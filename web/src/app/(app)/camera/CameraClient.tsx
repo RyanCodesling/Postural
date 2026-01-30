@@ -125,7 +125,6 @@ export default function CameraClient() {
         <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold">Camera</h1>
-            <p className="text-gray-600">Webcam preview (foundation for pose estimation).</p>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -168,9 +167,7 @@ export default function CameraClient() {
                 muted
                 className={`w-full h-[420px] object-cover ${mirror ? "-scale-x-100" : ""}`}
               />
-              <div className="absolute bottom-3 left-3 text-xs bg-black/60 text-white px-2 py-1 rounded">
-                Tip: Stand ~2–3 meters away for full-body capture.
-              </div>
+            
             </div>
           </div>
 
@@ -229,13 +226,7 @@ export default function CameraClient() {
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold mb-2">Production notes</h2>
-              <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
-                <li>Camera access requires HTTPS on real websites (localhost is OK).</li>
-                <li>If it says “in use,” close Zoom/Meet/OBS then restart.</li>
-              </ul>
-            </div>
+            
           </aside>
         </section>
       </div>

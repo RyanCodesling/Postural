@@ -169,6 +169,44 @@ export default function CameraClient() {
               />
             
             </div>
+
+            <div className="mt-4 p-4 rounded-2xl bg-white shadow-sm border">
+              <h2 className="font-semibold mb-3">Measurements</h2>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="p-3 rounded bg-gray-50 border">
+                  <p className="text-xs text-gray-600">Neck Angle</p>
+                  <p className="text-lg font-bold text-gray-900">--°</p>
+                </div>
+                <div className="p-3 rounded bg-gray-50 border">
+                  <p className="text-xs text-gray-600">Spine Curve</p>
+                  <p className="text-lg font-bold text-gray-900">--°</p>
+                </div>
+                <div className="p-3 rounded bg-gray-50 border">
+                  <p className="text-xs text-gray-600">Posture Score</p>
+                  <p className="text-lg font-bold text-gray-900">--/100</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 p-4 rounded-2xl bg-white shadow-sm border">
+              <h2 className="font-semibold mb-3">Session Progress</h2>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm text-gray-600">Sets</p>
+                    <p className="text-2xl font-bold text-gray-900">3</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm text-gray-600">Reps</p>
+                    <p className="text-2xl font-bold text-gray-900">12</p>
+                  </div>
+                </div>
+                <div className="p-3 rounded bg-blue-50 border border-blue-200 text-center">
+                  <p className="text-xs text-gray-600 mb-1">Timer</p>
+                  <p className="text-3xl font-bold text-blue-600">05:32</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <aside className="space-y-4">
@@ -226,7 +264,22 @@ export default function CameraClient() {
               </button>
             </div>
 
-            
+            <div className="p-4 rounded-2xl bg-white shadow-sm border">
+              <h2 className="font-semibold mb-3">Video Reference</h2>
+              <div className="relative rounded-lg overflow-hidden bg-gray-200 shadow">
+                <video
+                  className="w-full h-[240px] object-cover bg-gray-300"
+                  controls
+                  controlsList="nodownload"
+                >
+                  <source src="/sample-video.mp4" type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Reference video for posture comparison
+              </p>
+            </div>
           </aside>
         </section>
       </div>

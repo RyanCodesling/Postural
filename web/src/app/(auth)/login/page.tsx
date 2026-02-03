@@ -2,6 +2,7 @@
 
 import { use } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 
 export default function LoginPage() {
   const searchParams = useSearchParams();
@@ -39,8 +40,19 @@ export default function LoginPage() {
         <input
           type="password"
           placeholder="Password"
-          className="w-full border p-2 mb-4 rounded"
+          className="w-full border p-2 mb-2 rounded"
         />
+
+        {!isDoctor && (
+          <div className="text-right mb-4">
+            <Link
+              href={`/forgot-password?role=patient`}
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Forgot password?
+            </Link>
+          </div>
+        )}
 
         <button className="w-full bg-black text-white py-2 rounded">
           Login

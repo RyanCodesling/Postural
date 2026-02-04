@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 
 type Patient = { id: string; name: string; lastVisit: string };
@@ -13,11 +13,18 @@ const SAMPLE: Patient[] = [
 
 export default function TherapistDashboardPage() {
   const [query, setQuery] = useState("");
-  const [patients] = useState<Patient[]>(SAMPLE);
+  const patients = SAMPLE;
 
-  const filtered = patients.filter((p) =>
-    p.name.toLowerCase().includes(query.toLowerCase())
-  );
+  const filtered = useMemo(() => {
+    const lowerQuery = query.toLowerCase();
+    return patients.filter((p) =>
+      p.name.toLowerCase().includes(lowerQuery)
+    );
+  }, [query]);
+
+  const handleQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.target.value);
+  }, []);
 
   return (
     <div className="min-h-screen flex bg-white">
@@ -60,7 +67,7 @@ export default function TherapistDashboardPage() {
         <div className="mt-6">
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={handleQueryChange}
             placeholder="Search patients"
             className="w-full max-w-sm border p-2 rounded"
           />

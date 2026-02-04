@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -23,7 +23,7 @@ export default function CameraClient() {
     typeof navigator !== "undefined" &&
     !!navigator.mediaDevices?.getUserMedia;
 
-  async function stopCamera() {
+  const stopCamera = useCallback(async () => {
     try {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -31,17 +31,17 @@ export default function CameraClient() {
     } catch {
       // ignore
     }
-  }
+  }, []);
 
-  async function listCameras() {
+  const listCameras = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     const all = await navigator.mediaDevices.enumerateDevices();
     const cams = all.filter((d) => d.kind === "videoinput");
     setDevices(cams);
     if (!selectedDeviceId && cams[0]?.deviceId) setSelectedDeviceId(cams[0].deviceId);
-  }
+  }, [selectedDeviceId]);
 
-  async function startCamera(deviceId?: string) {
+  const startCamera = useCallback(async (deviceId?: string) => {
     if (!canUseMediaDevices) {
       setError("Camera API not available in this browser/environment.");
       return;
@@ -82,7 +82,27 @@ export default function CameraClient() {
     } finally {
       setIsStarting(false);
     }
-  }
+  }, [canUseMediaDevices, useFrontCameraHint, stopCamera, listCameras]);
+
+  const handleDeviceChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedDeviceId(e.target.value);
+  }, []);
+
+  const handleMirrorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setMirror(e.target.checked);
+  }, []);
+
+  const handleFrontCameraChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setUseFrontCameraHint(e.target.checked);
+  }, []);
+
+  const handleStartClick = useCallback(() => {
+    startCamera(selectedDeviceId || undefined);
+  }, [startCamera, selectedDeviceId]);
+
+  const handleRestartClick = useCallback(() => {
+    startCamera();
+  }, [startCamera]);
 
   // ✅ Mount gate: server + first client render match
   useEffect(() => {
@@ -96,16 +116,14 @@ export default function CameraClient() {
     return () => {
       stopCamera();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted]);
+  }, [mounted, startCamera, stopCamera]);
 
   // ✅ Restart when device changes (after we have device list)
   useEffect(() => {
     if (!mounted) return;
     if (!selectedDeviceId) return;
     if (devices.length > 0) startCamera(selectedDeviceId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, selectedDeviceId]);
+  }, [mounted, selectedDeviceId, devices.length, startCamera]);
 
   // ✅ IMPORTANT: show a stable “Loading…” UI until mounted
   if (!mounted) {
@@ -129,7 +147,7 @@ export default function CameraClient() {
 
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => startCamera(selectedDeviceId || undefined)}
+              onClick={handleStartClick}
               disabled={isStarting}
               className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
             >
@@ -216,7 +234,7 @@ export default function CameraClient() {
               <label className="block text-sm font-medium mb-1">Camera device</label>
               <select
                 value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
+                onChange={handleDeviceChange}
                 className="w-full border rounded px-3 py-2 bg-white"
               >
                 {devices.length === 0 ? (
@@ -238,7 +256,7 @@ export default function CameraClient() {
                 <input
                   type="checkbox"
                   checked={mirror}
-                  onChange={(e) => setMirror(e.target.checked)}
+                  onChange={handleMirrorChange}
                   className="h-5 w-5"
                 />
               </div>
@@ -251,13 +269,13 @@ export default function CameraClient() {
                 <input
                   type="checkbox"
                   checked={useFrontCameraHint}
-                  onChange={(e) => setUseFrontCameraHint(e.target.checked)}
+                  onChange={handleFrontCameraChange}
                   className="h-5 w-5"
                 />
               </div>
 
               <button
-                onClick={() => startCamera()}
+                onClick={handleRestartClick}
                 className="mt-4 w-full px-4 py-2 rounded bg-gray-900 text-white"
               >
                 Restart with preference

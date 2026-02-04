@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -11,7 +11,7 @@ export default function FirstTimePasswordPage() {
   const [success, setSuccess] = useState(false);
   const router = useRouter();
 
-  function handleSubmit(e: React.FormEvent) {
+  const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     if (!password) {
       setError("Please enter a new password.");
@@ -23,7 +23,11 @@ export default function FirstTimePasswordPage() {
     }
     setError("");
     setSuccess(true);
-  }
+  }, [password, confirm]);
+
+  const handleCancel = useCallback(() => {
+    router.push('/login?role=patient');
+  }, [router]);
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -64,7 +68,7 @@ export default function FirstTimePasswordPage() {
               </button>
               <button
                 type="button"
-                onClick={() => router.push('/login?role=patient')}
+                onClick={handleCancel}
                 className="flex-1 border py-2 rounded"
               >
                 Cancel

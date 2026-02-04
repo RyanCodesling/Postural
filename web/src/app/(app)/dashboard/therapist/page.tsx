@@ -20,7 +20,7 @@ export default function TherapistDashboardPage() {
     return patients.filter((p) =>
       p.name.toLowerCase().includes(lowerQuery)
     );
-  }, [query, patients]);
+  }, [query]);
 
   const handleQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);

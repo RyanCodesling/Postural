@@ -46,8 +46,8 @@ export default function DashboardPage() {
             <NavItem href="#" icon="home" label="Dashboard" />
             <NavItem href="#" icon="clock" label="Session" />
             <NavItem href="#" icon="history" label="History" />
-            <NavItem href="/camera" icon="history" label="Start Session" />
-            <NavItem href="#" icon="history" label="Exercises" />
+            <NavItem href="/camera" icon="clock" label="Start Session" />
+            <NavItem href="#" icon="clock" label="Exercises" />
           </ul>
         </nav>
       </aside>

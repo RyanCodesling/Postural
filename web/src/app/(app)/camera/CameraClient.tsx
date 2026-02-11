@@ -4,6 +4,15 @@ import { useEffect, useRef, useState } from "react";
 
 type CamDevice = MediaDeviceInfo;
 
+const EXERCISES = [
+  "Lateral Arm Raises",
+  "Overhead Arm Raises",
+  "Shoulder Shrugs",
+  "Neck Lateral Flexion",
+  "Standing Side Bends",
+  "Arm Abduction at 90°",
+];
+
 export default function CameraClient() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -17,6 +26,9 @@ export default function CameraClient() {
 
   const [useFrontCameraHint, setUseFrontCameraHint] = useState(true);
   const [mirror, setMirror] = useState(true);
+  const [currentTime, setCurrentTime] = useState<string>("");
+  const [currentDate, setCurrentDate] = useState<string>("");
+  const [selectedExercise, setSelectedExercise] = useState<string>(EXERCISES[0]);
 
   const canUseMediaDevices =
     mounted &&
@@ -98,15 +110,17 @@ export default function CameraClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
-
-  // ✅ Restart when device changes (after we have device list)
+  // ✅ Update current time and date
   useEffect(() => {
-    if (!mounted) return;
-    if (!selectedDeviceId) return;
-    if (devices.length > 0) startCamera(selectedDeviceId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, selectedDeviceId]);
-
+    const updateDateTime = () => {
+      const now = new Date();
+      setCurrentTime(now.toLocaleTimeString());
+      setCurrentDate(now.toLocaleDateString());
+    };
+    updateDateTime();
+    const interval = setInterval(updateDateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
   // ✅ IMPORTANT: show a stable “Loading…” UI until mounted
   if (!mounted) {
     return (
@@ -201,9 +215,32 @@ export default function CameraClient() {
                     <p className="text-2xl font-bold text-gray-900">12</p>
                   </div>
                 </div>
+                
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-sm text-gray-600">Overall Progress</p>
+                    <p className="text-sm font-semibold text-gray-900">65%</p>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-500 to-purple-600 h-full rounded-full" style={{ width: '65%' }}></div>
+                  </div>
+                </div>
+
                 <div className="p-3 rounded bg-blue-50 border border-blue-200 text-center">
                   <p className="text-xs text-gray-600 mb-1">Timer</p>
                   <p className="text-3xl font-bold text-blue-600">05:32</p>
+                </div>
+                <div className="p-3 rounded bg-green-50 border border-green-200">
+                  <div className="flex justify-between items-center">
+                    <div className="text-center flex-1">
+                      <p className="text-xs text-gray-600 mb-1">Local Time</p>
+                      <p className="text-lg font-semibold text-green-600">{currentTime}</p>
+                    </div>
+                    <div className="text-center flex-1">
+                      <p className="text-xs text-gray-600 mb-1">Local Date</p>
+                      <p className="text-lg font-semibold text-green-600">{currentDate}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -212,6 +249,19 @@ export default function CameraClient() {
           <aside className="space-y-4">
             <div className="p-4 rounded-2xl bg-white shadow-sm border">
               <h2 className="font-semibold mb-3">Controls</h2>
+
+              <label className="block text-sm font-medium mb-1">Exercise</label>
+              <select
+                value={selectedExercise}
+                onChange={(e) => setSelectedExercise(e.target.value)}
+                className="w-full border rounded px-3 py-2 bg-white mb-4"
+              >
+                {EXERCISES.map((exercise) => (
+                  <option key={exercise} value={exercise}>
+                    {exercise}
+                  </option>
+                ))}
+              </select>
 
               <label className="block text-sm font-medium mb-1">Camera device</label>
               <select
@@ -266,6 +316,9 @@ export default function CameraClient() {
 
             <div className="p-4 rounded-2xl bg-white shadow-sm border">
               <h2 className="font-semibold mb-3">Video Reference</h2>
+              <div className="bg-gray-100 rounded-lg p-6 text-center mb-4">
+                <h3 className="text-xl font-semibold text-gray-800">{selectedExercise}</h3>
+              </div>
               <div className="relative rounded-lg overflow-hidden bg-gray-200 shadow">
                 <video
                   className="w-full h-[240px] object-cover bg-gray-300"
@@ -279,6 +332,14 @@ export default function CameraClient() {
               <p className="text-xs text-gray-500 mt-2">
                 Reference video for posture comparison
               </p>
+              <div className="mt-4 flex gap-3">
+                <button className="flex-1 px-4 py-2 rounded bg-green-600 text-white font-medium hover:bg-green-700">
+                  Start Session
+                </button>
+                <button className="flex-1 px-4 py-2 rounded bg-red-600 text-white font-medium hover:bg-red-700">
+                  End Session
+                </button>
+              </div>
             </div>
           </aside>
         </section>

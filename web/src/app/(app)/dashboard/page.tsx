@@ -22,7 +22,7 @@ export default function DashboardPage() {
                 </a>
             </li>
               <li>
-                <a href="#" className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100">
+                <a href="/session" className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100">
                   <span className="mr-3 h-5 w-5 text-gray-500" aria-hidden="true">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-5 w-5">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />

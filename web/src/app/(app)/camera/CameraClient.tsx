@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  PoseLandmarker,
+  FilesetResolver,
+  DrawingUtils,
+} from "@mediapipe/tasks-vision";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -15,11 +20,17 @@ const EXERCISES = [
 
 export default function CameraClient() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null); // ✅ Added Canvas Ref
   const streamRef = useRef<MediaStream | null>(null);
+  
+  // AI Refs
+  const requestRef = useRef<number | null>(null);
+  const landmarkerRef = useRef<PoseLandmarker | null>(null);
 
-  const [mounted, setMounted] = useState(false); // ✅ add
+  const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modelLoaded, setModelLoaded] = useState(false); // ✅ Track AI Status
 
   const [devices, setDevices] = useState<CamDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
@@ -30,6 +41,82 @@ export default function CameraClient() {
   const [currentDate, setCurrentDate] = useState<string>("");
   const [selectedExercise, setSelectedExercise] = useState<string>(EXERCISES[0]);
 
+  // ---------------------------------------------------------
+  // 1. Initialize AI Model (The "Brain")
+  // ---------------------------------------------------------
+  useEffect(() => {
+    const initLandmarker = async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
+        const landmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "/models/pose_landmarker_lite.task",
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+          numPoses: 1,
+        });
+        landmarkerRef.current = landmarker;
+        setModelLoaded(true);
+        console.log("✅ AI Model Loaded");
+      } catch (err) {
+        console.error("Failed to load landmarker:", err);
+        setError("AI Model failed. Check public/models/pose_landmarker_lite.task");
+      }
+    };
+    initLandmarker();
+  }, []);
+
+  // ---------------------------------------------------------
+  // 2. The AI Prediction Loop
+  // ---------------------------------------------------------
+  const predictWebcam = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const landmarker = landmarkerRef.current;
+
+    if (!video || !canvas || !landmarker) return;
+
+    if (video.readyState === 4 && video.videoWidth > 0) {
+      // Match canvas size to video size
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+
+      if (ctx) {
+        const startTimeMs = performance.now();
+        const results = landmarker.detectForVideo(video, startTimeMs);
+
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw Skeleton
+        const drawingUtils = new DrawingUtils(ctx);
+        if (results.landmarks) {
+          for (const landmarks of results.landmarks) {
+            drawingUtils.drawConnectors(
+              landmarks,
+              PoseLandmarker.POSE_CONNECTIONS,
+              { color: "#00FF00", lineWidth: 3 }
+            );
+            drawingUtils.drawLandmarks(landmarks, {
+              color: "#FF0000",
+              lineWidth: 1,
+              radius: 3,
+            });
+          }
+        }
+        ctx.restore();
+      }
+    }
+    requestRef.current = requestAnimationFrame(predictWebcam);
+  };
+
+  // ---------------------------------------------------------
+  // 3. Camera Logic
+  // ---------------------------------------------------------
   const canUseMediaDevices =
     mounted &&
     typeof navigator !== "undefined" &&
@@ -40,6 +127,11 @@ export default function CameraClient() {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      // Stop AI Loop
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
+      }
     } catch {
       // ignore
     }
@@ -80,7 +172,12 @@ export default function CameraClient() {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        
+        // Wait for data before playing & predicting
+        videoRef.current.onloadeddata = () => {
+          videoRef.current?.play();
+          predictWebcam(); // ✅ Start AI loop here
+        };
       }
 
       await listCameras();
@@ -96,21 +193,14 @@ export default function CameraClient() {
     }
   }
 
-  // ✅ Mount gate: server + first client render match
   useEffect(() => {
     setMounted(true);
+    // Cleanup on unmount
+    return () => { stopCamera(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Start camera only after mounted
-  useEffect(() => {
-    if (!mounted) return;
-    startCamera();
-    return () => {
-      stopCamera();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted]);
-  // ✅ Update current time and date
+  // Update current time and date
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -121,7 +211,7 @@ export default function CameraClient() {
     const interval = setInterval(updateDateTime, 1000);
     return () => clearInterval(interval);
   }, []);
-  // ✅ IMPORTANT: show a stable “Loading…” UI until mounted
+
   if (!mounted) {
     return (
       <main className="min-h-screen p-6 bg-gray-50">
@@ -132,19 +222,25 @@ export default function CameraClient() {
     );
   }
 
-
   return (
     <main className="min-h-screen p-6 bg-gray-50">
       <div className="max-w-5xl mx-auto space-y-4">
         <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold">Camera</h1>
+            {/* Added AI Status Indicator */}
+            <div className="flex items-center gap-2 mt-1">
+                <span className={`w-2 h-2 rounded-full ${modelLoaded ? 'bg-green-500' : 'bg-orange-500'}`} />
+                <span className="text-xs text-gray-600">
+                    {modelLoaded ? "AI Ready" : "Loading Model..."}
+                </span>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => startCamera(selectedDeviceId || undefined)}
-              disabled={isStarting}
+              disabled={isStarting || !modelLoaded} // Prevent start if model isn't ready
               className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
             >
               {isStarting ? "Starting..." : "Start"}
@@ -174,14 +270,19 @@ export default function CameraClient() {
 
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            <div className="relative rounded-2xl overflow-hidden bg-black shadow">
+            {/* VIDEO CONTAINER */}
+            <div className="relative rounded-2xl overflow-hidden bg-black shadow h-[420px]">
               <video
                 ref={videoRef}
                 playsInline
                 muted
-                className={`w-full h-[420px] object-cover ${mirror ? "-scale-x-100" : ""}`}
+                className={`absolute inset-0 w-full h-full object-cover ${mirror ? "-scale-x-100" : ""}`}
               />
-            
+              {/* CANVAS OVERLAY (Added) */}
+              <canvas
+                ref={canvasRef}
+                className={`absolute inset-0 w-full h-full object-cover ${mirror ? "-scale-x-100" : ""}`}
+              />
             </div>
 
             <div className="mt-4 p-4 rounded-2xl bg-white shadow-sm border">

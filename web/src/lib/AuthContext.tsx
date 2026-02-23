@@ -7,7 +7,7 @@ interface User {
   id: string;
   email: string;
   name: string;
-  role: "patient" | "doctor";
+  role: "patient" | "therapist" | "admin";
   clinicId?: string;
 }
 

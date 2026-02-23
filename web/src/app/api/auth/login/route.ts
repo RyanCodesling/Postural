@@ -9,13 +9,20 @@ const MOCK_USERS = {
     id: "patient_001",
     name: "John Patient",
   },
-  doctor: {
-    email: "doctor@clinic.com",
-    password: "doctor123",
-    role: "doctor",
-    id: "doctor_001",
-    name: "Dr. Jane Smith",
+  therapist: {
+    email: "therapist@clinic.com",
+    password: "therapist123",
+    role: "therapist",
+    id: "therapist_001",
+    name: "Sarah Therapist",
     clinicId: "CLINIC_001",
+  },
+  admin: {
+    email: "admin@postural.com",
+    password: "admin123",
+    role: "admin",
+    id: "admin_001",
+    name: "Admin User",
   },
 };
 
@@ -31,14 +38,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user =
-      role === "doctor"
-        ? Object.values(MOCK_USERS).find(
-            (u) => u.role === "doctor" && u.email === email
-          )
-        : Object.values(MOCK_USERS).find(
-            (u) => u.role === "patient" && u.email === email
-          );
+    const user = Object.values(MOCK_USERS).find(
+      (u) => u.role === role && u.email === email
+    );
 
     if (!user || user.password !== password) {
       return NextResponse.json(
@@ -56,7 +58,9 @@ export async function POST(request: NextRequest) {
           email: user.email,
           name: user.name,
           role: user.role,
-          ...(user.role === "doctor" && { clinicId: user.clinicId }),
+          ...(user.role === "therapist" && {
+            clinicId: (user as any).clinicId,
+          }),
         },
       },
       { status: 200 }

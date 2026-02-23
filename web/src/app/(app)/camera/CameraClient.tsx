@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useAuth } from "@/lib/AuthContext";
 import {
   PoseLandmarker,
   FilesetResolver,
@@ -9,16 +10,23 @@ import {
 
 type CamDevice = MediaDeviceInfo;
 
-const EXERCISES = [
-  "Lateral Arm Raises",
-  "Overhead Arm Raises",
-  "Shoulder Shrugs",
-  "Neck Lateral Flexion",
-  "Standing Side Bends",
-  "Arm Abduction at 90°",
-];
+interface Exercise {
+  id: string;
+  name: string;
+  description: string;
+  duration: number;
+  difficulty: "easy" | "medium" | "hard";
+}
+
+interface PatientExercise {
+  exerciseId: string;
+  patientId: string;
+  assignedDate: string;
+  status: "pending" | "in-progress" | "completed";
+}
 
 export default function CameraClient() {
+  const { user } = useAuth();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null); // ✅ Added Canvas Ref
   const streamRef = useRef<MediaStream | null>(null);
@@ -39,7 +47,10 @@ export default function CameraClient() {
   const [mirror, setMirror] = useState(true);
   const [currentTime, setCurrentTime] = useState<string>("");
   const [currentDate, setCurrentDate] = useState<string>("");
-  const [selectedExercise, setSelectedExercise] = useState<string>(EXERCISES[0]);
+  
+  const [allExercises, setAllExercises] = useState<Exercise[]>([]);
+  const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
+  const [selectedExercise, setSelectedExercise] = useState<string>("");
 
   // ---------------------------------------------------------
   // 1. Initialize AI Model (The "Brain")
@@ -68,6 +79,39 @@ export default function CameraClient() {
     };
     initLandmarker();
   }, []);
+
+  // ---------------------------------------------------------
+  // Load Assigned Exercises
+  // ---------------------------------------------------------
+  useEffect(() => {
+    if (!user?.id) return;
+
+    try {
+      // Load all exercises
+      const storedExercises = localStorage.getItem("admin_exercises");
+      const exercises: Exercise[] = storedExercises ? JSON.parse(storedExercises) : [];
+      setAllExercises(exercises);
+
+      // Load patient's assigned exercises
+      const storedAssignments = localStorage.getItem("patient_exercises");
+      const assignments: PatientExercise[] = storedAssignments ? JSON.parse(storedAssignments) : [];
+      const patientAssignments = assignments.filter((a) => a.patientId === user.id);
+      
+      // Get the exercise details for assigned exercises
+      const assigned = exercises.filter((e) =>
+        patientAssignments.some((a) => a.exerciseId === e.id)
+      );
+      
+      setAssignedExercises(assigned);
+      
+      // Set first assigned exercise as default
+      if (assigned.length > 0 && !selectedExercise) {
+        setSelectedExercise(assigned[0].id);
+      }
+    } catch (err) {
+      console.error("Error loading exercises:", err);
+    }
+  }, [user?.id]);
 
   // ---------------------------------------------------------
   // 2. The AI Prediction Loop
@@ -352,17 +396,35 @@ export default function CameraClient() {
               <h2 className="font-semibold mb-3">Controls</h2>
 
               <label className="block text-sm font-medium mb-1">Exercise</label>
-              <select
-                value={selectedExercise}
-                onChange={(e) => setSelectedExercise(e.target.value)}
-                className="w-full border rounded px-3 py-2 bg-white mb-4"
-              >
-                {EXERCISES.map((exercise) => (
-                  <option key={exercise} value={exercise}>
-                    {exercise}
-                  </option>
-                ))}
-              </select>
+              {assignedExercises.length === 0 ? (
+                <div className="w-full p-3 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 text-sm mb-4">
+                  No exercises assigned yet. Please contact your therapist to assign exercises.
+                </div>
+              ) : (
+                <select
+                  value={selectedExercise}
+                  onChange={(e) => setSelectedExercise(e.target.value)}
+                  className="w-full border rounded px-3 py-2 bg-white mb-4"
+                >
+                  {assignedExercises.map((exercise) => (
+                    <option key={exercise.id} value={exercise.id}>
+                      {exercise.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {selectedExercise && assignedExercises.find((e) => e.id === selectedExercise) && (
+                <div className="mb-4 p-3 rounded bg-blue-50 border border-blue-200 text-sm">
+                  <p className="text-gray-700">
+                    {assignedExercises.find((e) => e.id === selectedExercise)?.description}
+                  </p>
+                  <div className="mt-2 flex gap-2 text-xs text-gray-600">
+                    <span>⏱ {assignedExercises.find((e) => e.id === selectedExercise)?.duration}s</span>
+                    <span>Difficulty: {assignedExercises.find((e) => e.id === selectedExercise)?.difficulty}</span>
+                  </div>
+                </div>
+              )}
 
               <label className="block text-sm font-medium mb-1">Camera device</label>
               <select
@@ -418,7 +480,9 @@ export default function CameraClient() {
             <div className="p-4 rounded-2xl bg-white shadow-sm border">
               <h2 className="font-semibold mb-3">Video Reference</h2>
               <div className="bg-gray-100 rounded-lg p-6 text-center mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">{selectedExercise}</h3>
+                <h3 className="text-xl font-semibold text-gray-800">
+                  {assignedExercises.find((e) => e.id === selectedExercise)?.name || selectedExercise}
+                </h3>
               </div>
               <div className="relative rounded-lg overflow-hidden bg-gray-200 shadow">
                 <video

@@ -8,6 +8,9 @@ import {
   DrawingUtils,
 } from "@mediapipe/tasks-vision";
 
+import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
+import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
+
 type CamDevice = MediaDeviceInfo;
 
 interface Exercise {
@@ -27,33 +30,52 @@ interface PatientExercise {
 
 export default function CameraClient() {
   const { user } = useAuth();
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null); // ✅ Added Canvas Ref
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  
-  // AI Refs
+
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [modelLoaded, setModelLoaded] = useState(false); // ✅ Track AI Status
+  const [modelLoaded, setModelLoaded] = useState(false);
+
+  // Capture readiness (HTML overlay, never mirrored)
+  const [captureOk, setCaptureOk] = useState(true);
+  const [captureMessage, setCaptureMessage] = useState("Captured");
+
+  const lastBadCaptureAtRef = useRef<number>(0);
+  const stableOkSinceRef = useRef<number>(0);
+
+  const lastCaptureOkRef = useRef<boolean>(true);
+  const lastCaptureMsgRef = useRef<string>("Captured");
 
   const [devices, setDevices] = useState<CamDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 
   const [useFrontCameraHint, setUseFrontCameraHint] = useState(true);
   const [mirror, setMirror] = useState(true);
+
   const [currentTime, setCurrentTime] = useState<string>("");
   const [currentDate, setCurrentDate] = useState<string>("");
-  
-  const [allExercises, setAllExercises] = useState<Exercise[]>([]);
+
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>("");
 
+  // Placeholder metrics (wire later)
+  const neckAngle = "--";
+  const spineCurve = "--";
+  const postureScore = "--";
+  const sets = 3;
+  const reps = 12;
+  const progressPct = 65;
+  const timer = "05:32";
+
   // ---------------------------------------------------------
-  // 1. Initialize AI Model (The "Brain")
+  // Init model
   // ---------------------------------------------------------
   useEffect(() => {
     const initLandmarker = async () => {
@@ -71,107 +93,125 @@ export default function CameraClient() {
         });
         landmarkerRef.current = landmarker;
         setModelLoaded(true);
-        console.log("✅ AI Model Loaded");
       } catch (err) {
-        console.error("Failed to load landmarker:", err);
+        console.error(err);
         setError("AI Model failed. Check public/models/pose_landmarker_lite.task");
       }
     };
     initLandmarker();
   }, []);
 
-  // ---------------------------------------------------------
-  // Load Assigned Exercises
-  // ---------------------------------------------------------
+  // Load assigned exercises (localStorage)
   useEffect(() => {
     if (!user?.id) return;
 
     try {
-      // Load all exercises
       const storedExercises = localStorage.getItem("admin_exercises");
       const exercises: Exercise[] = storedExercises ? JSON.parse(storedExercises) : [];
-      setAllExercises(exercises);
 
-      // Load patient's assigned exercises
       const storedAssignments = localStorage.getItem("patient_exercises");
       const assignments: PatientExercise[] = storedAssignments ? JSON.parse(storedAssignments) : [];
       const patientAssignments = assignments.filter((a) => a.patientId === user.id);
-      
-      // Get the exercise details for assigned exercises
+
       const assigned = exercises.filter((e) =>
         patientAssignments.some((a) => a.exerciseId === e.id)
       );
-      
+
       setAssignedExercises(assigned);
-      
-      // Set first assigned exercise as default
-      if (assigned.length > 0 && !selectedExercise) {
-        setSelectedExercise(assigned[0].id);
-      }
+      if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
     } catch (err) {
       console.error("Error loading exercises:", err);
     }
-  }, [user?.id]);
+  }, [user?.id, selectedExercise]);
+
+  const commitCaptureState = (ok: boolean, msg: string) => {
+    if (lastCaptureOkRef.current !== ok) {
+      lastCaptureOkRef.current = ok;
+      setCaptureOk(ok);
+    }
+    if (lastCaptureMsgRef.current !== msg) {
+      lastCaptureMsgRef.current = msg;
+      setCaptureMessage(msg);
+    }
+  };
 
   // ---------------------------------------------------------
-  // 2. The AI Prediction Loop
+  // AI loop
   // ---------------------------------------------------------
   const predictWebcam = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const landmarker = landmarkerRef.current;
-
     if (!video || !canvas || !landmarker) return;
 
     if (video.readyState === 4 && video.videoWidth > 0) {
-      // Match canvas size to video size
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
+      if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+      if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
 
+      const ctx = canvas.getContext("2d");
       if (ctx) {
-        const startTimeMs = performance.now();
-        const results = landmarker.detectForVideo(video, startTimeMs);
+        const results = landmarker.detectForVideo(video, performance.now());
 
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // Draw Skeleton
+
         const drawingUtils = new DrawingUtils(ctx);
-        if (results.landmarks) {
-          for (const landmarks of results.landmarks) {
-            drawingUtils.drawConnectors(
-              landmarks,
-              PoseLandmarker.POSE_CONNECTIONS,
-              { color: "#00FF00", lineWidth: 3 }
-            );
-            drawingUtils.drawLandmarks(landmarks, {
-              color: "#FF0000",
-              lineWidth: 1,
-              radius: 3,
-            });
+
+        if (results.landmarks && results.landmarks.length > 0) {
+          const landmarks = results.landmarks[0];
+
+          drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+            color: "#00FF00",
+            lineWidth: 3,
+          });
+          drawingUtils.drawLandmarks(landmarks, {
+            color: "#FF0000",
+            lineWidth: 1,
+            radius: 3,
+          });
+
+          const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height);
+
+          const now = performance.now();
+          if (!r.ok) {
+            lastBadCaptureAtRef.current = now;
+            stableOkSinceRef.current = 0;
+            commitCaptureState(false, r.message);
+          } else {
+            if (stableOkSinceRef.current === 0) stableOkSinceRef.current = now;
+            const okStable = now - stableOkSinceRef.current > 400;
+            const badGone = now - lastBadCaptureAtRef.current > 400;
+            if (okStable && badGone) commitCaptureState(true, "Captured");
           }
+
+          if (!r.ok) {
+            drawCutoutOverlay(ctx, canvas.width, canvas.height, r);
+          }
+
+          // Downstream logic later: only if (r.ok) { math engine + reps }
+        } else {
+          commitCaptureState(false, "No person detected. Step into the frame.");
         }
+
         ctx.restore();
       }
     }
+
     requestRef.current = requestAnimationFrame(predictWebcam);
   };
 
   // ---------------------------------------------------------
-  // 3. Camera Logic
+  // Camera helpers
   // ---------------------------------------------------------
   const canUseMediaDevices =
-    mounted &&
-    typeof navigator !== "undefined" &&
-    !!navigator.mediaDevices?.getUserMedia;
+    mounted && typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
   async function stopCamera() {
     try {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      // Stop AI Loop
+
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
         requestRef.current = null;
@@ -203,11 +243,7 @@ export default function CameraClient() {
       const constraints: MediaStreamConstraints = {
         video: deviceId
           ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-          : {
-              facingMode: useFrontCameraHint ? "user" : "environment",
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
+          : { facingMode: useFrontCameraHint ? "user" : "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       };
 
@@ -216,11 +252,9 @@ export default function CameraClient() {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        
-        // Wait for data before playing & predicting
         videoRef.current.onloadeddata = () => {
           videoRef.current?.play();
-          predictWebcam(); // ✅ Start AI loop here
+          predictWebcam();
         };
       }
 
@@ -229,8 +263,7 @@ export default function CameraClient() {
       const name = e?.name || "Error";
       if (name === "NotAllowedError") setError("Permission denied. Please allow camera access.");
       else if (name === "NotFoundError") setError("No camera found on this device.");
-      else if (name === "NotReadableError")
-        setError("Camera is already in use by another app (Zoom/Meet/OBS).");
+      else if (name === "NotReadableError") setError("Camera is already in use by another app.");
       else setError(`Failed to start camera: ${name}`);
     } finally {
       setIsStarting(false);
@@ -239,12 +272,12 @@ export default function CameraClient() {
 
   useEffect(() => {
     setMounted(true);
-    // Cleanup on unmount
-    return () => { stopCamera(); };
+    return () => {
+      stopCamera();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update current time and date
   useEffect(() => {
     const updateDateTime = () => {
       const now = new Date();
@@ -258,153 +291,123 @@ export default function CameraClient() {
 
   if (!mounted) {
     return (
-      <main className="min-h-screen p-6 bg-gray-50">
-        <div className="max-w-5xl mx-auto">
+      <main className="h-screen overflow-hidden bg-gray-50 p-4">
+        <div className="w-full">
           <div className="p-4 rounded border bg-white">Loading camera…</div>
         </div>
       </main>
     );
   }
 
+  const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+
   return (
-    <main className="min-h-screen p-6 bg-gray-50">
-      <div className="max-w-5xl mx-auto space-y-4">
-        <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Camera</h1>
-            {/* Added AI Status Indicator */}
-            <div className="flex items-center gap-2 mt-1">
-                <span className={`w-2 h-2 rounded-full ${modelLoaded ? 'bg-green-500' : 'bg-orange-500'}`} />
-                <span className="text-xs text-gray-600">
-                    {modelLoaded ? "AI Ready" : "Loading Model..."}
-                </span>
+    <main className="h-screen overflow-hidden bg-gray-50">
+      {/* Full-width container (no max-w) */}
+      <div className="h-full w-full px-4 lg:px-6 py-4 flex flex-col gap-3">
+        {/* Header stays compact so content fits */}
+        <header className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold leading-tight">Camera</h1>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />
+              <span className="text-xs text-gray-600">{modelLoaded ? "AI Ready" : "Loading Model..."}</span>
+              <span
+                className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                  captureOk ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                }`}
+                title={captureMessage}
+              >
+                {captureOk ? "Capture OK" : "Paused"}
+              </span>
+              {!captureOk && <span className="text-xs text-gray-600 truncate">{captureMessage}</span>}
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 shrink-0">
             <button
               onClick={() => startCamera(selectedDeviceId || undefined)}
-              disabled={isStarting || !modelLoaded} // Prevent start if model isn't ready
-              className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+              disabled={isStarting || !modelLoaded}
+              className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
             >
               {isStarting ? "Starting..." : "Start"}
             </button>
             <button
               onClick={stopCamera}
-              className="px-4 py-2 rounded border border-gray-300 bg-white"
+              className="px-3 py-2 rounded border border-gray-300 bg-white text-sm"
             >
               Stop
             </button>
           </div>
         </header>
 
-        {!canUseMediaDevices && (
-          <div className="p-4 rounded border bg-white">
-            <p className="text-sm text-gray-700">
-              Your browser/environment does not support camera access. Try Chrome/Edge.
-            </p>
-          </div>
-        )}
-
+        {/* Errors (still no scrolling; keep compact) */}
         {error && (
-          <div className="p-4 rounded border border-red-200 bg-red-50 text-red-800">
+          <div className="px-3 py-2 rounded border border-red-200 bg-red-50 text-red-800 text-sm">
             {error}
           </div>
         )}
 
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2">
-            {/* VIDEO CONTAINER */}
-            <div className="relative rounded-2xl overflow-hidden bg-black shadow h-[420px]">
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className={`absolute inset-0 w-full h-full object-cover ${mirror ? "-scale-x-100" : ""}`}
-              />
-              {/* CANVAS OVERLAY (Added) */}
-              <canvas
-                ref={canvasRef}
-                className={`absolute inset-0 w-full h-full object-cover ${mirror ? "-scale-x-100" : ""}`}
-              />
-            </div>
-
-            <div className="mt-4 p-4 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold mb-3">Measurements</h2>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="p-3 rounded bg-gray-50 border">
-                  <p className="text-xs text-gray-600">Neck Angle</p>
-                  <p className="text-lg font-bold text-gray-900">--°</p>
-                </div>
-                <div className="p-3 rounded bg-gray-50 border">
-                  <p className="text-xs text-gray-600">Spine Curve</p>
-                  <p className="text-lg font-bold text-gray-900">--°</p>
-                </div>
-                <div className="p-3 rounded bg-gray-50 border">
-                  <p className="text-xs text-gray-600">Posture Score</p>
-                  <p className="text-lg font-bold text-gray-900">--/100</p>
-                </div>
+        {/* Main content fills remaining height */}
+        <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3">
+          {/* Camera panel */}
+          <div className="lg:col-span-9 min-h-0">
+            <div className="relative h-full rounded-2xl overflow-hidden bg-black shadow">
+              {/* Mirrored visual layer only */}
+              <div className={`absolute inset-0 ${mirror ? "-scale-x-100" : ""}`}>
+                <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover" />
               </div>
-            </div>
 
-            <div className="mt-4 p-4 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold mb-3">Session Progress</h2>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-sm text-gray-600">Sets</p>
-                    <p className="text-2xl font-bold text-gray-900">3</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-600">Reps</p>
-                    <p className="text-2xl font-bold text-gray-900">12</p>
-                  </div>
+              {/* Non-mirrored message overlay */}
+              {!captureOk && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-black/75 text-white text-lg font-semibold shadow-lg">
+                  {captureMessage}
                 </div>
-                
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <p className="text-sm text-gray-600">Overall Progress</p>
-                    <p className="text-sm font-semibold text-gray-900">65%</p>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div className="bg-gradient-to-r from-blue-500 to-purple-600 h-full rounded-full" style={{ width: '65%' }}></div>
-                  </div>
-                </div>
+              )}
 
-                <div className="p-3 rounded bg-blue-50 border border-blue-200 text-center">
-                  <p className="text-xs text-gray-600 mb-1">Timer</p>
-                  <p className="text-3xl font-bold text-blue-600">05:32</p>
+              {/* Compact overlay metrics (no extra vertical space) */}
+              <div className="absolute bottom-3 left-3 z-20 flex flex-wrap gap-2">
+                <Chip label="Neck" value={`${neckAngle}°`} />
+                <Chip label="Spine" value={`${spineCurve}°`} />
+                <Chip label="Score" value={`${postureScore}/100`} />
+              </div>
+
+              {/* Compact overlay progress */}
+              <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-end">
+                <div className="flex gap-2">
+                  <Chip label="Sets" value={`${sets}`} />
+                  <Chip label="Reps" value={`${reps}`} />
+                  <Chip label="Time" value={timer} />
                 </div>
-                <div className="p-3 rounded bg-green-50 border border-green-200">
-                  <div className="flex justify-between items-center">
-                    <div className="text-center flex-1">
-                      <p className="text-xs text-gray-600 mb-1">Local Time</p>
-                      <p className="text-lg font-semibold text-green-600">{currentTime}</p>
-                    </div>
-                    <div className="text-center flex-1">
-                      <p className="text-xs text-gray-600 mb-1">Local Date</p>
-                      <p className="text-lg font-semibold text-green-600">{currentDate}</p>
-                    </div>
+                <div className="w-72 bg-black/70 rounded-xl px-5 py-4 shadow-lg">
+                  <div className="flex items-center justify-between text-sm text-white/90">
+                    <span>Progress</span>
+                    <span className="font-bold">{progressPct}%</span>
+                  </div>
+                  <div className="mt-3 h-3 bg-white/20 rounded-full overflow-hidden">
+                    <div className="h-full bg-white/85" style={{ width: `${progressPct}%` }} />
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <aside className="space-y-4">
-            <div className="p-4 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold mb-3">Controls</h2>
+          {/* Sidebar panel (must fit without scrolling) */}
+          <aside className="lg:col-span-3 min-h-0 flex flex-col gap-3">
+            <div className="p-3 rounded-2xl bg-white shadow-sm border">
+              <h2 className="font-semibold text-sm mb-2">Controls</h2>
 
-              <label className="block text-sm font-medium mb-1">Exercise</label>
+              <label className="block text-xs font-medium mb-1">Exercise</label>
               {assignedExercises.length === 0 ? (
-                <div className="w-full p-3 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 text-sm mb-4">
-                  No exercises assigned yet. Please contact your therapist to assign exercises.
+                <div className="w-full p-2 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 text-xs">
+                  No exercises assigned yet.
                 </div>
               ) : (
                 <select
                   value={selectedExercise}
                   onChange={(e) => setSelectedExercise(e.target.value)}
-                  className="w-full border rounded px-3 py-2 bg-white mb-4"
+                  className="w-full border rounded px-2 py-2 bg-white text-sm"
                 >
                   {assignedExercises.map((exercise) => (
                     <option key={exercise.id} value={exercise.id}>
@@ -414,23 +417,22 @@ export default function CameraClient() {
                 </select>
               )}
 
-              {selectedExercise && assignedExercises.find((e) => e.id === selectedExercise) && (
-                <div className="mb-4 p-3 rounded bg-blue-50 border border-blue-200 text-sm">
-                  <p className="text-gray-700">
-                    {assignedExercises.find((e) => e.id === selectedExercise)?.description}
-                  </p>
-                  <div className="mt-2 flex gap-2 text-xs text-gray-600">
-                    <span>⏱ {assignedExercises.find((e) => e.id === selectedExercise)?.duration}s</span>
-                    <span>Difficulty: {assignedExercises.find((e) => e.id === selectedExercise)?.difficulty}</span>
+              {selectedExerciseObj && (
+                <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-200 text-xs text-gray-700">
+                  <div className="font-semibold text-gray-900">{selectedExerciseObj.name}</div>
+                  <div className="line-clamp-3 mt-1">{selectedExerciseObj.description}</div>
+                  <div className="mt-2 flex gap-2 text-[11px] text-gray-600">
+                    <span>⏱ {selectedExerciseObj.duration}s</span>
+                    <span>• {selectedExerciseObj.difficulty}</span>
                   </div>
                 </div>
               )}
 
-              <label className="block text-sm font-medium mb-1">Camera device</label>
+              <label className="block text-xs font-medium mt-3 mb-1">Camera device</label>
               <select
                 value={selectedDeviceId}
                 onChange={(e) => setSelectedDeviceId(e.target.value)}
-                className="w-full border rounded px-3 py-2 bg-white"
+                className="w-full border rounded px-2 py-2 bg-white text-sm"
               >
                 {devices.length === 0 ? (
                   <option value="">(Allow camera access to list devices)</option>
@@ -443,10 +445,10 @@ export default function CameraClient() {
                 )}
               </select>
 
-              <div className="mt-4 flex items-center justify-between">
+              <div className="mt-3 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium">Mirror preview</p>
-                  <p className="text-xs text-gray-500">Useful for front camera UX</p>
+                  <p className="text-xs font-medium">Mirror</p>
+                  <p className="text-[11px] text-gray-500">Front cam feel</p>
                 </div>
                 <input
                   type="checkbox"
@@ -456,10 +458,10 @@ export default function CameraClient() {
                 />
               </div>
 
-              <div className="mt-4 flex items-center justify-between">
+              <div className="mt-2 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium">Prefer front camera</p>
-                  <p className="text-xs text-gray-500">Used when no device selected</p>
+                  <p className="text-xs font-medium">Prefer front camera</p>
+                  <p className="text-[11px] text-gray-500">When no device selected</p>
                 </div>
                 <input
                   type="checkbox"
@@ -471,38 +473,35 @@ export default function CameraClient() {
 
               <button
                 onClick={() => startCamera()}
-                className="mt-4 w-full px-4 py-2 rounded bg-gray-900 text-white"
+                className="mt-3 w-full px-3 py-2 rounded bg-gray-900 text-white text-sm"
               >
                 Restart with preference
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold mb-3">Video Reference</h2>
-              <div className="bg-gray-100 rounded-lg p-6 text-center mb-4">
-                <h3 className="text-xl font-semibold text-gray-800">
-                  {assignedExercises.find((e) => e.id === selectedExercise)?.name || selectedExercise}
-                </h3>
+            {/* Reference + time/date compact, still no scrolling */}
+            <div className="p-3 rounded-2xl bg-white shadow-sm border flex-1 min-h-0 flex flex-col">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-semibold text-sm">Reference</h2>
+                <div className="text-[11px] text-gray-600 text-right">
+                  <div>{currentTime}</div>
+                  <div>{currentDate}</div>
+                </div>
               </div>
-              <div className="relative rounded-lg overflow-hidden bg-gray-200 shadow">
-                <video
-                  className="w-full h-[240px] object-cover bg-gray-300"
-                  controls
-                  controlsList="nodownload"
-                >
+
+              <div className="rounded-lg overflow-hidden bg-gray-200 flex-1 min-h-0">
+                <video className="w-full h-full object-cover bg-gray-300" controls controlsList="nodownload">
                   <source src="/sample-video.mp4" type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
               </div>
-              <p className="text-xs text-gray-500 mt-2">
-                Reference video for posture comparison
-              </p>
-              <div className="mt-4 flex gap-3">
-                <button className="flex-1 px-4 py-2 rounded bg-green-600 text-white font-medium hover:bg-green-700">
-                  Start Session
+
+              <div className="mt-2 flex gap-2">
+                <button className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700">
+                  Start
                 </button>
-                <button className="flex-1 px-4 py-2 rounded bg-red-600 text-white font-medium hover:bg-red-700">
-                  End Session
+                <button className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                  End
                 </button>
               </div>
             </div>
@@ -510,5 +509,14 @@ export default function CameraClient() {
         </section>
       </div>
     </main>
+  );
+}
+
+function Chip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-black/70 text-white rounded-xl px-5 py-3 shadow-lg">
+      <div className="text-sm text-white/80">{label}</div>
+      <div className="text-xl font-bold leading-tight">{value}</div>
+    </div>
   );
 }

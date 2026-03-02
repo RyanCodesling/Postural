@@ -1,19 +1,65 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/AuthContext";
 
-type Patient = { id: string; name: string; lastVisit: string };
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  role: "patient" | "therapist";
+  therapistId?: string;
+}
 
-const SAMPLE: Patient[] = [
-  { id: "p1", name: "Alice Johnson", lastVisit: "2026-01-20" },
-  { id: "p2", name: "Bob Smith", lastVisit: "2026-01-15" },
-  { id: "p3", name: "Carol Lee", lastVisit: "2025-12-30" },
-];
+interface PatientData {
+  id: string;
+  name: string;
+  lastVisit: string;
+}
 
 export default function TherapistDashboardPage() {
+  const { user, logout } = useAuth();
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [patients] = useState<Patient[]>(SAMPLE);
+  const [patients, setPatients] = useState<PatientData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadAssignedPatients = () => {
+    if (!user?.id) return;
+    
+    const storedUsers = localStorage.getItem("admin_users");
+    if (storedUsers) {
+      try {
+        const users: User[] = JSON.parse(storedUsers);
+        const assignedPatients = users.filter(
+          (u) => u.role === "patient" && u.therapistId === user.id
+        );
+        
+        // Convert to PatientData format
+        const patientData = assignedPatients.map((p) => ({
+          id: p.id,
+          name: p.name,
+          lastVisit: new Date().toISOString().split("T")[0], // Current date as placeholder
+        }));
+        
+        setPatients(patientData);
+      } catch (error) {
+        console.error("Error loading patients:", error);
+      }
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadAssignedPatients();
+  }, [user?.id]);
+
+  const handleLogout = async () => {
+    await logout();
+    router.push("/login?role=therapist");
+  };
 
   const filtered = patients.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase())
@@ -24,7 +70,9 @@ export default function TherapistDashboardPage() {
       <aside className="w-64 bg-gray-50 border-r p-6">
         <div className="mb-8">
           <div className="text-sm text-gray-500">Therapist</div>
-          <div className="mt-1 text-lg font-semibold text-gray-900">You</div>
+          <div className="mt-1 text-lg font-semibold text-gray-900">
+            {user?.name || "Therapist"}
+          </div>
         </div>
 
         <nav aria-label="Therapist navigation">
@@ -38,9 +86,20 @@ export default function TherapistDashboardPage() {
               </Link>
             </li>
             <li>
-              <a className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100" href="#">
+              <a
+                className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100 cursor-pointer"
+                role="button"
+              >
                 Settings
               </a>
+            </li>
+            <li>
+              <button
+                onClick={handleLogout}
+                className="w-full text-left flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100 text-red-600 hover:text-red-700"
+              >
+                Logout
+              </button>
             </li>
           </ul>
         </nav>
@@ -52,9 +111,12 @@ export default function TherapistDashboardPage() {
             <h1 className="text-2xl font-bold">Therapist Dashboard</h1>
             <p className="text-gray-600 mt-1">Manage your patients and sessions.</p>
           </div>
-          <div>
-            <button className="px-4 py-2 bg-blue-600 text-white rounded">Add Patient</button>
-          </div>
+          <button 
+            onClick={loadAssignedPatients}
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded transition"
+          >
+            🔄 Refresh
+          </button>
         </div>
 
         <div className="mt-6">
@@ -67,8 +129,23 @@ export default function TherapistDashboardPage() {
         </div>
 
         <div className="mt-6 grid gap-4">
-          {filtered.length === 0 ? (
-            <div className="text-gray-500">No patients found.</div>
+          {loading ? (
+            <div className="text-center py-8 text-gray-500">Loading patients...</div>
+          ) : patients.length === 0 ? (
+            <div className="bg-blue-50 border border-blue-200 p-4 rounded text-blue-800">
+              <p className="font-semibold mb-1">No patients assigned yet</p>
+              <p className="text-sm mb-3">
+                The admin will assign patients to you. Check back here once patients are assigned.
+              </p>
+              <button 
+                onClick={loadAssignedPatients}
+                className="text-blue-600 hover:text-blue-800 font-medium underline"
+              >
+                Click to refresh
+              </button>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-gray-500">No patients found matching your search.</div>
           ) : (
             filtered.map((p) => (
               <div key={p.id} className="flex items-center justify-between p-4 border rounded">

@@ -11,12 +11,19 @@ Temporary login credentials have been created for testing purposes. No database 
 - **Role:** Patient
 - **User ID:** `patient_001`
 
-### Doctor Account
-- **Email:** `doctor@clinic.com`
-- **Password:** `doctor123`
-- **Role:** Doctor
-- **User ID:** `doctor_001`
+### Therapist Account
+- **Email:** `therapist@clinic.com`
+- **Password:** `therapist123`
+- **Role:** Therapist
+- **User ID:** `therapist_001`
 - **Clinic ID:** `CLINIC_001`
+
+### Admin Account
+- **Email:** `admin@postural.com`
+- **Password:** `admin123`
+- **Role:** Admin
+- **User ID:** `admin_001`
+- **Access:** Content Management System (CMS) to manage users and exercises
 
 ## Features Implemented
 
@@ -32,7 +39,9 @@ Temporary login credentials have been created for testing purposes. No database 
 
 ### 3. Protected Routes
 The following routes are protected and require authentication:
-- `/dashboard` (requires login)
+- `/dashboard` - Patient dashboard (requires patient login)
+- `/dashboard/therapist` - Therapist dashboard (requires therapist login)
+- `/dashboard/admin` - Admin CMS Interface (requires admin login)
 - `/profile` (requires login)
 - `/camera` (requires login)
 
@@ -44,11 +53,19 @@ The following routes are protected and require authentication:
 ## How to Use
 
 1. Navigate to `http://localhost:3000/login`
-2. Choose between Patient or Doctor using the role switcher
+2. Choose between Patient, Therapist, or Admin using the role switcher
 3. Use the provided credentials:
    - Patient: `patient@example.com` / `patient123`
-   - Doctor: `doctor@clinic.com` / `doctor123`
-4. After login, you'll be redirected to `/dashboard`
+   - Therapist: `therapist@clinic.com` / `therapist123`
+   - Admin: `admin@postural.com` / `admin123`
+4. After login, you'll be redirected to the appropriate dashboard
+
+## Admin Dashboard (CMS)
+The Admin panel allows system administrators to:
+- **Manage Users**: Add, view, and delete users (patients, therapists)
+- **Manage Exercises**: Create, edit, and delete exercise routines with difficulty levels and duration
+
+Access at `/dashboard/admin` after logging in as admin.
 
 ## File Structure
 ```
@@ -60,6 +77,13 @@ src/
 │   │       │   └── route.ts
 │   │       └── logout/
 │   │           └── route.ts
+│   ├── (app)/
+│   │   └── dashboard/
+│   │       ├── page.tsx (Patient)
+│   │       ├── therapist/
+│   │       │   └── page.tsx (Therapist)
+│   │       └── admin/
+│   │           └── page.tsx (Admin CMS)
 │   ├── (auth)/
 │   │   └── login/
 │   │       └── page.tsx (updated)

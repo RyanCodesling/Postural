@@ -10,7 +10,8 @@ export default function LoginPage() {
   const searchParams = useSearchParams();
   const roleParam = (searchParams?.get("role") as string) || "patient";
   const role = roleParam.toLowerCase();
-  const isDoctor = role === "doctor";
+  const isTherapist = role === "therapist";
+  const isAdmin = role === "admin";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,7 +26,13 @@ export default function LoginPage() {
     try {
       const result = await loginUser(email, password, role);
       setStoredUser(result.user);
-      router.push(isDoctor ? "/dashboard" : "/dashboard");
+      if (isAdmin) {
+        router.push("/dashboard/admin");
+      } else if (isTherapist) {
+        router.push("/dashboard/therapist");
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -37,22 +44,29 @@ export default function LoginPage() {
     <main className="min-h-screen flex items-center justify-center bg-gray-100">
       <div className="w-full max-w-sm bg-white p-6 rounded shadow">
         <h2 className="text-xl font-semibold mb-4">
-          Login — {isDoctor ? "Doctor Therapist" : "Patient"}
+          Login — {isAdmin ? "Admin" : isTherapist ? "Therapist" : "Patient"}
         </h2>
 
         <p className="text-sm text-gray-500 mb-4">
-          {isDoctor
-            ? "Please sign in with your clinic credentials."
+          {isAdmin
+            ? "Sign in to manage the system and content."
+            : isTherapist
+            ? "Sign in to manage your patients and sessions."
             : "Sign in to access your posture and movement data."}
         </p>
 
         {/* Temporary Credentials Display */}
         <div className="bg-blue-50 border border-blue-200 p-3 rounded mb-4 text-xs">
           <p className="font-semibold text-blue-900 mb-2">Demo Credentials:</p>
-          {isDoctor ? (
+          {isAdmin ? (
             <>
-              <p className="text-blue-800">Email: doctor@clinic.com</p>
-              <p className="text-blue-800">Password: doctor123</p>
+              <p className="text-blue-800">Email: admin@postural.com</p>
+              <p className="text-blue-800">Password: admin123</p>
+            </>
+          ) : isTherapist ? (
+            <>
+              <p className="text-blue-800">Email: therapist@clinic.com</p>
+              <p className="text-blue-800">Password: therapist123</p>
             </>
           ) : (
             <>
@@ -81,7 +95,7 @@ export default function LoginPage() {
             required
           />
 
-          {!isDoctor && (
+          {role === "patient" && (
             <div className="text-right mb-4">
               <Link
                 href={`/forgot-password?role=patient`}
@@ -108,14 +122,38 @@ export default function LoginPage() {
         {/* Role Switcher */}
         <div className="text-center mt-4 border-t pt-4">
           <p className="text-sm text-gray-600 mb-2">Switch Role:</p>
-          <button
-            onClick={() =>
-              router.push(`/login?role=${isDoctor ? "patient" : "doctor"}`)
-            }
-            className="text-sm text-blue-600 hover:underline"
-          >
-            {isDoctor ? "Login as Patient" : "Login as Doctor"}
-          </button>
+          <div className="flex gap-2 justify-center">
+            <button
+              onClick={() => router.push(`/login?role=patient`)}
+              className={`text-xs px-3 py-1 rounded ${
+                role === "patient"
+                  ? "bg-black text-white"
+                  : "border text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Patient
+            </button>
+            <button
+              onClick={() => router.push(`/login?role=therapist`)}
+              className={`text-xs px-3 py-1 rounded ${
+                role === "therapist"
+                  ? "bg-black text-white"
+                  : "border text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Therapist
+            </button>
+            <button
+              onClick={() => router.push(`/login?role=admin`)}
+              className={`text-xs px-3 py-1 rounded ${
+                role === "admin"
+                  ? "bg-black text-white"
+                  : "border text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Admin
+            </button>
+          </div>
         </div>
       </div>
     </main>

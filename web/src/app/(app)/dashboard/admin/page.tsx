@@ -225,11 +225,6 @@ export default function AdminDashboard() {
     setExercises(exercises.filter((e) => e.id !== id));
   };
 
-  const handleLogout = async () => {
-    await logout();
-    router.push("/login?role=admin");
-  };
-
   // Helper functions
   const patients = users.filter((u) => u.role === "patient");
   const therapists = users.filter((u) => u.role === "therapist");
@@ -281,15 +276,6 @@ export default function AdminDashboard() {
             🔗 Assign Patients
           </button>
         </nav>
-
-        <div className="mt-8 pt-6 border-t border-gray-700">
-          <button
-            onClick={handleLogout}
-            className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded transition"
-          >
-            Logout
-          </button>
-        </div>
       </aside>
 
       {/* Main Content */}

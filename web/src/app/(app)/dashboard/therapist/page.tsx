@@ -56,11 +56,6 @@ export default function TherapistDashboardPage() {
     loadAssignedPatients();
   }, [user?.id]);
 
-  const handleLogout = async () => {
-    await logout();
-    router.push("/login?role=therapist");
-  };
-
   const filtered = patients.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase())
   );
@@ -92,14 +87,6 @@ export default function TherapistDashboardPage() {
               >
                 Settings
               </a>
-            </li>
-            <li>
-              <button
-                onClick={handleLogout}
-                className="w-full text-left flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100 text-red-600 hover:text-red-700"
-              >
-                Logout
-              </button>
             </li>
           </ul>
         </nav>

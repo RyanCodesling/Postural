@@ -28,7 +28,7 @@ export default function HomePage() {
 
             <div className="bg-white rounded-lg p-6 z-10 w-11/12 max-w-sm text-center">
               <h2 className="text-lg font-semibold mb-4">Login as</h2>
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-col">
                 <button
                   onClick={() => router.push('/login?role=patient')}
                   className="flex-1 px-4 py-2 rounded bg-gray-800 text-white"
@@ -36,10 +36,16 @@ export default function HomePage() {
                   Patient
                 </button>
                 <button
-                  onClick={() => router.push('/login?role=doctor')}
+                  onClick={() => router.push('/login?role=therapist')}
                   className="flex-1 px-4 py-2 rounded bg-blue-600 text-white"
                 >
-                  Doctor Therapist
+                  Therapist
+                </button>
+                <button
+                  onClick={() => router.push('/login?role=admin')}
+                  className="flex-1 px-4 py-2 rounded bg-purple-600 text-white"
+                >
+                  Admin
                 </button>
               </div>
               <button

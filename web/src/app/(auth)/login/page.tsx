@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { loginUser, setStoredUser } from "@/lib/auth";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const roleParam = (searchParams?.get("role") as string) || "patient";
@@ -15,6 +15,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +32,7 @@ export default function LoginPage() {
       } else if (isTherapist) {
         router.push("/dashboard/therapist");
       } else {
-        router.push("/dashboard");
+        router.push("/dashboard/patient");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -86,14 +87,23 @@ export default function LoginPage() {
             required
           />
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border p-2 mb-2 rounded"
-            required
-          />
+          <div className="relative mb-2">
+            <input
+              type={showPassword ? "text" : "password"}
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full border p-2 pr-10 rounded"
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+            >
+              {showPassword ? "👁️" : "👁️‍🗨️"}
+            </button>
+          </div>
 
           {role === "patient" && (
             <div className="text-right mb-4">
@@ -119,43 +129,21 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* Role Switcher */}
-        <div className="text-center mt-4 border-t pt-4">
-          <p className="text-sm text-gray-600 mb-2">Switch Role:</p>
-          <div className="flex gap-2 justify-center">
-            <button
-              onClick={() => router.push(`/login?role=patient`)}
-              className={`text-xs px-3 py-1 rounded ${
-                role === "patient"
-                  ? "bg-black text-white"
-                  : "border text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Patient
-            </button>
-            <button
-              onClick={() => router.push(`/login?role=therapist`)}
-              className={`text-xs px-3 py-1 rounded ${
-                role === "therapist"
-                  ? "bg-black text-white"
-                  : "border text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Therapist
-            </button>
-            <button
-              onClick={() => router.push(`/login?role=admin`)}
-              className={`text-xs px-3 py-1 rounded ${
-                role === "admin"
-                  ? "bg-black text-white"
-                  : "border text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Admin
-            </button>
-          </div>
-        </div>
+        <button
+          onClick={() => router.push("/")}
+          className="mt-4 text-sm text-gray-500 w-full text-center block"
+        >
+          Cancel
+        </button>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

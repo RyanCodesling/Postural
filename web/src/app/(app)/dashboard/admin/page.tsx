@@ -18,6 +18,7 @@ interface User {
   // Patient-specific fields
   diagnosis?: string;
   prescription?: string;
+  condition?: string;
   // Therapist-specific fields
   therapistIDNum?: string;
   specialty?: string;
@@ -98,6 +99,7 @@ export default function AdminDashboard() {
     gender: "",
     diagnosis: "",
     prescription: "",
+    condition: "",
     therapistIDNum: "",
     specialty: ""
   });
@@ -170,7 +172,7 @@ export default function AdminDashboard() {
 
     // Validate role-specific required fields
     if (newUser.role === "patient") {
-      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.diagnosis || !newUser.prescription) return;
+      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.diagnosis || !newUser.prescription || !newUser.condition) return;
     } else if (newUser.role === "therapist") {
       if (!newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.therapistIDNum || !newUser.specialty) return;
     }
@@ -185,6 +187,7 @@ export default function AdminDashboard() {
       gender: newUser.gender,
       diagnosis: newUser.diagnosis,
       prescription: newUser.prescription,
+      condition: newUser.condition,
       therapistIDNum: newUser.therapistIDNum,
       specialty: newUser.specialty,
     };
@@ -198,6 +201,7 @@ export default function AdminDashboard() {
       gender: "",
       diagnosis: "",
       prescription: "",
+      condition: "",
       therapistIDNum: "",
       specialty: ""
     });
@@ -347,6 +351,7 @@ export default function AdminDashboard() {
                         gender: "",
                         diagnosis: "",
                         prescription: "",
+                        condition: "",
                         therapistIDNum: "",
                         specialty: ""
                       });
@@ -514,6 +519,19 @@ export default function AdminDashboard() {
                               required
                             />
                           </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Condition <span className="text-red-500">*</span>
+                            </label>
+                            <textarea
+                              value={newUser.condition || ""}
+                              onChange={(e) => setNewUser({ ...newUser, condition: e.target.value })}
+                              className="w-full border border-gray-300 rounded px-3 py-2"
+                              rows={4}
+                              required
+                            />
+                          </div>
                         </>
                       )}
 
@@ -674,6 +692,20 @@ export default function AdminDashboard() {
                           value={editingUser.prescription || ""}
                           onChange={(e) =>
                             setEditingUser({ ...editingUser, prescription: e.target.value })
+                          }
+                          className="w-full border border-gray-300 rounded px-3 py-2"
+                          rows={4}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Condition
+                        </label>
+                        <textarea
+                          value={editingUser.condition || ""}
+                          onChange={(e) =>
+                            setEditingUser({ ...editingUser, condition: e.target.value })
                           }
                           className="w-full border border-gray-300 rounded px-3 py-2"
                           rows={4}

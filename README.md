@@ -1,4 +1,5 @@
 # Postural
+📌 Update-3-25-26
 → dashboard\patient\page.tsx - Created subfolder for Patient Side
 
 → dashboard\page.tsx - now works as role-based router that redirects based on user’s role
@@ -14,3 +15,5 @@
 → therapist\page.tsx: Logout redirects back to app\page.tsx; removed extra logout button
 
 → (app)\layout.tsx: Logout functionality fixed
+
+📌 Update-3-31-26

@@ -1,16 +1,26 @@
-# Postural
-→ dashboard\patient\page.tsx - Created subfolder for Patient Side
+# Sprint Updates
+## 📌 Update-3-25-26
 
-→ dashboard\page.tsx - now works as role-based router that redirects based on user’s role
+### *dashboard\patient\page.tsx* 
+- Created subfolder for Patient Side
+- Logout button redirects back to app\page.tsx
 
-→ login\page.tsx: Removed Role Switcher
+### *dashboard\page.tsx* 
+- Now works as role-based router that redirects based on user’s role
 
-→ login\page.tsx: Now have Admin Login, Cancel Button, and Eye Icon on Password Field
+### *login\page.tsx*
+- Removed Role Switcher
+- Now have Admin Login
+- Cancel Button on Role Login
+- Eye Icon on Password Field
 
-→ admin\page.tsx: Logout redirects back to app\page.tsx; removed extra logout button
+### *dashboard\admin\page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
 
-→ patient\page.tsx: Logout redirects back to app\page.tsx
+### *dashboard\therapist\page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
 
-→ therapist\page.tsx: Logout redirects back to app\page.tsx; removed extra logout button
-
-→ (app)\layout.tsx: Logout functionality fixed
+### *(app)\layout.tsx*
+- Logout functionality fixed

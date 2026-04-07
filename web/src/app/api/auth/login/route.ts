@@ -1,30 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-// Temporary mock credentials (no database)
-const MOCK_USERS = {
-  patient: {
-    email: "patient@example.com",
-    password: "patient123",
-    role: "patient",
-    id: "patient_001",
-    name: "John Patient",
-  },
-  therapist: {
-    email: "therapist@clinic.com",
-    password: "therapist123",
-    role: "therapist",
-    id: "therapist_001",
-    name: "Sarah Therapist",
-    clinicId: "CLINIC_001",
-  },
-  admin: {
-    email: "admin@postural.com",
-    password: "admin123",
-    role: "admin",
-    id: "admin_001",
-    name: "Admin User",
-  },
-};
+import { getUser } from "@/lib/db";
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,9 +13,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user = Object.values(MOCK_USERS).find(
-      (u) => u.role === role && u.email === email
-    );
+    // Query database for user
+    const user = await getUser(email, role);
 
     if (!user || user.password !== password) {
       return NextResponse.json(
@@ -59,7 +33,7 @@ export async function POST(request: NextRequest) {
           name: user.name,
           role: user.role,
           ...(user.role === "therapist" && {
-            clinicId: (user as any).clinicId,
+            clinicId: user.clinicId,
           }),
         },
       },

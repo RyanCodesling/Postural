@@ -10,6 +10,7 @@ import {
 
 import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
+import { computePoseMetrics, type PoseMetrics } from "@/lib/pose/poseMetrics";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -65,10 +66,34 @@ export default function CameraClient() {
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>("");
 
-  // Placeholder metrics (wire later)
-  const neckAngle = "--";
-  const spineCurve = "--";
-  const postureScore = "--";
+  const [liveMetrics, setLiveMetrics] = useState<PoseMetrics>({
+    tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+    neckTilt:         null,
+    shoulderSymmetry: null,
+    postureScore:     null,
+  });
+ 
+  // ── Derived display strings ──────────────────────────────────────────────
+  // These keep the JSX clean and centralize all null-to-display-string logic.
+ 
+  const neckDisplay = liveMetrics.neckTilt
+    ? `${liveMetrics.neckTilt.angleDeg}° ${liveMetrics.neckTilt.direction}`
+    : "--";
+ 
+  const shoulderDisplay = liveMetrics.shoulderSymmetry
+    ? liveMetrics.shoulderSymmetry.severity === "normal"
+      ? "Level"
+      : `${liveMetrics.shoulderSymmetry.angleDeg}° ${liveMetrics.shoulderSymmetry.elevatedSide} high`
+    : "--";
+ 
+  const scoreDisplay = liveMetrics.postureScore !== null
+    ? `${liveMetrics.postureScore}`
+    : "--";
+ 
+  // Shown when hips and ears disagree — body asymmetry is affecting
+  // the tilt correction and metric reliability is reduced.
+  const showTiltWarning = liveMetrics.tiltReference.confidence === "low";
+ 
   const sets = 3;
   const reps = 12;
   const progressPct = 65;
@@ -85,7 +110,7 @@ export default function CameraClient() {
         );
         const landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: "/models/pose_landmarker_lite.task",
+            modelAssetPath: "/models/pose_landmarker_full.task",
             delegate: "GPU",
           },
           runningMode: "VIDEO",
@@ -95,7 +120,7 @@ export default function CameraClient() {
         setModelLoaded(true);
       } catch (err) {
         console.error(err);
-        setError("AI Model failed. Check public/models/pose_landmarker_lite.task");
+        setError("AI Model failed. Check public/models/pose_landmarker_full.task");
       }
     };
     initLandmarker();
@@ -188,7 +213,17 @@ export default function CameraClient() {
             drawCutoutOverlay(ctx, canvas.width, canvas.height, r);
           }
 
-          // Downstream logic later: only if (r.ok) { math engine + reps }
+          if (r.ok) {
+            const metrics = computePoseMetrics(landmarks as any);
+            setLiveMetrics(metrics);
+          } else {
+            setLiveMetrics({
+              tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+              neckTilt:         null,
+              shoulderSymmetry: null,
+              postureScore:     null,
+            });
+          }
         } else {
           commitCaptureState(false, "No person detected. Step into the frame.");
         }
@@ -368,9 +403,15 @@ export default function CameraClient() {
 
               {/* Compact overlay metrics (no extra vertical space) */}
               <div className="absolute bottom-3 left-3 z-20 flex flex-wrap gap-2">
-                <Chip label="Neck" value={`${neckAngle}°`} />
-                <Chip label="Spine" value={`${spineCurve}°`} />
-                <Chip label="Score" value={`${postureScore}/100`} />
+                <Chip label="Neck"     value={neckDisplay} />
+                <Chip label="Shoulder" value={shoulderDisplay} />
+                <Chip label="Score"    value={`${scoreDisplay}/100`} />
+ 
+                {showTiltWarning && (
+                  <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-lg bg-yellow-500/80 text-black text-xs font-medium shadow">
+                    Measurement confidence reduced — ensure hips and head are visible
+                  </div>
+                )}
               </div>
 
               {/* Compact overlay progress */}

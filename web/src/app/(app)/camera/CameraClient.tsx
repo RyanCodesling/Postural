@@ -10,7 +10,7 @@ import {
 
 import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
-import { computePoseMetrics, type PoseMetrics } from "@/lib/pose/poseMetrics";
+import { computePoseMetrics, type PoseMetrics, type Severity } from "@/lib/pose/poseMetrics";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -401,35 +401,45 @@ export default function CameraClient() {
                 </div>
               )}
 
-              {/* Compact overlay metrics (no extra vertical space) */}
-              <div className="absolute bottom-3 left-3 z-20 flex flex-wrap gap-2">
-                <Chip label="Neck"     value={neckDisplay} />
-                <Chip label="Shoulder" value={shoulderDisplay} />
-                <Chip label="Score"    value={`${scoreDisplay}/100`} />
+              {/* ── Tilt confidence warning — top center, own absolute element ── */}
+              {showTiltWarning && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-yellow-500/90 backdrop-blur-sm text-black text-xs font-semibold shadow-lg whitespace-nowrap">
+                  <span>⚠</span>
+                  <span>Measurement confidence reduced — ensure hips and head are visible</span>
+                </div>
+              )}
  
-                {showTiltWarning && (
-                  <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-lg bg-yellow-500/80 text-black text-xs font-medium shadow">
-                    Measurement confidence reduced — ensure hips and head are visible
-                  </div>
-                )}
+              {/* ── Posture metrics — bottom left ── */}
+              <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2">
+                <MetricCard
+                  label="NECK TILT"
+                  value={liveMetrics.neckTilt ? `${liveMetrics.neckTilt.angleDeg}°` : "--"}
+                  sub={
+                    liveMetrics.neckTilt
+                      ? `${liveMetrics.neckTilt.direction.charAt(0).toUpperCase() + liveMetrics.neckTilt.direction.slice(1)} · ${severityText(liveMetrics.neckTilt.severity)}`
+                      : "No data"
+                  }
+                  severity={liveMetrics.neckTilt?.severity ?? null}
+                />
+                <MetricCard
+                  label="SHOULDER"
+                  value={liveMetrics.shoulderSymmetry ? `${liveMetrics.shoulderSymmetry.angleDeg}°` : "--"}
+                  sub={
+                    liveMetrics.shoulderSymmetry
+                      ? liveMetrics.shoulderSymmetry.severity === "normal"
+                        ? "Level · Normal"
+                        : `${liveMetrics.shoulderSymmetry.elevatedSide.charAt(0).toUpperCase() + liveMetrics.shoulderSymmetry.elevatedSide.slice(1)} high · ${severityText(liveMetrics.shoulderSymmetry.severity)}`
+                      : "No data"
+                  }
+                  severity={liveMetrics.shoulderSymmetry?.severity ?? null}
+                />
+                <ScoreCard score={liveMetrics.postureScore} />
               </div>
-
-              {/* Compact overlay progress */}
-              <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-end">
-                <div className="flex gap-2">
-                  <Chip label="Sets" value={`${sets}`} />
-                  <Chip label="Reps" value={`${reps}`} />
-                  <Chip label="Time" value={timer} />
-                </div>
-                <div className="w-72 bg-black/70 rounded-xl px-5 py-4 shadow-lg">
-                  <div className="flex items-center justify-between text-sm text-white/90">
-                    <span>Progress</span>
-                    <span className="font-bold">{progressPct}%</span>
-                  </div>
-                  <div className="mt-3 h-3 bg-white/20 rounded-full overflow-hidden">
-                    <div className="h-full bg-white/85" style={{ width: `${progressPct}%` }} />
-                  </div>
-                </div>
+ 
+              {/* ── Exercise stats — bottom right ── */}
+              <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
+                <StatPanel sets={sets} reps={reps} timer={timer} />
+                <ProgressCard progressPct={progressPct} />
               </div>
             </div>
           </div>
@@ -553,11 +563,131 @@ export default function CameraClient() {
   );
 }
 
-function Chip({ label, value }: { label: string; value: string }) {
+function severityAccent(s: Severity | null): string {
+  if (!s) return "bg-white/25";
+  if (s === "normal")   return "bg-emerald-400";
+  if (s === "mild")     return "bg-yellow-400";
+  if (s === "moderate") return "bg-orange-500";
+  return "bg-red-500";
+}
+ 
+function severityText(s: Severity | null): string {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+ 
+function scoreAccent(score: number | null): string {
+  if (score === null) return "bg-white/25";
+  if (score >= 80)   return "bg-emerald-400";
+  if (score >= 60)   return "bg-yellow-400";
+  if (score >= 40)   return "bg-orange-500";
+  return "bg-red-500";
+}
+ 
+function scoreValueColor(score: number | null): string {
+  if (score === null) return "text-white/40";
+  if (score >= 80)   return "text-emerald-400";
+  if (score >= 60)   return "text-yellow-400";
+  if (score >= 40)   return "text-orange-400";
+  return "text-red-400";
+}
+
+function MetricCard({
+  label,
+  value,
+  sub,
+  severity,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  severity: Severity | null;
+}) {
   return (
-    <div className="bg-black/70 text-white rounded-xl px-5 py-3 shadow-lg">
-      <div className="text-sm text-white/80">{label}</div>
-      <div className="text-xl font-bold leading-tight">{value}</div>
+    <div className="flex overflow-hidden rounded-xl bg-black/65 backdrop-blur-sm shadow-lg w-44">
+      {/* Severity accent bar */}
+      <div className={`w-1.5 shrink-0 ${severityAccent(severity)}`} />
+      <div className="px-4 py-3 flex-1 min-w-0">
+        <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
+          {label}
+        </div>
+        {/* tabular-nums prevents layout shift as digits change each frame */}
+        <div className="text-4xl font-bold text-white leading-none tabular-nums">
+          {value}
+        </div>
+        <div className="text-xs text-white/55 mt-1.5 truncate">{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreCard({ score }: { score: number | null }) {
+  const pct = score ?? 0;
+  return (
+    <div className="flex overflow-hidden rounded-xl bg-black/65 backdrop-blur-sm shadow-lg w-44">
+      <div className={`w-1.5 shrink-0 ${scoreAccent(score)}`} />
+      <div className="px-4 py-3 flex-1">
+        <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
+          POSTURE SCORE
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <span className={`text-4xl font-bold leading-none tabular-nums ${scoreValueColor(score)}`}>
+            {score ?? "--"}
+          </span>
+          <span className="text-sm text-white/35 leading-none">/100</span>
+        </div>
+        {/* Mini score bar — animates smoothly between frames */}
+        <div className="mt-3 h-1.5 bg-white/15 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${scoreAccent(score)}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatPanel({ sets, reps, timer }: { sets: number; reps: number; timer: string }) {
+  return (
+    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
+      <div className="flex divide-x divide-white/10">
+        <StatCell label="SETS" value={String(sets)} />
+        <StatCell label="REPS" value={String(reps)} />
+        <StatCell label="TIME" value={timer} />
+      </div>
+    </div>
+  );
+}
+ 
+function StatCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="px-5 py-3 text-center">
+      <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
+        {label}
+      </div>
+      <div className="text-3xl font-bold text-white leading-none tabular-nums">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ProgressCard({ progressPct }: { progressPct: number }) {
+  return (
+    <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
+      <div className="flex items-center justify-between mb-2.5">
+        <span className="text-[10px] tracking-widest text-white/50 uppercase">
+          Session Progress
+        </span>
+        <span className="text-sm font-bold text-white tabular-nums">{progressPct}%</span>
+      </div>
+      <div className="h-2 bg-white/15 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-white/75 rounded-full transition-all duration-500"
+          style={{ width: `${progressPct}%` }}
+        />
+      </div>
     </div>
   );
 }

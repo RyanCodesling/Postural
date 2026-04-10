@@ -309,7 +309,7 @@ export function computeLateralNeckTilt(
   // 2° dead-band: below this, the angle is indistinguishable from landmark noise
   const direction: NeckTiltResult["direction"] =
     absDeg < 2         ? "center" :
-    correctedAngle > 0 ? "right"  : "left";
+    correctedAngle > 0 ? "left"  : "right";
 
   return {
     angleDeg:             Math.round(absDeg * 10) / 10,

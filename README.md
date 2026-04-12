@@ -71,3 +71,25 @@
 - Updated environment variables section
 - Modified authentication flow description
 
+## 📌 Update-4-09-26
+
+### *web/source/lib/pose*
+- Added poseMetrics.tsx for math engine
+
+### *web/public/models*
+- Upgraded pose_landmarker_lite.task to pose_landmarker_full.task
+
+### *web/src/app/(app)/camera/CameraClient.tsx*
+- Changed references of pose_landmarker_lite.task to pose_landmarker_full.task
+- Removed placeholder metrics, now uses and shows live metrics referenced from poseMetrics.ts
+- Added neck and shoulder metrics, as well as scoring
+- UI/UX changes for better visibility
+- Added color coded visualizers for metric deviation
+
+
+### *web/src/lib/pose/captureReadiness.ts*
+- Added knee(25,26) visibility requirement
+- Adjusted centering of head(0) to the top quarter of the frame
+- Replaced hint messages to natural language
+
+

@@ -1,66 +1,50 @@
 # Sprint Updates 
 
-## 📌 Update-4-13-26
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
 
-Added 2 new database tables
-therapist
-patients
+---
 
-### *dashboard\admin\page.tsx* 
+## 📌 Update-4-13-26 | *ralmeyda, Enah*
+
+Added 2 new database tables: therapist, patients
+
+### *dashboard/admin/page.tsx* 
 - Admin can now add a user and update to the database.
 - Added Database function for Add User in admin side.
 - Fix Patient-therapist assignment
 
-### *dashboard\therapist\page.tsx* 
+### *dashboard/therapist/page.tsx* 
 - The therapist can now view assigned patients
 
-📌This is for the next sprint update📌
-**Fix Assign Patient**
-- Admin can still assign the patient to the therapist even though they're already assigned. Will add the re-assign feature.
+### *This is for the next sprint update* ❕
+- **Fix Assign Patient** (Admin can still assign the patient to the therapist even though they're already assigned. Will add the re-assign feature.)
 
-  
-## 📌 Update-3-25-26
+---
 
-### *dashboard\patient\page.tsx* 
-- Created subfolder for Patient Side
-- Logout button redirects back to app\page.tsx
+## 📌 Update-4-09-26 | *RyanCodesling*
 
-### *dashboard\page.tsx* 
-- Now works as role-based router that redirects based on user’s role
+### *web/source/lib/pose*
+- Added poseMetrics.tsx for math engine
 
-### *login\page.tsx*
-- Removed Role Switcher
-- Now have Admin Login
-- Cancel Button on Role Login
-- Eye Icon on Password Field
+### *web/public/models*
+- Upgraded pose_landmarker_lite.task to pose_landmarker_full.task
 
-### *dashboard\admin\page.tsx* 
-- Logout button redirects back to app\page.tsx
-- Removed extra logout button
+### *web/src/app/(app)/camera/CameraClient.tsx*
+- Changed references of pose_landmarker_lite.task to pose_landmarker_full.task
+- Removed placeholder metrics, now uses and shows live metrics referenced from poseMetrics.ts
+- Added neck and shoulder metrics, as well as scoring
+- UI/UX changes for better visibility
+- Added color coded visualizers for metric deviation
 
-### *dashboard\therapist\page.tsx* 
-- Logout button redirects back to app\page.tsx
-- Removed extra logout button
+### *web/src/lib/pose/captureReadiness.ts*
+- Added knee(25,26) visibility requirement
+- Adjusted centering of head(0) to the top quarter of the frame
+- Replaced hint messages to natural language
 
-### *(app)\layout.tsx*
-- Logout functionality fixed
+---
 
-
-## 📌 Update-3-31-26
-
-### *dashboard\admin\page.tsx* 
-- Added Age, Gender, Diagnosis, Prescription, and Condition when adding a new user
-- When adding a new user ( Therapist ), the Therapist ID and Specialty were added.
-
-### *dashboard\therapist\page.tsx* 
-- Added Reps, Sets, weights, and notes when assigning exercise to the patient.
-- The therapist can now view/edit the medical information about the patient.
-- The therapist can now create a templated exercise, and can also add a custom exercise if the exercise is not part of the list ( Non-Machine Learning Exercises )
-- When the template is already assigned to the patient, it cannot be selected again.
-- The therapist can edit the exercises if they’re already assigned to the patient.
-- The system will show the time, date, and notes when the exercise is edited.
-
-## 📌 Update-4-08-26
+## 📌 Update-4-08-26 | *Enah*
 
 ### *web/package.json*
 - Added `mysql2` dependency for database connection
@@ -91,25 +75,46 @@ patients
 - Updated environment variables section
 - Modified authentication flow description
 
-## 📌 Update-4-09-26
+---
 
-### *web/source/lib/pose*
-- Added poseMetrics.tsx for math engine
+## 📌 Update-3-31-26 | *ralmeyda*
 
-### *web/public/models*
-- Upgraded pose_landmarker_lite.task to pose_landmarker_full.task
+### *dashboard/admin/page.tsx* 
+- Added Age, Gender, Diagnosis, Prescription, and Condition when adding a new user
+- When adding a new user ( Therapist ), the Therapist ID and Specialty were added.
 
-### *web/src/app/(app)/camera/CameraClient.tsx*
-- Changed references of pose_landmarker_lite.task to pose_landmarker_full.task
-- Removed placeholder metrics, now uses and shows live metrics referenced from poseMetrics.ts
-- Added neck and shoulder metrics, as well as scoring
-- UI/UX changes for better visibility
-- Added color coded visualizers for metric deviation
+### *dashboard/therapist/page.tsx* 
+- Added Reps, Sets, weights, and notes when assigning exercise to the patient.
+- The therapist can now view/edit the medical information about the patient.
+- The therapist can now create a templated exercise, and can also add a custom exercise if the exercise is not part of the list ( Non-Machine Learning Exercises )
+- When the template is already assigned to the patient, it cannot be selected again.
+- The therapist can edit the exercises if they’re already assigned to the patient.
+- The system will show the time, date, and notes when the exercise is edited.
 
+---
 
-### *web/src/lib/pose/captureReadiness.ts*
-- Added knee(25,26) visibility requirement
-- Adjusted centering of head(0) to the top quarter of the frame
-- Replaced hint messages to natural language
+## 📌 Update-3-25-26 | *Enah*
 
+### *dashboard/patient/page.tsx* 
+- Created subfolder for Patient Side
+- Logout button redirects back to app\page.tsx
 
+### *dashboard/page.tsx* 
+- Now works as role-based router that redirects based on user’s role
+
+### *login/page.tsx*
+- Removed Role Switcher
+- Now have Admin Login
+- Cancel Button on Role Login
+- Eye Icon on Password Field
+
+### *dashboard/admin/page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
+
+### *dashboard/therapist/page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
+
+### *(app)/layout.tsx*
+- Logout functionality fixed

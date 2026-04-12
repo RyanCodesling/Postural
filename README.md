@@ -1,4 +1,24 @@
 # Sprint Updates 
+
+## 📌 Update-4-13-26
+
+Added 2 new database tables
+therapist
+patients
+
+### *dashboard\admin\page.tsx* 
+- Admin can now add a user and update to the database.
+- Added Database function for Add User in admin side.
+- Fix Patient-therapist assignment
+
+### *dashboard\therapist\page.tsx* 
+- The therapist can now view assigned patients
+
+📌This is for the next sprint update📌
+**Fix Assign Patient**
+- Admin can still assign the patient to the therapist even though they're already assigned. Will add the re-assign feature.
+
+  
 ## 📌 Update-3-25-26
 
 ### *dashboard\patient\page.tsx* 

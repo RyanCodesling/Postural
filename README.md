@@ -1,5 +1,10 @@
 # Sprint Updates 
 
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
+
+---
+
 ## 📌 Update-4-15-26 | *Enah*
 - Fixed patient and therapist dashboard auth handling so `/dashboard` stays on the correct role dashboard rather than redirecting to login as patient
 - Fixed logout redirect race condition by removing auth checks from patient/therapist pages to prevent conflicts with layout's redirect to main page

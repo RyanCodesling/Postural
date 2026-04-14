@@ -6,7 +6,16 @@ import { useAuth } from "@/lib/AuthContext";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
+
+  const dashboardHref =
+    user?.role === "admin"
+      ? "/dashboard/admin"
+      : user?.role === "therapist"
+      ? "/dashboard/therapist"
+      : user?.role === "patient"
+      ? "/dashboard/patient"
+      : "/dashboard";
 
   const handleLogout = async () => {
     await logout();
@@ -18,7 +27,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <nav className="border-b bg-blue-300">
         <div className="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
           <div className="flex gap-4">
-            <Link href="/dashboard" className="font-semibold">Dashboard</Link>
+            <Link href={dashboardHref} className="font-semibold">Dashboard</Link>
             <Link href="/camera">Camera</Link>
             <Link href="/profile">Profile</Link>
           </div>

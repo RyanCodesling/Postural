@@ -9,7 +9,7 @@ interface User {
   id: string;
   name: string;
   email: string;
-  role: "patient" | "therapist";
+  role: "patient" | "therapist" | "admin";
   therapistId?: string;
 }
 
@@ -20,11 +20,22 @@ interface PatientData {
 }
 
 export default function TherapistDashboardPage() {
-  const { user, logout } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [patients, setPatients] = useState<PatientData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState(true);
+
+  useEffect(() => {
+    if (loading) return;
+
+    if (user && user.role !== "therapist") {
+      router.push("/dashboard");
+      return;
+    }
+
+    setPageLoading(false);
+  }, [user, loading, router]);
 
   const loadAssignedPatients = () => {
     if (!user?.id) return;
@@ -49,7 +60,7 @@ export default function TherapistDashboardPage() {
         console.error("Error loading patients:", error);
       }
     }
-    setLoading(false);
+    setPageLoading(false);
   };
 
   useEffect(() => {
@@ -59,6 +70,14 @@ export default function TherapistDashboardPage() {
   const filtered = patients.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase())
   );
+
+  if (loading || pageLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="text-gray-500">Loading dashboard...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-white">

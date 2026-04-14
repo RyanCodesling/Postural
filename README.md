@@ -1,11 +1,47 @@
 # Sprint Updates 
 
-## 📌 New sprint update here (●'◡'●) | *author_name*
--
+## 📌 Update-4-15-26 | *Enah*
+- Fixed patient and therapist dashboard auth handling so `/dashboard` stays on the correct role dashboard rather than redirecting to login as patient
+- Fixed logout redirect race condition by removing auth checks from patient/therapist pages to prevent conflicts with layout's redirect to main page
+
+### *web/src/lib/auth.ts*
+- Added `credentials: "same-origin"` to login and logout API requests to ensure auth cookies are persisted.
+
+### *web/src/lib/AuthContext.tsx*
+- Switched auth session resolution to `/api/auth/me` and removed localStorage-based auth state for login/logout.
+
+### *web/src/app/(auth)/login/page.tsx*
+- Updated login flow to call `login(result.user)` and avoid localStorage auth persistence.
+
+### *web/src/app/api/auth/login/route.ts*
+- Stored sanitized session user in `auth_token` instead of full DB row, and kept login logic on the database-backed route.
+
+### *web/src/app/api/auth/me/route.ts*
+- Added a new route to read the auth cookie and return the current user session.
+
+### *web/src/app/api/auth/logout/route.ts*
+- Fixed logout cookie deletion to clear the auth token path and allow redirect back to `/`.
+
+### *web/src/app/(app)/layout.tsx*
+- Updated dashboard nav link to route users directly to their own role-specific dashboard.
+
+### *web/src/app/(app)/dashboard/page.tsx*
+- Updated role redirect to use `router.replace(...)` for cleaner navigation from `/dashboard`.
+
+### *web/src/app/(app)/dashboard/patient/page.tsx*
+- Added role validation so patients stay on the patient dashboard and users with wrong roles are redirected to `/dashboard`.
+- Fixed Placeholder Name in "Signed in as" display showing the authenticated user's name from the database.
+
+### *web/src/app/(app)/dashboard/therapist/page.tsx*
+- Added role validation so therapists stay on the therapist dashboard and users with wrong roles are redirected to `/dashboard`.
+- Fixed Placeholder Name in "Signed in as" display showing the authenticated user's name from the database.
+
+### *web/src/app/(app)/dashboard/admin/page.tsx*
+- Fixed Placeholder Name in "Signed in as" display showing the authenticated user's name from the database.
 
 ---
 
-## 📌 Update-4-13-26 | *ralmeyda, Enah*
+## 📌 Update-4-13-26 | *ralmeyda*
 
 Added 2 new database tables: therapist, patients
 
@@ -13,9 +49,11 @@ Added 2 new database tables: therapist, patients
 - Admin can now add a user and update to the database.
 - Added Database function for Add User in admin side.
 - Fix Patient-therapist assignment
+- Added "Signed in as" display showing the authenticated user's name from the database.
 
 ### *dashboard/therapist/page.tsx* 
 - The therapist can now view assigned patients
+- Added "Signed in as" display showing the authenticated user's name from the database.
 
 ### *This is for the next sprint update* ❕
 - **Fix Assign Patient** (Admin can still assign the patient to the therapist even though they're already assigned. Will add the re-assign feature.)

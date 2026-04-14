@@ -5,7 +5,7 @@
 
 ---
 
-## 📌 Update-4-13-26 | *ralmeyda, Enah*
+## 📌 Update-4-13-26 | *ralmeyda*
 
 Added 2 new database tables: therapist, patients
 

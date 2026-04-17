@@ -25,7 +25,6 @@ interface Exercise {
   id: string;
   name: string;
   description: string;
-  duration: number;
 }
 
 interface PatientExercise {
@@ -868,7 +867,6 @@ export default function PatientDetailPage() {
                                 <h3 className="font-semibold text-gray-900">{exercise.name}</h3>
                                 <p className="text-sm text-gray-600 mt-1">{exercise.description}</p>
                                 <div className="flex gap-3 mt-3 flex-wrap">
-                                  <span className="text-xs text-gray-600">⏱ {exercise.duration}s</span>
                                   <span className="text-xs text-gray-600">Assigned: {assignment.assignedDate}</span>
                                   {assignment.reps !== undefined && <span className="text-xs text-gray-600">📊 {assignment.reps} reps</span>}
                                   {assignment.sets !== undefined && <span className="text-xs text-gray-600">📋 {assignment.sets} sets</span>}

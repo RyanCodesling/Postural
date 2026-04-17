@@ -28,7 +28,6 @@ interface Exercise {
   id: string;
   name: string;
   description: string;
-  duration: number;
 }
 
 export default function AdminDashboard() {
@@ -47,37 +46,31 @@ export default function AdminDashboard() {
       id: "ex_001",
       name: "Lateral Arm Raises",
       description: "Raise arms to the side at shoulder height. Improves shoulder strength and posture.",
-      duration: 30,
     },
     {
       id: "ex_002",
       name: "Overhead Arm Raises",
       description: "Raise arms straight up overhead. Strengthens shoulders and improves upper back flexibility.",
-      duration: 30,
     },
     {
       id: "ex_003",
       name: "Shoulder Shrugs",
       description: "Lift shoulders towards ears and release. Relieves tension and strengthens trapezius.",
-      duration: 20,
     },
     {
       id: "ex_004",
       name: "Neck Lateral Flexion",
       description: "Bend neck to each side gently. Improves neck flexibility and reduces stiffness.",
-      duration: 25,
     },
     {
       id: "ex_005",
       name: "Standing Side Bends",
       description: "Bend torso to the side while standing. Strengthens obliques and improves spinal mobility.",
-      duration: 35,
     },
     {
       id: "ex_006",
       name: "Arm Abduction at 90°",
       description: "Raise arms to 90 degrees from body. Targets shoulder stability and strength.",
-      duration: 30,
     },
   ]);
 
@@ -108,11 +101,9 @@ export default function AdminDashboard() {
   const [newExercise, setNewExercise] = useState<{
     name: string;
     description: string;
-    duration: number;
   }>({
     name: "",
     description: "",
-    duration: 30,
   });
   const [showExerciseForm, setShowExerciseForm] = useState(false);
 
@@ -257,7 +248,7 @@ export default function AdminDashboard() {
       ...newExercise,
     };
     setExercises([...exercises, exercise]);
-    setNewExercise({ name: "", description: "", duration: 30 });
+    setNewExercise({ name: "", description: "" });
     setShowExerciseForm(false);
   };
 
@@ -857,28 +848,6 @@ export default function AdminDashboard() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Duration (seconds)
-                      </label>
-                      <input
-                        type="number"
-                        value={newExercise.duration}
-                        onChange={(e) =>
-                          setNewExercise({
-                            ...newExercise,
-                            duration: parseInt(e.target.value),
-                          })
-                        }
-                        className="w-full border border-gray-300 rounded px-3 py-2"
-                        min="1"
-                        required
-                      />
-                    </div>
-
-                  </div>
-
                   <button
                     type="submit"
                     className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
@@ -895,12 +864,6 @@ export default function AdminDashboard() {
                 <div key={ex.id} className="bg-white p-6 rounded shadow hover:shadow-lg transition">
                   <h3 className="text-lg font-semibold text-gray-900 mb-2">{ex.name}</h3>
                   <p className="text-sm text-gray-600 mb-4">{ex.description}</p>
-
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-sm text-gray-500">
-                      <span className="block">⏱ {ex.duration}s</span>
-                    </div>
-                  </div>
 
                   <button
                     onClick={() => handleDeleteExercise(ex.id)}

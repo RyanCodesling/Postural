@@ -9,7 +9,6 @@ interface Exercise {
   name: string;
   description: string;
   duration: number;
-  difficulty: "easy" | "medium" | "hard";
 }
 
 interface TemplateExercise {
@@ -283,7 +282,7 @@ export default function ExerciseTemplatesPage() {
                             <div className="font-medium text-gray-900">{exercise.name}</div>
                             <div className="text-sm text-gray-600">{exercise.description}</div>
                             <div className="text-xs text-gray-500 mt-1">
-                              {exercise.difficulty} • {exercise.duration}s
+                              {exercise.duration}s
                             </div>
                           </div>
                         </label>

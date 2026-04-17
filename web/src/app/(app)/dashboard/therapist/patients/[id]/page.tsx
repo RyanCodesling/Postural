@@ -26,7 +26,6 @@ interface Exercise {
   name: string;
   description: string;
   duration: number;
-  difficulty: "easy" | "medium" | "hard";
 }
 
 interface PatientExercise {
@@ -280,19 +279,6 @@ export default function PatientDetailPage() {
   const getExerciseName = (exerciseId: string | undefined) => {
     if (!exerciseId) return "Custom Exercise";
     return exercises.find((e) => e.id === exerciseId)?.name || "Unknown Exercise";
-  };
-
-  const getDifficultyColor = (difficulty: string) => {
-    switch (difficulty) {
-      case "easy":
-        return "text-green-600 bg-green-50";
-      case "medium":
-        return "text-yellow-600 bg-yellow-50";
-      case "hard":
-        return "text-red-600 bg-red-50";
-      default:
-        return "text-gray-600 bg-gray-50";
-    }
   };
 
   const getStatusColor = (status: string) => {
@@ -697,7 +683,7 @@ export default function PatientDetailPage() {
                         <option value="">-- Select an exercise --</option>
                         {availableExercises.map((ex) => (
                           <option key={ex.id} value={ex.id}>
-                            {ex.name} ({ex.difficulty})
+                            {ex.name}
                           </option>
                         ))}
                       </select>
@@ -882,9 +868,6 @@ export default function PatientDetailPage() {
                                 <h3 className="font-semibold text-gray-900">{exercise.name}</h3>
                                 <p className="text-sm text-gray-600 mt-1">{exercise.description}</p>
                                 <div className="flex gap-3 mt-3 flex-wrap">
-                                  <span className={`px-2 py-1 text-xs font-medium rounded ${getDifficultyColor(exercise.difficulty)}`}>
-                                    {exercise.difficulty.charAt(0).toUpperCase() + exercise.difficulty.slice(1)}
-                                  </span>
                                   <span className="text-xs text-gray-600">⏱ {exercise.duration}s</span>
                                   <span className="text-xs text-gray-600">Assigned: {assignment.assignedDate}</span>
                                   {assignment.reps !== undefined && <span className="text-xs text-gray-600">📊 {assignment.reps} reps</span>}

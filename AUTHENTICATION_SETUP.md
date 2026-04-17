@@ -63,7 +63,7 @@ The following routes are protected and require authentication:
 ## Admin Dashboard (CMS)
 The Admin panel allows system administrators to:
 - **Manage Users**: Add, view, and delete users (patients, therapists)
-- **Manage Exercises**: Create, edit, and delete exercise routines with difficulty levels and duration
+- **Manage Exercises**: Create, edit, and delete exercise routines with duration
 
 Access at `/dashboard/admin` after logging in as admin.
 

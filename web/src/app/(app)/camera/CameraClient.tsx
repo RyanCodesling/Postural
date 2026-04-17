@@ -19,7 +19,6 @@ interface Exercise {
   name: string;
   description: string;
   duration: number;
-  difficulty: "easy" | "medium" | "hard";
 }
 
 interface PatientExercise {
@@ -474,7 +473,6 @@ export default function CameraClient() {
                   <div className="line-clamp-3 mt-1">{selectedExerciseObj.description}</div>
                   <div className="mt-2 flex gap-2 text-[11px] text-gray-600">
                     <span>⏱ {selectedExerciseObj.duration}s</span>
-                    <span>• {selectedExerciseObj.difficulty}</span>
                   </div>
                 </div>
               )}

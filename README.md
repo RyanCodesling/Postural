@@ -26,6 +26,9 @@
 - Logout functionality fixed
 
 
+## 📌 Update-4-17-26
+- Removed exercise difficulty and timer/duration.
+
 ## 📌 Update-3-31-26
 
 ### *dashboard\admin\page.tsx* 
@@ -39,57 +42,3 @@
 - When the template is already assigned to the patient, it cannot be selected again.
 - The therapist can edit the exercises if they’re already assigned to the patient.
 - The system will show the time, date, and notes when the exercise is edited.
-
-## 📌 Update-4-08-26
-
-### *web/package.json*
-- Added `mysql2` dependency for database connection
-
-### *web/src/lib/db.ts*
-- Created new database connection module with connection pool
-- Added `getUser()` function to query users from database by email and role
-- Configured environment variables for database host, user, password, and name
-
-### *web/src/app/api/auth/login/route.ts*
-- Migrated from hardcoded mock credentials to database queries
-- Now validates user credentials against MySQL database
-- Removed MOCK_USERS object and replaced with database lookup
-
-### *web/.env.local*
-- Created environment variables template for database configuration
-- Includes DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
-
-### *scripts/user_credentials.sql*
-- Created SQL file with users table schema including id, email, password, name, role, clinicId
-- Added indexes on email and role for better performance
-- Inserted 3 mock user records (patient, therapist, admin)
-
-### *AUTHENTICATION_SETUP.md*
-- Updated documentation to reflect database implementation
-- Added database setup instructions for phpMyAdmin
-- Added explanation of how `mysql2/promise` and phpMyAdmin work together
-- Updated environment variables section
-- Modified authentication flow description
-
-## 📌 Update-4-09-26
-
-### *web/source/lib/pose*
-- Added poseMetrics.tsx for math engine
-
-### *web/public/models*
-- Upgraded pose_landmarker_lite.task to pose_landmarker_full.task
-
-### *web/src/app/(app)/camera/CameraClient.tsx*
-- Changed references of pose_landmarker_lite.task to pose_landmarker_full.task
-- Removed placeholder metrics, now uses and shows live metrics referenced from poseMetrics.ts
-- Added neck and shoulder metrics, as well as scoring
-- UI/UX changes for better visibility
-- Added color coded visualizers for metric deviation
-
-
-### *web/src/lib/pose/captureReadiness.ts*
-- Added knee(25,26) visibility requirement
-- Adjusted centering of head(0) to the top quarter of the frame
-- Replaced hint messages to natural language
-
-

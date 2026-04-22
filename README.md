@@ -26,8 +26,6 @@
 - Logout functionality fixed
 
 
-## 📌 Update-4-17-26
-- Removed exercise difficulty and timer/duration.
 
 ## 📌 Update-3-31-26
 
@@ -42,3 +40,18 @@
 - When the template is already assigned to the patient, it cannot be selected again.
 - The therapist can edit the exercises if they’re already assigned to the patient.
 - The system will show the time, date, and notes when the exercise is edited.
+
+
+
+## 📌 Update-4-17-26
+- Removed exercise difficulty and timer/duration.
+
+
+
+## 📌 Update-4-24-26
+
+### *web\src\lib\pose*
+- Added oneEuroFilter.ts for landmarker smoothing
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added oneEuroFilter.ts implementations

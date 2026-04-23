@@ -1,47 +1,76 @@
 # Temporary Authentication Credentials
 
 ## Overview
-Temporary login credentials have been moved to a MySQL database. The authentication system now queries the database instead of using hardcoded credentials.
+Temporary login credentials are stored in a PostgreSQL database. The authentication system queries the database instead of using hardcoded credentials.
 
 ## Database Setup
 
-### 1. Create Database
-Run the SQL file provided in `scripts/user_credentials.sql` using phpMyAdmin:
-1. Open phpMyAdmin
-2. Click "Import" tab
-3. Upload or paste the contents of `scripts/user_credentials.sql`
-4. Execute the SQL
+### Step 1 — — Install PostgreSQL
+Download and install from **https://www.enterprisedb.com/downloads/postgres-postgresql-downloads**
+PostgreSQL Version 18.3
 
-The SQL file will automatically create the `postural` database and users table with sample data.
+### Step 2 — Register a Server in pgAdmin 4
+Open pgAdmin 4
+Click Add New Server from the Dashboard
+General tab → Name: postural
+Connection tab → fill in:
+Host name: localhost
+Port: 5432
+Username: postgres
+Password: (the password you set during PostgreSQL installation)
+Click Save
 
-### 2. Environment Variables
-The `.env.local` file already exists in the `web/` directory with the following database configuration:
+### Step 3 — Create the database
+Expand Servers → **`postural`** → Databases
+Right-click Databases → Create → Database
+Name the Database **`postural`** → Click Save
+
+### Step 4 — Create the user
+Expand Login/Group Roles
+Right-click → Create → Login/Group Role
+General tab → Name: postural
+Definition tab → Password: nasa sprint updates gdocs yung pass (copy paste mo nalang)
+Privileges tab → Enable Can login?
+Click Save
+
+### ‼️ Step 5 — Run the SQL file
+Right-click postural database → Query Tool
+Open File and go to scripts/
+Select the sql file
+Now run the sql by clicking Execute script or F5
+
+### Step 6 — Create `.env.local` (ONE-TIME SETUP ONLY)
+If you don't have a `.env.local` file inside the `web/` folder, create one and add:
 ```
-DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=
-DB_NAME=postural
+DATABASE_URL=postgresql://postural:nasasprintupdatesgdocsyungpass@localhost:5432/postural
 NODE_ENV=development
 ```
-Update these values if your database credentials are different.
+> `.env.local` is gitignored — it will not be pushed to the GitHub repository. You only need to create this once; it persists across all branches.
 
-### 3. Install Dependencies
-After updating `.env.local`, install the MySQL dependency:
+### Step 7 — Install dependencies
 ```bash
+cd web
 npm install
+npm audit fix
 ```
 
-## How mysql2/promise and phpMyAdmin Work Together
+### Step 8 — Run the app
+```bash
+npm run dev
+```
+Then go to `http://localhost:3000`.
 
-- **`mysql2/promise`** — Node.js package for your backend to connect and query MySQL. Used in `@/lib/db.ts` to connect from your Next.js API routes.
-- **phpMyAdmin** — Web interface for managing the MySQL database. Use it to create/view databases and import SQL files.
+---
+
+## How `pg` Works
+
+- **`pg`** — Node.js package for your backend to connect and query PostgreSQL. Used in `@/lib/db.ts` to connect from your Next.js API routes.
 
 **Workflow:**
-- ✅ Use **phpMyAdmin** to import `scripts/user_credentials.sql` and create the `users` table
-- ✅ Run **`npm install`** to install `mysql2/promise` dependency
-- ✅ Your **backend code** (using `mysql2/promise`) will query the database that phpMyAdmin manages
-
-They work together — phpMyAdmin manages the database, and `mysql2/promise` lets your app connect to it.
+- ✅ Set `DATABASE_URL` in `.env.local` (local) or hosting dashboard (deployment)
+- ✅ Run **`npm install`** to install `pg` dependency
+- ✅ Import `scripts/user_credentials_pg.sql` into your PostgreSQL database
+- ✅ Your **backend code** (using `pg`) will query the database
 
 ## Login Credentials
 
@@ -94,9 +123,9 @@ The following routes are protected and require authentication:
 
 ## How to Use
 
-1. Configure `.env.local` in the `web/` directory with your database credentials
+1. Set `DATABASE_URL` in `web/.env.local` with your PostgreSQL connection string
 2. Run `npm install` in the `web/` directory to install dependencies
-3. Import `scripts/user_credentials.sql` into phpMyAdmin (it will create the database and users table automatically)
+3. Import `scripts/user_credentials_pg.sql` into your PostgreSQL database
 4. Navigate to `http://localhost:3000/login`
 5. Choose between Patient, Therapist, or Admin using URL parameters:
    - Patient: `http://localhost:3000/login?role=patient`
@@ -120,32 +149,32 @@ web/
 │   │   ├── api/
 │   │   │   └── auth/
 │   │   │       ├── login/
-│   │   │       │   └── route.ts (updated - now uses database)
+│   │   │       │   └── route.ts
 │   │   │       └── logout/
 │   │   │           └── route.ts
 │   │   ├── (app)/
 │   │   │   └── dashboard/
 │   │   │       ├── patient/
-│   │   │       │   └── page.tsx (Patient)
+│   │   │       │   └── page.tsx
 │   │   │       ├── therapist/
-│   │   │       │   └── page.tsx (Therapist)
+│   │   │       │   └── page.tsx
 │   │   │       └── admin/
 │   │   │           └── page.tsx (Admin CMS)
 │   │   ├── (auth)/
 │   │   │   └── login/
-│   │   │       └── page.tsx (updated)
-│   │   └── layout.tsx (updated)
+│   │   │       └── page.tsx
+│   │   └── layout.tsx
 │   └── lib/
 │       ├── auth.ts
 │       ├── AuthContext.tsx
-│       ├── db.ts (new - database connection)
+│       ├── db.ts (PostgreSQL connection pool)
 │       └── pose/
 ├── middleware.ts
-├── .env.local.example (new - environment template)
-└── package.json (updated - added mysql2)
+├── .env.local
+└── package.json (uses pg)
 
 scripts/
-└── user_credentials.sql (new - database setup and mock data)
+└── user_credentials_pg.sql   (PostgreSQL - use this)
 ```
 
 ## Database Schema
@@ -155,16 +184,7 @@ The `users` table includes:
 - `email` - User email (unique)
 - `password` - User password
 - `name` - User full name
-- `role` - User role (patient, therapist, admin)
+- `role` - User role (`patient`, `therapist`, `admin`)
 - `clinicId` - Clinic identifier (therapists only)
 - `created_at` - Timestamp
 - `updated_at` - Timestamp
-
-## Future Enhancements
-When ready for production:
-1. Implement password hashing (e.g., bcryptjs)
-2. Add JWT tokens instead of simple auth cookies
-3. Add refresh token mechanism
-4. Migrate to a more robust ORM (e.g., Prisma, TypeORM)
-5. Add user registration and invitation system
-6. Implement role-based access control (RBAC) at the database level

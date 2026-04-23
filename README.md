@@ -5,6 +5,39 @@
 
 ---
 
+## 📌 Update-4-25-26 | *Enah*
+### *web\src\app\page.tsx*
+- Redesigned landing page UI with a blue color theme
+- Replaced location pin icon with a standing human figure appropriate for physical therapy
+- Updated button styles to rounded-full pill design with hover transitions
+- Improved role selection modal with blue-tinted backdrop blur and rounded card
+
+### *web\src\lib\db.ts*
+- Fully migrated database connection from MySQL (`mysql2`) to PostgreSQL (`pg`)
+- Now uses `DATABASE_URL` environment variable and `$1/$2` parameterized queries
+
+### *web\package.json*
+- Removed `mysql2` dependency
+- Added `pg` and `@types/pg` dependencies
+
+### *web\.env.local*
+- Replaced MySQL env vars (`DB_HOST`, `DB_USER`, etc.) with single `DATABASE_URL` PostgreSQL connection string
+
+### *scripts\user_credentials_pg.sql*
+- Added PostgreSQL-compatible schema (replaces MySQL `user_credentials.sql` for deployment)
+- Uses `CHECK` constraint instead of `ENUM`, and `ON CONFLICT DO NOTHING` for safe re-runs
+
+### *AUTHENTICATION_SETUP.md*
+- Rewrote all MySQL/phpMyAdmin instructions to PostgreSQL (`psql`, `pg`, `DATABASE_URL`)
+
+### *scripts\user_credentials_pg.sql*
+- Deleted old sql file with mysql queries — replaced as `user_credentials_pg.sql` for PostgreSQL
+
+### *web\package-lock.json*
+- Auto-updated by `npm install` after switching from `mysql2` to `pg`
+
+---
+
 ## 📌 Update-4-24-26 | *RyanCodesling*
 ### *web\src\lib\pose*
 - Added oneEuroFilter.ts for landmarker smoothing

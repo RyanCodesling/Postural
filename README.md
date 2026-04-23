@@ -5,7 +5,7 @@
 
 ---
 
-## 📌 Update-4-17-26
+## 📌 Update-4-17-26 | *ralmeyda*
 - Removed exercise difficulty and timer/duration.
 
 ---

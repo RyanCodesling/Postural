@@ -5,7 +5,7 @@
 
 ---
 
-## 📌 Update-4-24-26
+## 📌 Update-4-24-26 | *RyanCodesling*
 ### *web\src\lib\pose*
 - Added oneEuroFilter.ts for landmarker smoothing
 
@@ -14,7 +14,7 @@
 
 ---
 
-## 📌 Update-4-17-26
+## 📌 Update-4-17-26 | *ralmeyda*
 - Removed exercise difficulty and timer/duration.
 
 ---

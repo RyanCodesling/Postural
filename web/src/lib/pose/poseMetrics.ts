@@ -84,6 +84,27 @@ function pairVisible(a: LM | undefined, b: LM | undefined): boolean {
   return !!a && !!b && vis(a) >= MIN_VIS && vis(b) >= MIN_VIS;
 }
 
+/**
+ * bodyPairAngleDeg
+ *
+ * Returns the angle of the line connecting a left/right body landmark pair,
+ * measured in image coordinates relative to the positive x-axis.
+ *
+ * MediaPipe labels landmarks from the SUBJECT'S perspective. For a patient
+ * facing the camera, the "left" landmark (e.g. landmarks[23] left hip)
+ * appears on the camera's RIGHT side of the image (larger x value). If we
+ * naively call lineAngleDeg(leftHip, rightHip), the resulting vector points
+ * in the negative-x direction and atan2 returns ±180° instead of ~0° for
+ * a level body line.
+ *
+ * This helper takes the pair in subject order (left, right) but computes
+ * the camera-order vector (right → left, i.e. left-to-right in image space)
+ * so the result matches the "level → 0°" convention used throughout this file.
+ */
+function bodyPairAngleDeg(subjectLeft: LM, subjectRight: LM): number {
+  return lineAngleDeg(subjectRight, subjectLeft);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 2 — CONSENSUS TILT REFERENCE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,14 +203,14 @@ export function computeTiltReference(landmarks: LM[]): TiltReference {
   // ── Only one reference available ──────────────────────────────────────────
   if (!hipsOk || !earsOk) {
     const tilt = hipsOk
-      ? lineAngleDeg(leftHip!, rightHip!)
-      : lineAngleDeg(leftEar!, rightEar!);
+      ? bodyPairAngleDeg(leftHip!, rightHip!)
+      : bodyPairAngleDeg(leftEar!, rightEar!);
     return { cameraTiltDeg: tilt, confidence: "low", divergenceDeg: null };
   }
 
   // ── Both references available — check consensus ───────────────────────────
-  const hipAngle = lineAngleDeg(leftHip!, rightHip!);
-  const earAngle = lineAngleDeg(leftEar!, rightEar!);
+  const hipAngle = bodyPairAngleDeg(leftHip!, rightHip!);
+  const earAngle = bodyPairAngleDeg(leftEar!, rightEar!);
 
   // angleDiffDeg handles the ±180° wrap boundary correctly
   const divergence = Math.abs(angleDiffDeg(hipAngle, earAngle));
@@ -302,7 +323,7 @@ export function computeLateralNeckTilt(
 
   if (!pairVisible(leftEar, rightEar)) return null;
 
-  const rawEarAngle    = lineAngleDeg(leftEar!, rightEar!);
+  const rawEarAngle    = bodyPairAngleDeg(leftEar!, rightEar!);
   const correctedAngle = angleDiffDeg(rawEarAngle, tiltRef.cameraTiltDeg);
   const absDeg         = Math.abs(correctedAngle);
 
@@ -376,7 +397,7 @@ export function computeShoulderSymmetry(
 
   if (!pairVisible(leftShoulder, rightShoulder)) return null;
 
-  const rawShoulderAngle = lineAngleDeg(leftShoulder!, rightShoulder!);
+  const rawShoulderAngle = bodyPairAngleDeg(leftShoulder!, rightShoulder!);
   const correctedAngle   = angleDiffDeg(rawShoulderAngle, tiltRef.cameraTiltDeg);
   const absDeg           = Math.abs(correctedAngle);
   const severity         = classifyShoulderAsymmetry(absDeg);
@@ -389,6 +410,144 @@ export function computeShoulderSymmetry(
   return {
     angleDeg:             Math.round(absDeg * 10) / 10,
     elevatedSide,
+    severity,
+    correctionConfidence: tiltRef.confidence,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4.5 — TRUNK LATERAL LEAN
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+export type TrunkLeanResult = {
+  /** Tilt-corrected angle in degrees. Always ≥ 0; use `direction` for side. */
+  angleDeg: number;
+  direction: "left" | "right" | "center";
+  severity: Severity;
+  correctionConfidence: TiltConfidence;
+};
+ 
+/**
+ * classifyTrunkLean
+ *
+ * Trunk lean thresholds are tighter than neck tilt because the trunk has
+ * far less anatomical range of motion at rest than the cervical spine.
+ *
+ * Healthy adults in quiet standing typically show < 2° of lateral trunk
+ * deviation. Anything beyond 5° at rest is generally considered a postural
+ * compensation worth flagging during exercise execution.
+ *
+ *  0– 2° (normal):    within standing-sway noise
+ *  2– 5° (mild):      mild compensatory lean, common during arm raises
+ *  5–10° (moderate):  clear compensation, likely off-loading the working side
+ *   >10° (severe):    significant trunk dump, exercise should be re-instructed
+ */
+function classifyTrunkLean(absDeg: number): Severity {
+  if (absDeg < 2)  return "normal";
+  if (absDeg < 5)  return "mild";
+  if (absDeg < 10) return "moderate";
+  return "severe";
+}
+ 
+/**
+ * computeTrunkLateralLean
+ *
+ * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
+ * The sideways tilt of the entire torso, expressed as the angular deviation
+ * of the shoulder-midpoint-to-hip-midpoint line from true vertical, after
+ * removing the camera tilt component.
+ *
+ * This catches two distinct compensations that the existing metrics miss:
+ *   1. Lateral trunk shift — ribcage slides sideways over the pelvis without
+ *      either girdle rotating. Hips and shoulders stay parallel (and level),
+ *      so symmetry metrics see nothing, but the midpoint-to-midpoint line
+ *      is no longer vertical.
+ *   2. Whole-trunk rotation lean — torso tilts like the Tower of Pisa.
+ *      The tilt reference falls back to hips alone in this case (ears
+ *      diverge), which means the corrected trunk angle still reads the
+ *      true lean rather than being cancelled by the correction.
+ *
+ * ── COORDINATE NOTE (read this before changing the math) ─────────────────────
+ * In normalized image coords, y INCREASES DOWNWARD. An upright trunk has
+ * the shoulder midpoint at smaller y than the hip midpoint, so the vector
+ * from hip-mid to shoulder-mid points UP in the image, which is the
+ * NEGATIVE-y direction. lineAngleDeg() uses atan2(dy, dx) which returns
+ * −90° for an upward vector, not +90°.
+ *
+ * Therefore: a perfectly vertical trunk yields rawTrunkAngle ≈ −90°.
+ * We measure deviation FROM −90°, not from 0° or +90°.
+ *
+ * ── SIGN CONVENTION ──────────────────────────────────────────────────────────
+ * After computing (rawTrunkAngle − cameraTilt) − (−90°):
+ *   correctedDeviation > 0  →  trunk top leaning toward image-right
+ *                           →  patient leaning RIGHT
+ *   correctedDeviation < 0  →  trunk top leaning toward image-left
+ *                           →  patient leaning LEFT
+ *
+ * Note: this is image-frame "left/right" — the same convention used by
+ * neck tilt and shoulder symmetry. If the camera is mirrored for the
+ * patient's view (typical for a webcam UI), the UI layer handles the flip.
+ * The metric itself stays in raw image space.
+ *
+ * ── TILT CORRECTION ──────────────────────────────────────────────────────────
+ * Camera roll rotates ALL lines in the image by the same angular amount,
+ * including both horizontal references AND vertical references. So the
+ * same cameraTiltDeg subtraction that corrects shoulder symmetry (a
+ * horizontal-reference metric) also correctly adjusts trunk lean (a
+ * vertical-reference metric). The geometry is symmetric.
+ */
+export function computeTrunkLateralLean(
+  landmarks: LM[],
+  tiltRef: TiltReference
+): TrunkLeanResult | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+ 
+  // All four landmarks must be reliable — this metric depends on midpoints
+  // of two pairs, so a single weak landmark corrupts a midpoint and from
+  // there the entire angle.
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip)) return null;
+ 
+  // Midpoints. Averaging two landmarks per endpoint roughly halves the
+  // landmark-placement noise relative to single-landmark angle metrics.
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+ 
+
+  // ── TEMPORARY DEBUG ──
+  const rawTrunkAngle = lineAngleDeg(hipMid, shoulderMid);
+
+  // ── END DEBUG ──
+ 
+  // Step 1: remove camera tilt. After this, the angle is in body-relative
+  // image space — what the trunk angle would be if the camera were level.
+  const tiltCorrected = angleDiffDeg(rawTrunkAngle, tiltRef.cameraTiltDeg);
+ 
+  // Step 2: express as deviation from vertical. Subtracting −90° (i.e.,
+  // adding 90°) shifts the reference so 0° means "perfectly upright".
+  // angleDiffDeg keeps the result in [−180°, +180°] and handles the wrap.
+  const deviation = angleDiffDeg(tiltCorrected, -90);
+ 
+  const absDeg   = Math.abs(deviation);
+  const severity = classifyTrunkLean(absDeg);
+ 
+  // Within the 2° noise floor: report center regardless of sign
+  const direction: TrunkLeanResult["direction"] =
+    severity === "normal" ? "center" :
+    deviation > 0         ? "right"  : "left";
+ 
+  return {
+    angleDeg:             Math.round(absDeg * 10) / 10,
+    direction,
     severity,
     correctionConfidence: tiltRef.confidence,
   };
@@ -444,44 +603,59 @@ function bandedDeduction(
 }
 
 /**
- * Neck tilt deduction table (max contribution: 50 pts)
+ * Neck tilt deduction table (max contribution: 33 pts)
  *
- *  0– 5° (normal):    0–10 pts   within tolerance, small penalty
- *  5–10° (mild):     10–25 pts   increasing concern
- * 10–20° (moderate): 25–40 pts   significant deviation
- * 20–30° (severe):   40–50 pts   maximum contribution; capped at 30°
+ *  0– 5° (normal):    0 pts   within tolerance, small penalty
+ *  5–10° (mild):     0-12 pts   increasing concern
+ * 10–20° (moderate): 12-25 pts   significant deviation
+ * 20–30° (severe):   25-33 pts   maximum contribution; capped at 30°
  */
 const NECK_BANDS = [
-  { max: 5,  deductionMin: 0,  deductionMax: 10 },
-  { max: 10, deductionMin: 10, deductionMax: 25 },
-  { max: 20, deductionMin: 25, deductionMax: 40 },
-  { max: 30, deductionMin: 40, deductionMax: 50 },
+  { max: 5, deductionMin: 0, deductionMax: 0},
+  { max: 10, deductionMin: 0, deductionMax: 12},
+  { max: 20, deductionMin: 12, deductionMax: 25},
+  { max: 30, deductionMin: 25, deductionMax: 33},
 ];
 
 /**
- * Shoulder asymmetry deduction table (max contribution: 50 pts)
+ * Shoulder asymmetry deduction table (max contribution: 33 pts)
  *
  *  0– 3° (normal):    0 pts      noise floor — zero penalty always
- *  3– 7° (mild):      0–20 pts   clinically notable, common
- *  7–12° (moderate): 20–35 pts   likely compensatory pattern
- * 12–20° (severe):   35–50 pts   strong clinical flag; capped at 20°
+ *  3– 7° (mild):      0–12 pts   clinically notable, common
+ *  7–12° (moderate): 12-25 pts   likely compensatory pattern
+ * 12–20° (severe):   25-33 pts   strong clinical flag; capped at 20°
  *
  * The explicit 0-pt noise floor band ensures we never penalize a patient
  * for a deviation that is indistinguishable from measurement error.
  */
 const SHOULDER_BANDS = [
-  { max: 3,  deductionMin: 0,  deductionMax: 0  },
-  { max: 7,  deductionMin: 0,  deductionMax: 20 },
-  { max: 12, deductionMin: 20, deductionMax: 35 },
-  { max: 20, deductionMin: 35, deductionMax: 50 },
+  { max: 3, deductionMin: 0, deductionMax: 0},
+  { max: 7, deductionMin: 0, deductionMax: 12},
+  { max: 12, deductionMin: 12, deductionMax: 25},
+  { max: 20, deductionMin: 25, deductionMax: 33},
 ];
+
+/**
+ * Trunk lean deduction table (max contribution: 33 pts)
+ * 
+ *  *  0– 2° (normal):    within standing-sway noise
+ *  2– 5° (mild):      mild compensatory lean, common during arm raises
+ *  5–10° (moderate):  clear compensation, likely off-loading the working side
+ *   >10° (severe):    significant trunk dump, exercise should be re-instructed
+ */
+const TRUNK_BANDS = [
+  { max: 2, deductionMin: 0, deductionMax: 0},
+  { max: 5, deductionMin: 0, deductionMax: 12},
+  { max: 10, deductionMin: 12, deductionMax: 25},
+  { max: 20, deductionMin: 25, deductionMax: 33},
+]
 
 /**
  * computePostureScore
  *
- * 50/50 split between neck tilt and shoulder symmetry reflects:
+ * 33/33/33 split between neck tilt, shoulder symmetry, and trunk lean reflects:
  *   - Equal clinical relevance for upper-body rehabilitation exercises
- *   - Neither metric can single-handedly drive the score to 0
+ *   - None of metrics can single-handedly drive the score to 0
  *
  * Partial availability: if only one metric could be computed (e.g., hips
  * not visible so shoulder result is null), the score is computed from
@@ -491,13 +665,15 @@ const SHOULDER_BANDS = [
  */
 export function computePostureScore(
   neck: NeckTiltResult | null,
-  shoulder: ShoulderSymmetryResult | null
+  shoulder: ShoulderSymmetryResult | null,
+  trunk: TrunkLeanResult | null
 ): number | null {
-  if (!neck && !shoulder) return null;
+  if (!neck && !shoulder && !trunk) return null;
 
   let score = 100;
   if (neck)     score -= bandedDeduction(neck.angleDeg, NECK_BANDS);
   if (shoulder) score -= bandedDeduction(shoulder.angleDeg, SHOULDER_BANDS);
+  if (trunk)    score -= bandedDeduction(trunk.angleDeg, TRUNK_BANDS);
 
   return Math.max(0, Math.round(score));
 }
@@ -511,6 +687,7 @@ export type PoseMetrics = {
   tiltReference: TiltReference;
   neckTilt: NeckTiltResult | null;
   shoulderSymmetry: ShoulderSymmetryResult | null;
+  trunkLean: TrunkLeanResult | null;
   /** Composite score 0–100. Null only when no relevant landmarks are visible. */
   postureScore: number | null;
 };
@@ -523,14 +700,15 @@ export type PoseMetrics = {
  *
  * Execution order is mandatory:
  *   1. Tilt reference must be computed first — all metrics depend on it.
- *   2. Neck and shoulder can be computed in either order.
- *   3. Posture score is computed last, from the two corrected metrics.
+ *   2. Neck, shoulder, and trunk can be computed in any order.
+ *   3. Posture score is computed last, from the three corrected metrics.
  */
 export function computePoseMetrics(landmarks: LM[]): PoseMetrics {
   const tiltReference    = computeTiltReference(landmarks);
   const neckTilt         = computeLateralNeckTilt(landmarks, tiltReference);
   const shoulderSymmetry = computeShoulderSymmetry(landmarks, tiltReference);
-  const postureScore     = computePostureScore(neckTilt, shoulderSymmetry);
+  const trunkLean        = computeTrunkLateralLean(landmarks, tiltReference);
+  const postureScore     = computePostureScore(neckTilt, shoulderSymmetry, trunkLean);
 
-  return { tiltReference, neckTilt, shoulderSymmetry, postureScore };
+  return { tiltReference, neckTilt, shoulderSymmetry, trunkLean, postureScore };
 }

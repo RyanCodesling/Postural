@@ -143,6 +143,31 @@ export default function AdminDashboard() {
     }
   }, []); // Only run on mount
 
+  // Seed patient_exercises on first load so that seed patients have
+  // exercises assigned and can use the camera page immediately. This is
+  // a localStorage-only convenience; once the assignment table moves to
+  // Postgres, this seeding moves to a SQL migration / fixture instead.
+  useEffect(() => {
+    const stored = localStorage.getItem("patient_exercises");
+    if (stored) return; // already seeded — leave alone
+  
+    const seedAssignments = [
+      "ex_001",
+      "ex_002",
+      "ex_003",
+      "ex_004",
+      "ex_005",
+      "ex_006",
+    ].map((exerciseId) => ({
+      exerciseId,
+      patientId: "patient_001",
+      assignedDate: new Date().toISOString().split("T")[0],
+      status: "pending" as const,
+    }));
+  
+    localStorage.setItem("patient_exercises", JSON.stringify(seedAssignments));
+  }, []);
+
   // Persist exercises data to localStorage whenever they change
   useEffect(() => {
     localStorage.setItem("admin_exercises", JSON.stringify(exercises));

@@ -1,7 +1,64 @@
 # Sprint Updates 
 
-## 📌 New sprint update here (●'◡'●) | *author_name*
--
+## 📌 Update-5-4-26 | *RyanCodesling*
+
+### *web\src\lib\exercises\registry.ts*
+- Added exercise registry as the source of truth for the six thesis exercises (`ex_001` to `ex_006`)
+- Added per-exercise configuration for primary metrics, compensation metrics, thresholds, bilateral mode, and isometric target bands
+- Added support for both `per-limb` and `bidirectional-alternating` exercise handling
+- Added validation for threshold ordering to prevent invalid rep-counting configurations
+- Defined dynamic exercises separately from isometric hold exercises
+
+### *web\src\lib\pose\repCounter.ts*
+- Added hysteresis-based rep counting state machine
+- Added `WAITING_FOR_REP_START`, `ASCENDING`, and `DESCENDING` states for cleaner rep detection
+- Added threshold-based filtering for false starts, partial reps, and complete reps
+- Added per-rep event output with peak value, ascent duration, descent duration, total duration, and classification
+- Added reset support for exercise changes and pose detection dropouts
+
+### *web\src\lib\pose\repCounter.test.ts*
+- Added synthetic-data unit tests for the rep counter state machine
+- Added no-framework test runner using inline assertion helpers
+- Added reusable sample feeders for hand-crafted angle sequences
+- Added smooth arc sample generator to simulate exercise repetitions
+- Added tests for complete reps, partial reps, false starts, and multiple-rep indexing
+- Added hysteresis and jitter tests to confirm the counter does not double-count unstable movement
+- Added boundary tests for `targetROM`, `minimumPeakThreshold`, and below-minimum movements
+- Added timing consistency tests for ascent duration, descent duration, hold duration, and total duration
+- Added reset tests to confirm in-progress reps are discarded when capture drops
+- Added constructor validation tests for invalid threshold configurations
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Reworked posture scoring into exercise-specific compensation scoring
+- Added `computeCompensationScore()` using only the compensation metrics declared in the exercise registry
+- Added registry-aware metric computation through `computePoseMetricsForExercise()`
+- Added metric resolver for primary and compensation metrics
+- Added signed neck lateral flexion metric for Neck Lateral Flexion rep counting
+- Added stub functions for shoulder abduction, shoulder flexion, scapular elevation, trunk lateral flexion, and shoulder horizontal abduction for future exercise support
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Integrated exercise registry into the camera page
+- Added active exercise definition loading based on selected exercise
+- Added dynamic metric cards that change depending on the selected exercise
+- Added per-metric smoothing using `OneEuroFilter`
+- Added rep counter initialization when switching exercises
+- Added live rep counting for dynamic exercises
+- Added support for bidirectional alternating exercises like Neck Lateral Flexion
+- Added left/right rep tracking and console rep logs for debugging
+- Replaced fixed posture metric UI with registry-driven primary and compensation metric display
+- Added bidirectional stat panel showing LEFT, RIGHT, and TIME for alternating exercises
+- Reset filters and rep counters when capture readiness fails or the selected exercise changes
+
+### *web\src\app\(app)\camera\page.tsx*
+- Kept camera route connected to the updated `CameraClient`
+
+### *Current Status*
+- Neck Lateral Flexion (`ex_004`) rep counting is working with live webcam input
+- Other exercises are wired through the registry but still need their metric math implemented
+- Isometric hold tracking for Arm Abduction at 90° is planned but not yet implemented
+
+---
+
 ## 📌 Update-4-30-26 | *RyanCodesling*
 ### *web\src\lib\pose\poseMetrics.ts*
 - Added trunkLean as a third metric

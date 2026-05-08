@@ -26,30 +26,23 @@ export default function TherapistDashboardPage() {
   const [patients, setPatients] = useState<PatientData[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadAssignedPatients = () => {
+  const loadAssignedPatients = async () => {
     if (!user?.id) return;
-    
-    const storedUsers = localStorage.getItem("admin_users");
-    if (storedUsers) {
-      try {
-        const users: User[] = JSON.parse(storedUsers);
-        const assignedPatients = users.filter(
-          (u) => u.role === "patient" && u.therapistId === user.id
-        );
-        
-        // Convert to PatientData format
-        const patientData = assignedPatients.map((p) => ({
-          id: p.id,
-          name: p.name,
-          lastVisit: new Date().toISOString().split("T")[0], // Current date as placeholder
-        }));
-        
-        setPatients(patientData);
-      } catch (error) {
-        console.error("Error loading patients:", error);
-      }
+
+    try {
+      const res = await fetch(`/api/users?role=patient&therapistId=${user.id}`);
+      const data = await res.json();
+      const patientData = (data.users ?? []).map((p: User) => ({
+        id: p.id,
+        name: p.name,
+        lastVisit: new Date().toISOString().split("T")[0],
+      }));
+      setPatients(patientData);
+    } catch (error) {
+      console.error("Error loading patients:", error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {

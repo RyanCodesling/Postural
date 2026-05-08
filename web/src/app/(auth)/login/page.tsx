@@ -4,10 +4,12 @@ import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { loginUser, setStoredUser } from "@/lib/auth";
+import { useAuth } from "@/lib/AuthContext";
 
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { setUser } = useAuth();
   const roleParam = (searchParams?.get("role") as string) || "patient";
   const role = roleParam.toLowerCase();
   const isTherapist = role === "therapist";
@@ -27,6 +29,7 @@ function LoginPageContent() {
     try {
       const result = await loginUser(email, password, role);
       setStoredUser(result.user);
+      setUser(result.user);
       if (isAdmin) {
         router.push("/dashboard/admin");
       } else if (isTherapist) {

@@ -1,5 +1,10 @@
+"use client";
+
+import { useAuth } from "@/lib/AuthContext";
+
 export default function PatientDashboardPage() {
-  const userName = "Placeholder User";
+  const { user } = useAuth();
+  const userName = user?.name || "Patient";
 
   return (
     <div className="min-h-screen flex bg-white">

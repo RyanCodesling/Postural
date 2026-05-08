@@ -1,5 +1,107 @@
 # Sprint Updates 
 
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
+
+---
+
+## 📌 Update-5-8-26 | *Enah*
+- Fixed "Dashboard" nav link redirecting all roles to Log In — Patient instead of their own dashboard
+- Migrated all localStorage data (users, exercises, patient-exercise assignments) to PostgreSQL — data now persists across browsers and sessions
+- Wired patient session page to PostgreSQL — assigned exercises now load per logged-in patient from the database instead of a hardcoded schedule
+- Split "Full Name" into First Name, Middle Name, and Last Name in both Add and Edit user forms
+- Auto-generated sequential user IDs in `patient_001` / `therapist_001` format based on existing DB count
+- Auto-generated temporary password as `LastName + BirthYear` — multi-word last names have spaces removed and each word capitalized (e.g., `Delos Santos 2000` → `DelosSantos2000`)
+
+### *web\src\lib\AuthContext.tsx*
+- Added `setUser` to the context type and exported value so other components can update auth state directly
+- Added `/api/auth/me` fallback in the initialization effect — if localStorage is empty, the context now recovers the session from the server-side cookie instead of treating the user as logged out
+
+### *web\src\app\(auth)\login\page.tsx*
+- Imported `useAuth` and called `setUser(result.user)` immediately after a successful login so the auth context is live for the rest of the session without requiring a page reload
+
+### *web\src\app\api\auth\me\route.ts*
+- Created new `GET /api/auth/me` endpoint that reads the `auth_token` httpOnly cookie and returns the current user, used by `AuthContext` as a session fallback
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Added `"use client"` directive and wired to `useAuth()` so the sidebar shows the real authenticated user's name instead of the hardcoded "Placeholder User"
+
+### *scripts\exercises_pg.sql*
+- Created new `exercises` table with `id`, `name`, `description`, `created_at`
+- Seeded all 6 thesis exercises (`ex_001` to `ex_006`)
+
+### *scripts\patient_exercises_pg.sql*
+- Created new `patient_exercises` table with foreign keys to both `users` and `exercises`, a unique constraint on `(exercise_id, patient_id)`, a status check (`pending`, `in_progress`, `completed`), and `sets`/`reps` columns
+- Seeded all 6 exercises assigned to `patient_001` with sets and reps values
+
+### *scripts\user_credentials_pg.sql*
+- Added `ALTER TABLE` columns to the existing `users` table
+
+### *web\src\lib\db.ts*
+- Added `mapUser()` helper to convert snake_case DB columns to camelCase
+- Added `getUsers(filters?)` — fetches patients and therapists, filterable by role and therapistId
+- Added `createUser()`, `updateUser()`, `deleteUser()` for full user CRUD
+- Added `getExercises()`, `createExercise()`, `deleteExercise()` for exercise CRUD
+- Added `getPatientExercises(patientId)` to fetch a patient's assigned exercises with exercise details
+- Updated `getPatientExercises(patientId)` query to include `sets`, `reps`, and exercise `name` and `description` from the joined `exercises` table
+- Updated `mapUser()` to include `firstName`, `middleName`, `lastName` from new DB columns
+- Added `getNextUserId(role)` — queries the highest existing ID for a role, parses the numeric suffix, and returns the next zero-padded ID (e.g., `patient_002`)
+- Updated `createUser()` to accept and store `firstName`, `middleName`, `lastName`
+- Updated `updateUser()` to accept and update `firstName`, `middleName`, `lastName` columns
+- Added `types.setTypeParser(1082)` to return PostgreSQL `DATE` columns as plain `YYYY-MM-DD` strings, fixing date of birth not pre-filling in the Edit User form
+
+### *web\src\app\api\users\route.ts*
+- Created `GET /api/users` — returns all patients and therapists, supports `?role=` and `?therapistId=` query filters
+- Created `POST /api/users` — creates a new user in PostgreSQL with a default password of `changeme123`
+
+### *web\src\app\api\users\[id]\route.ts*
+- Created `PUT /api/users/[id]` — updates any user field including `therapistId` for patient-therapist assignment and unassignment
+- Created `DELETE /api/users/[id]` — deletes a user from the database
+- Updated `PUT /api/users/[id]` to reconstruct the `name` field from `firstName`, `middleName`, `lastName` when they are provided, so the display name stays in sync
+
+### *web\src\app\api\exercises\route.ts*
+- Created `GET /api/exercises` — returns all exercises from the database
+- Created `POST /api/exercises` — adds a new exercise to the database
+
+### *web\src\app\api\exercises\[id]\route.ts*
+- Created `DELETE /api/exercises/[id]` — removes an exercise from the database
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Removed all 4 `localStorage` `useEffect` blocks (`admin_users`, `admin_exercises`, `patient_exercises` keys)
+- Removed hardcoded `useState` seed data for users and exercises
+- Added single `useEffect` on mount that fetches `/api/users` and `/api/exercises`
+- Converted all 7 mutation handlers to `async` — `handleAddUser`, `handleDeleteUser`, `handleSaveEditUser`, `handleAssignPatient`, `handleUnassignPatient`, `handleAddExercise`, `handleDeleteExercise` now call the corresponding API routes
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced `localStorage.getItem("admin_users")` in `loadAssignedPatients` with a fetch to `GET /api/users?role=patient&therapistId=...`
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Created `GET /api/patient-exercises` endpoint — reads the `auth_token` cookie to identify the logged-in patient, returns only their assigned exercises with sets, reps, name, and status
+
+### *web\src\app\(app)\session\page.tsx*
+- Removed hardcoded `WEEK_SCHEDULE` array and all predefined exercise data
+- Added `useEffect` that fetches `/api/patient-exercises` on mount
+- Exercises are distributed across weekdays dynamically using the current week's actual dates
+- Added loading state and empty state when no exercises are assigned yet
+- All styling, progress bar, status badges, and summary card kept identical
+
+### *web\src\app\api\users\route.ts*
+- Updated `POST /api/users` to call `getNextUserId(role)` for sequential ID generation
+- Password is now auto-set to `LastName + BirthYear` instead of hardcoded `changeme123`
+- Constructs `name` from the three name-part fields before saving
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Added `firstName`, `middleName`, `lastName` to the `User` interface
+- Updated `newUser` initial state and all reset calls to use the three name fields instead of `name`
+- Updated `handleAddUser` to validate `firstName` + `lastName` instead of `name`
+- Replaced single "Full Name" input with a 3-column grid (First Name, Middle Name, Last Name) in the Add New User form and Edit User Details form
+- Removed Therapist ID field and replaced with Email in the Add New User Therapist form
+- Updated therapist validation in `handleAddUser` to require `email` instead of `therapistIDNum`
+- Fixed Edit User Details form — all saved fields now pre-fill correctly when clicking Edit
+- Gender dropdown restricted to Male and Female only in both Add and Edit forms
+
+---
+
 ## 📌 Update-5-4-26 | *RyanCodesling*
 
 ### *web\src\lib\exercises\registry.ts*

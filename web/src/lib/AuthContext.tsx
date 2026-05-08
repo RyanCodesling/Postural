@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { getStoredUser, clearStoredUser, logoutUser } from "@/lib/auth";
+import { getStoredUser, setStoredUser, clearStoredUser, logoutUser } from "@/lib/auth";
 
 interface User {
   id: string;
@@ -14,6 +14,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  setUser: (user: User | null) => void;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
 }
@@ -26,8 +27,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const storedUser = getStoredUser();
-    setUser(storedUser);
-    setLoading(false);
+    if (storedUser) {
+      setUser(storedUser);
+      setLoading(false);
+      return;
+    }
+    // localStorage is empty — check the server-side cookie session
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : { user: null }))
+      .then(({ user }) => {
+        if (user) {
+          setStoredUser(user);
+          setUser(user);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const logout = async () => {
@@ -46,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
+        setUser,
         logout,
         isAuthenticated: !!user,
       }}

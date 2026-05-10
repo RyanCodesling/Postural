@@ -6,7 +6,12 @@ export async function POST() {
     { status: 200 }
   );
 
-  response.cookies.delete("auth_token");
+  response.cookies.delete({
+    name: "auth_token",
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
 
   return response;
 }

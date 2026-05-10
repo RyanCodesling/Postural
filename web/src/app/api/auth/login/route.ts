@@ -23,25 +23,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const sessionUser = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      ...(user.role === "therapist" && {
+        clinicId: user.clinicId,
+      }),
+    };
+
     // Create response with user data
     const response = NextResponse.json(
       {
         success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          ...(user.role === "therapist" && {
-            clinicId: user.clinicId,
-          }),
-        },
+        user: sessionUser,
       },
       { status: 200 }
     );
 
     // Set a simple cookie for session
-    response.cookies.set("auth_token", JSON.stringify(user), {
+    response.cookies.set("auth_token", JSON.stringify(sessionUser), {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

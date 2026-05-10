@@ -3,7 +3,7 @@
 import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { loginUser, setStoredUser } from "@/lib/auth";
+import { loginUser } from "@/lib/auth";
 import { useAuth } from "@/lib/AuthContext";
 
 function LoginPageContent() {
@@ -20,6 +20,7 @@ function LoginPageContent() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,8 +29,7 @@ function LoginPageContent() {
 
     try {
       const result = await loginUser(email, password, role);
-      setStoredUser(result.user);
-      setUser(result.user);
+      login(result.user);
       if (isAdmin) {
         router.push("/dashboard/admin");
       } else if (isTherapist) {

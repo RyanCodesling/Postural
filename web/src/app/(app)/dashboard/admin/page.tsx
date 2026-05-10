@@ -61,6 +61,35 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusType, setStatusType] = useState<"success" | "error" | null>(null);
+  const [statusVisible, setStatusVisible] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+  const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      setStatusVisible(false);
+      return;
+    }
+
+    setStatusVisible(true);
+
+    const hideTimer = window.setTimeout(() => {
+      setStatusVisible(false);
+    }, 4700);
+
+    const clearTimer = window.setTimeout(() => {
+      setStatusMessage(null);
+      setStatusType(null);
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(hideTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [statusMessage]);
 
   // Assignment state
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -106,9 +135,18 @@ export default function AdminDashboard() {
         body: JSON.stringify(newUser),
       });
       const data = await res.json();
-      if (res.ok) setUsers([...users, data.user]);
+      if (res.ok) {
+        setUsers([...users, data.user]);
+        setStatusType("success");
+        setStatusMessage("User successfully added.");
+      } else {
+        setStatusType("error");
+        setStatusMessage(data?.error || "Unable to add user. Please try again.");
+      }
     } catch (err) {
       console.error("Failed to add user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to add user. Please try again.");
     }
 
     setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", diagnosis: "", prescription: "", condition: "", therapistIDNum: "", specialty: "" });
@@ -124,6 +162,38 @@ export default function AdminDashboard() {
       setUsers(users.filter((u) => u.id !== id));
     } catch (err) {
       console.error("Failed to delete user:", err);
+    }
+  };
+
+  const openDeleteModal = (user: User) => {
+    setDeleteUserId(user.id);
+    setDeleteUserName(user.name || `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "this user");
+    setIsDeleteModalOpen(true);
+  };
+
+  const closeDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setDeleteUserId(null);
+    setDeleteUserName(null);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deleteUserId) return;
+
+    try {
+      const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error("Failed to delete user.");
+      }
+      setUsers(users.filter((u) => u.id !== deleteUserId));
+      setStatusType("success");
+      setStatusMessage("User successfully deleted.");
+    } catch (err) {
+      console.error("Failed to delete user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to delete user. Please try again.");
+    } finally {
+      closeDeleteModal();
     }
   };
 
@@ -420,6 +490,8 @@ export default function AdminDashboard() {
                             value={newUser.dateOfBirth || ""}
                             onChange={(e) => setNewUser({ ...newUser, dateOfBirth: e.target.value })}
                             className="w-full border border-gray-300 rounded px-3 py-2"
+                            max={new Date().toISOString().split('T')[0]}
+                            min="1900-01-01"
                             required
                           />
                         </div>
@@ -430,7 +502,12 @@ export default function AdminDashboard() {
                           <input
                             type="number"
                             value={newUser.age || ""}
-                            onChange={(e) => setNewUser({ ...newUser, age: e.target.value ? parseInt(e.target.value) : undefined })}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              if (value.length <= 3) {
+                                setNewUser({ ...newUser, age: value ? parseInt(value) : undefined });
+                              }
+                            }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
                             min="0"
                             max="150"
@@ -619,6 +696,8 @@ export default function AdminDashboard() {
                           setEditingUser({ ...editingUser, dateOfBirth: e.target.value })
                         }
                         className="w-full border border-gray-300 rounded px-3 py-2"
+                        max={new Date().toISOString().split('T')[0]}
+                        min="1900-01-01"
                       />
                     </div>
                     <div>
@@ -628,9 +707,12 @@ export default function AdminDashboard() {
                       <input
                         type="number"
                         value={editingUser.age || ""}
-                        onChange={(e) =>
-                          setEditingUser({ ...editingUser, age: e.target.value ? parseInt(e.target.value) : undefined })
-                        }
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (value.length <= 3) {
+                            setEditingUser({ ...editingUser, age: value ? parseInt(value) : undefined });
+                          }
+                        }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
                         min="0"
                         max="150"
@@ -782,6 +864,40 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {statusMessage && (
+              <div className={`mb-4 rounded-lg border p-3 text-sm transition-opacity duration-300 ${statusVisible ? "opacity-100" : "opacity-0"} ${statusType === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900 shadow-sm" : "border-red-200 bg-red-50 text-red-900"}`} aria-live="polite">
+                {statusMessage}
+              </div>
+            )}
+
+            {isDeleteModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                  <h3 className="text-xl font-semibold text-gray-900">Confirm Delete</h3>
+                  <p className="mt-3 text-sm text-gray-600">
+                    Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteUserName}</span>?
+                    This action cannot be undone.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={closeDeleteModal}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeleteUser}
+                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Users List */}
             <div className="bg-white rounded shadow overflow-hidden">
               <table className="w-full">
@@ -820,7 +936,7 @@ export default function AdminDashboard() {
                             Edit
                           </button>
                           <button
-                            onClick={() => handleDeleteUser(u.id)}
+                            onClick={() => openDeleteModal(u)}
                             className="text-red-600 hover:text-red-800 font-medium"
                           >
                             Delete

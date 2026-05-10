@@ -10,8 +10,17 @@ import {
 
 import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
-import { computePoseMetrics, type PoseMetrics, type Severity } from "@/lib/pose/poseMetrics";
+import {
+  computePoseMetricsForExercise,
+  type ExerciseFrameMetrics,
+} from "@/lib/pose/poseMetrics";
+import {
+  getExerciseDefinition,
+  type ExerciseDefinition,
+  type MetricName,
+} from "@/lib/exercises/registry";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
+import { RepCounter, type RepEvent } from "@/lib/pose/repCounter";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -39,11 +48,30 @@ export default function CameraClient() {
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
 
-  const neckFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
-  const shoulderFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const tiltFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
-  const trunkFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   const lastMetricsUpdateRef = useRef(0);
+
+  const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
+  left: 0,
+  right: 0,
+  });
+
+  // Rep counters. Per-limb exercises use both refs (one per side). Bidirectional
+  // exercises use only the left counter (it's just "the counter," but reusing
+  // the slot keeps allocation simple). When the active exercise changes, both
+  // refs are recreated based on the new definition.
+  const leftRepCounterRef = useRef<RepCounter | null>(null);
+  const rightRepCounterRef = useRef<RepCounter | null>(null);
+  
+  // In-memory per-rep event log, keyed by side. Cleared when the exercise
+  // changes. This is the buffer that will eventually feed Postgres in a later
+  // step — for now, console.log on each rep is the only output beyond the
+  // live counter.
+  const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
+    left: [],
+    right: [],
+  });
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -72,37 +100,69 @@ export default function CameraClient() {
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>("");
 
-  const [liveMetrics, setLiveMetrics] = useState<PoseMetrics>({
-    tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-    neckTilt:         null,
-    shoulderSymmetry: null,
-    trunkLean:        null,
-    postureScore:     null,
+  const [activeDefinition, setActiveDefinition] =
+    useState<ExerciseDefinition | null>(null);
+  
+  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
+    tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+    metrics: {},
+    compensationScore: null,
   });
  
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
  
-  const neckDisplay = liveMetrics.neckTilt
-    ? `${liveMetrics.neckTilt.angleDeg}° ${liveMetrics.neckTilt.direction}`
-    : "--";
+  const showTiltWarning = frameMetrics.tiltReference.confidence === "low";
  
-  const shoulderDisplay = liveMetrics.shoulderSymmetry
-    ? liveMetrics.shoulderSymmetry.severity === "normal"
-      ? "Level"
-      : `${liveMetrics.shoulderSymmetry.angleDeg}° ${liveMetrics.shoulderSymmetry.elevatedSide} high`
-    : "--";
+  // `metricCards` is the list of cards to render in the bottom-left overlay.
+  // Built dynamically from the active exercise definition. Primary metric
+  // renders first (severity-styled), then each compensation metric (compensation-styled).
+  type CardSpec = {
+    key: MetricName;
+    label: string;
+    value: number | null;
+    kind: "primary" | "compensation";
+    warningThreshold?: number;
+  };
+  
+  const metricCards: CardSpec[] = (() => {
+    if (!activeDefinition) return [];
+    const cards: CardSpec[] = [];
+  
+    if (activeDefinition.kind === "dynamic") {
+      const p = activeDefinition.primaryMetric;
+      cards.push({
+        key: p.name,
+        label: metricLabel(p.name),
+        value: frameMetrics.metrics[p.name] ?? null,
+        kind: "primary",
+      });
+    } else {
+      const i = activeDefinition.isometric;
+      cards.push({
+        key: i.metric,
+        label: metricLabel(i.metric),
+        value: frameMetrics.metrics[i.metric] ?? null,
+        kind: "primary",
+      });
+    }
+  
+    for (const comp of activeDefinition.compensationMetrics) {
+      cards.push({
+        key: comp.name,
+        label: metricLabel(comp.name),
+        value: frameMetrics.metrics[comp.name] ?? null,
+        kind: "compensation",
+        warningThreshold: comp.warningThreshold,
+      });
+    }
+    return cards;
+  })();
  
-  const scoreDisplay = liveMetrics.postureScore !== null
-    ? `${liveMetrics.postureScore}`
-    : "--";
  
-  // Shown when hips and ears disagree — body asymmetry is affecting
-  // the tilt correction and metric reliability is reduced.
-  const showTiltWarning = liveMetrics.tiltReference.confidence === "low";
- 
+  
   const sets = 3;
-  const reps = 12;
+
   const progressPct = 65;
   const timer = "05:32";
 
@@ -155,6 +215,49 @@ export default function CameraClient() {
       console.error("Error loading exercises:", err);
     }
   }, [user?.id, selectedExercise]);
+
+  useEffect(() => {
+    if (!selectedExercise) {
+      setActiveDefinition(null);
+      leftRepCounterRef.current = null;
+      rightRepCounterRef.current = null;
+      repLogRef.current = { left: [], right: [] };
+      setRepCounts({ left: 0, right: 0 });
+      return;
+    }
+  
+    const def = getExerciseDefinition(selectedExercise);
+    setActiveDefinition(def);
+  
+    // Reset filters whenever the exercise changes — old filter history would
+    // bleed across exercises and produce a misleading first-frame jump.
+    metricFiltersRef.current.clear();
+  
+    // Rebuild rep counters based on the new definition. Isometric exercises
+    // get no counter (they use time-in-band, handled separately when we
+    // implement ex_006).
+    leftRepCounterRef.current = null;
+    rightRepCounterRef.current = null;
+    repLogRef.current = { left: [], right: [] };
+    setRepCounts({ left: 0, right: 0 });
+  
+    if (def && def.kind === "dynamic") {
+      const thresholds = def.primaryMetric.thresholds;
+  
+      if (def.bilateral && def.bilateralMode === "per-limb") {
+        // Two limbs in parallel — one counter per side.
+        leftRepCounterRef.current = new RepCounter(thresholds);
+        rightRepCounterRef.current = new RepCounter(thresholds);
+      } else if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
+        // One signed metric, sides distinguished by sign at peak time.
+        // Single counter receives the absolute value.
+        leftRepCounterRef.current = new RepCounter(thresholds);
+      } else {
+        // Unilateral — single counter on the left ref.
+        leftRepCounterRef.current = new RepCounter(thresholds);
+      }
+    }
+  }, [selectedExercise]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
@@ -221,76 +324,145 @@ export default function CameraClient() {
           }
 
           if (r.ok) {
-            const metrics = computePoseMetrics(landmarks as any);
-            const tNow = performance.now();
+            if (!activeDefinition) {
+              // No exercise selected — nothing to compute. Clear stale state.
+              setFrameMetrics({
+                tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+                metrics: {},
+                compensationScore: null,
+              });
+            } else {
+              const raw = computePoseMetricsForExercise(landmarks as any, activeDefinition);
+              const tNow = performance.now();
 
-            // Smooth the camera-tilt estimate
-            const smoothedTilt = tiltFilterRef.current.filter(
-              metrics.tiltReference.cameraTiltDeg,
-              tNow
-            );
+              // Smooth the camera-tilt estimate (still always needed)
+              const smoothedTilt = tiltFilterRef.current.filter(
+                raw.tiltReference.cameraTiltDeg,
+                tNow
+              );
 
-            // Smooth neck angle, then re-round to 1 decimal
-            const smoothedNeck = metrics.neckTilt
-              ? {
-                  ...metrics.neckTilt,
-                  angleDeg:
-                    Math.round(
-                      neckFilterRef.current.filter(metrics.neckTilt.angleDeg, tNow) * 10
-                    ) / 10,
+              // Per-metric filtering. Lazily allocate a filter the first time
+              // we see each metric for the active exercise. The filter map
+              // gets cleared when the exercise changes (see the
+              // `selectedExercise` effect).
+              const smoothedMetrics: Partial<Record<MetricName, number | null>> = {};
+              for (const [metricName, value] of Object.entries(raw.metrics) as Array<
+                [MetricName, number | null]
+              >) {
+                if (typeof value !== "number") {
+                  smoothedMetrics[metricName] = null;
+                  continue;
                 }
-              : null;
-
-            // Smooth shoulder angle, then re-round to 1 decimal
-            const smoothedShoulder = metrics.shoulderSymmetry
-              ? {
-                  ...metrics.shoulderSymmetry,
-                  angleDeg:
-                    Math.round(
-                      shoulderFilterRef.current.filter(
-                        metrics.shoulderSymmetry.angleDeg,
-                        tNow
-                      ) * 10
-                    ) / 10,
+                let filter = metricFiltersRef.current.get(metricName);
+                if (!filter) {
+                  filter = new OneEuroFilter(0.3, 0.3);
+                  metricFiltersRef.current.set(metricName, filter);
                 }
-              : null;
+                smoothedMetrics[metricName] =
+                  Math.round(filter.filter(value, tNow) * 10) / 10;
+              }
 
-            // Smooth trunk lean angle, then re-round to 1 decimal
-            const smoothedTrunk = metrics.trunkLean
-              ? {
-                  ...metrics.trunkLean,
-                  angleDeg:
-                    Math.round(
-                      trunkFilterRef.current.filter(metrics.trunkLean.angleDeg, tNow) * 10
-                    ) / 10,
+              // ── Rep counting ──────────────────────────────────────────
+              // Feeds the appropriate counter(s) based on the exercise's
+              // bilateralMode. Skipped for isometric exercises and for
+              // exercises whose primary metric is still a stub (null).
+              if (activeDefinition.kind === "dynamic") {
+                const primaryName = activeDefinition.primaryMetric.name;
+                const rawValue = smoothedMetrics[primaryName];
+ 
+                if (typeof rawValue === "number") {
+                  if (
+                    activeDefinition.bilateral &&
+                    activeDefinition.bilateralMode === "bidirectional-alternating"
+                  ) {
+                    // One counter, fed |value|. Side determined by sign at
+                    // the moment a rep fires.
+                    const counter = leftRepCounterRef.current;
+                    if (counter) {
+                      const event = counter.update(Math.abs(rawValue), tNow);
+                      if (event) {
+                        // Tag with side based on sign of the signed value.
+                        // For neck flexion: negative = left, positive = right.
+                        const side: "left" | "right" =
+                          rawValue > 0 ? "left" : "right";
+ 
+                        repLogRef.current[side].push(event);
+                        setRepCounts((prev) => ({
+                          ...prev,
+                          [side]: prev[side] + 1,
+                        }));
+ 
+                        // eslint-disable-next-line no-console
+                        console.log(`[rep] ${activeDefinition.id} ${side}`, event);
+                      }
+                    }
+                  } else if (
+                    activeDefinition.bilateral &&
+                    activeDefinition.bilateralMode === "per-limb"
+                  ) {
+                    // Two counters, each fed its own per-side metric.
+                    // NOTE: per-limb metrics aren't implemented yet (stubs
+                    // return null), so this branch will be a no-op until
+                    // we implement shoulderAbduction etc.
+                    // Left side:
+                    const leftValue = smoothedMetrics[primaryName]; // TODO: side-keyed
+                    const rightValue = smoothedMetrics[primaryName]; // TODO: side-keyed
+ 
+                    if (typeof leftValue === "number" && leftRepCounterRef.current) {
+                      const event = leftRepCounterRef.current.update(leftValue, tNow);
+                      if (event) {
+                        repLogRef.current.left.push(event);
+                        setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                        // eslint-disable-next-line no-console
+                        console.log(`[rep] ${activeDefinition.id} left`, event);
+                      }
+                    }
+                    if (typeof rightValue === "number" && rightRepCounterRef.current) {
+                      const event = rightRepCounterRef.current.update(rightValue, tNow);
+                      if (event) {
+                        repLogRef.current.right.push(event);
+                        setRepCounts((p) => ({ ...p, right: p.right + 1 }));
+                        // eslint-disable-next-line no-console
+                        console.log(`[rep] ${activeDefinition.id} right`, event);
+                      }
+                    }
+                  } else {
+                    // Unilateral.
+                    const counter = leftRepCounterRef.current;
+                    if (counter) {
+                      const event = counter.update(rawValue, tNow);
+                      if (event) {
+                        repLogRef.current.left.push(event);
+                        setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                        // eslint-disable-next-line no-console
+                        console.log(`[rep] ${activeDefinition.id}`, event);
+                      }
+                    }
+                  }
                 }
-              : null; 
+              }
 
-          if (tNow - lastMetricsUpdateRef.current > 150) {
-            lastMetricsUpdateRef.current = tNow;
-            setLiveMetrics({
-              tiltReference: { ...metrics.tiltReference, cameraTiltDeg: smoothedTilt },
-              neckTilt: smoothedNeck,
-              shoulderSymmetry: smoothedShoulder,
-              trunkLean: smoothedTrunk,
-              postureScore: metrics.postureScore,
-            });
-          }
-
+              if (tNow - lastMetricsUpdateRef.current > 150) {
+                lastMetricsUpdateRef.current = tNow;
+                setFrameMetrics({
+                  tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
+                  metrics: smoothedMetrics,
+                  compensationScore: raw.compensationScore,
+                });
+              }
+            }
           } else {
-            // Reset filters so the next good frame starts fresh instead of
-            // blending against stale history from before the dropout.
-            neckFilterRef.current.reset();
-            shoulderFilterRef.current.reset();
-            trunkFilterRef.current.reset();
+            // Frame not capture-ready — reset filters so the next good frame
+            // doesn't blend against stale history from before the dropout.
             tiltFilterRef.current.reset();
+            metricFiltersRef.current.forEach((f) => f.reset());
+            leftRepCounterRef.current?.reset();
+            rightRepCounterRef.current?.reset();
 
-            setLiveMetrics({
-              tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-              neckTilt:         null,
-              shoulderSymmetry: null,
-              trunkLean:        null,
-              postureScore:     null,
+            setFrameMetrics({
+              tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+              metrics: {},
+              compensationScore: null,
             });
           }
         } else {
@@ -480,46 +652,40 @@ export default function CameraClient() {
  
               {/* ── Posture metrics — bottom left ── */}
               <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2">
-                <MetricCard
-                  label="NECK TILT"
-                  value={liveMetrics.neckTilt ? `${liveMetrics.neckTilt.angleDeg}°` : "--"}
-                  sub={
-                    liveMetrics.neckTilt
-                      ? `${liveMetrics.neckTilt.direction.charAt(0).toUpperCase() + liveMetrics.neckTilt.direction.slice(1)} · ${severityText(liveMetrics.neckTilt.severity)}`
-                      : "No data"
-                  }
-                  severity={liveMetrics.neckTilt?.severity ?? null}
-                />
-                <MetricCard
-                  label="SHOULDER"
-                  value={liveMetrics.shoulderSymmetry ? `${liveMetrics.shoulderSymmetry.angleDeg}°` : "--"}
-                  sub={
-                    liveMetrics.shoulderSymmetry
-                      ? liveMetrics.shoulderSymmetry.severity === "normal"
-                        ? "Level · Normal"
-                        : `${liveMetrics.shoulderSymmetry.elevatedSide.charAt(0).toUpperCase() + liveMetrics.shoulderSymmetry.elevatedSide.slice(1)} high · ${severityText(liveMetrics.shoulderSymmetry.severity)}`
-                      : "No data"
-                  }
-                  severity={liveMetrics.shoulderSymmetry?.severity ?? null}
-                />
-                <MetricCard
-                  label="TRUNK LEAN"
-                  value={liveMetrics.trunkLean ? `${liveMetrics.trunkLean.angleDeg}°` : "--"}
-                  sub={
-                    liveMetrics.trunkLean
-                      ? liveMetrics.trunkLean.severity === "normal"
-                        ? "Upright · Normal"
-                        : `${liveMetrics.trunkLean.direction.charAt(0).toUpperCase() + liveMetrics.trunkLean.direction.slice(1)} · ${severityText(liveMetrics.trunkLean.severity)}`
-                      : "No data"
-                  }
-                  severity={liveMetrics.trunkLean?.severity ?? null}
-                />
-                <ScoreCard score={liveMetrics.postureScore} />
+                {metricCards.length === 0 ? (
+                  <div className="px-4 py-3 rounded-xl bg-black/65 backdrop-blur-sm text-white/60 text-xs w-44">
+                    Select an exercise to begin
+                  </div>
+                ) : (
+                  metricCards.map((card) => (
+                    <DynamicMetricCard
+                      key={card.key}
+                      label={card.label}
+                      value={card.value}
+                      kind={card.kind}
+                      warningThreshold={card.warningThreshold}
+                    />
+                  ))
+                )}
+                <ScoreCard score={frameMetrics.compensationScore} />
               </div>
  
               {/* ── Exercise stats — bottom right ── */}
               <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
-                <StatPanel sets={sets} reps={reps} timer={timer} />
+                {activeDefinition?.bilateral &&
+                activeDefinition.bilateralMode === "bidirectional-alternating" ? (
+                  <BidirectionalStatPanel
+                    leftReps={repCounts.left}
+                    rightReps={repCounts.right}
+                    timer={timer}
+                  />
+                ) : (
+                  <StatPanel
+                    sets={sets}
+                    reps={repCounts.left + repCounts.right}
+                    timer={timer}
+                  />
+                )}
                 <ProgressCard progressPct={progressPct} />
               </div>
             </div>
@@ -643,19 +809,6 @@ export default function CameraClient() {
   );
 }
 
-function severityAccent(s: Severity | null): string {
-  if (!s) return "bg-white/25";
-  if (s === "normal")   return "bg-emerald-400";
-  if (s === "mild")     return "bg-yellow-400";
-  if (s === "moderate") return "bg-orange-500";
-  return "bg-red-500";
-}
- 
-function severityText(s: Severity | null): string {
-  if (!s) return "";
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
- 
 function scoreAccent(score: number | null): string {
   if (score === null) return "bg-white/25";
   if (score >= 80)   return "bg-emerald-400";
@@ -670,35 +823,6 @@ function scoreValueColor(score: number | null): string {
   if (score >= 60)   return "text-yellow-400";
   if (score >= 40)   return "text-orange-400";
   return "text-red-400";
-}
-
-function MetricCard({
-  label,
-  value,
-  sub,
-  severity,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  severity: Severity | null;
-}) {
-  return (
-    <div className="flex overflow-hidden rounded-xl bg-black/65 backdrop-blur-sm shadow-lg w-44">
-      {/* Severity accent bar */}
-      <div className={`w-1.5 shrink-0 ${severityAccent(severity)}`} />
-      <div className="px-4 py-3 flex-1 min-w-0">
-        <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
-          {label}
-        </div>
-        {/* tabular-nums prevents layout shift as digits change each frame */}
-        <div className="text-4xl font-bold text-white leading-none tabular-nums">
-          {value}
-        </div>
-        <div className="text-xs text-white/55 mt-1.5 truncate">{sub}</div>
-      </div>
-    </div>
-  );
 }
 
 function ScoreCard({ score }: { score: number | null }) {
@@ -753,6 +877,26 @@ function StatCell({ label, value }: { label: string; value: string }) {
   );
 }
 
+function BidirectionalStatPanel({
+  leftReps,
+  rightReps,
+  timer,
+}: {
+  leftReps: number;
+  rightReps: number;
+  timer: string;
+}) {
+  return (
+    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
+      <div className="flex divide-x divide-white/10">
+        <StatCell label="LEFT" value={String(leftReps)} />
+        <StatCell label="RIGHT" value={String(rightReps)} />
+        <StatCell label="TIME" value={timer} />
+      </div>
+    </div>
+  );
+}
+
 function ProgressCard({ progressPct }: { progressPct: number }) {
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
@@ -767,6 +911,84 @@ function ProgressCard({ progressPct }: { progressPct: number }) {
           className="h-full bg-white/75 rounded-full transition-all duration-500"
           style={{ width: `${progressPct}%` }}
         />
+      </div>
+    </div>
+  );
+}
+
+function metricLabel(name: MetricName): string {
+  switch (name) {
+    case "shoulderAbduction":   return "SHOULDER ABD";
+    case "shoulderFlexion":     return "SHOULDER FLEX";
+    case "scapularElevation":   return "SHRUG";
+    case "neckLateralFlexion":  return "NECK FLEX";
+    case "trunkLateralFlexion": return "TRUNK FLEX";
+    case "shoulderHorizAbd":    return "T-POSE";
+    case "neckTilt":            return "NECK TILT";
+    case "shoulderSymmetry":    return "SHOULDER SYM";
+    case "trunkLean":           return "TRUNK LEAN";
+  }
+}
+ 
+/**
+ * Compensation metrics get a calm gray accent below their warning threshold,
+ * red above. Primary metrics show neutral white — they're an information
+ * display, not a quality flag.
+ */
+function compensationAccent(value: number | null, threshold: number): string {
+  if (value === null) return "bg-white/25";
+  return Math.abs(value) >= threshold ? "bg-red-500" : "bg-white/40";
+}
+ 
+function DynamicMetricCard({
+  label,
+  value,
+  kind,
+  warningThreshold,
+}: {
+  label: string;
+  value: number | null;
+  kind: "primary" | "compensation";
+  warningThreshold?: number;
+}) {
+  const accentClass =
+    kind === "primary"
+      ? "bg-white/60"
+      : compensationAccent(value, warningThreshold ?? Infinity);
+ 
+  const isFlagging =
+    kind === "compensation" &&
+    value !== null &&
+    Math.abs(value) >= (warningThreshold ?? Infinity);
+ 
+  // Display string: degrees for angles, just the rounded number for now
+  // for displacement metrics. Consumers can refine units later per metric.
+  const display = value === null ? "--" : `${value.toFixed(1)}°`;
+ 
+  return (
+    <div
+      className={`flex overflow-hidden rounded-xl backdrop-blur-sm shadow-lg w-44 transition-colors ${
+        isFlagging ? "bg-red-900/70 ring-1 ring-red-400/60" : "bg-black/65"
+      }`}
+    >
+      <div className={`w-1.5 shrink-0 ${accentClass}`} />
+      <div className="px-4 py-3 flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] tracking-widest text-white/50 uppercase">
+            {label}
+          </span>
+          {isFlagging && (
+            <span className="text-[9px] tracking-wider text-red-300 uppercase font-semibold">
+              ⚠ Compensation
+            </span>
+          )}
+        </div>
+        <div className="text-4xl font-bold text-white leading-none tabular-nums">
+          {display}
+        </div>
+        <div className="text-xs text-white/55 mt-1.5 truncate">
+          {kind === "primary" ? "Primary" : isFlagging ? "Above threshold" : "Within range"}
+        </div>
       </div>
     </div>
   );

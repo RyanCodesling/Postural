@@ -18,6 +18,8 @@
  * and affects how we interpret angle signs throughout this file.
  */
 
+import type { ExerciseDefinition, MetricName } from "@/lib/exercises/registry";
+
 type LM = { x: number; y: number; visibility?: number };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,6 +281,31 @@ export type NeckTiltResult = {
 };
 
 /**
+ * Internal helper — returns the tilt-corrected signed ear-line angle in
+ * degrees, or null if either ear landmark is unreliable.
+ *
+ *   correctedAngle > 0  →  right ear is lower in frame after correction
+ *                       →  head tilting RIGHT
+ *   correctedAngle < 0  →  head tilting LEFT
+ *
+ * Used by both `computeLateralNeckTilt` (which absolute-values it) and
+ * `computeNeckLateralFlexionSigned` (which keeps the sign for the rep
+ * counter to track which side a rep belonged to).
+ */
+function signedNeckFlexionAngle(
+  landmarks: LM[],
+  tiltRef: TiltReference
+): number | null {
+  const leftEar  = landmarks[7];
+  const rightEar = landmarks[8];
+ 
+  if (!pairVisible(leftEar, rightEar)) return null;
+ 
+  const rawEarAngle = bodyPairAngleDeg(leftEar!, rightEar!);
+  return angleDiffDeg(rawEarAngle, tiltRef.cameraTiltDeg);
+}
+
+/**
  * computeLateralNeckTilt
  *
  * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
@@ -318,20 +345,16 @@ export function computeLateralNeckTilt(
   landmarks: LM[],
   tiltRef: TiltReference
 ): NeckTiltResult | null {
-  const leftEar  = landmarks[7];
-  const rightEar = landmarks[8];
-
-  if (!pairVisible(leftEar, rightEar)) return null;
-
-  const rawEarAngle    = bodyPairAngleDeg(leftEar!, rightEar!);
-  const correctedAngle = angleDiffDeg(rawEarAngle, tiltRef.cameraTiltDeg);
-  const absDeg         = Math.abs(correctedAngle);
-
+  const correctedAngle = signedNeckFlexionAngle(landmarks, tiltRef);
+  if (correctedAngle === null) return null;
+ 
+  const absDeg = Math.abs(correctedAngle);
+ 
   // 2° dead-band: below this, the angle is indistinguishable from landmark noise
   const direction: NeckTiltResult["direction"] =
     absDeg < 2         ? "center" :
     correctedAngle > 0 ? "left"  : "right";
-
+ 
   return {
     angleDeg:             Math.round(absDeg * 10) / 10,
     direction,
@@ -554,161 +577,438 @@ export function computeTrunkLateralLean(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 5 — POSTURE SCORE (0–100)
+// SECTION 5 — COMPENSATION SCORE (0–100, exercise-aware)
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// REPLACES the previous fixed 33/33/33 posture score.
+//
+// ── WHY THIS CHANGED ─────────────────────────────────────────────────────────
+// The old `computePostureScore` deducted from neck tilt, shoulder asymmetry,
+// and trunk lean — three "standing well at rest" metrics that were always
+// shown regardless of exercise. With registry-driven exercise selection, the
+// displayed metrics change per exercise, and a fixed three-metric score is
+// meaningless when those three aren't all in scope.
+//
+// ── WHAT THIS MEASURES NOW ───────────────────────────────────────────────────
+// COMPENSATION quality — how cleanly the patient is performing the active
+// exercise, scored across the compensation metrics declared in the registry
+// for that exercise. The PRIMARY metric (the angle the patient is trying to
+// hit, e.g. shoulder abduction during a lateral raise) is NOT part of the
+// score. Reaching the target ROM is the rep state machine's job; this score
+// answers a different question: "while reaching that target, how much
+// compensation pattern did the patient show?"
+//
+// A patient executing perfect lateral raises with zero shrug and zero trunk
+// lean scores 100. A patient hiking the trapezius and leaning to assist the
+// raise gets penalized. That maps directly to what a therapist reviews when
+// scoring movement quality.
+//
+// ── WEIGHTING ────────────────────────────────────────────────────────────────
+// Equal weighting across whichever compensation metrics the exercise declares.
+// One compensation metric → it owns 100 pts of deduction headroom.
+// Two compensation metrics → 50/50.
+// Three → ~33/33/33.
+// This way, the maximum possible deduction is always ≤ 100 regardless of how
+// many compensation metrics the registry lists.
+
+
+/**
+ * Per-metric deduction bands. Each band defines a continuous interpolation
+ * range — entering a band scales linearly from `deductionMin` to `deductionMax`.
+ * Same banded-with-interpolation approach as the previous scoring code; only
+ * the per-metric tables and the weighting changed.
+ *
+ * Units match the metric:
+ *   - angle metrics (neck, shoulder symmetry, trunk lean):    degrees
+ *   - displacement metrics (scapular elevation):              torso-length fraction
+ *
+ * The deduction values below assume each band's full deduction would represent
+ * a "saturated" metric. They get scaled by 1/N at score-computation time, where
+ * N is the number of compensation metrics for the active exercise.
+ */
+type Band = { max: number; deductionMin: number; deductionMax: number };
+
+const COMPENSATION_BANDS: Record<MetricName, Band[]> = {
+  // Neck tilt: 5° normal floor (matches existing severity classifier)
+  neckTilt: [
+    { max: 5,  deductionMin: 0,   deductionMax: 0   },
+    { max: 10, deductionMin: 0,   deductionMax: 35  },
+    { max: 20, deductionMin: 35,  deductionMax: 75  },
+    { max: 30, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Shoulder symmetry: 3° noise floor
+  shoulderSymmetry: [
+    { max: 3,  deductionMin: 0,   deductionMax: 0   },
+    { max: 7,  deductionMin: 0,   deductionMax: 35  },
+    { max: 12, deductionMin: 35,  deductionMax: 75  },
+    { max: 20, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Trunk lean: 2° standing-sway floor
+  trunkLean: [
+    { max: 2,  deductionMin: 0,   deductionMax: 0   },
+    { max: 5,  deductionMin: 0,   deductionMax: 35  },
+    { max: 10, deductionMin: 35,  deductionMax: 75  },
+    { max: 20, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Scapular elevation as compensation: thresholds in normalized torso-length
+  // CHANGE from baseline. Below 0.02 = within noise floor.
+  scapularElevation: [
+    { max: 0.02, deductionMin: 0,   deductionMax: 0   },
+    { max: 0.04, deductionMin: 0,   deductionMax: 35  },
+    { max: 0.06, deductionMin: 35,  deductionMax: 75  },
+    { max: 0.10, deductionMin: 75,  deductionMax: 100 },
+  ],
+
+  // Stubs for compatibility — these metrics exist as MetricName values but
+  // are not currently used as compensation metrics in the registry. If they
+  // ever appear as a compensation entry, replace these placeholder bands.
+  shoulderAbduction:        [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+  shoulderFlexion:          [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+  neckLateralFlexion:       [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+  trunkLateralFlexion:      [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+  shoulderHorizAbd:         [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+};
 
 /**
  * bandedDeduction
  *
- * Maps a continuous angle value to a point deduction using severity bands
- * with LINEAR INTERPOLATION within each band.
+ * Maps a metric value to a 0–100 deduction using the per-metric bands above.
+ * Continuous within each band (linear interpolation) so there are no score
+ * cliffs at band boundaries.
  *
- * ── WHY BANDED INSTEAD OF PURELY LINEAR? ─────────────────────────────────────
- * A purely linear score (e.g., −2 pts per degree) has two problems:
- *   1. A single extreme metric can exhaust its deduction budget before
- *      the other metric can contribute, making the score misleading.
- *   2. It implies equal clinical sensitivity across all angle values, which
- *      is not true — the difference between 1° and 2° is clinically
- *      insignificant, while 10° vs 11° is meaningful.
- *
- * ── WHY INTERPOLATE WITHIN BANDS? ────────────────────────────────────────────
- * Hard band boundaries create score cliffs: a patient at 4.9° and 5.1° would
- * receive very different scores for essentially the same posture. Linear
- * interpolation within each band makes the score a smooth, continuous function
- * of the angle, eliminating cliff effects at severity boundaries.
- *
- * How to read band definitions:
- *   { max: 10, deductionMin: 10, deductionMax: 25 }
- *   → When absDeg is between the previous band's max and 10°,
- *     the deduction scales linearly from 10 pts to 25 pts.
+ * Same algorithm as the previous bandedDeduction; kept private to this section.
  */
-function bandedDeduction(
-  absDeg: number,
-  bands: Array<{ max: number; deductionMin: number; deductionMax: number }>
-): number {
+function bandedDeduction(absValue: number, bands: Band[]): number {
   let prevMax = 0;
-
   for (const band of bands) {
-    if (absDeg <= band.max) {
-      const bandWidth = band.max - prevMax;
-      // t = fractional position within this band (0 at entry, 1 at exit)
-      const t = bandWidth > 0 ? (absDeg - prevMax) / bandWidth : 1;
+    if (absValue <= band.max) {
+      const width = band.max - prevMax;
+      const t = width > 0 ? (absValue - prevMax) / width : 1;
       return band.deductionMin + t * (band.deductionMax - band.deductionMin);
     }
     prevMax = band.max;
   }
-
-  // Beyond the last defined band — return its maximum deduction
   return bands[bands.length - 1].deductionMax;
 }
 
 /**
- * Neck tilt deduction table (max contribution: 33 pts)
+ * computeCompensationScore
  *
- *  0– 5° (normal):    0 pts   within tolerance, small penalty
- *  5–10° (mild):     0-12 pts   increasing concern
- * 10–20° (moderate): 12-25 pts   significant deviation
- * 20–30° (severe):   25-33 pts   maximum contribution; capped at 30°
+ * Computes a 0–100 score reflecting compensation-pattern quality for the
+ * currently active exercise.
+ *
+ * @param definition  The active exercise from the registry.
+ * @param metricValues  A partial map from metric name to its CURRENT absolute
+ *                      value. Pass null/undefined for metrics that couldn't
+ *                      be computed this frame (e.g. occlusion).
+ *
+ * Returns null if NO compensation metrics could be evaluated this frame —
+ * this is distinct from "100" (perfect form) and signals to the UI that the
+ * score is unavailable rather than perfect.
+ *
+ * If only some compensation metrics are unavailable, the score is computed
+ * from those that ARE available, with weighting redistributed equally among
+ * them. This avoids penalizing the patient for landmarks we couldn't see.
  */
-const NECK_BANDS = [
-  { max: 5, deductionMin: 0, deductionMax: 0},
-  { max: 10, deductionMin: 0, deductionMax: 12},
-  { max: 20, deductionMin: 12, deductionMax: 25},
-  { max: 30, deductionMin: 25, deductionMax: 33},
-];
-
-/**
- * Shoulder asymmetry deduction table (max contribution: 33 pts)
- *
- *  0– 3° (normal):    0 pts      noise floor — zero penalty always
- *  3– 7° (mild):      0–12 pts   clinically notable, common
- *  7–12° (moderate): 12-25 pts   likely compensatory pattern
- * 12–20° (severe):   25-33 pts   strong clinical flag; capped at 20°
- *
- * The explicit 0-pt noise floor band ensures we never penalize a patient
- * for a deviation that is indistinguishable from measurement error.
- */
-const SHOULDER_BANDS = [
-  { max: 3, deductionMin: 0, deductionMax: 0},
-  { max: 7, deductionMin: 0, deductionMax: 12},
-  { max: 12, deductionMin: 12, deductionMax: 25},
-  { max: 20, deductionMin: 25, deductionMax: 33},
-];
-
-/**
- * Trunk lean deduction table (max contribution: 33 pts)
- * 
- *  *  0– 2° (normal):    within standing-sway noise
- *  2– 5° (mild):      mild compensatory lean, common during arm raises
- *  5–10° (moderate):  clear compensation, likely off-loading the working side
- *   >10° (severe):    significant trunk dump, exercise should be re-instructed
- */
-const TRUNK_BANDS = [
-  { max: 2, deductionMin: 0, deductionMax: 0},
-  { max: 5, deductionMin: 0, deductionMax: 12},
-  { max: 10, deductionMin: 12, deductionMax: 25},
-  { max: 20, deductionMin: 25, deductionMax: 33},
-]
-
-/**
- * computePostureScore
- *
- * 33/33/33 split between neck tilt, shoulder symmetry, and trunk lean reflects:
- *   - Equal clinical relevance for upper-body rehabilitation exercises
- *   - None of metrics can single-handedly drive the score to 0
- *
- * Partial availability: if only one metric could be computed (e.g., hips
- * not visible so shoulder result is null), the score is computed from
- * whichever is available. The maximum deduction in that case is 50 pts,
- * so scores cluster higher. This is intentional — we must not penalize a
- * patient for data we simply could not measure.
- */
-export function computePostureScore(
-  neck: NeckTiltResult | null,
-  shoulder: ShoulderSymmetryResult | null,
-  trunk: TrunkLeanResult | null
+export function computeCompensationScore(
+  definition: ExerciseDefinition,
+  metricValues: Partial<Record<MetricName, number | null>>
 ): number | null {
-  if (!neck && !shoulder && !trunk) return null;
+  const compensations = definition.compensationMetrics;
+  if (compensations.length === 0) {
+    // Exercise declares no compensation metrics. Return null rather than 100,
+    // because a perfect score would be misleading — we have no quality signal.
+    return null;
+  }
 
-  let score = 100;
-  if (neck)     score -= bandedDeduction(neck.angleDeg, NECK_BANDS);
-  if (shoulder) score -= bandedDeduction(shoulder.angleDeg, SHOULDER_BANDS);
-  if (trunk)    score -= bandedDeduction(trunk.angleDeg, TRUNK_BANDS);
+  // Filter to compensation metrics that have a non-null reading this frame.
+  const active = compensations.filter((c) => {
+    const v = metricValues[c.name];
+    return typeof v === "number";
+  });
 
-  return Math.max(0, Math.round(score));
+  if (active.length === 0) return null;
+
+  // Equal weighting across active compensation metrics. Each metric's max
+  // possible deduction is 100/N, so summed deductions stay in [0, 100].
+  const weightPerMetric = 100 / active.length;
+
+  let totalDeduction = 0;
+  for (const c of active) {
+    const value = metricValues[c.name] as number;
+    const bands = COMPENSATION_BANDS[c.name];
+    const rawDeduction = bandedDeduction(Math.abs(value), bands);
+    // rawDeduction is on a 0–100 per-metric scale; scale to its weight share.
+    totalDeduction += (rawDeduction / 100) * weightPerMetric;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(100 - totalDeduction)));
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 — METRIC STUBS (registry-referenced, math TBD)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These functions exist so the exercise registry can reference them and the
+// camera loop can wire up state machines without runtime errors. Each stub
+// returns null so any consumer that checks for "no data" handles them
+// correctly. Replace each stub with real math one at a time as you implement
+// rep counting per exercise.
+//
+// All stubs return a number (the metric value in the units declared by the
+// registry — degrees for angles, normalized torso-length for displacements)
+// or null when the required landmarks aren't visible.
+
+/**
+ * Shoulder abduction angle (degrees) — used by ex_001 Lateral Arm Raises.
+ *
+ * Definition: angle between the trunk-vertical axis and the shoulder→elbow
+ * vector, measured in the frontal plane. 0° = arm at side, 90° = arm
+ * horizontal, 180° = arm overhead.
+ *
+ * Landmarks needed:
+ *   side="left":  11 (left shoulder), 13 (left elbow), plus midpoints of
+ *                 11/12 and 23/24 to derive trunk vertical
+ *   side="right": 12, 14, plus the same midpoints
+ *
+ * TODO: implement. Tilt-correct using `tiltRef.cameraTiltDeg` so the
+ * trunk-vertical reference is camera-roll-independent.
+ */
+export function computeShoulderAbduction(
+  _landmarks: LM[],
+  _tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return null;
+}
+
+/**
+ * Shoulder flexion angle (degrees) — used by ex_002 Overhead Arm Raises.
+ *
+ * Definition: angle between trunk-vertical and shoulder→elbow vector in the
+ * sagittal plane. Front-camera 2D estimation produces a foreshortened
+ * apparent angle (acknowledged in proposal limitations); this metric returns
+ * the apparent angle, not the anatomical angle.
+ *
+ * TODO: implement. Targets the same registry-declared thresholds as
+ * abduction but interpreted in the apparent-angle space.
+ */
+export function computeShoulderFlexion(
+  _landmarks: LM[],
+  _tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return null;
+}
+
+/**
+ * Scapular elevation (normalized torso-lengths) — used by ex_003 Shoulder Shrugs.
+ *
+ * Definition: vertical distance from shoulder landmark to ear landmark on
+ * the same side, normalized by trunk length (shoulder-midpoint to
+ * hip-midpoint distance) for scale invariance across patients.
+ *
+ * Returns the CHANGE from a per-session resting baseline. The camera loop
+ * is responsible for sampling and storing the baseline during the first
+ * ~1 second after capture-readiness clears, before the patient begins
+ * shrugging. This stub returns the raw normalized distance; baseline
+ * subtraction is the caller's job.
+ *
+ * TODO: implement. Tilt correction needed because shoulder-to-ear vertical
+ * distance changes with camera roll.
+ */
+export function computeScapularElevation(
+  _landmarks: LM[],
+  _tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return null;
+}
+
+/**
+ * Signed neck lateral flexion angle (degrees) — used by ex_004.
+ *
+ * Returns the tilt-corrected ear-line angle in body-relative frame.
+ * Sign convention:
+ *   negative  →  head tilting LEFT  (left ear toward left shoulder)
+ *   positive  →  head tilting RIGHT (right ear toward right shoulder)
+ *   ~0        →  head level
+ *
+ * The `_side` parameter is currently ignored — neck lateral flexion is
+ * a single bidirectional metric, not a per-side measurement. The
+ * parameter exists for signature compatibility with other per-side metrics
+ * routed through `computeMetricByName`. The bidirectional-alternating
+ * routing in CameraClient takes care of side attribution per rep.
+ */
+export function computeNeckLateralFlexionSigned(
+  landmarks: LM[],
+  tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return signedNeckFlexionAngle(landmarks, tiltRef);
+}
+
+/**
+ * Trunk lateral flexion (degrees) — used by ex_005.
+ *
+ * Same situation as neck flexion: existing `computeTrunkLateralLean`
+ * returns absolute angle + direction enum; the state machine needs the
+ * signed continuous value. Wrapper TBD.
+ */
+export function computeTrunkLateralFlexionSigned(
+  _landmarks: LM[],
+  _tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return null;
+}
+
+/**
+ * Shoulder horizontal abduction (degrees) — used by ex_006 isometric T-pose.
+ *
+ * Definition: angle of the shoulder→elbow vector relative to the
+ * trunk-horizontal axis, measured in the transverse plane projection.
+ * 0° = arm forward, 90° = arm out to side at shoulder height (T-pose).
+ *
+ * For the isometric hold, the camera loop checks whether this value stays
+ * within the registry's targetBand (center 90°, tolerance 10°).
+ *
+ * TODO: implement. For a frontal-camera setup, this ends up being
+ * essentially the same calculation as shoulder abduction — they only
+ * differ in clinical interpretation, not in the geometric measurement.
+ */
+export function computeShoulderHorizAbduction(
+  _landmarks: LM[],
+  _tiltRef: TiltReference,
+  _side: "left" | "right"
+): number | null {
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 6 — MAIN EXPORT
+// SECTION 8 — REGISTRY-AWARE ENTRY POINT
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// `computePoseMetricsForExercise` is the new top-level call from CameraClient.
+// It looks at the active exercise definition and returns ONLY the metrics
+// that exercise needs — primary metric (for rep counting), compensation
+// metrics (for the score and warning UI), nothing else.
+//
+// The original `computePoseMetrics` is kept for backward compatibility and
+// for any UI surface that wants the always-on three-metric snapshot. New
+// camera-loop code should use this function instead.
 
-export type PoseMetrics = {
-  /** Camera tilt estimate + confidence — log this per session for quality auditing */
+
+
+/**
+ * Snapshot of every metric the active exercise cares about, plus the
+ * compensation score. The shape is dynamic — only metrics referenced by the
+ * exercise definition appear in `metrics`. Consumers should iterate over
+ * `definition.compensationMetrics` and `definition.primaryMetric` (or
+ * `definition.isometric.metric`) rather than expecting fixed fields.
+ */
+export type ExerciseFrameMetrics = {
   tiltReference: TiltReference;
-  neckTilt: NeckTiltResult | null;
-  shoulderSymmetry: ShoulderSymmetryResult | null;
-  trunkLean: TrunkLeanResult | null;
-  /** Composite score 0–100. Null only when no relevant landmarks are visible. */
-  postureScore: number | null;
+  /** Map keyed by MetricName. Values are the metric's CURRENT raw value or null. */
+  metrics: Partial<Record<MetricName, number | null>>;
+  /** 0–100 compensation-quality score, or null if no compensation data. */
+  compensationScore: number | null;
 };
 
 /**
- * computePoseMetrics
+ * Compute one frame's worth of metrics for the active exercise.
  *
- * Single entry point for the camera loop.
- * Call once per frame with results.landmarks[0] from MediaPipe.
+ * For now, primary-metric values come from the stub functions in Section 7
+ * and will return null until those are implemented. Compensation metrics use
+ * the existing computed values (neck tilt, shoulder symmetry, trunk lean) —
+ * those work today.
  *
- * Execution order is mandatory:
- *   1. Tilt reference must be computed first — all metrics depend on it.
- *   2. Neck, shoulder, and trunk can be computed in any order.
- *   3. Posture score is computed last, from the three corrected metrics.
+ * The function deliberately reads the active definition rather than computing
+ * everything always-on. This keeps per-frame work proportional to what the UI
+ * actually displays — important once the per-frame rate climbs and the stubs
+ * become real implementations doing real math.
  */
-export function computePoseMetrics(landmarks: LM[]): PoseMetrics {
-  const tiltReference    = computeTiltReference(landmarks);
-  const neckTilt         = computeLateralNeckTilt(landmarks, tiltReference);
-  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tiltReference);
-  const trunkLean        = computeTrunkLateralLean(landmarks, tiltReference);
-  const postureScore     = computePostureScore(neckTilt, shoulderSymmetry, trunkLean);
+export function computePoseMetricsForExercise(
+  landmarks: LM[],
+  definition: ExerciseDefinition
+): ExerciseFrameMetrics {
+  const tiltReference = computeTiltReference(landmarks);
+  const metrics: Partial<Record<MetricName, number | null>> = {};
 
-  return { tiltReference, neckTilt, shoulderSymmetry, trunkLean, postureScore };
+  // ── Primary metric ──────────────────────────────────────────────────────
+  // Only one of these branches runs per frame. The result is stored in the
+  // metrics map under the metric name declared in the registry.
+  if (definition.kind === "dynamic") {
+    const p = definition.primaryMetric;
+    metrics[p.name] = computeMetricByName(landmarks, tiltReference, p.name, p.side);
+  } else {
+    const i = definition.isometric;
+    metrics[i.metric] = computeMetricByName(landmarks, tiltReference, i.metric, i.side);
+  }
+
+  // ── Compensation metrics ────────────────────────────────────────────────
+  for (const comp of definition.compensationMetrics) {
+    // Compensation metrics in the current registry don't carry a `side`,
+    // so pass undefined and let the metric resolver pick the bilateral form.
+    if (metrics[comp.name] === undefined) {
+      metrics[comp.name] = computeMetricByName(landmarks, tiltReference, comp.name, undefined);
+    }
+  }
+
+  const compensationScore = computeCompensationScore(definition, metrics);
+
+  return { tiltReference, metrics, compensationScore };
+}
+
+/**
+ * Resolves a metric name to its computation function.
+ *
+ * This is the single source of truth for "which function computes which
+ * metric." Adding a new metric means: add to the MetricName union, add a
+ * compute function (real or stubbed), add a case here. That's it.
+ *
+ * Returns the metric's value as a plain number (or null when unavailable),
+ * stripped of any wrapper objects. Consumers comparing to thresholds want
+ * the raw number; if a UI surface wants the rich form (severity + direction
+ * for neck tilt, etc.) it should call the underlying function directly.
+ */
+function computeMetricByName(
+  landmarks: LM[],
+  tiltRef: TiltReference,
+  metricName: MetricName,
+  side: "left" | "right" | undefined
+): number | null {
+  switch (metricName) {
+    case "neckTilt": {
+      const r = computeLateralNeckTilt(landmarks, tiltRef);
+      return r ? r.angleDeg : null;
+    }
+    case "shoulderSymmetry": {
+      const r = computeShoulderSymmetry(landmarks, tiltRef);
+      return r ? r.angleDeg : null;
+    }
+    case "trunkLean": {
+      const r = computeTrunkLateralLean(landmarks, tiltRef);
+      return r ? r.angleDeg : null;
+    }
+    case "shoulderAbduction":
+      return computeShoulderAbduction(landmarks, tiltRef, side ?? "left");
+    case "shoulderFlexion":
+      return computeShoulderFlexion(landmarks, tiltRef, side ?? "left");
+    case "scapularElevation":
+      return computeScapularElevation(landmarks, tiltRef, side ?? "left");
+    case "neckLateralFlexion":
+      return computeNeckLateralFlexionSigned(landmarks, tiltRef, side ?? "left");
+    case "trunkLateralFlexion":
+      return computeTrunkLateralFlexionSigned(landmarks, tiltRef, side ?? "left");
+    case "shoulderHorizAbd":
+      return computeShoulderHorizAbduction(landmarks, tiltRef, side ?? "left");
+    default: {
+      // Exhaustiveness guard — TypeScript will complain if a MetricName is
+      // ever added without a case here.
+      const _exhaustive: never = metricName;
+      return null;
+    }
+  }
 }

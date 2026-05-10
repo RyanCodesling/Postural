@@ -5,6 +5,45 @@
 
 ---
 
+## 📌 Update-4-13-26 | *ralmeyda*
+
+Added 2 new database tables: therapist, patients
+
+### *dashboard/admin/page.tsx* 
+- Admin can now add a user and update to the database.
+- Added Database function for Add User in admin side.
+- Fix Patient-therapist assignment
+
+### *dashboard/therapist/page.tsx* 
+- The therapist can now view assigned patients
+
+### *This is for the next sprint update* ❕
+- **Fix Assign Patient** (Admin can still assign the patient to the therapist even though they're already assigned. Will add the re-assign feature.)
+
+---
+
+## 📌 Update-4-09-26 | *RyanCodesling*
+
+### *web/source/lib/pose*
+- Added poseMetrics.tsx for math engine
+
+### *web/public/models*
+- Upgraded pose_landmarker_lite.task to pose_landmarker_full.task
+
+### *web/src/app/(app)/camera/CameraClient.tsx*
+- Changed references of pose_landmarker_lite.task to pose_landmarker_full.task
+- Removed placeholder metrics, now uses and shows live metrics referenced from poseMetrics.ts
+- Added neck and shoulder metrics, as well as scoring
+- UI/UX changes for better visibility
+- Added color coded visualizers for metric deviation
+
+### *web/src/lib/pose/captureReadiness.ts*
+- Added knee(25,26) visibility requirement
+- Adjusted centering of head(0) to the top quarter of the frame
+- Replaced hint messages to natural language
+
+---
+
 ## 📌 Update-4-17-26 | *ralmeyda*
 - Removed exercise difficulty and timer/duration.
 
@@ -150,6 +189,13 @@ Added 2 new database tables: therapist, patients
 ### *dashboard/page.tsx* 
 - Now works as role-based router that redirects based on user’s role
 
+### *dashboard/patient/page.tsx* 
+- Created subfolder for Patient Side
+- Logout button redirects back to app\page.tsx
+
+### *dashboard/page.tsx* 
+- Now works as role-based router that redirects based on user’s role
+
 ### *login/page.tsx*
 - Removed Role Switcher
 - Now have Admin Login
@@ -167,3 +213,19 @@ Added 2 new database tables: therapist, patients
 ### *(app)/layout.tsx*
 - Logout functionality fixed
 
+### *login/page.tsx*
+- Removed Role Switcher
+- Now have Admin Login
+- Cancel Button on Role Login
+- Eye Icon on Password Field
+
+### *dashboard/admin/page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
+
+### *dashboard/therapist/page.tsx* 
+- Logout button redirects back to app\page.tsx
+- Removed extra logout button
+
+### *(app)/layout.tsx*
+- Logout functionality fixed

@@ -10,12 +10,13 @@ CREATE TABLE IF NOT EXISTS users (
   "clinicId"        VARCHAR(50),
   created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
-);
+); 
 
 CREATE INDEX IF NOT EXISTS idx_email ON users (email);
 CREATE INDEX IF NOT EXISTS idx_role ON users (role);
 
--- Add new columns (safe to re-run)
+-- Add missing columns safely
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password          VARCHAR(255);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name        VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS middle_name       VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name         VARCHAR(100);
@@ -28,7 +29,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS prescription      TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS condition         TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id_num  VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty         VARCHAR(100);
-
 CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
 
 -- Insert demo credentials

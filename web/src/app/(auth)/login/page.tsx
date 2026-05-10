@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/AuthContext";
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { setUser } = useAuth();
   const roleParam = (searchParams?.get("role") as string) || "patient";
   const role = roleParam.toLowerCase();
   const isTherapist = role === "therapist";

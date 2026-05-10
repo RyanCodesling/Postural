@@ -9,6 +9,9 @@ type Tab = "users" | "exercises" | "assignments";
 interface User {
   id: string;
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
   email?: string;
   role: "patient" | "therapist";
   therapistId?: string;
@@ -35,50 +38,16 @@ export default function AdminDashboard() {
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<Tab>("users");
-  const [users, setUsers] = useState<User[]>([
-    { id: "patient_001", name: "John Patient", email: "patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "patient_002", name: "Jane Patient", email: "jane.patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "patient_003", name: "Mike Patient", email: "mike.patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "therapist_001", name: "Sarah Therapist", email: "therapist@clinic.com", role: "therapist" },
-  ]);
-  const [exercises, setExercises] = useState<Exercise[]>([
-    {
-      id: "ex_001",
-      name: "Lateral Arm Raises",
-      description: "Raise arms to the side at shoulder height. Improves shoulder strength and posture.",
-    },
-    {
-      id: "ex_002",
-      name: "Overhead Arm Raises",
-      description: "Raise arms straight up overhead. Strengthens shoulders and improves upper back flexibility.",
-    },
-    {
-      id: "ex_003",
-      name: "Shoulder Shrugs",
-      description: "Lift shoulders towards ears and release. Relieves tension and strengthens trapezius.",
-    },
-    {
-      id: "ex_004",
-      name: "Neck Lateral Flexion",
-      description: "Bend neck to each side gently. Improves neck flexibility and reduces stiffness.",
-    },
-    {
-      id: "ex_005",
-      name: "Standing Side Bends",
-      description: "Bend torso to the side while standing. Strengthens obliques and improves spinal mobility.",
-    },
-    {
-      id: "ex_006",
-      name: "Arm Abduction at 90°",
-      description: "Raise arms to 90 degrees from body. Targets shoulder stability and strength.",
-    },
-  ]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
 
   // User form state
   const [selectedRole, setSelectedRole] = useState<"patient" | "therapist" | null>(null);
-  const [newUser, setNewUser] = useState<Partial<User>>({ 
-    name: "", 
-    email: "", 
+  const [newUser, setNewUser] = useState<Partial<User>>({
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    email: "",
     role: "patient",
     dateOfBirth: "",
     age: undefined,
@@ -107,119 +76,55 @@ export default function AdminDashboard() {
   });
   const [showExerciseForm, setShowExerciseForm] = useState(false);
 
-  // Initialize and persist users data to localStorage
+  // Load users and exercises from PostgreSQL on mount
   useEffect(() => {
-    // Load from localStorage if exists, otherwise use initial state
-    const storedUsers = localStorage.getItem("admin_users");
-    if (storedUsers) {
-      try {
-        setUsers(JSON.parse(storedUsers));
-      } catch (error) {
-        console.error("Error loading users from storage:", error);
-      }
-    } else {
-      // Initialize localStorage with initial users on first load
-      localStorage.setItem("admin_users", JSON.stringify(users));
-    }
-  }, []); // Only run on mount
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((data) => setUsers(data.users ?? []))
+      .catch((err) => console.error("Failed to load users:", err));
 
-  // Persist users data to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem("admin_users", JSON.stringify(users));
-  }, [users]);
-
-  // Initialize and persist exercises data to localStorage
-  useEffect(() => {
-    const storedExercises = localStorage.getItem("admin_exercises");
-    if (storedExercises) {
-      try {
-        setExercises(JSON.parse(storedExercises));
-      } catch (error) {
-        console.error("Error loading exercises from storage:", error);
-      }
-    } else {
-      // Initialize localStorage with initial exercises on first load
-      localStorage.setItem("admin_exercises", JSON.stringify(exercises));
-    }
-  }, []); // Only run on mount
-
-  // Seed patient_exercises on first load so that seed patients have
-  // exercises assigned and can use the camera page immediately. This is
-  // a localStorage-only convenience; once the assignment table moves to
-  // Postgres, this seeding moves to a SQL migration / fixture instead.
-  useEffect(() => {
-    const stored = localStorage.getItem("patient_exercises");
-    if (stored) return; // already seeded — leave alone
-  
-    const seedAssignments = [
-      "ex_001",
-      "ex_002",
-      "ex_003",
-      "ex_004",
-      "ex_005",
-      "ex_006",
-    ].map((exerciseId) => ({
-      exerciseId,
-      patientId: "patient_001",
-      assignedDate: new Date().toISOString().split("T")[0],
-      status: "pending" as const,
-    }));
-  
-    localStorage.setItem("patient_exercises", JSON.stringify(seedAssignments));
+    fetch("/api/exercises")
+      .then((r) => r.json())
+      .then((data) => setExercises(data.exercises ?? []))
+      .catch((err) => console.error("Failed to load exercises:", err));
   }, []);
 
-  // Persist exercises data to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem("admin_exercises", JSON.stringify(exercises));
-  }, [exercises]);
-
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUser.name || !newUser.role) return;
+    if (!newUser.firstName || !newUser.lastName || !newUser.role) return;
 
-    // Validate role-specific required fields
     if (newUser.role === "patient") {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.diagnosis || !newUser.prescription || !newUser.condition) return;
     } else if (newUser.role === "therapist") {
-      if (!newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.therapistIDNum || !newUser.specialty) return;
+      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
 
-    const user: User = {
-      id: `user_${Date.now()}`,
-      name: newUser.name!,
-      email: newUser.email,
-      role: newUser.role as "patient" | "therapist",
-      dateOfBirth: newUser.dateOfBirth,
-      age: newUser.age,
-      gender: newUser.gender,
-      diagnosis: newUser.diagnosis,
-      prescription: newUser.prescription,
-      condition: newUser.condition,
-      therapistIDNum: newUser.therapistIDNum,
-      specialty: newUser.specialty,
-    };
-    setUsers([...users, user]);
-    setNewUser({ 
-      name: "", 
-      email: "", 
-      role: "patient",
-      dateOfBirth: "",
-      age: undefined,
-      gender: "",
-      diagnosis: "",
-      prescription: "",
-      condition: "",
-      therapistIDNum: "",
-      specialty: ""
-    });
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newUser),
+      });
+      const data = await res.json();
+      if (res.ok) setUsers([...users, data.user]);
+    } catch (err) {
+      console.error("Failed to add user:", err);
+    }
+
+    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", diagnosis: "", prescription: "", condition: "", therapistIDNum: "", specialty: "" });
     setSelectedRole(null);
     setShowUserForm(false);
     setEditingUserId(null);
     setEditingUser(null);
   };
 
-  const handleDeleteUser = (id: string) => {
-    setUsers(users.filter((u) => u.id !== id));
+  const handleDeleteUser = async (id: string) => {
+    try {
+      await fetch(`/api/users/${id}`, { method: "DELETE" });
+      setUsers(users.filter((u) => u.id !== id));
+    } catch (err) {
+      console.error("Failed to delete user:", err);
+    }
   };
 
   const handleEditUser = (user: User) => {
@@ -228,13 +133,22 @@ export default function AdminDashboard() {
     setShowUserForm(false);
   };
 
-  const handleSaveEditUser = (e: React.FormEvent) => {
+  const handleSaveEditUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser || !editingUser.name) return;
+    if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
 
-    setUsers(
-      users.map((u) => (u.id === editingUserId ? editingUser : u))
-    );
+    try {
+      const res = await fetch(`/api/users/${editingUserId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingUser),
+      });
+      const data = await res.json();
+      if (res.ok) setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
+    } catch (err) {
+      console.error("Failed to update user:", err);
+    }
+
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -244,41 +158,72 @@ export default function AdminDashboard() {
     setEditingUser(null);
   };
 
-  const handleAssignPatient = () => {
+  const handleAssignPatient = async () => {
     if (!selectedPatientId || !selectedTherapistId) return;
 
-    setUsers(
-      users.map((u) =>
-        u.id === selectedPatientId ? { ...u, therapistId: selectedTherapistId } : u
-      )
-    );
+    try {
+      const res = await fetch(`/api/users/${selectedPatientId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ therapistId: selectedTherapistId }),
+      });
+      if (res.ok) {
+        setUsers(users.map((u) =>
+          u.id === selectedPatientId ? { ...u, therapistId: selectedTherapistId } : u
+        ));
+      }
+    } catch (err) {
+      console.error("Failed to assign patient:", err);
+    }
+
     setSelectedPatientId(null);
     setSelectedTherapistId(null);
   };
 
-  const handleUnassignPatient = (patientId: string) => {
-    setUsers(
-      users.map((u) =>
-        u.id === patientId ? { ...u, therapistId: undefined } : u
-      )
-    );
+  const handleUnassignPatient = async (patientId: string) => {
+    try {
+      const res = await fetch(`/api/users/${patientId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ therapistId: null }),
+      });
+      if (res.ok) {
+        setUsers(users.map((u) =>
+          u.id === patientId ? { ...u, therapistId: undefined } : u
+        ));
+      }
+    } catch (err) {
+      console.error("Failed to unassign patient:", err);
+    }
   };
 
-  const handleAddExercise = (e: React.FormEvent) => {
+  const handleAddExercise = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newExercise.name || !newExercise.description) return;
 
-    const exercise: Exercise = {
-      id: `ex_${Date.now()}`,
-      ...newExercise,
-    };
-    setExercises([...exercises, exercise]);
+    try {
+      const res = await fetch("/api/exercises", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newExercise),
+      });
+      const data = await res.json();
+      if (res.ok) setExercises([...exercises, data.exercise]);
+    } catch (err) {
+      console.error("Failed to add exercise:", err);
+    }
+
     setNewExercise({ name: "", description: "" });
     setShowExerciseForm(false);
   };
 
-  const handleDeleteExercise = (id: string) => {
-    setExercises(exercises.filter((e) => e.id !== id));
+  const handleDeleteExercise = async (id: string) => {
+    try {
+      await fetch(`/api/exercises/${id}`, { method: "DELETE" });
+      setExercises(exercises.filter((e) => e.id !== id));
+    } catch (err) {
+      console.error("Failed to delete exercise:", err);
+    }
   };
 
   // Helper functions
@@ -350,7 +295,9 @@ export default function AdminDashboard() {
                     if (showUserForm) {
                       setSelectedRole(null);
                       setNewUser({
-                        name: "",
+                        firstName: "",
+                        middleName: "",
+                        lastName: "",
                         email: "",
                         role: "patient",
                         dateOfBirth: "",
@@ -425,17 +372,42 @@ export default function AdminDashboard() {
                       </div>
 
                       {/* Common Fields */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Full Name <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={newUser.name || ""}
-                          onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                          required
-                        />
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            First Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.firstName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Middle Name
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.middleName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, middleName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Last Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.lastName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            required
+                          />
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -480,8 +452,6 @@ export default function AdminDashboard() {
                           <option value="">-- Select Gender --</option>
                           <option value="male">Male</option>
                           <option value="female">Female</option>
-                          <option value="other">Other</option>
-                          <option value="prefer-not-to-say">Prefer Not To Say</option>
                         </select>
                       </div>
 
@@ -547,12 +517,12 @@ export default function AdminDashboard() {
                         <>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Therapist ID <span className="text-red-500">*</span>
+                              Email <span className="text-red-500">*</span>
                             </label>
                             <input
-                              type="text"
-                              value={newUser.therapistIDNum || ""}
-                              onChange={(e) => setNewUser({ ...newUser, therapistIDNum: e.target.value })}
+                              type="email"
+                              value={newUser.email || ""}
+                              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                               className="w-full border border-gray-300 rounded px-3 py-2"
                               required
                             />
@@ -595,19 +565,46 @@ export default function AdminDashboard() {
                   </h4>
 
                   {/* Common Fields */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Full Name
-                    </label>
-                    <input
-                      type="text"
-                      value={editingUser.name}
-                      onChange={(e) =>
-                        setEditingUser({ ...editingUser, name: e.target.value })
-                      }
-                      className="w-full border border-gray-300 rounded px-3 py-2"
-                      required
-                    />
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        First Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.firstName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, firstName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Middle Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.middleName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, middleName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Last Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.lastName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, lastName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -655,8 +652,6 @@ export default function AdminDashboard() {
                       <option value="">-- Select Gender --</option>
                       <option value="male">Male</option>
                       <option value="female">Female</option>
-                      <option value="other">Other</option>
-                      <option value="prefer-not-to-say">Prefer Not To Say</option>
                     </select>
                   </div>
 
@@ -724,6 +719,20 @@ export default function AdminDashboard() {
                   {/* Therapist-specific Fields */}
                   {editingUser.role === "therapist" && (
                     <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Email
+                        </label>
+                        <input
+                          type="email"
+                          value={editingUser.email || ""}
+                          onChange={(e) =>
+                            setEditingUser({ ...editingUser, email: e.target.value })
+                          }
+                          className="w-full border border-gray-300 rounded px-3 py-2"
+                        />
+                      </div>
+                      
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Therapist ID

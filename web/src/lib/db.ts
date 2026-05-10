@@ -1,18 +1,211 @@
-import { Pool } from "pg";
+import { Pool, types } from "pg";
+
+// Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
+types.setTypeParser(1082, (val: string) => val);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+// Maps snake_case DB columns to camelCase for the app
+function mapUser(row: any) {
+  return {
+    id:             row.id,
+    email:          row.email,
+    name:           row.name,
+    firstName:      row.first_name        ?? null,
+    middleName:     row.middle_name       ?? null,
+    lastName:       row.last_name         ?? null,
+    role:           row.role,
+    clinicId:       row["clinicId"]       ?? null,
+    therapistId:    row.therapist_id      ?? null,
+    dateOfBirth:    row.date_of_birth ?? null,
+    age:            row.age               ?? null,
+    gender:         row.gender            ?? null,
+    diagnosis:      row.diagnosis         ?? null,
+    prescription:   row.prescription      ?? null,
+    condition:      row.condition         ?? null,
+    therapistIDNum: row.therapist_id_num  ?? null,
+    specialty:      row.specialty         ?? null,
+  };
+}
+
+export async function getNextUserId(role: string): Promise<string> {
+  const result = await pool.query(
+    "SELECT id FROM users WHERE role = $1 ORDER BY id DESC LIMIT 1",
+    [role]
+  );
+  if (result.rows.length === 0) return `${role}_001`;
+  const lastId = result.rows[0].id as string;
+  const match = lastId.match(/_(\d+)$/);
+  const next = match ? parseInt(match[1], 10) + 1 : 1;
+  return `${role}_${String(next).padStart(3, "0")}`;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
 export async function getUser(email: string, role: string) {
-  try {
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1 AND role = $2",
-      [email, role]
-    );
-    return result.rows.length > 0 ? result.rows[0] : null;
-  } catch (error) {
-    console.error("Database error:", error);
-    throw error;
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email = $1 AND role = $2",
+    [email, role]
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+export async function getUsers(filters?: { role?: string; therapistId?: string }) {
+  let query = "SELECT * FROM users WHERE role IN ('patient', 'therapist')";
+  const params: any[] = [];
+
+  if (filters?.role) {
+    params.push(filters.role);
+    query += ` AND role = $${params.length}`;
   }
+  if (filters?.therapistId) {
+    params.push(filters.therapistId);
+    query += ` AND therapist_id = $${params.length}`;
+  }
+
+  query += " ORDER BY name";
+  const result = await pool.query(query, params);
+  return result.rows.map(mapUser);
+}
+
+export async function createUser(data: {
+  id: string;
+  name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  email?: string;
+  password: string;
+  role: "patient" | "therapist";
+  dateOfBirth?: string;
+  age?: number;
+  gender?: string;
+  diagnosis?: string;
+  prescription?: string;
+  condition?: string;
+  therapistIDNum?: string;
+  specialty?: string;
+}) {
+  const result = await pool.query(
+    `INSERT INTO users
+       (id, email, password, name, first_name, middle_name, last_name,
+        role, date_of_birth, age, gender,
+        diagnosis, prescription, condition, therapist_id_num, specialty)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     RETURNING *`,
+    [
+      data.id,
+      data.email ?? null,
+      data.password,
+      data.name,
+      data.firstName ?? null,
+      data.middleName ?? null,
+      data.lastName ?? null,
+      data.role,
+      data.dateOfBirth ?? null,
+      data.age ?? null,
+      data.gender ?? null,
+      data.diagnosis ?? null,
+      data.prescription ?? null,
+      data.condition ?? null,
+      data.therapistIDNum ?? null,
+      data.specialty ?? null,
+    ]
+  );
+  return mapUser(result.rows[0]);
+}
+
+export async function updateUser(id: string, data: Partial<{
+  name: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  email: string;
+  therapistId: string | null;
+  dateOfBirth: string;
+  age: number;
+  gender: string;
+  diagnosis: string;
+  prescription: string;
+  condition: string;
+  therapistIDNum: string;
+  specialty: string;
+}>) {
+  const fields: string[] = [];
+  const params: any[] = [];
+
+  const columnMap: Record<string, string> = {
+    name:           "name",
+    firstName:      "first_name",
+    middleName:     "middle_name",
+    lastName:       "last_name",
+    email:          "email",
+    therapistId:    "therapist_id",
+    dateOfBirth:    "date_of_birth",
+    age:            "age",
+    gender:         "gender",
+    diagnosis:      "diagnosis",
+    prescription:   "prescription",
+    condition:      "condition",
+    therapistIDNum: "therapist_id_num",
+    specialty:      "specialty",
+  };
+
+  for (const [key, col] of Object.entries(columnMap)) {
+    if (key in data) {
+      params.push((data as any)[key]);
+      fields.push(`${col} = $${params.length}`);
+    }
+  }
+
+  if (fields.length === 0) return null;
+
+  params.push(id);
+  const result = await pool.query(
+    `UPDATE users SET ${fields.join(", ")} WHERE id = $${params.length} RETURNING *`,
+    params
+  );
+  return result.rows.length > 0 ? mapUser(result.rows[0]) : null;
+}
+
+export async function deleteUser(id: string) {
+  await pool.query("DELETE FROM users WHERE id = $1", [id]);
+}
+
+// ── Exercises ─────────────────────────────────────────────────────────────────
+
+export async function getExercises() {
+  const result = await pool.query("SELECT * FROM exercises ORDER BY id");
+  return result.rows;
+}
+
+export async function createExercise(data: { id: string; name: string; description: string }) {
+  const result = await pool.query(
+    "INSERT INTO exercises (id, name, description) VALUES ($1, $2, $3) RETURNING *",
+    [data.id, data.name, data.description]
+  );
+  return result.rows[0];
+}
+
+export async function deleteExercise(id: string) {
+  await pool.query("DELETE FROM exercises WHERE id = $1", [id]);
+}
+
+// ── Patient exercises ─────────────────────────────────────────────────────────
+
+export async function getPatientExercises(patientId: string) {
+  const result = await pool.query(
+    `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
+            pe.status, pe.sets, pe.reps, e.name, e.description
+     FROM patient_exercises pe
+     JOIN exercises e ON e.id = pe.exercise_id
+     WHERE pe.patient_id = $1
+     ORDER BY pe.id ASC`,
+    [patientId]
+  );
+  return result.rows;
 }
 
 export default pool;

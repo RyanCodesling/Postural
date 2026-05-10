@@ -193,28 +193,23 @@ export default function CameraClient() {
     initLandmarker();
   }, []);
 
-  // Load assigned exercises (localStorage)
+  // Load assigned exercises from database
   useEffect(() => {
     if (!user?.id) return;
 
-    try {
-      const storedExercises = localStorage.getItem("admin_exercises");
-      const exercises: Exercise[] = storedExercises ? JSON.parse(storedExercises) : [];
-
-      const storedAssignments = localStorage.getItem("patient_exercises");
-      const assignments: PatientExercise[] = storedAssignments ? JSON.parse(storedAssignments) : [];
-      const patientAssignments = assignments.filter((a) => a.patientId === user.id);
-
-      const assigned = exercises.filter((e) =>
-        patientAssignments.some((a) => a.exerciseId === e.id)
-      );
-
-      setAssignedExercises(assigned);
-      if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
-    } catch (err) {
-      console.error("Error loading exercises:", err);
-    }
-  }, [user?.id, selectedExercise]);
+    fetch("/api/patient-exercises")
+      .then((r) => r.json())
+      .then((data) => {
+        const assigned: Exercise[] = (data.exercises ?? []).map((e: any) => ({
+          id: e.exercise_id,
+          name: e.name,
+          description: e.description,
+        }));
+        setAssignedExercises(assigned);
+        if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
+      })
+      .catch((err) => console.error("Error loading exercises:", err));
+  }, [user?.id]);
 
   useEffect(() => {
     if (!selectedExercise) {

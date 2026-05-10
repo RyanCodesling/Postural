@@ -5,6 +5,68 @@
 
 ---
 
+## 📌 Update-5-10-26 | *Ron*
+- Added reusable status banner system for Admin Dashboard actions
+- Added success and error feedback messages for user creation
+- Added automatic fade-out animation for status banners after 5 seconds
+- Added a delete confirmation modal before permanently removing users
+- Improved delete workflow with safer confirmation handling
+- Added success and error feedback messages for user deletion
+- Updated the delete button behavior to open a modal instead of instantly deleting users
+- Added validation for Date of Birth fields to prevent future dates
+- Added minimum allowed birth date range (1900-01-01)
+- Added age input validation to prevent entering more than 3 digits
+- Replaced ineffective maxLength handling on type="number" inputs with JavaScript validation logic
+- Preserved native number input spinner functionality using max="150"
+  
+### web\src\app(app)\dashboard\admin\page.tsx
+- Added new state handlers for status notifications:
+  - statusMessage
+  - statusType
+  - statusVisible
+- Added useEffect() for automatic status banner fade-in and fade-out transitions
+- Added error handling in handleAddUser():
+  - Displays "User successfully added." on successful creation
+  - Displays API/server error messages when creation fails
+- Added new delete confirmation modal states:
+  - isDeleteModalOpen
+  - deleteUserId
+  - deleteUserName
+- Created openDeleteModal(user) helper to initialize delete confirmation data
+- Created closeDeleteModal() helper to safely reset modal state
+- Added confirmDeleteUser() async handler:
+  - Sends DELETE request to /api/users/[id]
+  - Removes deleted user from local state
+  - Displays success/error banners depending on API response
+- Added animated status banner UI above the Users table:
+  - Green banner for success states
+  - Red banner for error states
+  - Uses opacity transition for smooth fade effect
+- Added reusable delete confirmation modal UI with:
+  - Darkened backdrop overlay
+  - Cancel button
+  - Confirm Delete button
+  - Dynamic selected user name display
+- Replaced direct delete action:
+  - From handleDeleteUser(u.id)
+  - To openDeleteModal(u)
+- Improved UX by preventing accidental instant deletion of users
+- Added validation to Add User Date of Birth field:
+  - max={new Date().toISOString().split('T')[0]}
+  - min="1900-01-01"
+- Added validation to Edit User Date of Birth field:
+  - Prevents selecting future dates
+  - Restricts dates below year 1900
+- Updated Add User age field validation:
+  - Prevents typing more than 3 digits using custom onChange logic
+  - Retains min="0" and max="150" constraints
+- Updated Edit User age field validation:
+  - Prevents typing values longer than 3 digits
+  - Maintains native increment/decrement controls
+- Removed ineffective maxLength approach for numeric inputs and replaced it with controlled validation logic
+
+---
+
 ## 📌 Update-5-8-26 | *Enah*
 - Fixed "Dashboard" nav link redirecting all roles to Log In — Patient instead of their own dashboard
 - Migrated all localStorage data (users, exercises, patient-exercise assignments) to PostgreSQL — data now persists across browsers and sessions

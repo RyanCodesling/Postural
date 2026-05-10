@@ -11,6 +11,7 @@ import {
 import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import { computePoseMetrics, type PoseMetrics, type Severity } from "@/lib/pose/poseMetrics";
+import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -37,6 +38,11 @@ export default function CameraClient() {
 
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
+
+  const neckFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const shoulderFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const tiltFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const lastMetricsUpdateRef = useRef(0);
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -214,8 +220,55 @@ export default function CameraClient() {
 
           if (r.ok) {
             const metrics = computePoseMetrics(landmarks as any);
-            setLiveMetrics(metrics);
+            const tNow = performance.now();
+
+            // Smooth the camera-tilt estimate
+            const smoothedTilt = tiltFilterRef.current.filter(
+              metrics.tiltReference.cameraTiltDeg,
+              tNow
+            );
+
+            // Smooth neck angle, then re-round to 1 decimal
+            const smoothedNeck = metrics.neckTilt
+              ? {
+                  ...metrics.neckTilt,
+                  angleDeg:
+                    Math.round(
+                      neckFilterRef.current.filter(metrics.neckTilt.angleDeg, tNow) * 10
+                    ) / 10,
+                }
+              : null;
+
+            // Smooth shoulder angle, then re-round to 1 decimal
+            const smoothedShoulder = metrics.shoulderSymmetry
+              ? {
+                  ...metrics.shoulderSymmetry,
+                  angleDeg:
+                    Math.round(
+                      shoulderFilterRef.current.filter(
+                        metrics.shoulderSymmetry.angleDeg,
+                        tNow
+                      ) * 10
+                    ) / 10,
+                }
+              : null;
+          if (tNow - lastMetricsUpdateRef.current > 150) {
+            lastMetricsUpdateRef.current = tNow;
+            setLiveMetrics({
+              tiltReference: { ...metrics.tiltReference, cameraTiltDeg: smoothedTilt },
+              neckTilt: smoothedNeck,
+              shoulderSymmetry: smoothedShoulder,
+              postureScore: metrics.postureScore,
+            });
+          }
+          
           } else {
+            // Reset filters so the next good frame starts fresh instead of
+            // blending against stale history from before the dropout.
+            neckFilterRef.current.reset();
+            shoulderFilterRef.current.reset();
+            tiltFilterRef.current.reset();
+
             setLiveMetrics({
               tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
               neckTilt:         null,

@@ -42,6 +42,7 @@ export default function CameraClient() {
   const neckFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const shoulderFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const tiltFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const trunkFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const lastMetricsUpdateRef = useRef(0);
 
   const [mounted, setMounted] = useState(false);
@@ -75,6 +76,7 @@ export default function CameraClient() {
     tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
     neckTilt:         null,
     shoulderSymmetry: null,
+    trunkLean:        null,
     postureScore:     null,
   });
  
@@ -252,27 +254,42 @@ export default function CameraClient() {
                     ) / 10,
                 }
               : null;
+
+            // Smooth trunk lean angle, then re-round to 1 decimal
+            const smoothedTrunk = metrics.trunkLean
+              ? {
+                  ...metrics.trunkLean,
+                  angleDeg:
+                    Math.round(
+                      trunkFilterRef.current.filter(metrics.trunkLean.angleDeg, tNow) * 10
+                    ) / 10,
+                }
+              : null; 
+
           if (tNow - lastMetricsUpdateRef.current > 150) {
             lastMetricsUpdateRef.current = tNow;
             setLiveMetrics({
               tiltReference: { ...metrics.tiltReference, cameraTiltDeg: smoothedTilt },
               neckTilt: smoothedNeck,
               shoulderSymmetry: smoothedShoulder,
+              trunkLean: smoothedTrunk,
               postureScore: metrics.postureScore,
             });
           }
-          
+
           } else {
             // Reset filters so the next good frame starts fresh instead of
             // blending against stale history from before the dropout.
             neckFilterRef.current.reset();
             shoulderFilterRef.current.reset();
+            trunkFilterRef.current.reset();
             tiltFilterRef.current.reset();
 
             setLiveMetrics({
               tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
               neckTilt:         null,
               shoulderSymmetry: null,
+              trunkLean:        null,
               postureScore:     null,
             });
           }
@@ -484,6 +501,18 @@ export default function CameraClient() {
                       : "No data"
                   }
                   severity={liveMetrics.shoulderSymmetry?.severity ?? null}
+                />
+                <MetricCard
+                  label="TRUNK LEAN"
+                  value={liveMetrics.trunkLean ? `${liveMetrics.trunkLean.angleDeg}°` : "--"}
+                  sub={
+                    liveMetrics.trunkLean
+                      ? liveMetrics.trunkLean.severity === "normal"
+                        ? "Upright · Normal"
+                        : `${liveMetrics.trunkLean.direction.charAt(0).toUpperCase() + liveMetrics.trunkLean.direction.slice(1)} · ${severityText(liveMetrics.trunkLean.severity)}`
+                      : "No data"
+                  }
+                  severity={liveMetrics.trunkLean?.severity ?? null}
                 />
                 <ScoreCard score={liveMetrics.postureScore} />
               </div>

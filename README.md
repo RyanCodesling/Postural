@@ -2,7 +2,13 @@
 
 ## 📌 New sprint update here (●'◡'●) | *author_name*
 -
+## 📌 Update-4-30-26 | *RyanCodesling*
+### *web\src\lib\pose\poseMetrics.ts*
+- Added trunkLean as a third metric
+- Added a wrapper to handle the left-right convention, instead of having to swap out every left-right to right-left
 
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added a trunk MetricCard
 ---
 
 ## 📌 Update-4-25-26 | *Enah*

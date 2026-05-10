@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { getStoredUser, clearStoredUser, logoutUser } from "@/lib/auth";
+import { logoutUser } from "@/lib/auth";
 
 interface User {
   id: string;
@@ -14,6 +14,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  login: (user: User) => void;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
 }
@@ -25,19 +26,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedUser = getStoredUser();
-    setUser(storedUser);
-    setLoading(false);
+    const fetchUser = async () => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          setUser(null);
+        } else {
+          const data = await response.json();
+          setUser(data.user ?? null);
+        }
+      } catch (error) {
+        console.error("Auth fetch error:", error);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUser();
   }, []);
 
+  const login = (user: User) => {
+    setUser(user);
+  };
+
   const logout = async () => {
+    setLoading(true);
     try {
       await logoutUser();
     } catch (error) {
       console.error("Logout error:", error);
     } finally {
-      clearStoredUser();
       setUser(null);
+      setLoading(false);
     }
   };
 
@@ -46,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
+        login,
         logout,
         isAuthenticated: !!user,
       }}

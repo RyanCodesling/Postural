@@ -2,6 +2,66 @@
 
 ## 📌 New sprint update here (●'◡'●) | *author_name*
 -
+## 📌 Update-5-11-26 | *RyanCodesling*
+- Implemented the real shoulder abduction metric for Lateral Arm Raises (`ex_001`)
+- Added per-side shoulder abduction calculation for left and right arms
+- Fixed cross-body arm movement being mistaken as valid lateral arm raise motion
+- Updated rep counting so per-limb exercises use separate left and right metric streams
+- Added dedicated smoothing filters for left and right primary metrics
+- Added per-side metric output from `computePoseMetricsForExercise()`
+- Added a continuity gate to the rep counter so reps cannot start from stale or invalid motion data
+- Expanded rep counter tests to cover continuity-gate behavior
+- Added a new shoulder abduction test suite with synthetic landmark poses
+- Preserved null-return behavior for invalid, hidden, or cross-body landmark states
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Implemented `computeShoulderAbduction()` for `ex_001` Lateral Arm Raises
+- Uses shoulder-to-elbow angle instead of shoulder-to-wrist for a cleaner upper-arm measurement
+- Uses the trunk-down vector from shoulder midpoint to hip midpoint as the body-relative reference
+- Added left/right side handling so lateral abduction is positive on both sides
+- Returns `null` for cross-body adduction instead of using `Math.abs()`
+- Prevents cross-body motion from being interpreted as a valid arm raise
+- Added visibility checks for shoulders, hips, and the active elbow landmark
+- Added `perSideMetrics` to `ExerciseFrameMetrics`
+- Updated `computePoseMetricsForExercise()` to compute left and right primary metrics separately for `per-limb` exercises
+- Keeps the left-side value in the main metrics map for existing UI compatibility
+- Leaves shoulder flexion, scapular elevation, trunk lateral flexion, and shoulder horizontal abduction as future metric implementations
+
+### *web\src\lib\pose\repCounter.ts*
+- Added a continuity gate before allowing `WAITING_FOR_REP_START → ASCENDING`
+- Requires the limb to be observed below `startThreshold` before a new rep can begin
+- Clears rest evidence after long update gaps to avoid counting stale motion
+- Uses skipped/null metric frames as a signal that the limb left the valid measurable region
+- Prevents invalid cross-body → overhead → lateral-return motion from triggering a false rep
+- Reset now clears continuity state in addition to the normal rep state
+- Added `REST_GAP_THRESHOLD_MS` for detecting stale tracking gaps
+- Strengthened constructor validation for invalid threshold ordering
+
+### *web\src\lib\pose\repCounter.test.ts*
+- Added continuity-gate test for refusing reps that start without prior rest evidence
+- Added continuity-gate test for refusing reps after a long simulated tracking gap
+- Added test confirming back-to-back reps still work after clean rest frames
+- Updated test coverage from the original rep counter behavior to include stale-input protection
+- Kept coverage for complete reps, partial reps, false starts, jitter handling, reset behavior, and threshold validation
+
+### *web\src\lib\pose\shoulderAbduction.test.ts*
+- Added synthetic landmark tests for the new shoulder abduction metric
+- Added tests for arms hanging at rest returning near `0°`
+- Added tests for left and right horizontal arm raises returning near `90°`
+- Added tests for 45° and 20° left arm abduction
+- Added cross-body tests to confirm invalid inward arm motion returns `null`
+- Added camera-roll invariance test to confirm body-relative measurement stays stable
+- Added missing-landmark tests for elbow, hip, and shoulder visibility failure cases
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added separate OneEuroFilter instances for left and right primary metrics
+- Updated per-limb rep counting to read from `raw.perSideMetrics`
+- Feeds the left rep counter only the left-side metric stream
+- Feeds the right rep counter only the right-side metric stream
+- Allows each side to independently skip rep-counter updates when its metric is `null`
+- Prevents one arm’s smoothing history from bleeding into the other arm’s rep detection
+- Keeps bidirectional-alternating and unilateral rep-counting behavior unchanged
+- Resets per-side filters when the selected exercise changes or capture readiness fails
 
 ---
 

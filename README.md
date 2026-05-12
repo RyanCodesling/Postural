@@ -6,6 +6,10 @@
 --- 
 
 ## 📌 Update-5-12-26 | *Enah*
+- Removed **Profile** nav link and deleted the placeholder profile page — profile functionality is now inside each role's dashboard under the View Profile tab
+- Fixed `TypeError` in Login page — removed invalid `setUser` destructure from `useAuth()` which is not exposed by `AuthContextType`
+- Added **View Profile** tab to Therapist Dashboard — shows therapist info and assigned patients, fully database-driven with empty states directing users to contact the admin
+- Added **View Profile** tab to Patient Dashboard — shows patient info and assigned exercises, fully database-driven with empty states directing users to contact the therapist; converted patient dashboard to tab-based layout matching therapist dashboard styling
 - Fixed `ReferenceError: setLoading is not defined` crash on the Therapist Dashboard
 - Removed Therapist ID field from Edit User Details form for therapist accounts
 - Added dedicated SQL file for patient-therapist assignment `patient_therapist_pg.sql`
@@ -14,6 +18,45 @@
 - Custom exercises now save to the `exercises` table with `is_custom = true` and auto-incremented `ex_XXX` ID format — no more local-only state
 - Restructured Therapist Dashboard into four tabs: Dashboard, Manage Patients, Manage Exercises, Assign Patient
 - Therapist can now assign exercises (system or custom) or load from a template directly to a patient with sets/reps per exercise
+
+### *web\src\app\(app)\layout.tsx*
+- Removed `<Link href="/profile">Profile</Link>` from the top nav — profile is now accessible per role inside the dashboard View Profile tab
+
+### *web\src\middleware.ts*
+- Removed `"/profile"` from the `protectedRoutes` array — route no longer exists
+
+### *web\src\app\(app)\profile\page.tsx*
+- Deleted placeholder profile page and its folder — was a static stub with no real functionality; superseded by the View Profile tab on each role's dashboard
+
+### *web\src\app\(auth)\login\page.tsx*
+- Removed duplicate `useAuth()` call on line 12 that attempted to destructure `setUser` — `setUser` is not part of `AuthContextType` (context only exposes `login`, `logout`, `user`, `loading`, `isAuthenticated`)
+- `login` was already correctly destructured from `useAuth()` further down the component; the erroneous line caused a TypeScript error with no runtime fallback
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Added `"view-profile"` to the `ActiveTab` union type and `NAV_TABS` array
+- Added `TherapistProfile` interface for full profile data
+- Added `therapistProfile` state; fetched in parallel with patients, exercises, and templates in `loadData()` via `GET /api/users/:id`
+- **View Profile tab** — two sections:
+  - *Therapist Information*: displays Full Name, First/Middle/Last Name, Email, Therapist ID, Specialty, Clinic ID, Gender, Age, Date of Birth — each field shows "Not set — contact admin" when null
+  - *Assigned Patients*: lists all patients assigned to the therapist (name, email, system ID); shows a blue info banner directing to contact the admin when empty
+- Added `ProfileField` sub-component for consistent label/value display with null-state fallback
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Converted from a static single-view page to a tab-based layout matching the therapist dashboard styling
+- Added `"view-profile"` to `ActiveTab` union; sidebar now uses the same button-based tab navigation with green active highlight
+- Added `PatientProfile` and `AssignedExercise` interfaces
+- Added `patientProfile` and `exercises` state; both fetched in parallel on mount via `loadData()`
+- Profile fetched from `GET /api/users/:id`; exercises fetched from `GET /api/patient-exercises`
+- **View Profile tab** — two sections:
+  - *Patient Information*: Full Name, First/Middle/Last Name, Email, Gender, Age, Date of Birth, Diagnosis, Prescription, Condition, Assigned Therapist — each null field shows "Not set — contact therapist"
+  - *Assigned Exercises*: lists all exercises (name, description, sets × reps, color-coded status badge); shows a blue info banner directing to contact the therapist when empty
+- Added `ProfileField` sub-component (identical pattern to therapist dashboard)
+- Retained Session and Start Session sidebar links
+
+### *web\src\app\api\users\[id]\route.ts*
+- Fixed `GET /api/users/[id]` to allow therapists to fetch their own profile — previously the therapist-role guard only permitted fetching assigned patients, blocking self-lookup needed for the View Profile tab
+- Therapists may now access `id === sessionUser.id` (self) or assigned patients; all other combinations remain 403
+- Added patient-role guard: patients may only fetch their own profile (`id === sessionUser.id`), preventing cross-patient data access
 
 ### *web\src\app\(app)\dashboard\therapist\page.tsx*
 - Replaced `setLoading(false)` with `setPageLoading(false)` in the `finally` block of `loadAssignedPatients()` — `setLoading` was never declared in this component

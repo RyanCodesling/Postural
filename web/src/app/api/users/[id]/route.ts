@@ -18,9 +18,16 @@ export async function GET(
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Therapist can only view their own assigned patients
+    // Patients may only view their own profile
+    if (sessionUser.role === "patient" && id !== sessionUser.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    // Therapist can view their own profile or their assigned patients
     if (sessionUser.role === "therapist") {
-      if (user.role !== "patient" || user.therapistId !== sessionUser.id) {
+      const isSelf = id === sessionUser.id;
+      const isAssignedPatient = user.role === "patient" && user.therapistId === sessionUser.id;
+      if (!isSelf && !isAssignedPatient) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
     }

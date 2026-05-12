@@ -39,7 +39,22 @@ interface PatientData {
   exercises: PatientExercise[];
 }
 
-type ActiveTab = "dashboard" | "manage-patients" | "manage-exercises" | "assign-patient";
+interface TherapistProfile {
+  id: string;
+  name: string;
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  email: string;
+  clinicId: string | null;
+  therapistIDNum: string | null;
+  specialty: string | null;
+  dateOfBirth: string | null;
+  age: number | null;
+  gender: string | null;
+}
+
+type ActiveTab = "dashboard" | "manage-patients" | "manage-exercises" | "assign-patient" | "view-profile";
 
 export default function TherapistDashboardPage() {
   const { user, loading } = useAuth();
@@ -47,6 +62,7 @@ export default function TherapistDashboardPage() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [pageLoading, setPageLoading] = useState(true);
+  const [therapistProfile, setTherapistProfile] = useState<TherapistProfile | null>(null);
 
   // Manage Patients
   const [patients, setPatients] = useState<PatientData[]>([]);
@@ -78,10 +94,11 @@ export default function TherapistDashboardPage() {
   const loadData = async () => {
     if (!user?.id) return;
     try {
-      const [patientsRes, exercisesRes, templatesRes] = await Promise.all([
+      const [patientsRes, exercisesRes, templatesRes, profileRes] = await Promise.all([
         fetch(`/api/users?role=patient&therapistId=${user.id}`),
         fetch("/api/exercises"),
         fetch("/api/templates"),
+        fetch(`/api/users/${user.id}`),
       ]);
 
       if (patientsRes.ok) {
@@ -108,6 +125,11 @@ export default function TherapistDashboardPage() {
       if (templatesRes.ok) {
         const d = await templatesRes.json();
         setTemplates(d.templates ?? []);
+      }
+
+      if (profileRes.ok) {
+        const d = await profileRes.json();
+        setTherapistProfile(d.user ?? null);
       }
     } catch (err) {
       console.error("Error loading data:", err);
@@ -259,6 +281,7 @@ export default function TherapistDashboardPage() {
 
   const NAV_TABS: { key: ActiveTab; label: string }[] = [
     { key: "dashboard",        label: "🏠 Dashboard" },
+    { key: "view-profile",     label: "👤 View Profile" },
     { key: "manage-patients",  label: "👥 Manage Patients" },
     { key: "manage-exercises", label: "🏋️ Manage Exercises" },
     { key: "assign-patient",   label: "📋 Assign Patient" },
@@ -602,12 +625,84 @@ export default function TherapistDashboardPage() {
           </div>
         )}
 
+        {/* ── View Profile ── */}
+        {activeTab === "view-profile" && (
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">My Profile</h1>
+            <p className="text-gray-500 mb-6">Your account information.</p>
+
+            {/* Therapist Information */}
+            <section className="bg-white border border-gray-200 rounded-2xl p-6 mb-6 max-w-2xl">
+              <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
+                Therapist Information
+              </h2>
+
+              {!therapistProfile ? (
+                <p className="text-gray-400 text-sm">Unable to load profile. Please contact the admin.</p>
+              ) : (
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+                  <ProfileField label="Full Name" value={therapistProfile.name} />
+                  <ProfileField label="First Name" value={therapistProfile.firstName} />
+                  <ProfileField label="Middle Name" value={therapistProfile.middleName} />
+                  <ProfileField label="Last Name" value={therapistProfile.lastName} />
+                  <ProfileField label="Email" value={therapistProfile.email} />
+                  <ProfileField label="Therapist ID" value={therapistProfile.therapistIDNum ?? therapistProfile.id} />
+                  <ProfileField label="Specialty" value={therapistProfile.specialty} />
+                  <ProfileField label="Clinic ID" value={therapistProfile.clinicId} />
+                  <ProfileField label="Gender" value={therapistProfile.gender} />
+                  <ProfileField label="Age" value={therapistProfile.age != null ? String(therapistProfile.age) : null} />
+                  <ProfileField label="Date of Birth" value={therapistProfile.dateOfBirth} />
+                </dl>
+              )}
+            </section>
+
+            {/* Assigned Patients */}
+            <section className="bg-white border border-gray-200 rounded-2xl p-6 max-w-2xl">
+              <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
+                Assigned Patients ({patients.length})
+              </h2>
+
+              {patients.length === 0 ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+                  <p className="font-semibold mb-1">No patients assigned yet</p>
+                  <p>You currently have no patients assigned to you. Please contact or inform the admin to assign patients to your account.</p>
+                </div>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {patients.map((p) => (
+                    <li key={p.id} className="py-3 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="font-medium text-gray-900 text-sm">{p.name}</p>
+                        <p className="text-xs text-gray-500">{p.email}</p>
+                      </div>
+                      <span className="text-xs text-gray-400 font-mono shrink-0">{p.id}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
+        )}
+
       </main>
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
+
+function ProfileField({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <dt className="text-xs text-gray-500 font-medium mb-0.5">{label}</dt>
+      <dd className="text-sm text-gray-900">
+        {value ? value : (
+          <span className="text-gray-400 italic">Not set — contact admin</span>
+        )}
+      </dd>
+    </div>
+  );
+}
 
 function ExerciseRow({
   exercise, isEditing, editName, editDesc, saving,

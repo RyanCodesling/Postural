@@ -4,9 +4,13 @@
 CREATE TABLE IF NOT EXISTS exercises (
   id          VARCHAR(50)  PRIMARY KEY,
   name        VARCHAR(255) NOT NULL,
-  description TEXT,
+  description TEXT         NOT NULL,
+  is_custom   BOOLEAN      NOT NULL DEFAULT FALSE,
   created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Safe to re-run on existing tables
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS is_custom BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_exercises_name ON exercises (name);
 

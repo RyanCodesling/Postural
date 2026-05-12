@@ -65,7 +65,7 @@
 
 ---
 
-## 📌 Update-5-10-26 | *Ron*
+## 📌 Update-5-10-26 | *ralmeyda*
 - Added reusable status banner system for Admin Dashboard actions
 - Added success and error feedback messages for user creation
 - Added automatic fade-out animation for status banners after 5 seconds
@@ -79,7 +79,7 @@
 - Replaced ineffective maxLength handling on type="number" inputs with JavaScript validation logic
 - Preserved native number input spinner functionality using max="150"
   
-### web\src\app(app)\dashboard\admin\page.tsx
+### *web\src\app(app)\dashboard\admin\page.tsx*
 - Added new state handlers for status notifications:
   - statusMessage
   - statusType

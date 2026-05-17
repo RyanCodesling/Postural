@@ -69,7 +69,7 @@ export default function SessionPage() {
   const progressPercentage = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-6">
       <div className="max-w-4xl mx-auto">
         <div className="mb-6">
           <Link
@@ -78,7 +78,7 @@ export default function SessionPage() {
           >
             ← Back to Dashboard
           </Link>
-          <h1 className="text-3xl font-bold text-gray-900">Weekly Exercise Schedule</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Weekly Exercise Schedule</h1>
           <p className="text-gray-600 mt-2">Track your exercises for the upcoming week</p>
         </div>
 

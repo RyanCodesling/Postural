@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -47,6 +48,9 @@ function LoginPageContent() {
   return (
     <main className="min-h-screen flex items-center justify-center bg-gray-100">
       <div className="w-full max-w-sm bg-white p-6 rounded shadow">
+        <div className="flex justify-center mb-4">
+          <Image src="/acc_bacoor_logo.png" alt="ACC Bacoor Logo" width={120} height={120} />
+        </div>
         <h2 className="text-xl font-semibold mb-4">
           Login — {isAdmin ? "Admin" : isTherapist ? "Therapist" : "Patient"}
         </h2>

@@ -67,6 +67,7 @@ export default function AdminDashboard() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!statusMessage) {
@@ -179,6 +180,11 @@ export default function AdminDashboard() {
 
   const confirmDeleteUser = async () => {
     if (!deleteUserId) return;
+
+    const confirmed = window.confirm(
+      `Are you absolutely sure you want to delete ${deleteUserName ?? "this user"}? This action cannot be undone.`
+    );
+    if (!confirmed) return;
 
     try {
       const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
@@ -308,8 +314,18 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen flex bg-gray-100">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 text-white p-6">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-900 text-white p-6 transform transition-transform duration-200 ease-in-out
+        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Admin Panel</h1>
           <p className="text-sm text-gray-400 mt-1">{user?.name}</p>
@@ -350,12 +366,22 @@ export default function AdminDashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-8">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0">
+        {/* Mobile hamburger */}
+        <button
+          className="md:hidden mb-4 p-2 rounded border bg-gray-200 hover:bg-gray-300 transition"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         {/* Users Tab */}
         {activeTab === "users" && (
           <div>
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-900">Manage Users</h2>
+              <h2 className="text-xl sm:text-3xl font-bold text-gray-900">Manage Users</h2>
               <button
                 onClick={() => {
                   if (editingUserId) {
@@ -442,7 +468,7 @@ export default function AdminDashboard() {
                       </div>
 
                       {/* Common Fields */}
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
                             First Name <span className="text-red-500">*</span>
@@ -480,7 +506,7 @@ export default function AdminDashboard() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
                             Date of Birth <span className="text-red-500">*</span>
@@ -899,8 +925,8 @@ export default function AdminDashboard() {
             )}
 
             {/* Users List */}
-            <div className="bg-white rounded shadow overflow-hidden">
-              <table className="w-full">
+            <div className="bg-white rounded shadow overflow-x-auto">
+              <table className="w-full min-w-[560px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
@@ -955,7 +981,7 @@ export default function AdminDashboard() {
         {activeTab === "exercises" && (
           <div>
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-900">Manage Exercises</h2>
+              <h2 className="text-xl sm:text-3xl font-bold text-gray-900">Manage Exercises</h2>
               <button
                 onClick={() => setShowExerciseForm(!showExerciseForm)}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition"
@@ -1030,7 +1056,7 @@ export default function AdminDashboard() {
         {/* Assignments Tab */}
         {activeTab === "assignments" && (
           <div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-6">Assign Patients to Therapists</h2>
+            <h2 className="text-xl sm:text-3xl font-bold text-gray-900 mb-6">Assign Patients to Therapists</h2>
 
             {therapists.length === 0 ? (
               <div className="bg-yellow-50 border border-yellow-200 p-4 rounded text-yellow-800 mb-6">
@@ -1112,8 +1138,8 @@ export default function AdminDashboard() {
             {assignedPatients.length > 0 && (
               <div className="mt-8">
                 <h3 className="text-2xl font-semibold text-gray-900 mb-4">Currently Assigned Patients</h3>
-                <div className="bg-white rounded shadow overflow-hidden">
-                  <table className="w-full">
+                <div className="bg-white rounded shadow overflow-x-auto">
+                  <table className="w-full min-w-[560px]">
                     <thead className="bg-gray-50 border-b">
                       <tr>
                         <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>

@@ -25,6 +25,7 @@ export default function TherapistDashboardPage() {
   const [query, setQuery] = useState("");
   const [patients, setPatients] = useState<PatientData[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -52,9 +53,8 @@ export default function TherapistDashboardPage() {
     } catch (error) {
       console.error("Error loading patients:", error);
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
-    setPageLoading(false);
   };
 
   useEffect(() => {
@@ -75,7 +75,20 @@ export default function TherapistDashboardPage() {
 
   return (
     <div className="min-h-screen flex bg-white">
-      <aside className="w-64 bg-gray-50 border-r p-6">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-50 border-r p-6 transform transition-transform duration-200 ease-in-out
+          md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <div className="mb-8">
           <div className="text-sm text-gray-500">Therapist</div>
           <div className="mt-1 text-lg font-semibold text-gray-900">
@@ -89,6 +102,7 @@ export default function TherapistDashboardPage() {
               <Link
                 href="/dashboard/therapist"
                 className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 <span className="mr-3">👥 Patients</span>
               </Link>
@@ -97,6 +111,7 @@ export default function TherapistDashboardPage() {
               <Link
                 href="/dashboard/therapist/templates"
                 className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 <span className="mr-3">📋 Exercise Templates</span>
               </Link>
@@ -113,15 +128,27 @@ export default function TherapistDashboardPage() {
         </nav>
       </aside>
 
-      <main className="flex-1 p-6">
-        <div className="flex items-center justify-between">
+      {/* Main content */}
+      <main className="flex-1 p-4 sm:p-6 min-w-0">
+        {/* Mobile hamburger */}
+        <button
+          className="md:hidden mb-4 p-2 rounded border bg-gray-100 hover:bg-gray-200 transition"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold">Therapist Dashboard</h1>
+            <h1 className="text-xl sm:text-2xl font-bold">Therapist Dashboard</h1>
             <p className="text-gray-600 mt-1">Manage your patients and sessions.</p>
           </div>
-          <button 
+          <button
             onClick={loadAssignedPatients}
-            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded transition"
+            className="self-start sm:self-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded transition"
           >
             🔄 Refresh
           </button>
@@ -137,7 +164,7 @@ export default function TherapistDashboardPage() {
         </div>
 
         <div className="mt-6 grid gap-4">
-          {loading ? (
+          {pageLoading ? (
             <div className="text-center py-8 text-gray-500">Loading patients...</div>
           ) : patients.length === 0 ? (
             <div className="bg-blue-50 border border-blue-200 p-4 rounded text-blue-800">
@@ -145,7 +172,7 @@ export default function TherapistDashboardPage() {
               <p className="text-sm mb-3">
                 The admin will assign patients to you. Check back here once patients are assigned.
               </p>
-              <button 
+              <button
                 onClick={loadAssignedPatients}
                 className="text-blue-600 hover:text-blue-800 font-medium underline"
               >
@@ -156,7 +183,7 @@ export default function TherapistDashboardPage() {
             <div className="text-gray-500">No patients found matching your search.</div>
           ) : (
             filtered.map((p) => (
-              <div key={p.id} className="flex items-center justify-between p-4 border rounded">
+              <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded gap-3">
                 <div>
                   <div className="font-semibold">{p.name}</div>
                   <div className="text-sm text-gray-500">Last visit: {p.lastVisit}</div>

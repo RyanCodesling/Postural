@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 
 export default function PatientDashboardPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -27,7 +28,20 @@ export default function PatientDashboardPage() {
 
   return (
     <div className="min-h-screen flex bg-white">
-      <aside className="w-64 bg-gray-50 border-r p-6">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-50 border-r p-6 transform transition-transform duration-200 ease-in-out
+          md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <div className="mb-8">
           <div className="text-sm text-gray-500">Signed in as</div>
           <div className="mt-1 text-lg font-semibold text-gray-900">{user.name}</div>
@@ -39,6 +53,7 @@ export default function PatientDashboardPage() {
               <Link
                 href="/dashboard/patient"
                 className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 <span className="mr-3 h-5 w-5 text-gray-500" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-5 w-5">
@@ -52,6 +67,7 @@ export default function PatientDashboardPage() {
               <Link
                 href="/session"
                 className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 <span className="mr-3 h-5 w-5 text-gray-500" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-5 w-5">
@@ -78,6 +94,7 @@ export default function PatientDashboardPage() {
               <Link
                 href="/camera"
                 className="flex items-center px-3 py-2 rounded text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 <span className="mr-3 h-5 w-5 text-gray-500" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-5 w-5">
@@ -103,8 +120,21 @@ export default function PatientDashboardPage() {
           </ul>
         </nav>
       </aside>
-      <main className="flex-1 p-6">
-        <h1 className="text-2xl font-bold">Dashboard</h1>
+
+      {/* Main content */}
+      <main className="flex-1 p-4 sm:p-6 min-w-0">
+        {/* Mobile hamburger */}
+        <button
+          className="md:hidden mb-4 p-2 rounded border bg-gray-100 hover:bg-gray-200 transition"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+
+        <h1 className="text-xl sm:text-2xl font-bold">Dashboard</h1>
         <p className="text-gray-600 mt-2">Welcome to your postural monitoring dashboard.</p>
 
         <div className="mt-6">

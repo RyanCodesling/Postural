@@ -50,6 +50,12 @@ export default function CameraClient() {
 
   const tiltFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
+  // Dedicated smoothing filters for per-limb primary metrics. Separate from
+  // the metricFiltersRef map because per-limb exercises need TWO filters for
+  // the same MetricName — one per side. Cleared on exercise change, reset on
+  // capture dropout, same lifecycle as metricFiltersRef.
+  const leftPrimaryFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const rightPrimaryFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
   const lastMetricsUpdateRef = useRef(0);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
@@ -227,6 +233,8 @@ export default function CameraClient() {
     // Reset filters whenever the exercise changes — old filter history would
     // bleed across exercises and produce a misleading first-frame jump.
     metricFiltersRef.current.clear();
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
   
     // Rebuild rep counters based on the new definition. Isometric exercises
     // get no counter (they use time-in-band, handled separately when we
@@ -363,48 +371,31 @@ export default function CameraClient() {
               // exercises whose primary metric is still a stub (null).
               if (activeDefinition.kind === "dynamic") {
                 const primaryName = activeDefinition.primaryMetric.name;
-                const rawValue = smoothedMetrics[primaryName];
- 
-                if (typeof rawValue === "number") {
-                  if (
-                    activeDefinition.bilateral &&
-                    activeDefinition.bilateralMode === "bidirectional-alternating"
-                  ) {
-                    // One counter, fed |value|. Side determined by sign at
-                    // the moment a rep fires.
-                    const counter = leftRepCounterRef.current;
-                    if (counter) {
-                      const event = counter.update(Math.abs(rawValue), tNow);
-                      if (event) {
-                        // Tag with side based on sign of the signed value.
-                        // For neck flexion: negative = left, positive = right.
-                        const side: "left" | "right" =
-                          rawValue > 0 ? "left" : "right";
- 
-                        repLogRef.current[side].push(event);
-                        setRepCounts((prev) => ({
-                          ...prev,
-                          [side]: prev[side] + 1,
-                        }));
- 
-                        // eslint-disable-next-line no-console
-                        console.log(`[rep] ${activeDefinition.id} ${side}`, event);
-                      }
-                    }
-                  } else if (
-                    activeDefinition.bilateral &&
-                    activeDefinition.bilateralMode === "per-limb"
-                  ) {
-                    // Two counters, each fed its own per-side metric.
-                    // NOTE: per-limb metrics aren't implemented yet (stubs
-                    // return null), so this branch will be a no-op until
-                    // we implement shoulderAbduction etc.
-                    // Left side:
-                    const leftValue = smoothedMetrics[primaryName]; // TODO: side-keyed
-                    const rightValue = smoothedMetrics[primaryName]; // TODO: side-keyed
- 
-                    if (typeof leftValue === "number" && leftRepCounterRef.current) {
-                      const event = leftRepCounterRef.current.update(leftValue, tNow);
+
+                if (
+                  activeDefinition.bilateral &&
+                  activeDefinition.bilateralMode === "per-limb"
+                ) {
+                  // Two counters, each fed its own per-side metric.
+                  // raw.perSideMetrics is populated by computePoseMetricsForExercise
+                  // for per-limb bilateral exercises. Each side gets its own
+                  // OneEuroFilter so left-arm jitter doesn't bleed into the
+                  // right-arm angle stream (or vice versa).
+                  //
+                  // This branch is NOT guarded by a single rawValue check because
+                  // each side can independently be null (e.g., left elbow occluded
+                  // while right elbow is visible). Each side handles its own null.
+                  const perSide = raw.perSideMetrics;
+                  if (perSide) {
+                    const smoothedLeft = typeof perSide.left === "number"
+                      ? Math.round(leftPrimaryFilterRef.current.filter(perSide.left, tNow) * 10) / 10
+                      : null;
+                    const smoothedRight = typeof perSide.right === "number"
+                      ? Math.round(rightPrimaryFilterRef.current.filter(perSide.right, tNow) * 10) / 10
+                      : null;
+
+                    if (typeof smoothedLeft === "number" && leftRepCounterRef.current) {
+                      const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
                       if (event) {
                         repLogRef.current.left.push(event);
                         setRepCounts((p) => ({ ...p, left: p.left + 1 }));
@@ -412,8 +403,8 @@ export default function CameraClient() {
                         console.log(`[rep] ${activeDefinition.id} left`, event);
                       }
                     }
-                    if (typeof rightValue === "number" && rightRepCounterRef.current) {
-                      const event = rightRepCounterRef.current.update(rightValue, tNow);
+                    if (typeof smoothedRight === "number" && rightRepCounterRef.current) {
+                      const event = rightRepCounterRef.current.update(smoothedRight, tNow);
                       if (event) {
                         repLogRef.current.right.push(event);
                         setRepCounts((p) => ({ ...p, right: p.right + 1 }));
@@ -421,16 +412,48 @@ export default function CameraClient() {
                         console.log(`[rep] ${activeDefinition.id} right`, event);
                       }
                     }
-                  } else {
-                    // Unilateral.
-                    const counter = leftRepCounterRef.current;
-                    if (counter) {
-                      const event = counter.update(rawValue, tNow);
-                      if (event) {
-                        repLogRef.current.left.push(event);
-                        setRepCounts((p) => ({ ...p, left: p.left + 1 }));
-                        // eslint-disable-next-line no-console
-                        console.log(`[rep] ${activeDefinition.id}`, event);
+                  }
+                } else {
+                  // Bidirectional-alternating or unilateral — single smoothed value.
+                  const rawValue = smoothedMetrics[primaryName];
+
+                  if (typeof rawValue === "number") {
+                    if (
+                      activeDefinition.bilateral &&
+                      activeDefinition.bilateralMode === "bidirectional-alternating"
+                    ) {
+                      // One counter, fed |value|. Side determined by sign at
+                      // the moment a rep fires.
+                      const counter = leftRepCounterRef.current;
+                      if (counter) {
+                        const event = counter.update(Math.abs(rawValue), tNow);
+                        if (event) {
+                          // Tag with side based on sign of the signed value.
+                          // For neck flexion: negative = left, positive = right.
+                          const side: "left" | "right" =
+                            rawValue < 0 ? "left" : "right";
+ 
+                          repLogRef.current[side].push(event);
+                          setRepCounts((prev) => ({
+                            ...prev,
+                            [side]: prev[side] + 1,
+                          }));
+ 
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} ${side}`, event);
+                        }
+                      }
+                    } else {
+                      // Unilateral.
+                      const counter = leftRepCounterRef.current;
+                      if (counter) {
+                        const event = counter.update(rawValue, tNow);
+                        if (event) {
+                          repLogRef.current.left.push(event);
+                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id}`, event);
+                        }
                       }
                     }
                   }
@@ -451,6 +474,8 @@ export default function CameraClient() {
             // doesn't blend against stale history from before the dropout.
             tiltFilterRef.current.reset();
             metricFiltersRef.current.forEach((f) => f.reset());
+            leftPrimaryFilterRef.current.reset();
+            rightPrimaryFilterRef.current.reset();
             leftRepCounterRef.current?.reset();
             rightRepCounterRef.current?.reset();
 
@@ -667,8 +692,7 @@ export default function CameraClient() {
  
               {/* ── Exercise stats — bottom right ── */}
               <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
-                {activeDefinition?.bilateral &&
-                activeDefinition.bilateralMode === "bidirectional-alternating" ? (
+                {activeDefinition?.bilateral ? (
                   <BidirectionalStatPanel
                     leftReps={repCounts.left}
                     rightReps={repCounts.right}

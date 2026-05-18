@@ -142,6 +142,16 @@ export class RepCounter {
   // Cumulative count of reps completed by this instance.
   private repIndex = 0;
 
+  // ── CONTINUITY GATE ────────────────────────────────────────────────────
+  // Tracks whether the arm has been observed at rest recently. Required for
+  // the WAITING → ASCENDING transition to fire. Cleared when a long gap
+  // between update() calls indicates we lost track of the arm (the caller
+  // skips update() when the metric returns null, so cross-body excursions
+  // and visibility dropouts both produce gaps).
+  private lastUpdateTimeMs = 0;
+  private armAtRest = false;
+  private static readonly REST_GAP_THRESHOLD_MS = 300;
+
   constructor(thresholds: RepCounterThresholds, options: RepCounterOptions = {}) {
     // Defensive validation — the registry validates this too, but instances
     // can be constructed directly for tests, so check here as well.
@@ -173,6 +183,25 @@ export class RepCounter {
    * rep completes, or null otherwise. Do not call with null/NaN angles.
    */
   update(angle: number, tMs: number): RepEvent | null {
+    // Continuity check. A long gap since the last update means the caller
+    // stopped feeding us — either the metric returned null (cross-body region,
+    // landmark below visibility threshold) or the camera loop hiccuped. In
+    // either case, we no longer know the arm's position, so any prior "at rest"
+    // observation is stale.
+    if (
+      this.lastUpdateTimeMs !== 0 &&
+      tMs - this.lastUpdateTimeMs > RepCounter.REST_GAP_THRESHOLD_MS
+    ) {
+      this.armAtRest = false;
+    }
+    this.lastUpdateTimeMs = tMs;
+
+    // Refresh the "arm at rest" flag whenever we see a low value. This is the
+    // gate condition for starting a new rep — see handleWaiting.
+    if (angle < this.thresholds.startThreshold) {
+      this.armAtRest = true;
+    }
+
     switch (this.state) {
       case "WAITING_FOR_REP_START":
         return this.handleWaiting(angle, tMs);
@@ -193,6 +222,11 @@ export class RepCounter {
     this.peakValue = -Infinity;
     this.peakTimeMs = 0;
     this.repStartTimeMs = 0;
+    // Continuity state — after a reset (capture drop, exercise switch), we
+    // don't know the arm's position. The next rep can only start once we've
+    // seen fresh rest evidence.
+    this.lastUpdateTimeMs = 0;
+    this.armAtRest = false;
   }
 
   /** Total reps emitted by this instance (complete + partial). */
@@ -209,11 +243,21 @@ export class RepCounter {
 
   private handleWaiting(angle: number, tMs: number): RepEvent | null {
     if (angle >= this.thresholds.startThreshold) {
+      // Continuity gate. Refuse to start a rep unless the arm has been observed
+      // at rest within the recent past. This blocks the bogus trajectory where
+      // the arm sweeps cross-body → overhead → back to rest via the lateral
+      // side: the metric returns null during cross-body, producing a gap that
+      // clears armAtRest. When the metric resumes at a high lateral value, the
+      // state machine refuses the would-be ascent.
+      if (!this.armAtRest) {
+        return null;
+      }
       // Begin a new rep attempt.
       this.state = "ASCENDING";
       this.repStartTimeMs = tMs;
       this.peakValue = angle;
       this.peakTimeMs = tMs;
+      this.armAtRest = false; // must return to rest before counting another rep
     }
     return null;
   }

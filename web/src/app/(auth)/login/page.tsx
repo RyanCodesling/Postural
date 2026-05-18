@@ -10,7 +10,6 @@ import { useAuth } from "@/lib/AuthContext";
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { setUser } = useAuth();
   const roleParam = (searchParams?.get("role") as string) || "patient";
   const role = roleParam.toLowerCase();
   const isTherapist = role === "therapist";
@@ -57,10 +56,10 @@ function LoginPageContent() {
 
         <p className="text-sm text-gray-500 mb-4">
           {isAdmin
-            ? "Sign in to manage the system and content."
+            ? "System administration and exercise management."
             : isTherapist
-            ? "Sign in to manage your patients and sessions."
-            : "Sign in to access your posture and movement data."}
+            ? "Log in to manage patients, exercises, and monitor progress."
+            : "Log in to access your exercises and track your sessions."}
         </p>
 
         {/* Temporary Credentials Display */}

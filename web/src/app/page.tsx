@@ -49,7 +49,7 @@ export default function HomePage() {
 
             <div className="bg-white border border-blue-100 rounded-2xl p-8 z-10 w-11/12 max-w-sm text-center shadow-xl">
               <h2 className="text-xl font-bold text-blue-900 mb-1">Hello!</h2>
-              <p className="text-sm text-blue-600 mb-6">Select your role to continue</p>
+              <p className="text-sm text-blue-600 mb-6">Select your role to access your dashboard</p>
               <div className="flex gap-3 flex-col">
                 <button
                   onClick={() => router.push('/login?role=patient')}

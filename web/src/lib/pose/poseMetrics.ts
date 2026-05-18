@@ -763,24 +763,123 @@ export function computeCompensationScore(
 /**
  * Shoulder abduction angle (degrees) — used by ex_001 Lateral Arm Raises.
  *
- * Definition: angle between the trunk-vertical axis and the shoulder→elbow
- * vector, measured in the frontal plane. 0° = arm at side, 90° = arm
- * horizontal, 180° = arm overhead.
+ * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
+ * The angle between the trunk's downward axis and the upper arm, measured
+ * in the image plane (frontal-plane projection given a front-facing camera).
  *
- * Landmarks needed:
- *   side="left":  11 (left shoulder), 13 (left elbow), plus midpoints of
- *                 11/12 and 23/24 to derive trunk vertical
- *   side="right": 12, 14, plus the same midpoints
+ *   Arm at side, hanging down  →  ~0°
+ *   Arm out horizontally       →  ~90°
+ *   Arm raised past horizontal →  >90° (not relevant — registry targetROM is 90°)
  *
- * TODO: implement. Tilt-correct using `tiltRef.cameraTiltDeg` so the
- * trunk-vertical reference is camera-roll-independent.
+ * ── WHY SHOULDER→ELBOW (not shoulder→wrist) ──────────────────────────────────
+ * The elbow flexes during arm raise even when the patient is keeping the arm
+ * "straight," and the wrist is at the end of the longest kinematic chain so
+ * its landmark is the noisiest. Goniometric convention (Kisner & Colby) places
+ * the moving arm of the goniometer along the humerus — i.e., shoulder to
+ * elbow. We follow that.
+ *
+ * ── THE MATH ─────────────────────────────────────────────────────────────────
+ * Two vectors, both originating conceptually at the shoulder:
+ *   1. Trunk-down vector: shoulder-midpoint → hip-midpoint.
+ *      Points DOWN in the image, ≈ +90° in atan2 image-coords.
+ *   2. Upper-arm vector: shoulder → elbow (on the chosen side).
+ *      Also points DOWN at rest (arm hanging), ≈ +90°.
+ *
+ * The angle between them is `angleDiffDeg(armAngle, trunkDownAngle)`.
+ * At rest the two vectors are nearly parallel, so the result is near 0°.
+ * As the arm abducts, the upper-arm vector rotates while the trunk-down
+ * vector stays put, and the difference grows toward 90°.
+ *
+ * ── WHY NO TILT-CORRECTION SUBTRACTION ───────────────────────────────────────
+ * Camera roll rotates BOTH vectors by the same angular amount, so the
+ * difference between them is invariant to camera roll. The trunk's own axis
+ * is the body-relative reference here — there's nothing to subtract. This
+ * differs from ear-line metrics (which need the hip-derived camera tilt to
+ * isolate body-relative angle), and is the cleaner case of the two.
+ *
+ * `tiltRef` is still in the signature for shape-compatibility with the rest
+ * of the metric family, and so the camera loop can pass the same value to
+ * every metric without branching. Its `confidence` field could be propagated
+ * out as a quality flag in a future revision; for now we just ignore it.
+ *
+ * ── SIGN ─────────────────────────────────────────────────────────────────────
+ * The signed angleDiff carries two pieces of information at once:
+ *   (a) lateral abduction vs cross-body adduction on the SAME limb — these
+ *       motions produce opposite signs because the arm vector rotates the
+ *       opposite way around the trunk axis.
+ *   (b) the mirror-image asymmetry between left and right limbs.
+ *
+ * Collapsing both with Math.abs() was a bug: it made cross-body motion (arm
+ * swinging across the chest, up past the head, back down to the side) look
+ * identical to true lateral abduction, so the rep state machine could trip
+ * a full rep on a non-clinical movement.
+ *
+ * Per-side sign convention with the current bodyPairAngle setup and y-down
+ * normalized coords:
+ *   side="left"  (LM11 on image-right): lateral abduction → signed ≈ −90°
+ *   side="right" (LM12 on image-left ): lateral abduction → signed ≈ +90°
+ *
+ * We flip the left-side sign so lateral abduction is positive on both sides,
+ * then clamp negatives (cross-body) to null. The rep counter sees a null
+ * during cross-body motion and never crosses startThreshold.
+ *
+ * ── LANDMARKS REQUIRED ───────────────────────────────────────────────────────
+ *   11, 12 — both shoulders (for shoulder-midpoint, the trunk top)
+ *   23, 24 — both hips (for hip-midpoint, the trunk bottom)
+ *   side="left":  13 (left elbow), pairs with shoulder 11
+ *   side="right": 14 (right elbow), pairs with shoulder 12
+ *
+ * Returns null if any required landmark is below MIN_VIS — a partial
+ * computation here would silently corrupt rep counting.
  */
 export function computeShoulderAbduction(
-  _landmarks: LM[],
+  landmarks: LM[],
   _tiltRef: TiltReference,
-  _side: "left" | "right"
+  side: "left" | "right"
 ): number | null {
-  return null;
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  // Trunk endpoints — required regardless of which arm we're measuring,
+  // because both contribute to the trunk-down reference vector.
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip))           return null;
+
+  // Per-side shoulder + elbow. Note `shoulder` here aliases the same
+  // landmark as `leftShoulder` or `rightShoulder` above — the explicit
+  // re-pick reads more clearly at the call site.
+  const shoulder = side === "left" ? leftShoulder! : rightShoulder!;
+  const elbow    = side === "left" ? landmarks[13] : landmarks[14];
+  if (!elbow || vis(elbow) < MIN_VIS) return null;
+
+  // Trunk-down vector: from shoulder-midpoint down to hip-midpoint.
+  // Direction matters — we want it pointing DOWN so it parallels the
+  // arm-at-rest vector and the resulting angle is near 0° at rest.
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  const trunkDownAngle = lineAngleDeg(shoulderMid, hipMid);
+  const armAngle       = lineAngleDeg(shoulder,    elbow);
+
+  const signedAbduction = angleDiffDeg(armAngle, trunkDownAngle);
+  // Flip the left-side sign so positive = lateral abduction on BOTH sides.
+  // Negatives (cross-body adduction) are returned as null below. See the SIGN
+  // section in the doc comment for why this is not Math.abs.
+  const lateralAbduction = side === "left" ? -signedAbduction : signedAbduction;
+  // Return null (not 0) during cross-body motion. The rep counter relies on the
+  // time gap created by skipping null frames to detect that the arm went out of
+  // the valid lateral region. Clamping to 0 would feed continuous data to the
+  // state machine and let it mistake "lateral overhead after a cross-body sweep"
+  // for a normal rep ascent — see CONTINUITY GATE in repCounter.ts.
+  return lateralAbduction < 0 ? null : lateralAbduction;
 }
 
 /**
@@ -912,6 +1011,19 @@ export type ExerciseFrameMetrics = {
   tiltReference: TiltReference;
   /** Map keyed by MetricName. Values are the metric's CURRENT raw value or null. */
   metrics: Partial<Record<MetricName, number | null>>;
+  /**
+   * Per-side primary metric values for per-limb bilateral exercises.
+   * Only populated when the active exercise has bilateralMode === "per-limb".
+   * The rep-counting loop reads these instead of the single `metrics[name]`
+   * entry so each arm's counter gets its own angle stream.
+   *
+   * For bidirectional-alternating and unilateral exercises this is undefined —
+   * those modes read from `metrics` directly.
+   */
+  perSideMetrics?: {
+    left: number | null;
+    right: number | null;
+  };
   /** 0–100 compensation-quality score, or null if no compensation data. */
   compensationScore: number | null;
 };
@@ -935,13 +1047,25 @@ export function computePoseMetricsForExercise(
 ): ExerciseFrameMetrics {
   const tiltReference = computeTiltReference(landmarks);
   const metrics: Partial<Record<MetricName, number | null>> = {};
+  let perSideMetrics: { left: number | null; right: number | null } | undefined;
 
   // ── Primary metric ──────────────────────────────────────────────────────
-  // Only one of these branches runs per frame. The result is stored in the
-  // metrics map under the metric name declared in the registry.
   if (definition.kind === "dynamic") {
     const p = definition.primaryMetric;
-    metrics[p.name] = computeMetricByName(landmarks, tiltReference, p.name, p.side);
+
+    if (definition.bilateral && definition.bilateralMode === "per-limb") {
+      // Per-limb: compute the metric once per side. Both values go into
+      // perSideMetrics for the rep counters; the left value is also placed
+      // in the main metrics map so compensation-score and UI code that
+      // expects a single entry still works without changes.
+      const leftVal  = computeMetricByName(landmarks, tiltReference, p.name, "left");
+      const rightVal = computeMetricByName(landmarks, tiltReference, p.name, "right");
+      metrics[p.name] = leftVal;
+      perSideMetrics = { left: leftVal, right: rightVal };
+    } else {
+      // Bidirectional-alternating or unilateral: single value, no per-side split.
+      metrics[p.name] = computeMetricByName(landmarks, tiltReference, p.name, p.side);
+    }
   } else {
     const i = definition.isometric;
     metrics[i.metric] = computeMetricByName(landmarks, tiltReference, i.metric, i.side);
@@ -958,7 +1082,7 @@ export function computePoseMetricsForExercise(
 
   const compensationScore = computeCompensationScore(definition, metrics);
 
-  return { tiltReference, metrics, compensationScore };
+  return { tiltReference, metrics, perSideMetrics, compensationScore };
 }
 
 /**

@@ -57,6 +57,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 )}
               </svg>
             </button>
+        <div className="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
+          <div className="flex gap-4">
+            <Link href={dashboardHref} className="font-semibold">Dashboard</Link>
+            <Link href="/camera">Camera</Link>
           </div>
         </div>
 

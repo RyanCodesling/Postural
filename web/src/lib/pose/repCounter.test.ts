@@ -306,6 +306,88 @@ test("constructor throws when minimumPeakThreshold > targetROM", () => {
   assertEqual(threw, true, "expected constructor to throw");
 });
 
+// ── CONTINUITY GATE ──────────────────────────────────────────────────────────
+
+test("continuity gate: rep refused when ascent starts without prior rest evidence", () => {
+  const counter = new RepCounter({
+    startThreshold: 20,
+    repCompleteThreshold: 10,
+    minimumPeakThreshold: 60,
+    targetROM: 90,
+  });
+  // No rest frames first — feed a complete arc starting from a high value.
+  // armAtRest is false at construction, so no rep should emit.
+  const evs = [
+    counter.update(80, 100),
+    counter.update(85, 133),
+    counter.update(40, 166),
+    counter.update(5,  200),
+  ];
+  if (evs.some((e) => e !== null)) {
+    throw new Error("rep emitted without prior rest evidence");
+  }
+});
+
+test("continuity gate: rep refused when ascent starts after a long gap (simulated cross-body sweep)", () => {
+  const counter = new RepCounter({
+    startThreshold: 20,
+    repCompleteThreshold: 10,
+    minimumPeakThreshold: 60,
+    targetROM: 90,
+  });
+  // Establish rest.
+  counter.update(0, 100);
+  counter.update(0, 133);
+  counter.update(0, 166);
+  // Simulate ~1.5s during which the metric returned null (cross-body sweep),
+  // so the caller skipped update() entirely. Then the arm reappears at lateral
+  // overhead and descends through the lateral region to rest. This is the
+  // exact bogus trajectory the production bug exhibits.
+  const seq: Array<[number, number]> = [
+    [170, 1700],
+    [130, 1733],
+    [90,  1766],
+    [50,  1800],
+    [25,  1833],
+    [5,   1866],
+  ];
+  for (const [a, t] of seq) {
+    const ev = counter.update(a, t);
+    if (ev !== null) {
+      throw new Error(`cross-body trajectory wrongly emitted rep at angle=${a}`);
+    }
+  }
+});
+
+test("continuity gate: back-to-back reps after a clean rest work normally", () => {
+  // Sanity check: the new gate must not break legitimate consecutive reps.
+  const counter = new RepCounter({
+    startThreshold: 20,
+    repCompleteThreshold: 10,
+    minimumPeakThreshold: 60,
+    targetROM: 90,
+  });
+  // First rep: rest → ascend → peak → descend → rest.
+  counter.update(0,  100);
+  counter.update(0,  133);
+  counter.update(30, 166);
+  counter.update(70, 200);
+  counter.update(95, 233);
+  counter.update(70, 266);
+  counter.update(30, 300);
+  const ev1 = counter.update(5, 333);
+  if (!ev1) throw new Error("first rep did not emit");
+
+  // Second rep immediately after (one rest frame is enough).
+  counter.update(0,  366);
+  counter.update(30, 400);
+  counter.update(95, 433);
+  counter.update(30, 466);
+  const ev2 = counter.update(5, 500);
+  if (!ev2) throw new Error("second rep did not emit");
+  if (ev2.index !== 2) throw new Error(`expected index 2, got ${ev2.index}`);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SUMMARY
 // ─────────────────────────────────────────────────────────────────────────────

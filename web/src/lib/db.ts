@@ -1,4 +1,4 @@
-import { Pool, types } from "pg";
+import { Pool, PoolClient, types } from "pg";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -41,6 +41,19 @@ export async function getNextUserId(role: string): Promise<string> {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
+
+export async function getUserById(id: string) {
+  const result = await pool.query(
+    `SELECT u.*, t.name AS therapist_name
+     FROM users u
+     LEFT JOIN users t ON t.id = u.therapist_id
+     WHERE u.id = $1`,
+    [id]
+  );
+  if (result.rows.length === 0) return null;
+  const row = result.rows[0];
+  return { ...mapUser(row), therapistName: row.therapist_name ?? null };
+}
 
 export async function getUser(email: string, role: string) {
   const result = await pool.query(
@@ -181,12 +194,42 @@ export async function getExercises() {
   return result.rows;
 }
 
-export async function createExercise(data: { id: string; name: string; description: string }) {
+export async function getNextExerciseId(): Promise<string> {
   const result = await pool.query(
-    "INSERT INTO exercises (id, name, description) VALUES ($1, $2, $3) RETURNING *",
-    [data.id, data.name, data.description]
+    "SELECT id FROM exercises WHERE id ~ '^ex_[0-9]+$' ORDER BY id DESC LIMIT 1"
+  );
+  if (result.rows.length === 0) return "ex_001";
+  const lastId = result.rows[0].id as string;
+  const match = lastId.match(/_(\d+)$/);
+  const next = match ? parseInt(match[1], 10) + 1 : 1;
+  return `ex_${String(next).padStart(3, "0")}`;
+}
+
+export async function createExercise(data: {
+  id: string;
+  name: string;
+  description: string;
+  isCustom?: boolean;
+}) {
+  const result = await pool.query(
+    "INSERT INTO exercises (id, name, description, is_custom) VALUES ($1, $2, $3, $4) RETURNING *",
+    [data.id, data.name, data.description, data.isCustom ?? false]
   );
   return result.rows[0];
+}
+
+export async function updateExercise(id: string, data: { name?: string; description?: string }) {
+  const fields: string[] = [];
+  const params: unknown[] = [];
+  if (data.name !== undefined) { params.push(data.name); fields.push(`name = $${params.length}`); }
+  if (data.description !== undefined) { params.push(data.description); fields.push(`description = $${params.length}`); }
+  if (fields.length === 0) return null;
+  params.push(id);
+  const result = await pool.query(
+    `UPDATE exercises SET ${fields.join(", ")} WHERE id = $${params.length} RETURNING *`,
+    params
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
 }
 
 export async function deleteExercise(id: string) {
@@ -194,6 +237,31 @@ export async function deleteExercise(id: string) {
 }
 
 // ── Patient exercises ─────────────────────────────────────────────────────────
+
+export async function assignExercisesToPatient(
+  patientId: string,
+  exercises: { exerciseId: string; sets: number; reps: number }[]
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const ex of exercises) {
+      await client.query(
+        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (exercise_id, patient_id) DO UPDATE
+         SET sets = EXCLUDED.sets, reps = EXCLUDED.reps`,
+        [ex.exerciseId, patientId, ex.sets, ex.reps]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 export async function getPatientExercises(patientId: string) {
   const result = await pool.query(
@@ -206,6 +274,143 @@ export async function getPatientExercises(patientId: string) {
     [patientId]
   );
   return result.rows;
+}
+
+// ── Exercise templates ────────────────────────────────────────────────────────
+
+export async function getTemplates(therapistId: string) {
+  const result = await pool.query(
+    `SELECT et.id, et.name, et.created_at, et.updated_at,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id',          te.id,
+                  'exerciseId',  te.exercise_id,
+                  'name',        te.name,
+                  'description', te.description,
+                  'isCustom',    te.is_custom,
+                  'sets',        te.sets,
+                  'reps',        te.reps
+                ) ORDER BY te.id
+              ) FILTER (WHERE te.id IS NOT NULL),
+              '[]'
+            ) AS exercises
+     FROM exercise_templates et
+     LEFT JOIN template_exercises te ON te.template_id = et.id
+     WHERE et.therapist_id = $1
+     GROUP BY et.id
+     ORDER BY et.created_at DESC`,
+    [therapistId]
+  );
+  return result.rows.map((row) => ({
+    id:        row.id,
+    name:      row.name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    exercises: row.exercises as TemplateExerciseRow[],
+  }));
+}
+
+interface TemplateExerciseRow {
+  id: number;
+  exerciseId: string | null;
+  name: string;
+  description: string | null;
+  isCustom: boolean;
+  sets: number | null;
+  reps: number | null;
+}
+
+interface TemplateExerciseInput {
+  exerciseId?: string;
+  name: string;
+  description?: string;
+  isCustom: boolean;
+  sets?: number;
+  reps?: number;
+}
+
+async function insertTemplateExercises(
+  client: PoolClient,
+  templateId: string,
+  exercises: TemplateExerciseInput[]
+) {
+  for (const ex of exercises) {
+    await client.query(
+      `INSERT INTO template_exercises
+         (template_id, exercise_id, name, description, is_custom, sets, reps)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        templateId,
+        ex.exerciseId ?? null,
+        ex.name,
+        ex.description ?? null,
+        ex.isCustom,
+        ex.sets ?? null,
+        ex.reps ?? null,
+      ]
+    );
+  }
+}
+
+export async function createTemplate(data: {
+  therapistId: string;
+  name: string;
+  exercises: TemplateExerciseInput[];
+}) {
+  const id = `tmpl_${Date.now()}`;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "INSERT INTO exercise_templates (id, therapist_id, name) VALUES ($1, $2, $3)",
+      [id, data.therapistId, data.name]
+    );
+    await insertTemplateExercises(client, id, data.exercises);
+    await client.query("COMMIT");
+    return id;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateTemplate(
+  id: string,
+  therapistId: string,
+  data: { name: string; exercises: TemplateExerciseInput[] }
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const check = await client.query(
+      "SELECT id FROM exercise_templates WHERE id = $1 AND therapist_id = $2",
+      [id, therapistId]
+    );
+    if (check.rows.length === 0) throw new Error("Not found or forbidden");
+    await client.query(
+      "UPDATE exercise_templates SET name = $1, updated_at = NOW() WHERE id = $2",
+      [data.name, id]
+    );
+    await client.query("DELETE FROM template_exercises WHERE template_id = $1", [id]);
+    await insertTemplateExercises(client, id, data.exercises);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteTemplate(id: string, therapistId: string) {
+  const result = await pool.query(
+    "DELETE FROM exercise_templates WHERE id = $1 AND therapist_id = $2",
+    [id, therapistId]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export default pool;

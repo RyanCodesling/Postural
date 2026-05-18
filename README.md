@@ -263,6 +263,64 @@
 - Resets per-side filters when the selected exercise changes or capture readiness fails
 
 ---
+## 📌 Update-5-17-26 | *ralmeyda*
+- Added a second browser-level `window.confirm` dialog as a final confirmation step before a user is permanently deleted in Manage Users
+- Added `acc_bacoor_logo.png` to every page — navbar (all authenticated routes), home, login, and first-time-password screens
+- Increased logo size across all placements (navbar: 64 px, auth cards: 120 px, home page: 140 px)
+- Made all pages responsive — collapsible sidebars with overlay for dashboard pages, hamburger dropdown for the navbar, and responsive grids/text sizes throughout
+
+### *web\public\acc_bacoor_logo.png*
+- Copied from `web\assets\img\acc_bacoor_logo.png` into the Next.js `public` folder so it can be served as a static asset
+
+### *web\src\app\(app)\layout.tsx*
+- Imported `next/image` and added the logo to the left side of the navbar
+- Added `menuOpen` state and a hamburger button that is visible only on mobile (`sm:hidden`)
+- Desktop nav links and logout button are hidden on mobile (`hidden sm:flex` / `hidden sm:block`)
+- Mobile dropdown renders below the navbar when the hamburger is toggled, containing all nav links and logout
+
+### *web\src\app\page.tsx*
+- Added `acc_bacoor_logo.png` above the posture icon on the home/landing page
+- Made heading text responsive: `text-4xl` → `text-2xl sm:text-4xl`
+- Made subtitle text responsive: `text-base` → `text-sm sm:text-base`
+
+### *web\src\app\(auth)\login\page.tsx*
+- Added `acc_bacoor_logo.png` centered at the top of the login card (120 px)
+
+### *web\src\app\(auth)\first-time-password\page.tsx*
+- Added `acc_bacoor_logo.png` centered at the top of the set-password card (120 px)
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Added `window.confirm` inside `confirmDeleteUser` — fires after the modal's Delete button is clicked; cancelling it aborts the deletion without closing the modal
+- Added `sidebarOpen` state for mobile sidebar toggle
+- Changed outer `<aside>` from static `w-64` to `fixed` on mobile with `translate-x` slide-in/out; reverts to `md:static` on desktop
+- Added dark backdrop overlay (`fixed inset-0 z-30 bg-black/50 md:hidden`) that closes the sidebar on tap
+- Added hamburger button at the top of `<main>` visible only on mobile (`md:hidden`)
+- Changed main content padding from `p-8` to `p-4 sm:p-6 lg:p-8` and added `min-w-0` to prevent flex overflow
+- Made all three page headings responsive: `text-3xl` → `text-xl sm:text-3xl`
+- Made name-part form grids responsive: `grid-cols-3` → `grid-cols-1 sm:grid-cols-3`
+- Made DOB/Age form grids responsive: `grid-cols-2` → `grid-cols-1 sm:grid-cols-2`
+- Wrapped both user list and assigned-patients tables in `overflow-x-auto` with `min-w-[560px]` on the table so they scroll horizontally on small screens
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Added `sidebarOpen` state
+- Changed `<aside>` to slide-in overlay on mobile, static on `md+` — same pattern as admin
+- Added mobile backdrop overlay and hamburger button in `<main>`
+- Changed main padding to `p-4 sm:p-6` and added `min-w-0`
+- Made page heading responsive: `text-2xl` → `text-xl sm:text-2xl`
+- Patient list cards stack vertically on mobile (`flex-col sm:flex-row`)
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Added `sidebarOpen` state
+- Changed `<aside>` to slide-in overlay on mobile, static on `md+`
+- Added mobile backdrop overlay and hamburger button in `<main>`
+- Changed main padding to `p-4 sm:p-6` and added `min-w-0`
+- Sidebar links call `setSidebarOpen(false)` on click to auto-close on mobile
+
+### *web\src\app\(app)\session\page.tsx*
+- Changed outer padding from `p-6` to `p-4 sm:p-6`
+- Made heading responsive: `text-3xl` → `text-2xl sm:text-3xl`
+
+---
 
 ## 📌 Update-5-10-26 | *ralmeyda*
 - Added reusable status banner system for Admin Dashboard actions

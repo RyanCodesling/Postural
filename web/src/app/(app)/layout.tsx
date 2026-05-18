@@ -29,7 +29,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex gap-4">
             <Link href={dashboardHref} className="font-semibold">Dashboard</Link>
             <Link href="/camera">Camera</Link>
-            <Link href="/profile">Profile</Link>
           </div>
           <button 
             onClick={handleLogout}

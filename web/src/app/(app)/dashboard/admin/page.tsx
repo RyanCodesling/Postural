@@ -817,20 +817,6 @@ export default function AdminDashboard() {
                       
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Therapist ID
-                        </label>
-                        <input
-                          type="text"
-                          value={editingUser.therapistIDNum || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, therapistIDNum: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
                           Specialty
                         </label>
                         <input
@@ -1109,21 +1095,29 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assigned Patients */}
-            {assignedPatients.length > 0 && (
-              <div className="mt-8">
-                <h3 className="text-2xl font-semibold text-gray-900 mb-4">Currently Assigned Patients</h3>
-                <div className="bg-white rounded shadow overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b">
+            <div className="mt-8">
+              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+                Currently Assigned Patients ({assignedPatients.length})
+              </h3>
+              <div className="bg-white rounded shadow overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Assigned Therapist</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {assignedPatients.length === 0 ? (
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Assigned Therapist</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                        <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">
+                          No patients have been assigned yet.
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {assignedPatients.map((patient) => (
+                    ) : (
+                      assignedPatients.map((patient) => (
                         <tr key={patient.id}>
                           <td className="px-6 py-4 text-sm font-medium text-gray-900">{patient.name}</td>
                           <td className="px-6 py-4 text-sm text-gray-600">{patient.email}</td>
@@ -1139,12 +1133,12 @@ export default function AdminDashboard() {
                             </button>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
           </div>
         )}
       </main>

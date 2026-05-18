@@ -2,6 +2,205 @@
 
 ## 📌 New sprint update here (●'◡'●) | *author_name*
 -
+
+--- 
+
+## 📌 Update-5-12-26 | *Enah*
+- Removed **Profile** nav link and deleted the placeholder profile page — profile functionality is now inside each role's dashboard under the View Profile tab
+- Fixed `TypeError` in Login page — removed invalid `setUser` destructure from `useAuth()` which is not exposed by `AuthContextType`
+- Added **View Profile** tab to Therapist Dashboard — shows therapist info and assigned patients, fully database-driven with empty states directing users to contact the admin
+- Added **View Profile** tab to Patient Dashboard — shows patient info and assigned exercises, fully database-driven with empty states directing users to contact the therapist; converted patient dashboard to tab-based layout matching therapist dashboard styling
+- Fixed `ReferenceError: setLoading is not defined` crash on the Therapist Dashboard
+- Removed Therapist ID field from Edit User Details form for therapist accounts
+- Added dedicated SQL file for patient-therapist assignment `patient_therapist_pg.sql`
+- Rewrote Patient Profile page — fully database-driven, zero localStorage
+- Implemented Exercise Templates fully from the database — per-therapist templates with multi-select system exercises, custom exercises with sets/reps, persisted to PostgreSQL
+- Custom exercises now save to the `exercises` table with `is_custom = true` and auto-incremented `ex_XXX` ID format — no more local-only state
+- Restructured Therapist Dashboard into four tabs: Dashboard, Manage Patients, Manage Exercises, Assign Patient
+- Therapist can now assign exercises (system or custom) or load from a template directly to a patient with sets/reps per exercise
+
+### *web\src\app\(app)\layout.tsx*
+- Removed `<Link href="/profile">Profile</Link>` from the top nav — profile is now accessible per role inside the dashboard View Profile tab
+
+### *web\src\middleware.ts*
+- Removed `"/profile"` from the `protectedRoutes` array — route no longer exists
+
+### *web\src\app\(app)\profile\page.tsx*
+- Deleted placeholder profile page and its folder — was a static stub with no real functionality; superseded by the View Profile tab on each role's dashboard
+
+### *web\src\app\(auth)\login\page.tsx*
+- Removed duplicate `useAuth()` call on line 12 that attempted to destructure `setUser` — `setUser` is not part of `AuthContextType` (context only exposes `login`, `logout`, `user`, `loading`, `isAuthenticated`)
+- `login` was already correctly destructured from `useAuth()` further down the component; the erroneous line caused a TypeScript error with no runtime fallback
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Added `"view-profile"` to the `ActiveTab` union type and `NAV_TABS` array
+- Added `TherapistProfile` interface for full profile data
+- Added `therapistProfile` state; fetched in parallel with patients, exercises, and templates in `loadData()` via `GET /api/users/:id`
+- **View Profile tab** — two sections:
+  - *Therapist Information*: displays Full Name, First/Middle/Last Name, Email, Therapist ID, Specialty, Clinic ID, Gender, Age, Date of Birth — each field shows "Not set — contact admin" when null
+  - *Assigned Patients*: lists all patients assigned to the therapist (name, email, system ID); shows a blue info banner directing to contact the admin when empty
+- Added `ProfileField` sub-component for consistent label/value display with null-state fallback
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Converted from a static single-view page to a tab-based layout matching the therapist dashboard styling
+- Added `"view-profile"` to `ActiveTab` union; sidebar now uses the same button-based tab navigation with green active highlight
+- Added `PatientProfile` and `AssignedExercise` interfaces
+- Added `patientProfile` and `exercises` state; both fetched in parallel on mount via `loadData()`
+- Profile fetched from `GET /api/users/:id`; exercises fetched from `GET /api/patient-exercises`
+- **View Profile tab** — two sections:
+  - *Patient Information*: Full Name, First/Middle/Last Name, Email, Gender, Age, Date of Birth, Diagnosis, Prescription, Condition, Assigned Therapist — each null field shows "Not set — contact therapist"
+  - *Assigned Exercises*: lists all exercises (name, description, sets × reps, color-coded status badge); shows a blue info banner directing to contact the therapist when empty
+- Added `ProfileField` sub-component (identical pattern to therapist dashboard)
+- Retained Session and Start Session sidebar links
+
+### *web\src\app\api\users\[id]\route.ts*
+- Fixed `GET /api/users/[id]` to allow therapists to fetch their own profile — previously the therapist-role guard only permitted fetching assigned patients, blocking self-lookup needed for the View Profile tab
+- Therapists may now access `id === sessionUser.id` (self) or assigned patients; all other combinations remain 403
+- Added patient-role guard: patients may only fetch their own profile (`id === sessionUser.id`), preventing cross-patient data access
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced `setLoading(false)` with `setPageLoading(false)` in the `finally` block of `loadAssignedPatients()` — `setLoading` was never declared in this component
+- Removed duplicate `setPageLoading(false)` call that appeared outside the `finally` block
+- Removed unused "Settings" navigation tab
+- Added `PatientExercise` interface and `exercises` field to `PatientData` — each patient card now fetches and displays their assigned exercises from the database
+- Exercises for all assigned patients are fetched in parallel with `Promise.all` after loading the patient list
+- Each patient card shows exercise name, sets × reps, and a color-coded status badge (pending / in_progress / completed)
+- Refresh button now re-fetches both the patient list and all their exercises from the database
+- Fixed `useEffect` dependency to trigger `loadAssignedPatients` only after auth is resolved (`!loading && user?.id`)
+- No localStorage usage — all data sourced from PostgreSQL via API
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Extended to support therapist access — therapists can now pass `?patientId=xxx` to fetch a patient's exercises
+- Added ID validation — verifies the `patientId` belongs to a user with `role = 'patient'` assigned to the requesting therapist before returning data, preventing cross-therapist access and preventing admin/therapist IDs from being passed as `patientId`
+- Patients still get only their own exercises (no query param needed)
+- Returns 400 if a therapist calls the endpoint without `patientId`
+- Returns 403 if the `patientId` is not assigned to the requesting therapist
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Fully rewrote Patient Profile page — removed all localStorage (admin_users, admin_exercises, patient_exercises, exercise_templates, patient_sessions keys)
+- Fetches patient info from `GET /api/users/[id]` and exercises from `GET /api/patient-exercises?patientId=` in parallel
+- Shows Personal Information: Full Name, Age, Email, Progress Status badge, Assigned Specialist name
+- Progress Status is derived from exercise statuses (not started / in progress / progressing / completed)
+- Assigned Specialist name is joined from the therapist's row in the users table
+- Ongoing Exercises section: exercises with status `pending` or `in_progress`, color-coded badge, View Exercise button
+- Finished Exercises section: exercises with status `completed`, green Completed badge
+- Sessions Record section: empty state (no sessions table yet)
+
+### *web\src\lib\db.ts*
+- Added `getUserById(id)` — fetches a single user by id, LEFT JOINs the therapist's name from the users table so the patient profile can display the Assigned Specialist name in one query
+- Added `getTemplates(therapistId)` — single query with `json_agg` + `FILTER` to fetch all templates and their exercises for the requesting therapist only; returns empty array for templates with no exercises
+- Added `createTemplate()` — inserts into `exercise_templates` then all rows into `template_exercises` inside a single transaction; rolls back on any error
+- Added `updateTemplate()` — verifies ownership, updates template name and timestamp, deletes all existing `template_exercises` rows then re-inserts the new set, all inside a transaction
+- Added `deleteTemplate()` — deletes only if the record belongs to the requesting therapist; returns `false` if not found or not owned
+- Added `PoolClient` import from `pg` to correctly type the `insertTemplateExercises` transaction helper
+- Added `getNextExerciseId()` — queries the highest `ex_XXX` formatted ID in the `exercises` table and returns the next zero-padded ID (e.g. `ex_007`); returns `ex_001` if no matching IDs exist
+- Updated `createExercise()` to accept `isCustom` parameter and write it to the `is_custom` column
+
+### *web\src\app\api\users\[id]\route.ts*
+- Fixed root cause of assign/unassign/edit/delete not persisting to the database — Next.js 15+ changed `params` to a `Promise`, so `params.id` was `undefined` and every `WHERE id = $1` matched nothing
+- Updated both `PUT` and `DELETE` handlers to destructure `id` from `await params` instead of accessing `params.id` directly
+- Added `GET /api/users/[id]` handler — returns a single user with therapist name included; therapists can only fetch their own assigned patients (403 otherwise)
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Removed Therapist ID input field from the Edit User Details form under the Therapist Information section — `therapistIDNum` is an internal system field and should not be manually editable by admin
+- Edit User Details persists all changes to PostgreSQL via `PUT /api/users/[id]` — no localStorage used anywhere in this page
+- Assign Patients persists `therapist_id` to the `users` table via `PUT /api/users/[id]` — assign and unassign both go directly to the database
+- Fixed "Currently Assigned Patients" table always being hidden — removed `assignedPatients.length > 0` conditional wrapper so the table is always rendered
+- Added empty state row ("No patients have been assigned yet.") when there are no assignments
+- Added patient count to the "Currently Assigned Patients" section heading
+
+### *scripts\patient_therapist_pg.sql*
+- Fixed FK constraint not being applied — `ADD COLUMN IF NOT EXISTS` skips the whole statement when the column already exists (added by `user_credentials_pg.sql`), so the FK was never created
+- Separated the column creation and FK constraint into two independent statements
+- FK constraint is now added via a `DO $$ ... IF NOT EXISTS ... $$` block that checks `pg_constraint` before applying, making it safe to re-run
+- `therapist_id` stores the assigned therapist's user id (e.g. `therapist_001`) with `ON DELETE SET NULL`
+
+### *scripts\patient_exercises_pg.sql*
+- Removed all demo seed `INSERT` statements for `patient_001` — Lateral Arm Raises, Shoulder Shrugs, and the other 4 pre-seeded exercises were leftovers from the localStorage era and should not be pre-populated
+- Exercises are now assigned exclusively through the therapist dashboard UI, not seeded by the SQL file
+- Table schema and `ALTER TABLE` safety statements are unchanged
+
+### *scripts\exercises_pg.sql*
+- Added `is_custom BOOLEAN NOT NULL DEFAULT FALSE` column to the `exercises` table
+- Added `ALTER TABLE exercises ADD COLUMN IF NOT EXISTS is_custom ...` — safe to re-run on existing tables
+- System exercises (`ex_001`–`ex_006`) default to `is_custom = FALSE`; therapist-created custom exercises are saved with `is_custom = TRUE`
+
+### *scripts\exercise_templates_pg.sql*
+- Created new SQL file for exercise templates — run in pgAdmin after `exercises_pg.sql`; both `CREATE TABLE IF NOT EXISTS` blocks are safe to re-run
+- `exercise_templates` table:
+  - `id VARCHAR(50) PRIMARY KEY` — format `tmpl_<timestamp>`, generated at insert time in `createTemplate()`
+  - `therapist_id VARCHAR(50) NOT NULL` — FK → `users(id)` with `ON DELETE CASCADE`; each template is owned by exactly one therapist
+  - `name VARCHAR(255) NOT NULL` — display name of the template
+  - `created_at`, `updated_at TIMESTAMP` — default to `CURRENT_TIMESTAMP`
+- `template_exercises` table:
+  - `id SERIAL PRIMARY KEY` — auto-incrementing row ID
+  - `template_id VARCHAR(50) NOT NULL` — FK → `exercise_templates(id)` with `ON DELETE CASCADE`; deleting a template removes all its exercise rows
+  - `exercise_id VARCHAR(50)` — FK → `exercises(id)` with `ON DELETE SET NULL`; always populated now that custom exercises are saved to the `exercises` table before being added to a template
+  - `name VARCHAR(255) NOT NULL`, `description TEXT` — denormalized from the referenced exercise
+  - `is_custom BOOLEAN NOT NULL DEFAULT FALSE` — mirrors the `exercises.is_custom` flag of the referenced exercise
+  - `sets INT`, `reps INT` — per-template prescription for this exercise
+- Indexes: `idx_et_therapist_id` on `exercise_templates(therapist_id)`, `idx_te_template_id` on `template_exercises(template_id)`
+- GRANT statements: `ALL PRIVILEGES` on both tables and `USAGE, SELECT` on `template_exercises_id_seq` granted to the `postural` user
+
+### *web\src\app\api\exercises\route.ts*
+- Updated `POST /api/exercises` to use `getNextExerciseId()` — new exercises follow `ex_001` format instead of timestamp-based IDs
+- Updated `POST /api/exercises` to accept `isCustom` boolean and pass it to `createExercise()`
+- Both `name` and `description` are now validated as required (trimmed)
+
+### *web\src\app\api\templates\route.ts*
+- Created `GET /api/templates` — returns all templates (with exercises) for the logged-in therapist; 401 if unauthenticated, 403 if not a therapist
+- Created `POST /api/templates` — creates a new template; validates name and requires at least one exercise
+
+### *web\src\app\api\templates\[id]\route.ts*
+- Created `PUT /api/templates/[id]` — updates template name and replaces all exercises; ownership verified before any write
+- Created `DELETE /api/templates/[id]` — deletes template; returns 404 if not found or not owned by requesting therapist
+- Both handlers use `await params` (Next.js 15+ Promise params pattern)
+
+### *web\src\app\(app)\dashboard\therapist\templates\page.tsx*
+- Removed all `localStorage` usage (`admin_exercises`, `exercise_templates` keys)
+- Exercises loaded from `GET /api/exercises` on mount — therapist always sees the live system exercise list
+- Templates loaded from `GET /api/templates` on mount — therapist sees only their own templates
+- System and custom exercises both appear as multi-select checkboxes; selecting any exercise reveals inline sets and reps fields
+- "Add New Custom Exercise" section: name (required), description (required), sets (required, min 1), reps (required, min 1) — all fields validated before submission
+- Clicking "Add Custom Exercise" POSTs to `POST /api/exercises` with `isCustom: true`; the new exercise is saved with the next `ex_XXX` ID, automatically added to the exercises list, and auto-selected with the provided sets/reps
+- Removed local-only `customExercises` state — all exercises now live in the `exercises` table
+- Custom exercises display a "custom" badge and show their `ex_XXX` ID in the exercise list
+- Save calls `POST /api/templates` (create) or `PUT /api/templates/[id]` (edit); `isCustom` is derived from the exercise's `is_custom` DB field, not local state
+- Delete calls `DELETE /api/templates/[id]`
+- Template cards preview exercise list with sets×reps and "custom" badge
+
+### *web\src\app\api\exercises\[id]\route.ts*
+- Fixed `params` to use `await params` (Next.js 15+ Promise params) — `params.id` was previously accessed directly causing a TypeScript error
+- Added `PUT /api/exercises/[id]` — updates `name` and `description` of any exercise; both fields are required and trimmed; returns 404 if ID not found
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Added `POST /api/patient-exercises` — therapist-only endpoint to bulk-assign exercises to one of their patients
+- Accepts `{ patientId, exercises: [{ exerciseId, sets, reps }] }` in the request body
+- Verifies the `patientId` belongs to a patient assigned to the requesting therapist before writing
+- Uses `ON CONFLICT (exercise_id, patient_id) DO UPDATE SET sets, reps` — re-assigning an already-assigned exercise updates its sets/reps rather than erroring
+
+### *web\src\lib\db.ts*
+- Added `updateExercise(id, data)` — updates `name` and/or `description` of an exercise row; dynamically builds SET clause; returns updated row or `null` if not found
+- Added `assignExercisesToPatient(patientId, exercises)` — loops through exercise array inside a transaction, inserting each row with `ON CONFLICT DO UPDATE` so duplicate assignments update sets/reps rather than failing
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced single-view layout with a four-tab sidebar: **Dashboard** (blank placeholder), **Manage Patients**, **Manage Exercises**, **Assign Patient**; Exercise Templates remains a sidebar link to `/dashboard/therapist/templates`
+- Active tab is highlighted in green; tab state is local — no route change
+- All data (patients + exercises, all patients' exercises, templates) is loaded in one parallel `loadData()` call on mount and after any mutation
+- **Dashboard tab**: blank welcome screen for now
+- **Manage Patients tab**: preserves existing patient list (lines 139–218) — search bar, per-patient exercise badge list with status colors, View and Start Session buttons
+- **Manage Exercises tab**: shows exercises categorized into System Exercises (`is_custom = false`) and Custom Exercises (`is_custom = true`); each row shows ID, name, description, and an Edit button; inline edit form replaces the row with name and description inputs; Save calls `PUT /api/exercises/[id]` and updates local state without a full reload
+- **Assign Patient tab**:
+  - Step 1: patient dropdown (only therapist's assigned patients); on patient select, their existing `patient_exercises` rows are fetched and pre-checked with current sets/reps so the therapist can see and adjust what is already assigned
+  - Step 2: optional template dropdown — selecting a template **merges** its exercises into the current selection; template sets/reps override existing values for matching exercises; a live preview card shows all exercise names and sets×reps for the selected template before applying
+  - Step 3: multi-select exercise list, split into System and Custom sections; each checked exercise reveals required sets and reps fields
+  - Submit calls `POST /api/patient-exercises`; on success clears the form and refreshes data
+  - Inline success/error banners for submit feedback
+  - `useEffect` on `assignPatientId` — clears selection when patient is deselected; fetches and pre-populates exercises when a new patient is chosen
+- Extracted two reusable sub-components at the bottom of the file: `ExerciseRow` (Manage Exercises inline edit) and `AssignRow` (Assign Patient multi-select row with sets/reps)
+
+---
+
 ## 📌 Update-5-11-26 | *RyanCodesling*
 - Implemented the real shoulder abduction metric for Lateral Arm Raises (`ex_001`)
 - Added per-side shoulder abduction calculation for left and right arms

@@ -284,9 +284,16 @@ export type NeckTiltResult = {
  * Internal helper — returns the tilt-corrected signed ear-line angle in
  * degrees, or null if either ear landmark is unreliable.
  *
- *   correctedAngle > 0  →  right ear is lower in frame after correction
- *                       →  head tilting RIGHT
- *   correctedAngle < 0  →  head tilting LEFT
+ * SIGN CONVENTION (authoritative — pinned by neckSideAgreement.test.ts and
+ * matching `computeLateralNeckTilt` + CLAUDE.md; do NOT "correct" this back
+ * to a right-positive reading — that was a long-standing doc error):
+ *
+ *   correctedAngle > 0  →  head tilting to the patient's LEFT
+ *   correctedAngle < 0  →  head tilting to the patient's RIGHT
+ *
+ * (Earlier revisions of this comment claimed positive → RIGHT. That was
+ * wrong; the code has always mapped positive → "left" and the regression
+ * test enforces it.)
  *
  * Used by both `computeLateralNeckTilt` (which absolute-values it) and
  * `computeNeckLateralFlexionSigned` (which keeps the sign for the rep
@@ -329,10 +336,11 @@ function signedNeckFlexionAngle(
  * It is more stable than eye outer corners (affected by gaze) or the nose
  * midpoint (a single landmark, noisier than a two-point line).
  *
- * ── SIGN CONVENTION (y increases downward) ───────────────────────────────────
- *   correctedAngle > 0  →  right ear is lower in frame after correction
- *                       →  head tilting RIGHT (right ear toward right shoulder)
- *   correctedAngle < 0  →  left ear is lower → head tilting LEFT
+ * ── SIGN CONVENTION (authoritative; pinned by neckSideAgreement.test.ts) ─────
+ *   correctedAngle > 0  →  head tilting to the patient's LEFT
+ *   correctedAngle < 0  →  head tilting to the patient's RIGHT
+ * The code below maps `correctedAngle > 0 ? "left" : "right"`. Matches
+ * CLAUDE.md. Do not flip this comment back to a right-positive reading.
  *
  * ── NOTE ON EAR-LINE AND TILT REFERENCE ─────────────────────────────────────
  * This is why we do NOT use the ear line as the tilt reference for shoulder
@@ -874,6 +882,14 @@ export function computeShoulderAbduction(
   // Negatives (cross-body adduction) are returned as null below. See the SIGN
   // section in the doc comment for why this is not Math.abs.
   const lateralAbduction = side === "left" ? -signedAbduction : signedAbduction;
+  // Boundary case: ±180° are the same physical angle (arm straight up,
+  // exactly opposite trunk-down). `angleDiffDeg` returns -180 at this
+  // boundary because its wrap-loop uses strict `< -180`. On the LEFT side
+  // the sign-flip accidentally lands on +180; on the RIGHT side the value
+  // stays -180 and would be rejected by the cross-body check below. Map
+  // -180 to +180 so straight-overhead poses (common in ex_002 Overhead
+  // Arm Raises) read identically on both sides.
+  if (lateralAbduction <= -180 + 1e-9) return 180;
   // Return null (not 0) during cross-body motion. The rep counter relies on the
   // time gap created by skipping null frames to detect that the arm went out of
   // the valid lateral region. Clamping to 0 would feed continuous data to the
@@ -885,53 +901,158 @@ export function computeShoulderAbduction(
 /**
  * Shoulder flexion angle (degrees) — used by ex_002 Overhead Arm Raises.
  *
- * Definition: angle between trunk-vertical and shoulder→elbow vector in the
- * sagittal plane. Front-camera 2D estimation produces a foreshortened
- * apparent angle (acknowledged in proposal limitations); this metric returns
- * the apparent angle, not the anatomical angle.
+ * ── WHY THIS DELEGATES TO computeShoulderAbduction ───────────────────────────
+ * Anatomically, abduction (frontal plane, arm out to the side) and flexion
+ * (sagittal plane, arm forward and up) are different motions. With a
+ * front-facing 2D webcam, both motions are projected into the image plane
+ * and the metric we can measure is the apparent angle between the trunk-down
+ * vector and the upper-arm vector — the same geometric quantity in both cases.
  *
- * TODO: implement. Targets the same registry-declared thresholds as
- * abduction but interpreted in the apparent-angle space.
+ * Clinically, patients perform "overhead arm raises" in front of a webcam by
+ * lifting their arms straight up in the FRONTAL plane (extending lateral
+ * abduction past horizontal into the overhead region), not by true sagittal
+ * flexion. The frontal-plane motion is well-captured by the abduction math:
+ *   arm at side       → 0°
+ *   arm horizontal    → 90°
+ *   arm overhead      → ~180°
+ *
+ * If a patient does perform true sagittal flexion (arm forward), the elbow
+ * lands near the shoulder in image space and the apparent angle reads
+ * artificially small. That foreshortening is an accepted thesis limitation
+ * — this function returns the APPARENT angle, not the anatomical angle.
+ *
+ * ── INHERITED CONTRACT ───────────────────────────────────────────────────────
+ * Because this delegates, all of `computeShoulderAbduction`'s behavior carries
+ * over verbatim:
+ *   - per-side sign normalization (lateral motion is positive on both sides)
+ *   - returns null during cross-body motion (the rep counter relies on this
+ *     to detect that the arm went out of the valid lateral region)
+ *   - returns null on any landmark below MIN_VIS
+ *   - camera-roll invariant (no tilt subtraction)
+ *
+ * If ex_002 ever needs to diverge from ex_001 (e.g. a different sign rule,
+ * a different rest reference, or compensation-specific behavior), break this
+ * delegation and implement inline. For now keep one source of truth so the
+ * cross-body null contract can't drift between the two exercises.
  */
 export function computeShoulderFlexion(
-  _landmarks: LM[],
-  _tiltRef: TiltReference,
-  _side: "left" | "right"
+  landmarks: LM[],
+  tiltRef: TiltReference,
+  side: "left" | "right"
 ): number | null {
-  return null;
+  return computeShoulderAbduction(landmarks, tiltRef, side);
 }
 
 /**
- * Scapular elevation (normalized torso-lengths) — used by ex_003 Shoulder Shrugs.
+ * Scapular elevation (normalized trunk-length units) — used by ex_003 Shoulder
+ * Shrugs as the primary metric and by ex_001 Lateral Arm Raises as a
+ * compensation metric (shoulder hiking).
  *
- * Definition: vertical distance from shoulder landmark to ear landmark on
- * the same side, normalized by trunk length (shoulder-midpoint to
- * hip-midpoint distance) for scale invariance across patients.
+ * ── METHOD: TRUNK-AXIS PROJECTION ────────────────────────────────────────────
+ * Returns the signed projection of the ear-from-shoulder offset onto the
+ * trunk axis (shoulder-midpoint → hip-midpoint direction), normalized by
+ * trunk length so the value is scale-invariant across patients.
  *
- * Returns the CHANGE from a per-session resting baseline. The camera loop
- * is responsible for sampling and storing the baseline during the first
- * ~1 second after capture-readiness clears, before the patient begins
- * shrugging. This stub returns the raw normalized distance; baseline
- * subtraction is the caller's job.
+ * Why projection along the trunk axis, not image-vertical distance:
+ *   - Lateral arm raises performed with proper form involve a slight forward
+ *     lean. In image-vertical units, the lean alone reduces ear-to-shoulder
+ *     distance, producing a false positive on "shrug" even when the trapezius
+ *     isn't recruiting.
+ *   - Projecting along the trunk axis preserves the relative geometry of ear
+ *     and shoulder along the body, independent of how the body is oriented in
+ *     the camera frame (within reasonable lean angles).
  *
- * TODO: implement. Tilt correction needed because shoulder-to-ear vertical
- * distance changes with camera roll.
+ * ── SIGN CONVENTION ──────────────────────────────────────────────────────────
+ * Trunk-up vector points from hip-midpoint toward shoulder-midpoint. The ear
+ * sits ABOVE the shoulder (further along trunk-up), so the projection is
+ * positive at rest. When the shoulder hikes toward the ear, the ear-from-
+ * shoulder distance along trunk-up DECREASES — i.e., a shrug produces a
+ * smaller value than baseline.
+ *
+ * The caller subtracts a per-session resting baseline and inverts the sign so
+ * downstream consumers (rep counter, warning threshold) see "positive =
+ * elevation away from rest" — see baselineCapture handling in the camera loop.
+ * THIS FUNCTION returns the raw signed projection. It is the caller's job to
+ * baseline-subtract and re-orient.
+ *
+ * ── FAILURE MODES (acknowledged in thesis limitations) ───────────────────────
+ *   - Forward head posture during lean: head juts forward independently of
+ *     trunk, breaking the assumption that ear and trunk move together.
+ *   - Cervical flexion (chin-to-chest): shortens projection along trunk axis,
+ *     reads as shrug in the wrong direction.
+ *   - Camera height too low/high: distorts the projection.
+ *
+ * ── LANDMARKS REQUIRED ───────────────────────────────────────────────────────
+ *   11, 12 — shoulders (for shoulder-midpoint and per-side shoulder)
+ *   23, 24 — hips (for hip-midpoint, completes trunk axis)
+ *   side="left":  7  (left ear)
+ *   side="right": 8  (right ear)
+ *
+ * Returns null if any required landmark is below MIN_VIS, or if trunk length
+ * is degenerate (patient sitting on the camera, basically).
  */
 export function computeScapularElevation(
-  _landmarks: LM[],
+  landmarks: LM[],
   _tiltRef: TiltReference,
-  _side: "left" | "right"
+  side: "left" | "right"
 ): number | null {
-  return null;
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip))           return null;
+
+  const ear = side === "left" ? landmarks[7] : landmarks[8];
+  if (!ear || vis(ear) < MIN_VIS) return null;
+
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  // Trunk-up vector (hip → shoulder direction). In normalized image coords
+  // with y increasing downward, "up" in the image corresponds to NEGATIVE dy.
+  const trunkVecX = shoulderMid.x - hipMid.x;
+  const trunkVecY = shoulderMid.y - hipMid.y;
+  const trunkLen  = Math.hypot(trunkVecX, trunkVecY);
+
+  // Degenerate case: shoulder and hip midpoints essentially coincide. Either
+  // the patient is collapsed, or landmarks are wildly off. Either way the
+  // projection is meaningless.
+  const TRUNK_LEN_EPSILON = 0.05; // 5% of frame height; well below any real torso
+  if (trunkLen < TRUNK_LEN_EPSILON) return null;
+
+  const trunkUpX = trunkVecX / trunkLen;
+  const trunkUpY = trunkVecY / trunkLen;
+
+  // Per-side shoulder for the ear-from-shoulder vector. Using the SAME-side
+  // shoulder rather than shoulder-midpoint preserves the asymmetric signal:
+  // if only one shoulder hikes, that side's measurement changes while the
+  // other side's stays near baseline.
+  const sameShoulder = side === "left" ? leftShoulder! : rightShoulder!;
+  const earOffsetX = ear.x - sameShoulder.x;
+  const earOffsetY = ear.y - sameShoulder.y;
+
+  // Dot product with trunk-up direction, then normalize by trunk length so
+  // the result is in "trunk-length units" rather than raw normalized pixels.
+  const projection = earOffsetX * trunkUpX + earOffsetY * trunkUpY;
+  return projection / trunkLen;
 }
 
 /**
  * Signed neck lateral flexion angle (degrees) — used by ex_004.
  *
  * Returns the tilt-corrected ear-line angle in body-relative frame.
- * Sign convention:
- *   negative  →  head tilting LEFT  (left ear toward left shoulder)
- *   positive  →  head tilting RIGHT (right ear toward right shoulder)
+ * Sign convention (authoritative; pinned by neckSideAgreement.test.ts,
+ * matches `computeLateralNeckTilt` + CLAUDE.md):
+ *   positive  →  head tilting to the patient's LEFT
+ *   negative  →  head tilting to the patient's RIGHT
  *   ~0        →  head level
  *
  * The `_side` parameter is currently ignored — neck lateral flexion is

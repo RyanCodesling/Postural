@@ -5,6 +5,78 @@
 
 --- 
 
+## 📌 Update-5-19-26 | *RyanCodesling*
+Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_004` bidirectional rep counting was iterated heavily and is now **frozen** as a proof-of-concept-adequate mitigation (see Current Status).
+
+- Implemented shoulder flexion (`ex_002`) and scapular elevation + baseline capture (`ex_003`) — both now code-complete
+- Real `holdDurationMs` (was a hardcoded `0` placeholder); per-rep descent timing split into hold vs descent
+- Bidirectional rep side tagging now uses sign-at-peak — fixes `ex_004` left/right mislabeling; added `neckSideAgreement` regression test
+- Added `BidirectionalRepCounter` wrapper for `ex_004` — suppresses opposite-side return-stroke phantom reps; **frozen at iteration 8**
+- Compensation score now computed from the same smoothed values the metric cards show (was using raw)
+- Per-exercise smoothing override now applies to the bidirectional/unilateral path too (was silently ignored — only per-limb honored it)
+- Fixed a ±180° boundary bug in shoulder abduction (right-side overhead returned `null` mid-rep)
+- Added premature-descent-latch recovery to the shared rep-counter state machine
+- Capture-readiness now has a 300 ms grace window so brief landmark flickers don't reset an in-progress rep
+- Evaluated Heavy vs Full pose model — Heavy rejected (11 fps vs Full's ~20 fps on dev hardware); **decision: accept ~20 fps**
+- Three-tier rep classification (`attempted` tier for reduced ROM) was implemented then **reverted** (see Current Status)
+- Added profiling scripts and new test suites; full pose suite **69 green**
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Implemented `computeShoulderFlexion()` (`ex_002`) — delegates to `computeShoulderAbduction()` (frontal-camera projection collapses both motions to the same measurement)
+- Implemented `computeScapularElevation()` (`ex_003`) — trunk-axis projection of the ear-from-shoulder offset, normalized by trunk length; robust to forward lean
+- Fixed ±180° boundary in `computeShoulderAbduction()` — right-side straight-overhead previously returned `null` mid-rep
+- Corrected sign-convention JSDoc in all three neck-flexion functions to the authoritative **positive → patient's LEFT** (matches `computeLateralNeckTilt` and the registry); added a do-not-flip note
+
+### *web\src\lib\pose\repCounter.ts*
+- Implemented real `holdDurationMs` — added `descentStartTimeMs`; a pause at the peak is no longer absorbed into `descentDurationMs`
+- Added `DESCENDING → ASCENDING` recovery — a real rep that briefly dips early then climbs higher is no longer frozen at a stale partial peak (shared change — affects all dynamic exercises)
+- Reverted the three-tier `attempted` classification — back to two-tier complete/partial; constructor invariant restored to `repCompleteThreshold < startThreshold < minimumPeakThreshold ≤ targetROM`
+
+### *web\src\lib\pose\repCounter.test.ts*
+- Added hold-duration tests (explicit hold at peak; snappy one-frame hold) and premature-descent-latch recovery test
+- Removed the three-tier classification tests with the revert; net 21 tests
+
+### *web\src\lib\pose\bidirectionalRepCounter.ts* (new)
+- Wrapper around `RepCounter` for signed bidirectional exercises (`ex_004` Neck Lateral Flexion)
+- Feeds `|angle|` to the state machine, tags side from sign-at-peak
+- Post-rep neutral-settle gate with decoupled `restSettleBand` (default = `startThreshold`) + short refractory — suppresses return-stroke overshoot phantoms while allowing realistic loose-neutral alternation
+- Bounded synthetic-neutral completion for missed-neutral cross-frame side changes at low frame rate; internal completion threshold derived from the settle band (registry `repCompleteThreshold` is too strict at webcam frame rate)
+
+### *web\src\lib\pose\bidirectionalRepCounter.test.ts* (new)
+- Synthetic regression coverage: side tagging both directions, overshoot suppression, loose-neutral alternation, refractory release, limited-ROM partials, missed-neutral crossing (12 tests)
+
+### *web\src\lib\pose\neckSideAgreement.test.ts* (new)
+- Pins that the display path and the rep-tag path produce the same side for the same input (2 tests)
+
+### *web\src\lib\pose\scapularElevation.test.ts* (new)
+- Rest sanity, shrug direction, asymmetry preservation, forward-lean rejection, scale invariance, visibility gating (9 tests)
+
+### *web\src\lib\pose\shoulderFlexion.test.ts* (new)
+- Overhead-range (150°–180°) coverage, monotonicity, cross-body `null`, visibility gating (11 tests)
+
+### *web\src\lib\exercises\registry.ts*
+- `ex_002`: shoulder flexion wired as primary metric
+- `ex_003`: tuned scapular-elevation thresholds (torso-length deltas), `descentEpsilon 0.005`, `requiresBaselineCapture: true`, smoothing override `{ minCutoff: 0.3, beta: 0.01 }`
+- `ex_004`: smoothing override `{ minCutoff: 0.5, beta: 0.05 }`; thresholds back to two-tier (`minimumPeakThreshold: 12`) after the three-tier revert; corrected the stale threshold comment
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Wired `ex_002` / `ex_003` / `ex_004` through their metrics and counters
+- Per-session baseline capture for `ex_003`: per-side sample accumulate → **median** baseline → `baseline − raw` → per-limb smooth → per-limb counter
+- Bidirectional exercises route through `BidirectionalRepCounter`
+- Compensation score recomputed from `smoothedMetrics` (was `raw.compensationScore`)
+- Generic smoothing loop is now primary-metric-aware (honors the registry smoothing override on every path, not just per-limb)
+- Capture-readiness reset grace window (`CAPTURE_READINESS_RESET_GRACE_MS = 300`) so short flickers pause rather than reset counters
+- `ex_004` debug ring buffer + `dumpNeckRepDebug()` console helper for live diagnosis
+
+### *web\package.json*
+- Added `profile:filter` and `profile:sweep` npm scripts
+
+### *web\scripts\* (new)
+- `profileOneEuroFilter.ts`, `sweepOneEuroFilter.ts` — OneEuroFilter profiling/sweep tooling; CSV output under `scripts/out/` (gitignored)
+
+
+--- 
+
 ## 📌 Update-5-19-26 | *ralmeyda*
 - Completed responsive sidebar layout for all dashboard pages (patient, therapist, admin) — collapsible slide-in sidebar with dark overlay on mobile, static on desktop
 - Made the navbar responsive with a hamburger dropdown for mobile

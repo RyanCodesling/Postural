@@ -202,6 +202,40 @@ test("jitter near the peak does not cause early descent transition", () => {
   assertCloseTo(events[0].peakValue, 95, 0.1, "peak should be true max, not dip-entry");
 });
 
+test("premature descent latch recovers when the signal reaches a new high", () => {
+  const counter = new RepCounter({
+    startThreshold: 5,
+    repCompleteThreshold: 2,
+    minimumPeakThreshold: 12,
+    targetROM: 30,
+  });
+  const samples: Array<[number, number]> = [
+    [0, 0],
+    [7.5, 33],
+    [12.3, 66],
+    [17.8, 99],
+    [17.0, 132], // premature descent trigger under the old logic
+    [19.8, 165],
+    [25.8, 198],
+    [34.8, 231],
+    [42.5, 264],
+    [57.2, 297],
+    [64.3, 330],
+    [63.3, 363],
+    [57.9, 396],
+    [43.0, 429],
+    [27.2, 462],
+    [13.2, 495],
+    [5.5, 528],
+    [1.0, 561],
+  ];
+  const events = feed(counter, samples);
+
+  assertEqual(events.length, 1, "event count");
+  assertEqual(events[0].classification, "complete", "classification");
+  assertCloseTo(events[0].peakValue, 64.3, 0.1, "peak should recover to true high");
+});
+
 // ── EDGE CASES ──────────────────────────────────────────────────────────────
 
 test("rep peaking exactly at targetROM is classified complete (boundary case)", () => {
@@ -237,8 +271,9 @@ test("RepEvent timing fields are internally consistent", () => {
   assertEqual(events.length, 1, "event count");
   const ev = events[0];
 
-  // ascentDurationMs + descentDurationMs should equal totalDurationMs
-  // (holdDuration is 0 by current schema)
+  // ascentDurationMs + holdDurationMs + descentDurationMs should equal totalDurationMs.
+  // Hold can be zero for a synthetic rep with no peak plateau, but the sum
+  // invariant holds either way.
   const sum = ev.ascentDurationMs + ev.descentDurationMs + ev.holdDurationMs;
   assertCloseTo(sum, ev.totalDurationMs, 1, "ascent + hold + descent ≈ total");
 
@@ -248,6 +283,75 @@ test("RepEvent timing fields are internally consistent", () => {
 
   // Total duration matches end - start
   assertCloseTo(ev.totalDurationMs, ev.endTimeMs - ev.startTimeMs, 0.1, "total = end - start");
+});
+
+// ── HOLD AT PEAK ────────────────────────────────────────────────────────────
+//
+// holdDurationMs was previously hard-coded to 0; any pause at the peak was
+// silently absorbed into descentDurationMs. Below tests confirm that:
+//   (1) a deliberate hold at peak is recorded with non-trivial holdDurationMs
+//   (2) holdDurationMs + descentDurationMs equals what descentDurationMs used
+//       to be under the old contract (preserves backward-compatible totals)
+//   (3) a snappy rep with no observable hold records holdDurationMs equal to
+//       a single frame interval, not zero (zero is reserved for "uninitialised")
+
+test("explicit hold at peak is captured in holdDurationMs, not descentDurationMs", () => {
+  const counter = new RepCounter(STANDARD_THRESHOLDS);
+
+  // Construct: ascent → 12 frames at the peak (no descent) → clean descent.
+  // 12 * 33ms ≈ 396ms of hold. With descentEpsilon=0.5, holding flat at peak
+  // should NOT trigger DESCENDING; only the drop afterwards should.
+  const samples: Array<[number, number]> = [];
+  let t = 0;
+  // Ascent (180ms)
+  for (const a of [5, 25, 50, 75, 95]) {
+    samples.push([a, t]); t += 33;
+  }
+  // Plateau at peak for 12 frames (~396ms). Keep exactly at peak — any drop
+  // beyond descentEpsilon would prematurely trigger DESCENDING.
+  for (let i = 0; i < 12; i++) {
+    samples.push([95, t]); t += 33;
+  }
+  // Descent: angle must drop > descentEpsilon (0.5) below the running peak.
+  for (const a of [90, 70, 40, 20, 8]) {
+    samples.push([a, t]); t += 33;
+  }
+
+  const events = feed(counter, samples);
+  assertEqual(events.length, 1, "expected exactly one rep");
+  const ev = events[0];
+
+  // Hold should reflect the plateau (~396ms). Use a generous tolerance —
+  // exact value depends on which frame trips descentEpsilon.
+  if (ev.holdDurationMs < 300) {
+    throw new Error(`expected holdDurationMs > 300, got ${ev.holdDurationMs}`);
+  }
+  // Descent should be SHORT (just the 5 descent frames, ~150ms), not the
+  // ~550ms total it would have been under the old "descent = end - peak" rule.
+  if (ev.descentDurationMs > 250) {
+    throw new Error(`descentDurationMs (${ev.descentDurationMs}) too large — hold time leaking into descent?`);
+  }
+  // Sum invariant still holds.
+  const sum = ev.ascentDurationMs + ev.holdDurationMs + ev.descentDurationMs;
+  assertCloseTo(sum, ev.totalDurationMs, 1, "ascent + hold + descent ≈ total");
+});
+
+test("snappy rep with no plateau records small positive holdDurationMs (one frame), not zero", () => {
+  const counter = new RepCounter(STANDARD_THRESHOLDS);
+  // Sine arc — peak at apex, immediate descent on the next frame.
+  const events = feed(counter, arcSamples(95, 1200, 0));
+  assertEqual(events.length, 1, "expected exactly one rep");
+  const ev = events[0];
+
+  // Should be one frame interval (~33ms), not zero. Zero is reserved for
+  // "uninitialised" — emitting zero would conflate "no observable hold" with
+  // "we never recorded a descent-start timestamp."
+  if (ev.holdDurationMs <= 0) {
+    throw new Error(`expected holdDurationMs > 0, got ${ev.holdDurationMs}`);
+  }
+  if (ev.holdDurationMs > 100) {
+    throw new Error(`snappy rep should have hold ≤ 100ms (one frame), got ${ev.holdDurationMs}`);
+  }
 });
 
 // ── ABANDONED REPS ──────────────────────────────────────────────────────────

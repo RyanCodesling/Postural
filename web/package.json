@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "profile:filter": "tsx scripts/profileOneEuroFilter.ts",
+    "profile:sweep": "tsx scripts/sweepOneEuroFilter.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.34",

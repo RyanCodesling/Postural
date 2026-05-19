@@ -12,6 +12,7 @@ import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import {
   computePoseMetricsForExercise,
+  computeCompensationScore,
   type ExerciseFrameMetrics,
 } from "@/lib/pose/poseMetrics";
 import {
@@ -21,6 +22,11 @@ import {
 } from "@/lib/exercises/registry";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
 import { RepCounter, type RepEvent } from "@/lib/pose/repCounter";
+import {
+  BidirectionalRepCounter,
+  type BidirectionalRepCounterDebugSnapshot,
+  type BidirectionalSide,
+} from "@/lib/pose/bidirectionalRepCounter";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -38,6 +44,44 @@ interface PatientExercise {
   status: "pending" | "in-progress" | "completed";
 }
 
+type NeckRepDebugRecord = {
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  exerciseId: string;
+  signedDeg: number;
+  absDeg: number;
+  before: BidirectionalRepCounterDebugSnapshot;
+  after: BidirectionalRepCounterDebugSnapshot;
+  blockedBySettleGate: boolean;
+  gateReleasedThisFrame: boolean;
+  emitted: {
+    side: BidirectionalSide;
+    index: number;
+    peakValue: number;
+    classification: RepEvent["classification"];
+    endTimeMs: number;
+  } | null;
+  counts: { left: number; right: number };
+};
+
+type NeckRepDebugDump = {
+  generatedAt: string;
+  recordCount: number;
+  records: NeckRepDebugRecord[];
+};
+
+declare global {
+  interface Window {
+    __neckRepDebug?: NeckRepDebugRecord[];
+    dumpNeckRepDebug?: (limit?: number) => string;
+    clearNeckRepDebug?: () => void;
+  }
+}
+
+const MAX_NECK_REP_DEBUG_RECORDS = 3000;
+const CAPTURE_READINESS_RESET_GRACE_MS = 300;
+
 export default function CameraClient() {
   const { user } = useAuth();
 
@@ -48,14 +92,21 @@ export default function CameraClient() {
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
 
-  const tiltFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
   // the metricFiltersRef map because per-limb exercises need TWO filters for
   // the same MetricName — one per side. Cleared on exercise change, reset on
   // capture dropout, same lifecycle as metricFiltersRef.
-  const leftPrimaryFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
-  const rightPrimaryFilterRef = useRef(new OneEuroFilter(0.3, 0.3));
+  const leftPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
+  const rightPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
+  // Per-side resting baseline for metrics whose raw value is a positive
+  // absolute distance (currently only scapularElevation for ex_003). Only
+  // active when the primary metric has requiresBaselineCapture set. Reset
+  // on exercise change and capture-readiness dropout.
+  type BaselineState = { samples: number[]; value: number | null };
+  const leftBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  const rightBaselineRef = useRef<BaselineState>({ samples: [], value: null });
   const lastMetricsUpdateRef = useRef(0);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
@@ -69,6 +120,14 @@ export default function CameraClient() {
   // refs are recreated based on the new definition.
   const leftRepCounterRef = useRef<RepCounter | null>(null);
   const rightRepCounterRef = useRef<RepCounter | null>(null);
+
+  // Bidirectional exercises use one signed metric. The wrapper feeds |angle|
+  // into RepCounter, tags the side from the sign at peak, and gates immediate
+  // opposite-side return-stroke overshoot until neutral has settled.
+  const bidirectionalRepCounterRef = useRef<BidirectionalRepCounter | null>(null);
+  const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
+  const neckRepDebugStartMsRef = useRef<number | null>(null);
+  const neckRepDebugSeqRef = useRef(0);
   
   // In-memory per-rep event log, keyed by side. Cleared when the exercise
   // changes. This is the buffer that will eventually feed Postgres in a later
@@ -88,8 +147,26 @@ export default function CameraClient() {
   const [captureOk, setCaptureOk] = useState(true);
   const [captureMessage, setCaptureMessage] = useState("Captured");
 
+  // Resting-baseline phase. "capturing" while the per-side baseline samples
+  // are being accumulated, "captured" once both sides have enough samples,
+  // "not-needed" for exercises whose primary metric is already baseline-
+  // relative (everything except scapularElevation today).
+  //
+  // The ref is what predictWebcam reads — the rAF chain holds a stale
+  // closure on the React state, mirroring the lastCaptureOkRef pattern
+  // used for captureOk. The state is only for re-rendering the JSX banner.
+  type BaselinePhase = "not-needed" | "capturing" | "captured";
+  const baselinePhaseRef = useRef<BaselinePhase>("not-needed");
+  const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
+  const setBaselinePhase = (phase: BaselinePhase) => {
+    baselinePhaseRef.current = phase;
+    setBaselinePhaseState(phase);
+  };
+
   const lastBadCaptureAtRef = useRef<number>(0);
   const stableOkSinceRef = useRef<number>(0);
+  const captureDropoutStartedAtRef = useRef<number | null>(null);
+  const captureDropoutResetDoneRef = useRef(false);
 
   const lastCaptureOkRef = useRef<boolean>(true);
   const lastCaptureMsgRef = useRef<string>("Captured");
@@ -108,6 +185,39 @@ export default function CameraClient() {
 
   const [activeDefinition, setActiveDefinition] =
     useState<ExerciseDefinition | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.__neckRepDebug = neckRepDebugRef.current;
+    window.clearNeckRepDebug = () => {
+      neckRepDebugRef.current = [];
+      neckRepDebugStartMsRef.current = null;
+      neckRepDebugSeqRef.current = 0;
+      window.__neckRepDebug = neckRepDebugRef.current;
+      console.info("[neck-rep-debug] cleared");
+    };
+    window.dumpNeckRepDebug = (limit = 1200) => {
+      const records = neckRepDebugRef.current.slice(-limit);
+      const dump: NeckRepDebugDump = {
+        generatedAt: new Date().toISOString(),
+        recordCount: records.length,
+        records,
+      };
+      const text = JSON.stringify(dump, null, 2);
+      console.info(text);
+      return text;
+    };
+    console.info(
+      "[neck-rep-debug] available: clearNeckRepDebug(); dumpNeckRepDebug(limit)",
+    );
+
+    return () => {
+      delete window.__neckRepDebug;
+      delete window.clearNeckRepDebug;
+      delete window.dumpNeckRepDebug;
+    };
+  }, []);
   
   const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
     tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
@@ -222,48 +332,103 @@ export default function CameraClient() {
       setActiveDefinition(null);
       leftRepCounterRef.current = null;
       rightRepCounterRef.current = null;
+      bidirectionalRepCounterRef.current = null;
       repLogRef.current = { left: [], right: [] };
+      neckRepDebugRef.current = [];
+      neckRepDebugStartMsRef.current = null;
+      neckRepDebugSeqRef.current = 0;
+      if (typeof window !== "undefined") {
+        window.__neckRepDebug = neckRepDebugRef.current;
+      }
       setRepCounts({ left: 0, right: 0 });
       return;
     }
-  
+
     const def = getExerciseDefinition(selectedExercise);
     setActiveDefinition(def);
-  
+
     // Reset filters whenever the exercise changes — old filter history would
     // bleed across exercises and produce a misleading first-frame jump.
+    // The per-side primary filters are RECREATED (rather than reset) so they
+    // can pick up the per-exercise smoothing override when present. Falls
+    // back to the global degree-scale default for exercises without one.
     metricFiltersRef.current.clear();
-    leftPrimaryFilterRef.current.reset();
-    rightPrimaryFilterRef.current.reset();
-  
+    const primaryParams =
+      def?.kind === "dynamic" && def.primaryMetric.smoothing
+        ? def.primaryMetric.smoothing
+        : { minCutoff: 1.0, beta: 0.1 };
+    leftPrimaryFilterRef.current = new OneEuroFilter(
+      primaryParams.minCutoff,
+      primaryParams.beta,
+    );
+    rightPrimaryFilterRef.current = new OneEuroFilter(
+      primaryParams.minCutoff,
+      primaryParams.beta,
+    );
+
     // Rebuild rep counters based on the new definition. Isometric exercises
     // get no counter (they use time-in-band, handled separately when we
     // implement ex_006).
     leftRepCounterRef.current = null;
     rightRepCounterRef.current = null;
+    bidirectionalRepCounterRef.current = null;
     repLogRef.current = { left: [], right: [] };
+    neckRepDebugRef.current = [];
+    neckRepDebugStartMsRef.current = null;
+    neckRepDebugSeqRef.current = 0;
+    if (typeof window !== "undefined") {
+      window.__neckRepDebug = neckRepDebugRef.current;
+    }
     setRepCounts({ left: 0, right: 0 });
-  
+
+    // Reset baseline state on every exercise change. If the new exercise
+    // needs a baseline, enter "capturing"; otherwise "not-needed".
+    leftBaselineRef.current = { samples: [], value: null };
+    rightBaselineRef.current = { samples: [], value: null };
+    setBaselinePhase(
+      def?.kind === "dynamic" && def.primaryMetric.requiresBaselineCapture
+        ? "capturing"
+        : "not-needed",
+    );
+
     if (def && def.kind === "dynamic") {
       const thresholds = def.primaryMetric.thresholds;
-  
+      const options =
+        def.primaryMetric.descentEpsilon !== undefined
+          ? { descentEpsilon: def.primaryMetric.descentEpsilon }
+          : {};
+
       if (def.bilateral && def.bilateralMode === "per-limb") {
         // Two limbs in parallel — one counter per side.
-        leftRepCounterRef.current = new RepCounter(thresholds);
-        rightRepCounterRef.current = new RepCounter(thresholds);
+        leftRepCounterRef.current = new RepCounter(thresholds, options);
+        rightRepCounterRef.current = new RepCounter(thresholds, options);
       } else if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
         // One signed metric, sides distinguished by sign at peak time.
-        // Single counter receives the absolute value.
-        leftRepCounterRef.current = new RepCounter(thresholds);
+        bidirectionalRepCounterRef.current = new BidirectionalRepCounter(
+          thresholds,
+          options,
+        );
       } else {
         // Unilateral — single counter on the left ref.
-        leftRepCounterRef.current = new RepCounter(thresholds);
+        leftRepCounterRef.current = new RepCounter(thresholds, options);
       }
     }
   }, [selectedExercise]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
+      // Transition into not-ok: any already-captured baseline is now stale
+      // (patient may have shifted while we couldn't see them). Drop it and
+      // require re-capture when readiness returns.
+      if (
+        !ok &&
+        activeDefinition?.kind === "dynamic" &&
+        activeDefinition.primaryMetric.requiresBaselineCapture
+      ) {
+        leftBaselineRef.current = { samples: [], value: null };
+        rightBaselineRef.current = { samples: [], value: null };
+        setBaselinePhase("capturing");
+      }
       lastCaptureOkRef.current = ok;
       setCaptureOk(ok);
     }
@@ -314,8 +479,13 @@ export default function CameraClient() {
           if (!r.ok) {
             lastBadCaptureAtRef.current = now;
             stableOkSinceRef.current = 0;
+            if (captureDropoutStartedAtRef.current === null) {
+              captureDropoutStartedAtRef.current = now;
+            }
             commitCaptureState(false, r.message);
           } else {
+            captureDropoutStartedAtRef.current = null;
+            captureDropoutResetDoneRef.current = false;
             if (stableOkSinceRef.current === 0) stableOkSinceRef.current = now;
             const okStable = now - stableOkSinceRef.current > 400;
             const badGone = now - lastBadCaptureAtRef.current > 400;
@@ -358,7 +528,23 @@ export default function CameraClient() {
                 }
                 let filter = metricFiltersRef.current.get(metricName);
                 if (!filter) {
-                  filter = new OneEuroFilter(0.3, 0.3);
+                  // The primary metric of a dynamic exercise may declare a
+                  // smoothing override (small-signal-scale metrics like
+                  // neckLateralFlexion or scapularElevation, where the global
+                  // degree-scale default is too light and landmark jitter
+                  // accumulates phantom reps while the patient is still). The
+                  // per-limb path already honors this via the dedicated
+                  // per-side filters; the bidirectional/unilateral path reads
+                  // smoothedMetrics[primaryName], so the override must be
+                  // applied HERE too or it is silently ignored for those modes.
+                  const isPrimary =
+                    activeDefinition.kind === "dynamic" &&
+                    activeDefinition.primaryMetric.name === metricName;
+                  const params =
+                    isPrimary && activeDefinition.primaryMetric.smoothing
+                      ? activeDefinition.primaryMetric.smoothing
+                      : { minCutoff: 1.0, beta: 0.1 };
+                  filter = new OneEuroFilter(params.minCutoff, params.beta);
                   metricFiltersRef.current.set(metricName, filter);
                 }
                 smoothedMetrics[metricName] =
@@ -387,29 +573,87 @@ export default function CameraClient() {
                   // while right elbow is visible). Each side handles its own null.
                   const perSide = raw.perSideMetrics;
                   if (perSide) {
-                    const smoothedLeft = typeof perSide.left === "number"
-                      ? Math.round(leftPrimaryFilterRef.current.filter(perSide.left, tNow) * 10) / 10
-                      : null;
-                    const smoothedRight = typeof perSide.right === "number"
-                      ? Math.round(rightPrimaryFilterRef.current.filter(perSide.right, tNow) * 10) / 10
-                      : null;
-
-                    if (typeof smoothedLeft === "number" && leftRepCounterRef.current) {
-                      const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
-                      if (event) {
-                        repLogRef.current.left.push(event);
-                        setRepCounts((p) => ({ ...p, left: p.left + 1 }));
-                        // eslint-disable-next-line no-console
-                        console.log(`[rep] ${activeDefinition.id} left`, event);
+                    // Read via ref — the rAF chain captured a stale state value.
+                    if (baselinePhaseRef.current === "capturing") {
+                      // Accumulate raw projections until each side has enough
+                      // samples to summarize. Rep counting stays paused while
+                      // the patient is in calibration.
+                      if (typeof perSide.left === "number") {
+                        leftBaselineRef.current.samples.push(perSide.left);
                       }
-                    }
-                    if (typeof smoothedRight === "number" && rightRepCounterRef.current) {
-                      const event = rightRepCounterRef.current.update(smoothedRight, tNow);
-                      if (event) {
-                        repLogRef.current.right.push(event);
-                        setRepCounts((p) => ({ ...p, right: p.right + 1 }));
-                        // eslint-disable-next-line no-console
-                        console.log(`[rep] ${activeDefinition.id} right`, event);
+                      if (typeof perSide.right === "number") {
+                        rightBaselineRef.current.samples.push(perSide.right);
+                      }
+                      const N_REQUIRED = 90; // ~3 s at 30 fps
+                      if (
+                        leftBaselineRef.current.samples.length >= N_REQUIRED &&
+                        rightBaselineRef.current.samples.length >= N_REQUIRED
+                      ) {
+                        // Median, not mean — robust to single-frame spikes
+                        // if the patient briefly shifted during capture.
+                        const median = (xs: number[]) => {
+                          const sorted = [...xs].sort((a, b) => a - b);
+                          const mid = Math.floor(sorted.length / 2);
+                          return sorted.length % 2 === 0
+                            ? (sorted[mid - 1] + sorted[mid]) / 2
+                            : sorted[mid];
+                        };
+                        leftBaselineRef.current.value = median(
+                          leftBaselineRef.current.samples,
+                        );
+                        rightBaselineRef.current.value = median(
+                          rightBaselineRef.current.samples,
+                        );
+                        setBaselinePhase("captured");
+                      }
+                    } else {
+                      // For requiresBaselineCapture exercises, the registry's
+                      // thresholds expect (baseline − raw): a shrug DECREASES
+                      // the raw projection, so subtracting from the captured
+                      // resting value yields a positive delta that increases
+                      // during the rep — matching what the state machine expects.
+                      // Pass-through when no baseline was captured.
+                      const lb = leftBaselineRef.current.value;
+                      const rb = rightBaselineRef.current.value;
+                      const inputLeft =
+                        typeof perSide.left === "number"
+                          ? lb !== null ? lb - perSide.left : perSide.left
+                          : null;
+                      const inputRight =
+                        typeof perSide.right === "number"
+                          ? rb !== null ? rb - perSide.right : perSide.right
+                          : null;
+
+                      const smoothedLeft =
+                        inputLeft !== null
+                          ? Math.round(
+                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) * 10,
+                            ) / 10
+                          : null;
+                      const smoothedRight =
+                        inputRight !== null
+                          ? Math.round(
+                              rightPrimaryFilterRef.current.filter(inputRight, tNow) * 10,
+                            ) / 10
+                          : null;
+
+                      if (typeof smoothedLeft === "number" && leftRepCounterRef.current) {
+                        const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
+                        if (event) {
+                          repLogRef.current.left.push(event);
+                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} left`, event);
+                        }
+                      }
+                      if (typeof smoothedRight === "number" && rightRepCounterRef.current) {
+                        const event = rightRepCounterRef.current.update(smoothedRight, tNow);
+                        if (event) {
+                          repLogRef.current.right.push(event);
+                          setRepCounts((p) => ({ ...p, right: p.right + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} right`, event);
+                        }
                       }
                     }
                   }
@@ -422,25 +666,80 @@ export default function CameraClient() {
                       activeDefinition.bilateral &&
                       activeDefinition.bilateralMode === "bidirectional-alternating"
                     ) {
-                      // One counter, fed |value|. Side determined by sign at
-                      // the moment a rep fires.
-                      const counter = leftRepCounterRef.current;
+                      // One wrapper around RepCounter: it feeds |value| to the
+                      // state machine, tags the side from the sign at peak, and
+                      // blocks immediate opposite-side return-stroke overshoot
+                      // until the signed metric has settled near neutral.
+                      const counter = bidirectionalRepCounterRef.current;
                       if (counter) {
-                        const event = counter.update(Math.abs(rawValue), tNow);
-                        if (event) {
-                          // Tag with side based on sign of the signed value.
-                          // For neck flexion: negative = left, positive = right.
-                          const side: "left" | "right" =
-                            rawValue < 0 ? "left" : "right";
- 
+                        const before = counter.getDebugSnapshot(tNow, rawValue);
+                        const rep = counter.update(rawValue, tNow);
+                        if (rep) {
+                          const { side, event } = rep;
                           repLogRef.current[side].push(event);
                           setRepCounts((prev) => ({
                             ...prev,
                             [side]: prev[side] + 1,
                           }));
- 
+
                           // eslint-disable-next-line no-console
                           console.log(`[rep] ${activeDefinition.id} ${side}`, event);
+                        }
+                        const after = counter.getDebugSnapshot(tNow, rawValue);
+
+                        if (activeDefinition.id === "ex_004") {
+                          if (neckRepDebugStartMsRef.current === null) {
+                            neckRepDebugStartMsRef.current = tNow;
+                          }
+
+                          const record: NeckRepDebugRecord = {
+                            seq: ++neckRepDebugSeqRef.current,
+                            tMs: Math.round(tNow),
+                            elapsedMs: Math.round(
+                              tNow - neckRepDebugStartMsRef.current,
+                            ),
+                            exerciseId: activeDefinition.id,
+                            signedDeg: Math.round(rawValue * 10) / 10,
+                            absDeg: Math.round(Math.abs(rawValue) * 10) / 10,
+                            before,
+                            after,
+                            blockedBySettleGate:
+                              before.awaitingRestSettle &&
+                              after.awaitingRestSettle &&
+                              rep === null,
+                            gateReleasedThisFrame:
+                              before.awaitingRestSettle &&
+                              !after.awaitingRestSettle,
+                            emitted: rep
+                              ? {
+                                  side: rep.side,
+                                  index: rep.event.index,
+                                  peakValue:
+                                    Math.round(rep.event.peakValue * 10) / 10,
+                                  classification: rep.event.classification,
+                                  endTimeMs: Math.round(rep.event.endTimeMs),
+                                }
+                              : null,
+                            counts: {
+                              left: repLogRef.current.left.length,
+                              right: repLogRef.current.right.length,
+                            },
+                          };
+
+                          neckRepDebugRef.current.push(record);
+                          if (
+                            neckRepDebugRef.current.length >
+                            MAX_NECK_REP_DEBUG_RECORDS
+                          ) {
+                            neckRepDebugRef.current.splice(
+                              0,
+                              neckRepDebugRef.current.length -
+                                MAX_NECK_REP_DEBUG_RECORDS,
+                            );
+                          }
+                          if (typeof window !== "undefined") {
+                            window.__neckRepDebug = neckRepDebugRef.current;
+                          }
                         }
                       }
                     } else {
@@ -465,19 +764,38 @@ export default function CameraClient() {
                 setFrameMetrics({
                   tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
                   metrics: smoothedMetrics,
-                  compensationScore: raw.compensationScore,
+                  // PC (handover §3.10): recompute the score from the SAME
+                  // smoothed values the metric cards render, not from raw.
+                  // Otherwise a card sitting just under a warning threshold
+                  // can pair with a score that just penalized it. raw.metrics
+                  // is still available separately for the ML/log pipeline.
+                  compensationScore: computeCompensationScore(
+                    activeDefinition,
+                    smoothedMetrics
+                  ),
                 });
               }
             }
           } else {
-            // Frame not capture-ready — reset filters so the next good frame
-            // doesn't blend against stale history from before the dropout.
-            tiltFilterRef.current.reset();
-            metricFiltersRef.current.forEach((f) => f.reset());
-            leftPrimaryFilterRef.current.reset();
-            rightPrimaryFilterRef.current.reset();
-            leftRepCounterRef.current?.reset();
-            rightRepCounterRef.current?.reset();
+            const dropoutStartedAt = captureDropoutStartedAtRef.current ?? now;
+            const dropoutElapsedMs = now - dropoutStartedAt;
+            if (
+              !captureDropoutResetDoneRef.current &&
+              dropoutElapsedMs >= CAPTURE_READINESS_RESET_GRACE_MS
+            ) {
+              // A sustained not-ready interval is a true capture dropout:
+              // reset filters/counters so the next good frame does not blend
+              // against stale pre-dropout state. Short flickers only pause
+              // computation; resetting on those was discarding valid reps.
+              tiltFilterRef.current.reset();
+              metricFiltersRef.current.forEach((f) => f.reset());
+              leftPrimaryFilterRef.current.reset();
+              rightPrimaryFilterRef.current.reset();
+              leftRepCounterRef.current?.reset();
+              rightRepCounterRef.current?.reset();
+              bidirectionalRepCounterRef.current?.reset();
+              captureDropoutResetDoneRef.current = true;
+            }
 
             setFrameMetrics({
               tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
@@ -659,6 +977,15 @@ export default function CameraClient() {
               {!captureOk && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-black/75 text-white text-lg font-semibold shadow-lg">
                   {captureMessage}
+                </div>
+              )}
+
+              {/* Baseline-capture prompt: only when capture is good but we
+                  still need to calibrate the resting reference. The yellow
+                  capture-paused banner above already covers the not-ok case. */}
+              {captureOk && baselinePhase === "capturing" && (
+                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-blue-900/80 text-white text-base font-semibold shadow-lg">
+                  Stand naturally with arms relaxed — capturing baseline…
                 </div>
               )}
 

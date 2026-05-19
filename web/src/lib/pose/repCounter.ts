@@ -32,6 +32,10 @@
  *     when angle <= repCompleteThreshold
  *     emits: a RepEvent with full timing, peak, and classification
  *
+ *   DESCENDING → ASCENDING
+ *     when angle climbs above the recorded peak again
+ *     treats the previous descent trigger as premature and resumes peak tracking
+ *
  * ── HYSTERESIS ───────────────────────────────────────────────────────────────
  * `repCompleteThreshold` is intentionally lower than `startThreshold`. The
  * gap is the hysteresis band — it absorbs jitter at the threshold boundary
@@ -77,10 +81,18 @@
 export type RepCounterThresholds = {
   startThreshold: number;
   repCompleteThreshold: number;
+  /**
+   * Minimum peak the rep must reach to count at all. A peak below this is
+   * treated as a false start and silently discarded (no event emitted).
+   */
   minimumPeakThreshold: number;
   targetROM: number;
 };
 
+/**
+ * - `complete` — peak ≥ targetROM
+ * - `partial`  — minimumPeakThreshold ≤ peak < targetROM
+ */
 export type RepClassification = "complete" | "partial";
 
 export type RepEvent = {
@@ -94,17 +106,22 @@ export type RepEvent = {
   endTimeMs: number;
   /** Highest angle reached during the rep, in metric units. */
   peakValue: number;
-  /** Time from start to peak. */
+  /** Time from start to peak (peakTimeMs − startTimeMs). */
   ascentDurationMs: number;
   /**
-   * Time spent at or near the peak before descent began.
-   * Currently approximated as 0 because we transition out of ASCENDING the
-   * moment a real descent is detected. A future enhancement could buffer
-   * "near-peak" samples and report a hold duration; for now this is a
-   * placeholder so the schema is stable.
+   * Time spent at or near the peak before descent began. Computed as
+   * `descentStartTimeMs − peakTimeMs`, where `descentStartTimeMs` is the
+   * timestamp on the frame that triggered the ASCENDING → DESCENDING
+   * transition (the first frame where angle dropped more than
+   * `descentEpsilon` below the running peak).
+   *
+   * Will be ≥ 0. A rep with no observable hold (immediate descent on the
+   * frame after the peak) records a small positive value equal to one
+   * frame's update interval, NOT zero — zero is reserved for "we haven't
+   * started yet."
    */
   holdDurationMs: number;
-  /** Time from peak to end of rep. */
+  /** Time from descent start to rep completion (endTimeMs − descentStartTimeMs). */
   descentDurationMs: number;
   /** Total rep duration (start to end). */
   totalDurationMs: number;
@@ -138,6 +155,10 @@ export class RepCounter {
   private repStartTimeMs = 0;
   private peakValue = -Infinity;
   private peakTimeMs = 0;
+  // Timestamp of the frame that triggered the ASCENDING → DESCENDING
+  // transition. Used to split descent into "hold at peak" vs "actively
+  // descending" — see `holdDurationMs` in the RepEvent docstring.
+  private descentStartTimeMs = 0;
 
   // Cumulative count of reps completed by this instance.
   private repIndex = 0;
@@ -222,6 +243,7 @@ export class RepCounter {
     this.peakValue = -Infinity;
     this.peakTimeMs = 0;
     this.repStartTimeMs = 0;
+    this.descentStartTimeMs = 0;
     // Continuity state — after a reset (capture drop, exercise switch), we
     // don't know the arm's position. The next rep can only start once we've
     // seen fresh rest evidence.
@@ -289,19 +311,35 @@ export class RepCounter {
       angle < this.peakValue - this.descentEpsilon
     ) {
       this.state = "DESCENDING";
+      // Record the moment descent began. The gap between this and
+      // `peakTimeMs` is the hold duration; the gap between this and rep
+      // completion (in handleDescending) is the active descent.
+      this.descentStartTimeMs = tMs;
     }
 
     return null;
   }
 
   private handleDescending(angle: number, tMs: number): RepEvent | null {
+    // A single noisy dip can occasionally trip DESCENDING while the patient is
+    // still moving toward a higher peak. If the signal climbs above the stored
+    // peak, resume ascent tracking instead of freezing the rep at a stale peak.
+    if (angle > this.peakValue) {
+      this.state = "ASCENDING";
+      this.peakValue = angle;
+      this.peakTimeMs = tMs;
+      this.descentStartTimeMs = 0;
+      return null;
+    }
+
     if (angle <= this.thresholds.repCompleteThreshold) {
       // Rep complete. Build the event before resetting state.
       this.repIndex += 1;
 
-      const ascentDurationMs = this.peakTimeMs - this.repStartTimeMs;
-      const descentDurationMs = tMs - this.peakTimeMs;
-      const totalDurationMs = tMs - this.repStartTimeMs;
+      const ascentDurationMs  = this.peakTimeMs        - this.repStartTimeMs;
+      const holdDurationMs    = this.descentStartTimeMs - this.peakTimeMs;
+      const descentDurationMs = tMs                     - this.descentStartTimeMs;
+      const totalDurationMs   = tMs                     - this.repStartTimeMs;
 
       const classification: RepClassification =
         this.peakValue >= this.thresholds.targetROM ? "complete" : "partial";
@@ -313,7 +351,7 @@ export class RepCounter {
         endTimeMs: tMs,
         peakValue: this.peakValue,
         ascentDurationMs,
-        holdDurationMs: 0, // see schema note in RepEvent docstring
+        holdDurationMs,
         descentDurationMs,
         totalDurationMs,
         classification,
@@ -327,6 +365,7 @@ export class RepCounter {
       this.peakValue = -Infinity;
       this.peakTimeMs = 0;
       this.repStartTimeMs = 0;
+      this.descentStartTimeMs = 0;
 
       return event;
     }

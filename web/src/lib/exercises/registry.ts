@@ -127,6 +127,32 @@ export type PrimaryMetricSpec = {
   name: MetricName;
   side?: Side;
   thresholds: RepThresholds;
+  /**
+   * Override for the rep counter's descent-confirmation epsilon. Used for
+   * metrics whose dynamic range is much smaller than the default `0.5`
+   * (e.g. `scapularElevation` in normalized torso-length units). Must be
+   * < repCompleteThreshold — enforced in validateRegistry().
+   */
+  descentEpsilon?: number;
+  /**
+   * When true, the camera loop captures a per-side resting baseline at the
+   * start of the exercise and feeds the rep counter `baseline - rawProjection`
+   * instead of the raw metric. Required for `scapularElevation` whose raw
+   * value is a positive absolute distance and decreases during a shrug —
+   * the registry's thresholds expect a positive delta that increases.
+   */
+  requiresBaselineCapture?: boolean;
+  /**
+   * OneEuroFilter parameters for the per-side rep-counting stream of this
+   * metric. Falls back to the global default `(minCutoff=1.0, beta=0.1)`
+   * (tuned for degree-scale angles) when omitted. Override when the metric
+   * lives on a much smaller numeric scale and needs heavier at-rest
+   * smoothing — e.g. `scapularElevation` in normalized torso-length units.
+   */
+  smoothing?: {
+    minCutoff: number;
+    beta: number;
+  };
 };
 
 /**
@@ -289,16 +315,37 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // we measure CHANGE from resting baseline, so all thresholds below
         // are deltas, not absolutes.
         //
-        // 0.02 = ~2% torso-length change above resting. Above the ~0.01
-        // landmark-noise floor for vertical shoulder placement.
-        startThreshold: 0.02,
+        // 0.025 = ~2.5% torso-length change above resting. The original
+        // 0.02 estimate (2× the assumed 0.01 landmark-noise floor) turned
+        // out to be too tight in practice — landmark jitter plus subtle
+        // body sway crossed it during stillness, producing phantom reps.
+        startThreshold: 0.025,
         repCompleteThreshold: 0.01,
-        // 0.04 = ~4% torso change. A modest but deliberate shrug.
-        minimumPeakThreshold: 0.04,
+        // 0.05 = ~5% torso change. Bumped from the original 0.04 for the
+        // same reason as startThreshold — noise occasionally reached 0.04
+        // even when the patient was holding still.
+        minimumPeakThreshold: 0.05,
         // 0.06 = ~6% torso change. Full shrug at end-range trapezius
         // contraction. Pilot data should refine this.
         targetROM: 0.06,
       },
+      // Default 0.5 would be 10× the entire signal range; descent could
+      // never fire. 0.005 = half of repCompleteThreshold, well within the
+      // hysteresis band, an order of magnitude above expected post-smoothing
+      // jitter at this scale.
+      descentEpsilon: 0.005,
+      // Raw scapularElevation is a positive absolute projection that
+      // DECREASES during a shrug. Camera loop must capture a resting
+      // baseline and feed (baseline − raw) so the thresholds above see a
+      // positive delta that increases.
+      requiresBaselineCapture: true,
+      // Heavier at-rest smoothing than the global degree-scale default.
+      // Shrug signal range (~0.05) is ~3000× smaller than angle range (~150°),
+      // so global (1.0, 0.1) is much too light — landmark jitter crosses
+      // startThreshold and accumulates phantom reps while the patient is
+      // still. At shrug scale, beta is nearly a no-op since |dxHat| stays
+      // small; minCutoff is the dominant knob.
+      smoothing: { minCutoff: 0.3, beta: 0.01 },
     },
     compensationMetrics: [
       // Asymmetric shrug (one trap dominates) is the main quality issue.
@@ -325,14 +372,31 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Above the ±2° dead-band already used by `computeLateralNeckTilt`.
         startThreshold: 5,
         repCompleteThreshold: 2,
-        // 20° is a moderate cervical lateral flexion; below this, the
-        // patient is barely engaging the muscle.
+        // Minimum peak to count as a rep at all. Peaks below this are
+        // silently discarded as false starts. 12° (lowered from the
+        // original 20° literature value in May 2026 for the rehab pilot)
+        // — also acts as the noise/settle guard for the bidirectional
+        // abs() path: post-rep return wobble rarely exceeds 12°, so this
+        // suppresses the opposite-side phantom reps that a lower floor
+        // (the reverted three-tier 4°) let through. Tradeoff accepted:
+        // genuine sub-12° reduced-ROM tilts are not counted.
         minimumPeakThreshold: 12,
         // Healthy adult cervical lateral flexion ROM is 30–45°; conservative
         // home-exercise target is 30°. Source: AAOS clinical assessment ROM
         // norms.
         targetROM: 30,
       },
+      // neckLateralFlexion is a signed angle in degrees, range ~0–30°. The
+      // global degree-scale default (1.0, 0.1) was tuned for the 0–150°
+      // arm-raise range; at ~5× smaller scale it is too light and landmark
+      // jitter crosses the 5° startThreshold, accumulating phantom reps
+      // while the patient holds still (same failure mode ex_003 documents,
+      // milder — its signal is ~3000× smaller, this one ~5×). minCutoff is
+      // the dominant knob for at-rest jitter rejection; beta barely matters
+      // here since |dxHat| stays small at low speed. STARTING values —
+      // expected to need one tuning iteration against the live stillness
+      // diagnostic before being treated as final.
+      smoothing: { minCutoff: 0.5, beta: 0.05 },
     },
     compensationMetrics: [
       // Trunk lean during neck flexion = patient is bending the whole spine
@@ -477,6 +541,34 @@ function validateRegistry(): void {
           `≤ targetROM (${t.targetROM}). Otherwise no rep can ever be ` +
           `classified as "complete".`
         );
+      }
+      const eps = def.primaryMetric.descentEpsilon;
+      if (eps !== undefined && !(eps < t.repCompleteThreshold)) {
+        throw new Error(
+          `Registry invariant violated for ${def.id}: ` +
+          `descentEpsilon (${eps}) must be < repCompleteThreshold ` +
+          `(${t.repCompleteThreshold}). Otherwise descent can only be ` +
+          `confirmed after the value has already crossed the rep-complete ` +
+          `threshold, defeating the hysteresis design.`
+        );
+      }
+      const s = def.primaryMetric.smoothing;
+      if (s !== undefined) {
+        if (!(s.minCutoff > 0)) {
+          throw new Error(
+            `Registry invariant violated for ${def.id}: ` +
+            `smoothing.minCutoff (${s.minCutoff}) must be > 0. ` +
+            `OneEuroFilter divides by 2π·minCutoff in the alpha calc.`
+          );
+        }
+        if (!(s.beta >= 0)) {
+          throw new Error(
+            `Registry invariant violated for ${def.id}: ` +
+            `smoothing.beta (${s.beta}) must be ≥ 0. Negative beta would ` +
+            `make the filter more aggressive during motion, the opposite ` +
+            `of what the adaptive cutoff is meant to do.`
+          );
+        }
       }
     }
     if (def.kind === "isometric") {

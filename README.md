@@ -108,14 +108,12 @@
 - Applied green color palette: page background `bg-green-50`; sidebar `bg-green-900`; role label `text-green-400`; username `text-white`; active nav `bg-green-700 text-white`; inactive nav `text-green-200 hover:bg-green-800`; all primary action buttons `bg-green-700 hover:bg-green-800`; content cards remain white for readability
 - Added Log Out button at the bottom of the sidebar (`mt-auto pt-6 mb-4` positions it near the bottom with breathing room); styled as `bg-red-600 hover:bg-red-700 text-white text-sm` with a 🚪 exit door icon; calls `logout()` then redirects to `/`; patient and therapist pages had `logout` added to their `useAuth()` destructuring
 - Unified admin sidebar structure to match patient and therapist sidebars: header changed from `h1`/`p` to role label `div` (`text-sm text-green-400`) + name `div` (`text-lg font-semibold text-white`); nav changed from direct `<button>` elements in `<nav className="space-y-2">` to `<ul>`/`<li>` with `space-y-1`; button sizing changed from `px-4 py-3` to `px-3 py-2 text-sm`; active state now includes `font-medium` to match
+- Moved Camera link into each dashboard's sidebar (`📷 Camera` → `/camera`); patient's existing `📷 Start Session` renamed to `📷 Camera` for consistency; sidebar hamburger menu (☰) for responsive mobile is preserved and unaffected
 
 ### *web\src\app\(app)\layout.tsx (deleted)*
 - Removed logout button from the top nav bar — logout is now handled per-dashboard via the sidebar button
 - Removed "Dashboard" link from the top nav — redundant now that each dashboard sidebar has its own tab; unused `dashboardHref`, `handleLogout`, `useRouter`, `useAuth` imports also removed
 - Fully removed the top nav bar and its hamburger menu — all navigation (Camera, Dashboard, Logout) now lives in each dashboard's sidebar; layout reduced to a plain pass-through wrapper, then deleted entirely as it served no purpose
-
-### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\dashboard\therapist\page.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*
-- Moved Camera link into each dashboard's sidebar (`📷 Camera` → `/camera`); patient's existing `📷 Start Session` renamed to `📷 Camera` for consistency; sidebar hamburger menu (☰) for responsive mobile is preserved and unaffected
 
 ### *web\src\app\(app)\dashboard\admin\page.tsx*
 - Added `"dashboard"` to `Tab` type and set it as the default `activeTab`

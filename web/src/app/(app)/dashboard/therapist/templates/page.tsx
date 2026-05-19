@@ -200,7 +200,7 @@ export default function ExerciseTemplatesPage() {
 
   const handleSave = async () => {
     if (!templateName.trim()) {
-      alert("Please enter a template name.");
+      alert("Please enter a program name.");
       return;
     }
     const exPayload = buildExercisePayload();
@@ -226,15 +226,15 @@ export default function ExerciseTemplatesPage() {
 
       if (!res.ok) {
         const d = await res.json();
-        alert(d.error ?? "Failed to save template.");
+        alert(d.error ?? "Failed to save program.");
         return;
       }
 
       resetForm();
       await loadData();
     } catch (err) {
-      console.error("Error saving template:", err);
-      alert("Failed to save template.");
+      console.error("Error saving program:", err);
+      alert("Failed to save program.");
     } finally {
       setSaving(false);
     }
@@ -265,17 +265,17 @@ export default function ExerciseTemplatesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this template?")) return;
+    if (!confirm("Delete this program?")) return;
     try {
       const res = await fetch(`/api/templates/${id}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json();
-        alert(d.error ?? "Failed to delete template.");
+        alert(d.error ?? "Failed to delete program.");
         return;
       }
       setTemplates((prev) => prev.filter((t) => t.id !== id));
     } catch (err) {
-      console.error("Error deleting template:", err);
+      console.error("Error deleting program:", err);
     }
   };
 
@@ -285,7 +285,7 @@ export default function ExerciseTemplatesPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Loading templates...</div>
+        <div className="text-gray-500">Loading programs...</div>
       </div>
     );
   }
@@ -300,20 +300,20 @@ export default function ExerciseTemplatesPage() {
         ← Back to Dashboard
       </Link>
 
-      <h1 className="text-4xl font-bold text-green-800">Exercise Templates</h1>
-      <p className="text-gray-500 mt-1 mb-8">Create and manage reusable exercise templates.</p>
+      <h1 className="text-4xl font-bold text-green-800">Exercise Program</h1>
+      <p className="text-gray-500 mt-1 mb-8">Create and manage reusable exercise programs.</p>
 
       {/* Create / Edit form */}
       {showForm ? (
         <div className="bg-white rounded-2xl border border-green-100 p-6 mb-8">
           <h2 className="text-green-700 font-semibold text-lg mb-6">
-            {editingId ? "Edit Template" : "Create New Template"}
+            {editingId ? "Edit Program" : "Create New Program"}
           </h2>
 
           {/* Template name */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Template Name <span className="text-red-500">*</span>
+              Program Name <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -584,7 +584,7 @@ export default function ExerciseTemplatesPage() {
               disabled={saving}
               className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
             >
-              {saving ? "Saving..." : editingId ? "Update Template" : "Create Template"}
+              {saving ? "Saving..." : editingId ? "Update Program" : "Create Program"}
             </button>
             <button
               onClick={resetForm}
@@ -599,19 +599,19 @@ export default function ExerciseTemplatesPage() {
           onClick={() => setShowForm(true)}
           className="mb-8 px-5 py-2.5 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
         >
-          + Create New Template
+          + Create New Program
         </button>
       )}
 
       {/* Templates list */}
       <div className="bg-white rounded-2xl border border-green-100 p-6">
         <h2 className="text-green-700 font-semibold text-lg mb-6">
-          Your Templates ({templates.length})
+          Your Programs ({templates.length})
         </h2>
 
         {templates.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-6">
-            No templates yet. Click &quot;Create New Template&quot; to get started.
+            No programs yet. Click &quot;Create New Program&quot; to get started.
           </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

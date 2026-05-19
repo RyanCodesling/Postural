@@ -41,6 +41,7 @@ export default function PatientDashboardPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [patientProfile, setPatientProfile] = useState<PatientProfile | null>(null);
   const [exercises, setExercises] = useState<AssignedExercise[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -102,8 +103,18 @@ export default function PatientDashboardPage() {
   return (
     <div className="min-h-screen flex bg-white">
 
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-50 border-r p-6 shrink-0">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-50 border-r p-6 flex flex-col transform transition-transform duration-200
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
           <div className="text-sm text-gray-500">Patient</div>
           <div className="mt-1 text-lg font-semibold text-gray-900">{user?.name || "Patient"}</div>
@@ -114,7 +125,7 @@ export default function PatientDashboardPage() {
             {NAV_TABS.map(({ key, label }) => (
               <li key={key}>
                 <button
-                  onClick={() => setActiveTab(key)}
+                  onClick={() => { setActiveTab(key); setSidebarOpen(false); }}
                   className={`w-full text-left px-3 py-2 rounded text-sm transition ${
                     activeTab === key
                       ? "bg-green-100 text-green-800 font-medium"
@@ -129,6 +140,7 @@ export default function PatientDashboardPage() {
               <Link
                 href="/session"
                 className="flex px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 🕐 Session
               </Link>
@@ -137,6 +149,7 @@ export default function PatientDashboardPage() {
               <Link
                 href="/camera"
                 className="flex px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
                 📷 Start Session
               </Link>
@@ -146,7 +159,13 @@ export default function PatientDashboardPage() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 p-6 overflow-y-auto">
+      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0">
+        <button
+          className="md:hidden mb-4 px-3 py-2 border border-gray-300 rounded text-sm text-gray-600 hover:bg-gray-50"
+          onClick={() => setSidebarOpen(true)}
+        >
+          ☰ Menu
+        </button>
 
         {/* ── Dashboard ── */}
         {activeTab === "dashboard" && (

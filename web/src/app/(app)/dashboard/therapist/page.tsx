@@ -62,6 +62,7 @@ export default function TherapistDashboardPage() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [pageLoading, setPageLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [therapistProfile, setTherapistProfile] = useState<TherapistProfile | null>(null);
 
   // Manage Patients
@@ -284,7 +285,7 @@ export default function TherapistDashboardPage() {
     { key: "view-profile",     label: "👤 View Profile" },
     { key: "manage-patients",  label: "👥 Manage Patients" },
     { key: "manage-exercises", label: "🏋️ Manage Exercises" },
-    { key: "assign-patient",   label: "📋 Assign Patient" },
+    { key: "assign-patient",   label: "📋 Assign Exercise" },
   ];
 
   if (loading || pageLoading) {
@@ -298,8 +299,18 @@ export default function TherapistDashboardPage() {
   return (
     <div className="min-h-screen flex bg-white">
 
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-50 border-r p-6 shrink-0">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-50 border-r p-6 flex flex-col transform transition-transform duration-200
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
           <div className="text-sm text-gray-500">Therapist</div>
           <div className="mt-1 text-lg font-semibold text-gray-900">{user?.name || "Therapist"}</div>
@@ -310,7 +321,7 @@ export default function TherapistDashboardPage() {
             {NAV_TABS.map(({ key, label }) => (
               <li key={key}>
                 <button
-                  onClick={() => setActiveTab(key)}
+                  onClick={() => { setActiveTab(key); setSidebarOpen(false); }}
                   className={`w-full text-left px-3 py-2 rounded text-sm transition ${
                     activeTab === key
                       ? "bg-green-100 text-green-800 font-medium"
@@ -325,8 +336,9 @@ export default function TherapistDashboardPage() {
               <Link
                 href="/dashboard/therapist/templates"
                 className="flex px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+                onClick={() => setSidebarOpen(false)}
               >
-                📝 Exercise Templates
+                📝 Exercise Program
               </Link>
             </li>
           </ul>
@@ -334,7 +346,13 @@ export default function TherapistDashboardPage() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 p-6 overflow-y-auto">
+      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0">
+        <button
+          className="md:hidden mb-4 px-3 py-2 border border-gray-300 rounded text-sm text-gray-600 hover:bg-gray-50"
+          onClick={() => setSidebarOpen(true)}
+        >
+          ☰ Menu
+        </button>
 
         {/* ── Dashboard ── */}
         {activeTab === "dashboard" && (
@@ -459,7 +477,7 @@ export default function TherapistDashboardPage() {
                 Custom Exercises ({customExercises.length})
               </h2>
               {customExercises.length === 0 ? (
-                <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Templates.</p>
+                <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Program.</p>
               ) : (
                 <div className="space-y-2">
                   {customExercises.map((ex) => (
@@ -486,8 +504,8 @@ export default function TherapistDashboardPage() {
         {/* ── Assign Patient ── */}
         {activeTab === "assign-patient" && (
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-1">Assign Patient</h1>
-            <p className="text-gray-500 mb-6">Assign exercises or a template to one of your patients.</p>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">Assign Exercise</h1>
+            <p className="text-gray-500 mb-6">Assign exercises or a program to one of your patients.</p>
 
             {assignSuccess && (
               <div className="mb-4 px-4 py-3 bg-green-50 border border-green-200 text-green-800 rounded-lg text-sm">
@@ -526,10 +544,10 @@ export default function TherapistDashboardPage() {
               {/* Step 2 */}
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  2. Load from Template <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
+                  2. Load from Program <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
                 </label>
                 {templates.length === 0 ? (
-                  <p className="text-gray-400 text-sm">No templates yet.</p>
+                  <p className="text-gray-400 text-sm">No programs yet.</p>
                 ) : (
                   <>
                     <select
@@ -550,7 +568,7 @@ export default function TherapistDashboardPage() {
                       return (
                         <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3">
                           <p className="text-xs font-medium text-green-700 mb-2">
-                            {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this template:
+                            {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this program:
                           </p>
                           <ul className="space-y-1">
                             {tmpl.exercises.map((ex, i) => (

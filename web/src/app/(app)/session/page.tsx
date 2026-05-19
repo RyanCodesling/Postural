@@ -31,7 +31,7 @@ const getStatusColor = (status: string) => {
   switch (status) {
     case "completed": return "bg-green-50 border-green-200";
     case "skipped":   return "bg-red-50 border-red-200";
-    default:          return "bg-blue-50 border-blue-200";
+    default:          return "bg-white border-gray-200";
   }
 };
 
@@ -39,7 +39,7 @@ const getStatusBadgeColor = (status: string) => {
   switch (status) {
     case "completed": return "bg-green-100 text-green-800";
     case "skipped":   return "bg-red-100 text-red-800";
-    default:          return "bg-blue-100 text-blue-800";
+    default:          return "bg-green-100 text-green-700";
   }
 };
 
@@ -69,41 +69,41 @@ export default function SessionPage() {
   const progressPercentage = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-green-50 p-6">
       <div className="max-w-4xl mx-auto">
         <div className="mb-6">
           <Link
             href="/dashboard"
-            className="text-blue-600 hover:text-blue-800 text-sm mb-4 inline-block"
+            className="text-green-700 hover:text-green-900 text-sm mb-4 inline-block"
           >
             ← Back to Dashboard
           </Link>
-          <h1 className="text-3xl font-bold text-gray-900">Weekly Exercise Schedule</h1>
-          <p className="text-gray-600 mt-2">Track your exercises for the upcoming week</p>
+          <h1 className="text-3xl font-bold text-green-900">Weekly Exercise Schedule</h1>
+          <p className="text-green-700 mt-2">Track your exercises for the upcoming week</p>
         </div>
 
         {/* Progress Card */}
-        <div className="bg-white rounded-2xl shadow-sm border p-6 mb-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Weekly Progress</h2>
-            <span className="text-2xl font-bold text-blue-600">
+            <h2 className="text-lg font-semibold text-green-900">Weekly Progress</h2>
+            <span className="text-2xl font-bold text-green-700">
               {completedCount}/{totalCount}
             </span>
           </div>
-          <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+          <div className="w-full bg-green-100 rounded-full h-4 overflow-hidden">
             <div
-              className="bg-gradient-to-r from-green-500 to-blue-600 h-full rounded-full transition-all"
+              className="bg-green-700 h-full rounded-full transition-all"
               style={{ width: `${progressPercentage}%` }}
             ></div>
           </div>
-          <p className="text-sm text-gray-600 mt-2">{progressPercentage}% complete</p>
+          <p className="text-sm text-green-700 mt-2">{progressPercentage}% complete</p>
         </div>
 
         {/* Exercise Schedule */}
         {loading ? (
-          <div className="text-center py-12 text-gray-500">Loading your exercises...</div>
+          <div className="text-center py-12 text-green-700">Loading your exercises...</div>
         ) : schedule.length === 0 ? (
-          <div className="bg-white rounded-2xl shadow-sm border p-8 text-center text-gray-500">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 text-center text-gray-500">
             No exercises assigned yet. Your therapist will assign exercises to you.
           </div>
         ) : (
@@ -135,20 +135,20 @@ export default function SessionPage() {
                     <p className="text-xl font-bold text-gray-900">{exercise.reps}</p>
                   </div>
                   {exercise.status === "pending" && (
-                    <button className="ml-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+                    <button className="ml-auto px-4 py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 text-sm font-medium">
                       Start Exercise
                     </button>
                   )}
                   {exercise.status === "completed" && (
                     <div className="ml-auto flex items-center gap-2">
-                      <svg className="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                      <svg className="w-5 h-5 text-green-700" fill="currentColor" viewBox="0 0 20 20">
                         <path
                           fillRule="evenodd"
                           d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
                           clipRule="evenodd"
                         />
                       </svg>
-                      <span className="text-green-600 text-sm font-medium">Done</span>
+                      <span className="text-green-700 text-sm font-medium">Done</span>
                     </div>
                   )}
                 </div>
@@ -159,19 +159,19 @@ export default function SessionPage() {
 
         {/* Summary Card */}
         {!loading && schedule.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-sm border p-6 mt-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Summary</h3>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mt-6">
+            <h3 className="text-lg font-semibold text-green-900 mb-4">Summary</h3>
             <div className="grid grid-cols-3 gap-4">
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-600">{completedCount}</p>
+                <p className="text-2xl font-bold text-green-700">{completedCount}</p>
                 <p className="text-sm text-gray-600">Completed</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-blue-600">{totalCount - completedCount}</p>
+                <p className="text-2xl font-bold text-green-900">{totalCount - completedCount}</p>
                 <p className="text-sm text-gray-600">Remaining</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-purple-600">{totalCount}</p>
+                <p className="text-2xl font-bold text-green-800">{totalCount}</p>
                 <p className="text-sm text-gray-600">Total</p>
               </div>
             </div>

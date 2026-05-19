@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUser } from "@/lib/db";
+import { getUserByEmail } from "@/lib/db";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, password, role } = body;
+    const { email, password } = body;
 
-    if (!email || !password || !role) {
+    if (!email || !password) {
       return NextResponse.json(
-        { error: "Email, password, and role are required" },
+        { error: "Email and password are required" },
         { status: 400 }
       );
     }
 
-    // Query database for user
-    const user = await getUser(email, role);
+    const user = await getUserByEmail(email);
 
     if (!user || user.password !== password) {
       return NextResponse.json(
@@ -33,16 +32,11 @@ export async function POST(request: NextRequest) {
       }),
     };
 
-    // Create response with user data
     const response = NextResponse.json(
-      {
-        success: true,
-        user: sessionUser,
-      },
+      { success: true, user: sessionUser },
       { status: 200 }
     );
 
-    // Set a simple cookie for session
     response.cookies.set("auth_token", JSON.stringify(sessionUser), {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

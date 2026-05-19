@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import {
   PoseLandmarker,
@@ -84,6 +85,10 @@ const CAPTURE_READINESS_RESET_GRACE_MS = 300;
 
 export default function CameraClient() {
   const { user } = useAuth();
+  const dashboardHref =
+    user?.role === "admin" ? "/dashboard/admin"
+    : user?.role === "therapist" ? "/dashboard/therapist"
+    : "/dashboard/patient";
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -309,22 +314,45 @@ export default function CameraClient() {
     initLandmarker();
   }, []);
 
-  // Load assigned exercises from database
+  // Load exercises from database.
+  // Admin/therapist: fetch all exercises and show ex_001–ex_006 for troubleshooting.
+  // Patient: fetch only their assigned exercises.
   useEffect(() => {
     if (!user?.id) return;
 
-    fetch("/api/patient-exercises")
-      .then((r) => r.json())
-      .then((data) => {
-        const assigned: Exercise[] = (data.exercises ?? []).map((e: any) => ({
-          id: e.exercise_id,
-          name: e.name,
-          description: e.description,
-        }));
-        setAssignedExercises(assigned);
-        if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
-      })
-      .catch((err) => console.error("Error loading exercises:", err));
+    const isStaff = user.role === "admin" || user.role === "therapist";
+
+    if (isStaff) {
+      fetch("/api/exercises")
+        .then((r) => r.json())
+        .then((data) => {
+          const DEBUG_IDS = ["ex_001", "ex_002", "ex_003", "ex_004", "ex_005", "ex_006"];
+          const exercises: Exercise[] = (data.exercises ?? [])
+            .filter((e: any) => DEBUG_IDS.includes(e.id))
+            .sort((a: any, b: any) => a.id.localeCompare(b.id))
+            .map((e: any) => ({
+              id: e.id,
+              name: e.name,
+              description: e.description,
+            }));
+          setAssignedExercises(exercises);
+          if (exercises.length > 0 && !selectedExercise) setSelectedExercise(exercises[0].id);
+        })
+        .catch((err) => console.error("Error loading exercises:", err));
+    } else {
+      fetch("/api/patient-exercises")
+        .then((r) => r.json())
+        .then((data) => {
+          const assigned: Exercise[] = (data.exercises ?? []).map((e: any) => ({
+            id: e.exercise_id,
+            name: e.name,
+            description: e.description,
+          }));
+          setAssignedExercises(assigned);
+          if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
+        })
+        .catch((err) => console.error("Error loading exercises:", err));
+    }
   }, [user?.id]);
 
   useEffect(() => {
@@ -922,6 +950,9 @@ export default function CameraClient() {
         {/* Header stays compact so content fits */}
         <header className="flex items-center justify-between gap-3">
           <div className="min-w-0">
+            <Link href={dashboardHref} className="text-sm text-green-700 hover:text-green-900 inline-block mb-1">
+              ← Back to Dashboard
+            </Link>
             <h1 className="text-xl font-bold leading-tight">Camera</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />

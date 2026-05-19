@@ -64,7 +64,7 @@ export default function FirstTimePasswordPage() {
               </button>
               <button
                 type="button"
-                onClick={() => router.push('/login?role=patient')}
+                onClick={() => router.push('/login')}
                 className="flex-1 border py-2 rounded"
               >
                 Cancel
@@ -76,7 +76,7 @@ export default function FirstTimePasswordPage() {
             <p className="mb-4 text-green-600">Password updated successfully.</p>
             <div className="flex gap-3 justify-center">
               <Link
-                href="/login?role=patient"
+                href="/login"
                 className="px-4 py-2 bg-black text-white rounded"
               >
                 Go to Login

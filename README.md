@@ -5,6 +5,167 @@
 
 --- 
 
+## 📌 Update-5-20-26 | *Enah*
+- Renamed `scripts\exercise_templates_pg.sql` → `scripts\exercise_programs_pg.sql` — table `exercise_templates` renamed to `exercise_programs`, `template_exercises` renamed to `program_exercises`
+- Updated all SQL queries in `web\src\lib\db.ts` to reference the new table names
+- Renamed column `template_id` → `program_id` in `program_exercises` table; updated all references in SQL file and `db.ts`
+- Renamed route folder `therapist\templates` → `therapist\programs`; updated all TypeScript identifiers, interfaces, and state variables from Template/template to Program/program
+- Updated sidebar nav link in `therapist\page.tsx` from `/dashboard/therapist/templates` → `/dashboard/therapist/programs`
+- Removed role selection from login flow — system now determines dashboard from user ID prefix (`admin_` → admin, `therapist_` → therapist, `patient_` → patient); no more Patient/Therapist/Admin buttons or demo credentials
+- Redesigned landing page (`web\src\app\page.tsx`) — green-themed UI with ACC Bacoor branding; background image with frosted glass card positioned toward the right
+- Restyled login page to match the landing page — same background image, frosted glass card, and green theme
+
+### *scripts\exercise_programs_pg.sql*
+- Renamed file from `exercise_templates_pg.sql`
+- `exercise_templates` → `exercise_programs`
+- `template_exercises` → `program_exercises`
+- Column `template_id` → `program_id` in `program_exercises`
+- FK reference inside `program_exercises` updated to point to `exercise_programs(id)`
+- Indexes renamed: `idx_et_therapist_id` → `idx_ep_therapist_id` on `exercise_programs(therapist_id)`, `idx_te_template_id` → `idx_pe_program_id` on `program_exercises(program_id)`
+- GRANT and sequence updated: `template_exercises_id_seq` → `program_exercises_id_seq`
+
+### *web\src\lib\db.ts*
+- Updated `FROM exercise_templates` → `FROM exercise_programs` in `getTemplates()` query
+- Updated `LEFT JOIN template_exercises ... template_id` → `LEFT JOIN program_exercises ... program_id` in `getTemplates()` query
+- Updated `INSERT INTO template_exercises (template_id, ...)` → `INSERT INTO program_exercises (program_id, ...)` in `insertTemplateExercises()`
+- Updated `INSERT INTO exercise_templates` → `INSERT INTO exercise_programs` in `createTemplate()`
+- Updated `SELECT id FROM exercise_templates` → `SELECT id FROM exercise_programs` in `updateTemplate()`
+- Updated `UPDATE exercise_templates` → `UPDATE exercise_programs` in `updateTemplate()`
+- Updated `DELETE FROM program_exercises WHERE template_id` → `WHERE program_id` in `updateTemplate()`
+- Updated `DELETE FROM exercise_templates` → `DELETE FROM exercise_programs` in `deleteTemplate()`
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx* (renamed from templates\page.tsx)
+- Renamed route folder from `templates` to `programs`
+- `interface TemplateExercise` → `interface ProgramExercise`
+- `interface ExerciseTemplate` → `interface ExerciseProgram`
+- `ExerciseTemplatesPage` → `ExerciseProgramsPage`
+- State `templates / setTemplates` → `programs / setPrograms`
+- State `templateName / setTemplateName` → `programName / setProgramName`
+- `handleEdit` parameter type updated from `ExerciseTemplate` to `ExerciseProgram`
+- All JSX comments and inline labels updated from Template to Program
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Updated sidebar nav `href` from `/dashboard/therapist/templates` → `/dashboard/therapist/programs`
+
+### *web\src\app\page.tsx*
+- Removed role-selection modal and `useState`; converted to server component
+- "Log In" button replaced with a plain `<Link href="/login">` — navigates directly to the single login page
+
+### *web\src\app\(auth)\login\page.tsx*
+- Removed `useSearchParams`, role param, role-based heading/description, and demo credentials block
+- Removed `Suspense` wrapper — no longer needed without `useSearchParams`
+- After successful login, redirects based on `user.id` prefix: `admin_` → `/dashboard/admin`, `therapist_` → `/dashboard/therapist`, `patient_` → `/dashboard/patient`
+
+### *web\src\app\api\auth\login\route.ts*
+- Removed `role` from required request body fields
+- Switched from `getUser(email, role)` to `getUserByEmail(email)` — role no longer supplied by the client
+
+### *web\src\lib\auth.ts*
+- Removed `role` parameter from `loginUser()` — body now sends only `{ email, password }`
+
+### *web\src\lib\db.ts*
+- Added `getUserByEmail(email)` — queries `users` by email only, without a role filter
+
+### *web\src\app\(auth)\first-time-password\page.tsx*
+- Updated both `/login?role=patient` references to `/login`
+
+### *web\src\app\page.tsx*
+- Background: `acc_bacoor_landing_page.png` fills the screen at full opacity via `next/image` with `fill` + `object-cover`; `unoptimized` added to serve original PNG without WebP conversion or compression
+- Replaced SVG human figure with `acc_bacoor_logo.png` — rendered in a `w-32 h-32 rounded-full` container with `bg-green-600` backing to hide white PNG padding; `unoptimized` added to preserve original quality; `priority` to resolve LCP warning
+- Frosted glass card: `bg-green-800/55 backdrop-blur-sm` with `max-w-md` width, positioned right-of-center via `justify-end pr-56`
+- Typography: all text `text-white`; title `text-4xl`, subtitle `text-lg`, description `text-base`
+- Log In button: `bg-green-600 hover:bg-green-500`, `text-base`, `py-3.5`
+
+### *web\src\app\(auth)\login\page.tsx*
+- Applied `acc_bacoor_landing_page.png` background (path: `../../../../media/`) with same `fill` + `object-cover` + `unoptimized` setup
+- Frosted glass card: `bg-green-800/55 backdrop-blur-sm`, `max-w-md`, `px-14 py-16`, positioned at `justify-end pr-56` to match landing page
+- Removed logo from login card; added "Log In to access your dashboard" label above the email field
+- Floating label inputs — label sits centered in the input when empty, slides to the top with `text-xs` on focus or when a value is entered; uses Tailwind `peer` + `peer-placeholder-shown` + `peer-focus` pattern; inputs use `pt-6 pb-2` padding to accommodate the floating label
+- Form inputs: `bg-white/10 border-green-600/50 text-white placeholder-white/50`, green focus ring
+- Error message styled as a banner: `bg-red-500/20 border border-red-400/40 text-red-200` for readability against the green card
+- Submit button: `bg-green-600 hover:bg-green-500`, `py-3.5`, `text-base`
+- `← Back` replaced with a small black button: `bg-black/70 hover:bg-black`, `px-4 py-1.5`, `text-sm`
+- All text set to `text-white`; font sizes bumped — title `text-3xl`, subtitle `text-base`, "Log In" label `text-lg`, inputs `text-base`
+
+### *web\src\app\globals.css*
+- Added `-webkit-autofill` override scoped to `.dark-autofill` class — sets inset box-shadow to `rgba(22, 101, 52, 0.55)` to match the card background, `-webkit-text-fill-color: white`, and `transition: background-color 5000s` to prevent the browser autofill white background from flashing; scoped to avoid affecting dashboard and other pages
+
+### *web\media\* (new)
+- Added `acc_bacoor_landing_page.png` (1640×924) and `acc_bacoor_logo.png` (2000×2000) to version control via `git add web/media/` — both files are now tracked and will be included in commits so the app works correctly on any device that pulls the branch
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Added `computeAgePhilippines(dob)` helper — uses `Intl` with `timeZone: "Asia/Manila"` to get today's date in Philippine time, computes full years elapsed from date of birth, subtracts 1 if the birthday has not yet occurred this year
+- Add New User form (Patient & Therapist): `dateOfBirth` onChange now automatically computes and sets `age` via `computeAgePhilippines`; `max` date on the date picker also uses `Asia/Manila` timezone
+- Edit User form: same auto-compute wired to `dateOfBirth` onChange
+- Age field in both forms set to `readOnly` with `bg-gray-50 cursor-not-allowed` — field is auto-filled and cannot be manually edited
+- Replaced `window.confirm` double-confirmation with a second custom modal — delete flow is now: table Delete button → "Confirm Delete" modal → "Final Confirmation" modal → permanent deletion; added `isFinalConfirmOpen` state and `handleFinalDelete` function; both modals share the same styling as the existing delete modal
+- Add User preview modal — "Add User" button now shows a confirmation modal listing all filled-in details (role, full name, email, date of birth, age, gender, and role-specific fields) before submitting; admin can go back to edit or confirm to proceed; `handleAddUser` now only validates and opens the preview, `handleConfirmAdd` performs the actual API call
+- Edit User preview modal — "Save Changes" button now shows a before/after comparison modal; each field is shown in a three-column row (Field / Before / After); changed fields are highlighted in yellow with the old value struck through in red and the new value in green; unchanged fields are shown normally; `handleSaveEditUser` now only opens the preview, `handleConfirmEdit` performs the actual API call; added success/error status messages to both confirm handlers
+- Status messages for add, edit, and delete now include the user's full name (e.g. "Juan dela Cruz successfully added." / "...updated." / "...deleted."); edit toast uses the post-edit name, delete toast uses the name captured when the delete modal was opened
+- Role pill in the Manage Users table is now color-coded: blue (`bg-blue-100 text-blue-800`) for patient, green (`bg-green-100 text-green-800`) for therapist
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Applied green color palette: page background `bg-green-50`; sidebar `bg-green-900`; role label `text-green-400`; username `text-white`; active nav `bg-green-700 text-white`; inactive nav `text-green-200 hover:bg-green-800`; all primary action buttons `bg-green-700 hover:bg-green-800`; content cards remain white for readability
+- Added Log Out button at the bottom of the sidebar (`mt-auto pt-6 mb-4` positions it near the bottom with breathing room); styled as `bg-red-600 hover:bg-red-700 text-white text-sm` with a 🚪 exit door icon; calls `logout()` then redirects to `/`; patient and therapist pages had `logout` added to their `useAuth()` destructuring
+- Unified admin sidebar structure to match patient and therapist sidebars: header changed from `h1`/`p` to role label `div` (`text-sm text-green-400`) + name `div` (`text-lg font-semibold text-white`); nav changed from direct `<button>` elements in `<nav className="space-y-2">` to `<ul>`/`<li>` with `space-y-1`; button sizing changed from `px-4 py-3` to `px-3 py-2 text-sm`; active state now includes `font-medium` to match
+
+### *web\src\app\(app)\layout.tsx (deleted)*
+- Removed logout button from the top nav bar — logout is now handled per-dashboard via the sidebar button
+- Removed "Dashboard" link from the top nav — redundant now that each dashboard sidebar has its own tab; unused `dashboardHref`, `handleLogout`, `useRouter`, `useAuth` imports also removed
+- Fully removed the top nav bar and its hamburger menu — all navigation (Camera, Dashboard, Logout) now lives in each dashboard's sidebar; layout reduced to a plain pass-through wrapper, then deleted entirely as it served no purpose
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\dashboard\therapist\page.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*
+- Moved Camera link into each dashboard's sidebar (`📷 Camera` → `/camera`); patient's existing `📷 Start Session` renamed to `📷 Camera` for consistency; sidebar hamburger menu (☰) for responsive mobile is preserved and unaffected
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Added `"dashboard"` to `Tab` type and set it as the default `activeTab`
+- Added 🏠 Dashboard nav item to admin sidebar (first item, matching patient/therapist structure)
+- Added Dashboard tab content — welcome heading and user name, matching the patient/therapist dashboard view
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added `Link` import and derived `dashboardHref` from `user?.role` (admin → `/dashboard/admin`, therapist → `/dashboard/therapist`, patient → `/dashboard/patient`)
+- Added "← Back to Dashboard" link above the Camera heading so the page is navigable without the top nav
+- Admin and therapist now load all exercises from `/api/exercises` and show only `ex_001`–`ex_006` (sorted) for troubleshooting purposes; patient logic is unchanged — only their therapist-assigned exercises appear via `/api/patient-exercises`
+
+### *web\src\app\(app)\session\page.tsx*
+- Applied green color palette: page background `bg-green-50`; headings and labels `text-green-900`/`text-green-700`; progress bar track `bg-green-100` with `bg-green-700` fill; "Back to Dashboard" link `text-green-700`; "Start Exercise" button `bg-green-700 hover:bg-green-800`; summary stat colors unified to green shades; pending status badge changed from blue to `bg-green-100 text-green-700`
+
+### *web\src\app\(app)\dashboard\therapist\layout.tsx* (new)
+- Created shared layout for all therapist sub-routes — renders `bg-green-900` sidebar with `usePathname()` active detection, mobile hamburger + overlay, and `{children}` in `<main>`
+- NAV array: 🏠 Dashboard (exact match), 👤 View Profile, 👥 Manage Patients, 🏋️ Manage Exercises, 📋 Assign Exercise, 📝 Exercise Program, 📷 Camera
+- Active item: `bg-green-700 text-white font-medium`; inactive: `text-green-200 hover:bg-green-800`
+- Logout button at bottom: `mt-auto pt-6 mb-4`, `bg-red-600 hover:bg-red-700`
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced single-page tab-switching component with a minimal dashboard page — only renders a welcome heading and user name
+- Auth redirect preserved: redirects non-therapist users to `/dashboard`
+- All other tab content moved to dedicated route pages
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx* (new)
+- View Profile page — fetches therapist profile (`/api/users/${user.id}`) and assigned patients (`/api/users?role=patient&therapistId=`) in parallel
+- Renders Therapist Information card (full name, email, ID, specialty, clinic, gender, age, DOB) and Assigned Patients list
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx* (new)
+- Manage Patients page — fetches patients for the therapist and loads each patient's exercises in parallel
+- Search filter, Refresh button, and View/Start Session action buttons per patient card
+- "← Back to Patients" link in patient detail now correctly routes to `/dashboard/therapist/patients`
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx* (new)
+- Manage Exercises page — fetches all exercises and renders System and Custom exercise sections with inline edit (name + description) via `ExerciseRow` sub-component
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx* (new)
+- Assign Exercise page — loads patients, exercises, and templates; pre-fills existing patient exercises when a patient is selected; template merges into current selection; validates sets/reps before submitting to `/api/patient-exercises`; uses `AssignRow` sub-component
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Removed `min-h-screen bg-green-50` outer wrapper (layout now provides the page background and full-height container); content div `max-w-5xl mx-auto px-8 py-8` is now the outermost element
+- Loading state simplified to `flex items-center justify-center p-12` without a full-screen wrapper
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Removed `min-h-screen bg-gray-50` from loading, not-found, and main return wrappers — layout provides the background; main return is now `max-w-5xl mx-auto px-8 py-8`
+- Fixed "← Back to Patients" link to point to `/dashboard/therapist/patients` instead of `/dashboard/therapist`
+
+--- 
+
 ## 📌 Update-5-19-26 | *RyanCodesling*
 Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_004` bidirectional rep counting was iterated heavily and is now **frozen** as a proof-of-concept-adequate mitigation (see Current Status).
 
@@ -71,7 +232,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ### *web\package.json*
 - Added `profile:filter` and `profile:sweep` npm scripts
 
-### *web\scripts\* (new)
+### *web\scripts* (new)
 - `profileOneEuroFilter.ts`, `sweepOneEuroFilter.ts` — OneEuroFilter profiling/sweep tooling; CSV output under `scripts/out/` (gitignored)
 
 

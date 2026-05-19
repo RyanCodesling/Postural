@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 
-type Tab = "users" | "exercises" | "assignments";
+type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
 interface User {
   id: string;
@@ -37,7 +38,7 @@ export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<Tab>("users");
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -66,8 +67,11 @@ export default function AdminDashboard() {
   const [statusType, setStatusType] = useState<"success" | "error" | null>(null);
   const [statusVisible, setStatusVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isFinalConfirmOpen, setIsFinalConfirmOpen] = useState(false);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
+  const [showAddPreview, setShowAddPreview] = useState(false);
+  const [showEditPreview, setShowEditPreview] = useState(false);
 
   useEffect(() => {
     if (!statusMessage) {
@@ -134,7 +138,7 @@ export default function AdminDashboard() {
       .catch((err) => console.error("Failed to load exercises:", err));
   }, []);
 
-  const handleAddUser = async (e: React.FormEvent) => {
+  const handleAddUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUser.firstName || !newUser.lastName || !newUser.role) return;
 
@@ -144,6 +148,10 @@ export default function AdminDashboard() {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
 
+    setShowAddPreview(true);
+  };
+
+  const handleConfirmAdd = async () => {
     try {
       const res = await fetch("/api/users", {
         method: "POST",
@@ -153,8 +161,9 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (res.ok) {
         setUsers([...users, data.user]);
+        const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
         setStatusType("success");
-        setStatusMessage("User successfully added.");
+        setStatusMessage(`${fullName} successfully added.`);
       } else {
         setStatusType("error");
         setStatusMessage(data?.error || "Unable to add user. Please try again.");
@@ -165,6 +174,7 @@ export default function AdminDashboard() {
       setStatusMessage("Unable to add user. Please try again.");
     }
 
+    setShowAddPreview(false);
     setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", diagnosis: "", prescription: "", condition: "", therapistIDNum: "", specialty: "" });
     setSelectedRole(null);
     setShowUserForm(false);
@@ -193,28 +203,28 @@ export default function AdminDashboard() {
     setDeleteUserName(null);
   };
 
-  const confirmDeleteUser = async () => {
+  const confirmDeleteUser = () => {
     if (!deleteUserId) return;
+    setIsDeleteModalOpen(false);
+    setIsFinalConfirmOpen(true);
+  };
 
-    const confirmed = window.confirm(
-      `Are you sure you want to delete "${deleteUserName}"? This action cannot be undone.`
-    );
-    if (!confirmed) return;
-
+  const handleFinalDelete = async () => {
+    if (!deleteUserId) return;
     try {
       const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
-      if (!res.ok) {
-        throw new Error("Failed to delete user.");
-      }
+      if (!res.ok) throw new Error("Failed to delete user.");
       setUsers(users.filter((u) => u.id !== deleteUserId));
       setStatusType("success");
-      setStatusMessage("User successfully deleted.");
+      setStatusMessage(`${deleteUserName} successfully deleted.`);
     } catch (err) {
       console.error("Failed to delete user:", err);
       setStatusType("error");
       setStatusMessage("Unable to delete user. Please try again.");
     } finally {
-      closeDeleteModal();
+      setIsFinalConfirmOpen(false);
+      setDeleteUserId(null);
+      setDeleteUserName(null);
     }
   };
 
@@ -224,10 +234,14 @@ export default function AdminDashboard() {
     setShowUserForm(false);
   };
 
-  const handleSaveEditUser = async (e: React.FormEvent) => {
+  const handleSaveEditUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
+    setShowEditPreview(true);
+  };
 
+  const handleConfirmEdit = async () => {
+    if (!editingUser) return;
     try {
       const res = await fetch(`/api/users/${editingUserId}`, {
         method: "PUT",
@@ -235,11 +249,21 @@ export default function AdminDashboard() {
         body: JSON.stringify(editingUser),
       });
       const data = await res.json();
-      if (res.ok) setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
+      if (res.ok) {
+        setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
+        const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
+        setStatusType("success");
+        setStatusMessage(`${fullName} successfully updated.`);
+      } else {
+        setStatusType("error");
+        setStatusMessage(data?.error || "Unable to update user. Please try again.");
+      }
     } catch (err) {
       console.error("Failed to update user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to update user. Please try again.");
     }
-
+    setShowEditPreview(false);
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -328,6 +352,16 @@ export default function AdminDashboard() {
     }
   };
 
+  const computeAgePhilippines = (dob: string): number => {
+    if (!dob) return 0;
+    const phToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const [ty, tm, td] = phToday.split("-").map(Number);
+    const [by, bm, bd] = dob.split("-").map(Number);
+    let age = ty - by;
+    if (tm < bm || (tm === bm && td < bd)) age--;
+    return Math.max(0, age);
+  };
+
   // Helper functions
   const patients = users.filter((u) => u.role === "patient");
   const therapists = users.filter((u) => u.role === "therapist");
@@ -339,7 +373,7 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-100">
+    <div className="min-h-screen flex bg-green-50">
 
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -350,46 +384,84 @@ export default function AdminDashboard() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-900 text-white p-6 flex flex-col transform transition-transform duration-200
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
         ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
-          <h1 className="text-2xl font-bold">Admin Panel</h1>
-          <p className="text-sm text-gray-400 mt-1">{user?.name}</p>
+          <div className="text-sm text-green-400">Admin</div>
+          <div className="mt-1 text-lg font-semibold text-white">{user?.name}</div>
         </div>
 
-        <nav className="space-y-2">
-          <button
-            onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "users"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            👥 Manage Users
-          </button>
-          <button
-            onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "exercises"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            💪 Manage Exercises
-          </button>
-          <button
-            onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "assignments"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            🔗 Assign Patients
-          </button>
+        <nav>
+          <ul className="space-y-1">
+            <li>
+              <button
+                onClick={() => { setActiveTab("dashboard"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "dashboard"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                🏠 Dashboard
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "users"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                👥 Manage Users
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "exercises"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                💪 Manage Exercises
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "assignments"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                🔗 Assign Patients
+              </button>
+            </li>
+            <li>
+              <Link
+                href="/camera"
+                className="flex px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
+                onClick={() => setSidebarOpen(false)}
+              >
+                📷 Camera
+              </Link>
+            </li>
+          </ul>
         </nav>
+
+        <div className="mt-auto pt-6 mb-4">
+          <button
+            onClick={async () => { await logout(); router.push("/"); }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
+          >
+            🚪 Log Out
+          </button>
+        </div>
       </aside>
 
       {/* Main Content */}
@@ -400,6 +472,14 @@ export default function AdminDashboard() {
         >
           ☰ Menu
         </button>
+        {/* Dashboard Tab */}
+        {activeTab === "dashboard" && (
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+            <p className="text-gray-500 mt-1">Welcome, {user?.name}.</p>
+          </div>
+        )}
+
         {/* Users Tab */}
         {activeTab === "users" && (
           <div>
@@ -433,8 +513,8 @@ export default function AdminDashboard() {
                 }}
                 className={`px-4 py-2 rounded transition text-white ${
                   editingUserId
-                    ? "bg-gray-600 hover:bg-gray-700"
-                    : "bg-blue-600 hover:bg-blue-700"
+                    ? "bg-green-800 hover:bg-green-900"
+                    : "bg-green-700 hover:bg-green-800"
                 }`}
               >
                 {editingUserId ? "Cancel Edit" : showUserForm ? "Cancel" : "+ Add User"}
@@ -458,7 +538,7 @@ export default function AdminDashboard() {
                               setSelectedRole("patient");
                               setNewUser({ ...newUser, role: "patient" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-blue-500 hover:bg-blue-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
                           >
                             👤 Patient
                           </button>
@@ -468,7 +548,7 @@ export default function AdminDashboard() {
                               setSelectedRole("therapist");
                               setNewUser({ ...newUser, role: "therapist" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-blue-500 hover:bg-blue-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
                           >
                             👨‍⚕️ Therapist
                           </button>
@@ -484,7 +564,7 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setSelectedRole(null)}
-                          className="text-sm text-blue-600 hover:text-blue-800"
+                          className="text-sm text-green-700 hover:text-green-900"
                         >
                           Change Role
                         </button>
@@ -537,9 +617,12 @@ export default function AdminDashboard() {
                           <input
                             type="date"
                             value={newUser.dateOfBirth || ""}
-                            onChange={(e) => setNewUser({ ...newUser, dateOfBirth: e.target.value })}
+                            onChange={(e) => {
+                              const dob = e.target.value;
+                              setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
+                            }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
-                            max={new Date().toISOString().split('T')[0]}
+                            max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
                             min="1900-01-01"
                             required
                           />
@@ -550,17 +633,9 @@ export default function AdminDashboard() {
                           </label>
                           <input
                             type="number"
-                            value={newUser.age || ""}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              if (value.length <= 3) {
-                                setNewUser({ ...newUser, age: value ? parseInt(value) : undefined });
-                              }
-                            }}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
-                            min="0"
-                            max="150"
-                            required
+                            value={newUser.age ?? ""}
+                            readOnly
+                            className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
                           />
                         </div>
                       </div>
@@ -671,7 +746,7 @@ export default function AdminDashboard() {
 
                       <button
                         type="submit"
-                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
+                        className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                       >
                         Add User
                       </button>
@@ -741,11 +816,12 @@ export default function AdminDashboard() {
                       <input
                         type="date"
                         value={editingUser.dateOfBirth || ""}
-                        onChange={(e) =>
-                          setEditingUser({ ...editingUser, dateOfBirth: e.target.value })
-                        }
+                        onChange={(e) => {
+                          const dob = e.target.value;
+                          setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
+                        }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
-                        max={new Date().toISOString().split('T')[0]}
+                        max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
                         min="1900-01-01"
                       />
                     </div>
@@ -755,16 +831,9 @@ export default function AdminDashboard() {
                       </label>
                       <input
                         type="number"
-                        value={editingUser.age || ""}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          if (value.length <= 3) {
-                            setEditingUser({ ...editingUser, age: value ? parseInt(value) : undefined });
-                          }
-                        }}
-                        className="w-full border border-gray-300 rounded px-3 py-2"
-                        min="0"
-                        max="150"
+                        value={editingUser.age ?? ""}
+                        readOnly
+                        className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -883,7 +952,7 @@ export default function AdminDashboard() {
                   <div className="flex gap-3">
                     <button
                       type="submit"
-                      className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition"
+                      className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                     >
                       Save Changes
                     </button>
@@ -933,6 +1002,168 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {isFinalConfirmOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                  <h3 className="text-xl font-semibold text-gray-900">Final Confirmation</h3>
+                  <p className="mt-3 text-sm text-gray-600">
+                    This is your final confirmation. Deleting <span className="font-semibold text-gray-900">{deleteUserName}</span> is permanent and cannot be recovered.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinalDelete}
+                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                      Yes, Delete Permanently
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showAddPreview && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+                  <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm New User</h3>
+                  <p className="text-sm text-gray-500 mb-4">Please review the details below before adding the user.</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Role</span>
+                      <span className="font-medium text-gray-900 capitalize">{newUser.role}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Full Name</span>
+                      <span className="font-medium text-gray-900">{[newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ")}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Email</span>
+                      <span className="font-medium text-gray-900">{newUser.email}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Date of Birth</span>
+                      <span className="font-medium text-gray-900">{newUser.dateOfBirth}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Age</span>
+                      <span className="font-medium text-gray-900">{newUser.age}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Gender</span>
+                      <span className="font-medium text-gray-900 capitalize">{newUser.gender}</span>
+                    </div>
+                    {newUser.role === "patient" && (
+                      <>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Diagnosis</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.diagnosis}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Prescription</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.prescription}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Condition</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.condition}</span>
+                        </div>
+                      </>
+                    )}
+                    {newUser.role === "therapist" && (
+                      <div className="flex gap-2">
+                        <span className="w-32 shrink-0 text-gray-500">Specialty</span>
+                        <span className="font-medium text-gray-900">{newUser.specialty}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddPreview(false)}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Go Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmAdd}
+                      className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                    >
+                      Confirm & Add User
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showEditPreview && editingUser && (() => {
+              const original = users.find(u => u.id === editingUserId);
+              const fields: { label: string; oldVal: string | number | undefined; newVal: string | number | undefined }[] = [
+                { label: "First Name", oldVal: original?.firstName, newVal: editingUser.firstName },
+                { label: "Middle Name", oldVal: original?.middleName, newVal: editingUser.middleName },
+                { label: "Last Name", oldVal: original?.lastName, newVal: editingUser.lastName },
+                { label: "Email", oldVal: original?.email, newVal: editingUser.email },
+                { label: "Date of Birth", oldVal: original?.dateOfBirth, newVal: editingUser.dateOfBirth },
+                { label: "Age", oldVal: original?.age, newVal: editingUser.age },
+                { label: "Gender", oldVal: original?.gender, newVal: editingUser.gender },
+                ...(editingUser.role === "patient" ? [
+                  { label: "Diagnosis", oldVal: original?.diagnosis, newVal: editingUser.diagnosis },
+                  { label: "Prescription", oldVal: original?.prescription, newVal: editingUser.prescription },
+                  { label: "Condition", oldVal: original?.condition, newVal: editingUser.condition },
+                ] : []),
+                ...(editingUser.role === "therapist" ? [
+                  { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
+                ] : []),
+              ];
+              return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                  <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+                    <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm Edit</h3>
+                    <p className="text-sm text-gray-500 mb-4">Review changes before saving. Highlighted rows have been modified.</p>
+                    <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b pb-2 mb-1">
+                      <span>Field</span>
+                      <span>Before</span>
+                      <span>After</span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {fields.map(({ label, oldVal, newVal }) => {
+                        const changed = String(oldVal ?? "") !== String(newVal ?? "");
+                        return (
+                          <div key={label} className={`grid grid-cols-3 gap-2 text-sm py-2 px-2 rounded ${changed ? "bg-yellow-50" : ""}`}>
+                            <span className="text-gray-500">{label}</span>
+                            <span className={changed ? "line-through text-red-400" : "text-gray-700"}>{oldVal || "—"}</span>
+                            <span className={changed ? "font-medium text-green-700" : "text-gray-700"}>{newVal || "—"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-6 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowEditPreview(false)}
+                        className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        Go Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmEdit}
+                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                      >
+                        Confirm & Save Changes
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Users List */}
             <div className="bg-white rounded shadow overflow-x-auto">
               <table className="w-full min-w-[600px]">
@@ -958,7 +1189,7 @@ export default function AdminDashboard() {
                       <td className="px-6 py-4 text-sm text-gray-900">{u.name}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
                       <td className="px-6 py-4 text-sm">
-                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                           {u.role}
                         </span>
                       </td>
@@ -966,7 +1197,7 @@ export default function AdminDashboard() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleEditUser(u)}
-                            className="text-blue-600 hover:text-blue-800 font-medium"
+                            className="text-green-700 hover:text-green-900 font-medium"
                           >
                             Edit
                           </button>
@@ -993,7 +1224,7 @@ export default function AdminDashboard() {
               <h2 className="text-3xl font-bold text-gray-900">Manage Exercises</h2>
               <button
                 onClick={() => setShowExerciseForm(!showExerciseForm)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition"
+                className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
               >
                 {showExerciseForm ? "Cancel" : "+ Add Exercise"}
               </button>
@@ -1035,7 +1266,7 @@ export default function AdminDashboard() {
 
                   <button
                     type="submit"
-                    className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
+                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                   >
                     Add Exercise
                   </button>
@@ -1130,7 +1361,7 @@ export default function AdminDashboard() {
                         <button
                           onClick={handleAssignPatient}
                           disabled={!selectedTherapistId}
-                          className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded transition font-medium"
+                          className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white rounded transition font-medium"
                         >
                           Assign Patient
                         </button>

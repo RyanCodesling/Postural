@@ -1,16 +1,12 @@
 // Temporary auth utility functions for client-side use
-export async function loginUser(
-  email: string,
-  password: string,
-  role: string
-) {
+export async function loginUser(email: string, password: string) {
   const response = await fetch("/api/auth/login", {
     method: "POST",
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ email, password, role }),
+    body: JSON.stringify({ email, password }),
   });
 
   if (!response.ok) {

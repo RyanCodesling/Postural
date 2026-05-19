@@ -34,7 +34,7 @@ interface AssignedExercise {
 type ActiveTab = "dashboard" | "view-profile";
 
 export default function PatientDashboardPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
@@ -94,14 +94,14 @@ export default function PatientDashboardPage() {
 
   if (loading || pageLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
+      <div className="min-h-screen flex items-center justify-center bg-green-50">
         <div className="text-gray-500">Loading dashboard...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex bg-white">
+    <div className="min-h-screen flex bg-green-50">
 
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -112,12 +112,12 @@ export default function PatientDashboardPage() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-50 border-r p-6 flex flex-col transform transition-transform duration-200
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
         ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
-          <div className="text-sm text-gray-500">Patient</div>
-          <div className="mt-1 text-lg font-semibold text-gray-900">{user?.name || "Patient"}</div>
+          <div className="text-sm text-green-400">Patient</div>
+          <div className="mt-1 text-lg font-semibold text-white">{user?.name || "Patient"}</div>
         </div>
 
         <nav>
@@ -128,8 +128,8 @@ export default function PatientDashboardPage() {
                   onClick={() => { setActiveTab(key); setSidebarOpen(false); }}
                   className={`w-full text-left px-3 py-2 rounded text-sm transition ${
                     activeTab === key
-                      ? "bg-green-100 text-green-800 font-medium"
-                      : "text-gray-700 hover:bg-gray-100"
+                      ? "bg-green-700 text-white font-medium"
+                      : "text-green-200 hover:bg-green-800"
                   }`}
                 >
                   {label}
@@ -139,7 +139,7 @@ export default function PatientDashboardPage() {
             <li>
               <Link
                 href="/session"
-                className="flex px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+                className="flex px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
                 onClick={() => setSidebarOpen(false)}
               >
                 🕐 Session
@@ -148,14 +148,23 @@ export default function PatientDashboardPage() {
             <li>
               <Link
                 href="/camera"
-                className="flex px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100"
+                className="flex px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
                 onClick={() => setSidebarOpen(false)}
               >
-                📷 Start Session
+                📷 Camera
               </Link>
             </li>
           </ul>
         </nav>
+
+        <div className="mt-auto pt-6 mb-4">
+          <button
+            onClick={async () => { await logout(); router.push("/"); }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
+          >
+            🚪 Log Out
+          </button>
+        </div>
       </aside>
 
       {/* Main */}
@@ -176,7 +185,7 @@ export default function PatientDashboardPage() {
             <div className="mt-6">
               <Link
                 href="/camera"
-                className="inline-block px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
+                className="inline-block px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
               >
                 Start Session
               </Link>

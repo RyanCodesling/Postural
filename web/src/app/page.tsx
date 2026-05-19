@@ -1,83 +1,58 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import Image from "next/image";
+import bgImage from "../../media/acc_bacoor_landing_page.png";
+import logoImage from "../../media/acc_bacoor_logo.png";
 
 export default function HomePage() {
-  const [open, setOpen] = useState(false);
-  const router = useRouter();
-
   return (
-    <main className="min-h-screen flex items-center justify-center bg-blue-50">
-      <div className="text-center space-y-6 px-6">
-        <div className="flex flex-col items-center gap-2">
-          <div className="w-16 h-16 rounded-full bg-blue-200 flex items-center justify-center mb-2">
-            <svg className="w-9 h-9 text-blue-700" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-              {/* head */}
-              <circle cx="12" cy="4" r="2" />
-              {/* spine */}
-              <line x1="12" y1="6" x2="12" y2="14" strokeLinecap="round" />
-              {/* shoulders */}
-              <path strokeLinecap="round" d="M8 9h8" />
-              {/* arms */}
-              <line x1="8" y1="9" x2="6.5" y2="13" strokeLinecap="round" />
-              <line x1="16" y1="9" x2="17.5" y2="13" strokeLinecap="round" />
-              {/* legs */}
-              <line x1="12" y1="14" x2="10" y2="20" strokeLinecap="round" />
-              <line x1="12" y1="14" x2="14" y2="20" strokeLinecap="round" />
-            </svg>
-          </div>
-          <h1 className="text-4xl font-bold text-blue-900 tracking-tight">Postural Monitoring</h1>
-          <p className="text-blue-700 text-base">ML-assisted posture and movement analysis</p>
+    <main className="relative min-h-screen flex items-center justify-end pr-56 overflow-hidden">
+
+      {/* Background image — full opacity */}
+      <Image
+        src={bgImage}
+        alt=""
+        fill
+        unoptimized
+        className="object-cover object-center"
+        priority
+      />
+
+      {/* Card */}
+      <div className="relative z-10 flex flex-col items-center gap-7 px-12 py-14 rounded-3xl bg-green-800/55 backdrop-blur-sm border border-green-700/50 shadow-2xl text-center max-w-md w-11/12">
+
+        {/* ACC Bacoor logo */}
+        <div className="w-32 h-32 rounded-full overflow-hidden bg-green-600 shadow-lg ring-4 ring-white/30 flex items-center justify-center">
+          <Image
+            src={logoImage}
+            alt="ACC Bacoor Logo"
+            width={128}
+            height={128}
+            unoptimized
+            priority
+            className="w-full h-full object-cover"
+          />
         </div>
 
-        <button
-          onClick={() => setOpen(true)}
-          className="inline-block px-8 py-3 rounded-full bg-blue-600 text-white font-semibold shadow hover:bg-blue-700 transition-colors"
+        <div className="space-y-3">
+          <h1 className="text-4xl font-bold text-white tracking-tight">
+            ACC Bacoor
+          </h1>
+          <p className="text-lg font-medium text-white">
+            Postural Monitoring System
+          </p>
+          <p className="text-base text-white leading-relaxed">
+            Machine Learning-assisted posture and movement analysis
+          </p>
+        </div>
+
+        <Link
+          href="/login"
+          className="w-full py-3.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold shadow-lg transition-colors text-base tracking-wide"
         >
-          Get Started
-        </button>
-
-        {open && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div
-              className="fixed inset-0 bg-blue-950/40 backdrop-blur-sm"
-              onClick={() => setOpen(false)}
-            />
-
-            <div className="bg-white border border-blue-100 rounded-2xl p-8 z-10 w-11/12 max-w-sm text-center shadow-xl">
-              <h2 className="text-xl font-bold text-blue-900 mb-1">Hello!</h2>
-              <p className="text-sm text-blue-600 mb-6">Select your role to access your dashboard</p>
-              <div className="flex gap-3 flex-col">
-                <button
-                  onClick={() => router.push('/login?role=patient')}
-                  className="flex-1 px-4 py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
-                >
-                  Patient
-                </button>
-                <button
-                  onClick={() => router.push('/login?role=therapist')}
-                  className="flex-1 px-4 py-3 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 transition-colors"
-                >
-                  Therapist
-                </button>
-                <button
-                  onClick={() => router.push('/login?role=admin')}
-                  className="flex-1 px-4 py-3 rounded-xl bg-blue-800 text-white font-medium hover:bg-blue-900 transition-colors"
-                >
-                  Admin
-                </button>
-              </div>
-              <button
-                onClick={() => setOpen(false)}
-                className="mt-5 text-sm text-blue-500 hover:text-blue-700 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+          Log In
+        </Link>
       </div>
+
     </main>
   );
 }

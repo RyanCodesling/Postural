@@ -77,18 +77,18 @@ export default function PatientDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Loading patient profile...</div>
+      <div className="flex items-center justify-center p-12 text-gray-500">
+        Loading patient profile...
       </div>
     );
   }
 
   if (!patient) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="flex items-center justify-center p-12">
         <div className="text-center">
           <p className="text-gray-600 mb-4">Patient not found.</p>
-          <Link href="/dashboard/therapist" className="text-green-700 hover:underline">
+          <Link href="/dashboard/therapist/patients" className="text-green-700 hover:underline">
             ← Back to Patients
           </Link>
         </div>
@@ -97,11 +97,11 @@ export default function PatientDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-8 py-8 max-w-5xl mx-auto">
+    <div className="max-w-5xl mx-auto px-8 py-8">
 
       {/* Back link */}
       <Link
-        href="/dashboard/therapist"
+        href="/dashboard/therapist/patients"
         className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-6"
       >
         ← Back to Patients

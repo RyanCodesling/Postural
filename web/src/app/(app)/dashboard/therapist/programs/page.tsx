@@ -10,7 +10,7 @@ interface Exercise {
   is_custom: boolean;
 }
 
-interface TemplateExercise {
+interface ProgramExercise {
   id?: number;
   exerciseId?: string | null;
   name: string;
@@ -20,16 +20,16 @@ interface TemplateExercise {
   reps?: number | null;
 }
 
-interface ExerciseTemplate {
+interface ExerciseProgram {
   id: string;
   name: string;
   createdAt: string;
   updatedAt: string;
-  exercises: TemplateExercise[];
+  exercises: ProgramExercise[];
 }
 
-export default function ExerciseTemplatesPage() {
-  const [templates, setTemplates] = useState<ExerciseTemplate[]>([]);
+export default function ExerciseProgramsPage() {
+  const [programs, setPrograms] = useState<ExerciseProgram[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -37,8 +37,8 @@ export default function ExerciseTemplatesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Template form state
-  const [templateName, setTemplateName] = useState("");
+  // Program form state
+  const [programName, setProgramName] = useState("");
   const [selectedExercises, setSelectedExercises] = useState<Set<string>>(new Set());
   const [exerciseParams, setExerciseParams] = useState<
     Record<string, { sets?: number; reps?: number }>
@@ -68,7 +68,7 @@ export default function ExerciseTemplatesPage() {
       }
       if (tmplRes.ok) {
         const d = await tmplRes.json();
-        setTemplates(d.templates ?? []);
+        setPrograms(d.templates ?? []);
       }
     } catch (err) {
       console.error("Error loading data:", err);
@@ -78,7 +78,7 @@ export default function ExerciseTemplatesPage() {
   };
 
   const resetForm = () => {
-    setTemplateName("");
+    setProgramName("");
     setSelectedExercises(new Set());
     setExerciseParams({});
     resetCustomForm();
@@ -199,7 +199,7 @@ export default function ExerciseTemplatesPage() {
   };
 
   const handleSave = async () => {
-    if (!templateName.trim()) {
+    if (!programName.trim()) {
       alert("Please enter a program name.");
       return;
     }
@@ -211,7 +211,7 @@ export default function ExerciseTemplatesPage() {
 
     setSaving(true);
     try {
-      const body = { name: templateName.trim(), exercises: exPayload };
+      const body = { name: programName.trim(), exercises: exPayload };
       const res = editingId
         ? await fetch(`/api/templates/${editingId}`, {
             method: "PUT",
@@ -240,14 +240,14 @@ export default function ExerciseTemplatesPage() {
     }
   };
 
-  const handleEdit = (template: ExerciseTemplate) => {
-    setEditingId(template.id);
-    setTemplateName(template.name);
+  const handleEdit = (program: ExerciseProgram) => {
+    setEditingId(program.id);
+    setProgramName(program.name);
 
     const selected = new Set<string>();
     const params: Record<string, { sets?: number; reps?: number }> = {};
 
-    template.exercises.forEach((ex) => {
+    program.exercises.forEach((ex) => {
       if (ex.exerciseId) {
         selected.add(ex.exerciseId);
         if (ex.sets != null || ex.reps != null) {
@@ -273,7 +273,7 @@ export default function ExerciseTemplatesPage() {
         alert(d.error ?? "Failed to delete program.");
         return;
       }
-      setTemplates((prev) => prev.filter((t) => t.id !== id));
+      setPrograms((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       console.error("Error deleting program:", err);
     }
@@ -284,14 +284,14 @@ export default function ExerciseTemplatesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Loading programs...</div>
+      <div className="flex items-center justify-center p-12 text-gray-500">
+        Loading programs...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-8 py-8 max-w-5xl mx-auto">
+    <div className="max-w-5xl mx-auto px-8 py-8">
 
       <Link
         href="/dashboard/therapist"
@@ -310,15 +310,15 @@ export default function ExerciseTemplatesPage() {
             {editingId ? "Edit Program" : "Create New Program"}
           </h2>
 
-          {/* Template name */}
+          {/* Program name */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Program Name <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
+              value={programName}
+              onChange={(e) => setProgramName(e.target.value)}
               placeholder="e.g., Lower Body Strengthening"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
             />
@@ -603,28 +603,28 @@ export default function ExerciseTemplatesPage() {
         </button>
       )}
 
-      {/* Templates list */}
+      {/* Programs list */}
       <div className="bg-white rounded-2xl border border-green-100 p-6">
         <h2 className="text-green-700 font-semibold text-lg mb-6">
-          Your Programs ({templates.length})
+          Your Programs ({programs.length})
         </h2>
 
-        {templates.length === 0 ? (
+        {programs.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-6">
             No programs yet. Click &quot;Create New Program&quot; to get started.
           </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {templates.map((t) => (
-              <div key={t.id} className="rounded-xl border border-gray-100 p-4">
-                <h3 className="font-semibold text-green-700 text-base">{t.name}</h3>
+            {programs.map((p) => (
+              <div key={p.id} className="rounded-xl border border-gray-100 p-4">
+                <h3 className="font-semibold text-green-700 text-base">{p.name}</h3>
                 <p className="text-xs text-gray-400 mt-0.5 mb-3">
-                  {t.exercises.length} exercise{t.exercises.length !== 1 ? "s" : ""} ·
-                  Updated {new Date(t.updatedAt).toLocaleDateString()}
+                  {p.exercises.length} exercise{p.exercises.length !== 1 ? "s" : ""} ·
+                  Updated {new Date(p.updatedAt).toLocaleDateString()}
                 </p>
 
                 <div className="space-y-1 mb-4 max-h-28 overflow-y-auto">
-                  {t.exercises.map((ex, i) => (
+                  {p.exercises.map((ex, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
                       <span className="flex-1">{ex.name}</span>
                       {(ex.sets || ex.reps) && (
@@ -643,13 +643,13 @@ export default function ExerciseTemplatesPage() {
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => handleEdit(t)}
+                    onClick={() => handleEdit(p)}
                     className="flex-1 px-3 py-1.5 text-sm border border-green-700 text-green-700 rounded-lg hover:bg-green-50 transition"
                   >
                     Edit
                   </button>
                   <button
-                    onClick={() => handleDelete(t.id)}
+                    onClick={() => handleDelete(p.id)}
                     className="flex-1 px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition"
                   >
                     Delete

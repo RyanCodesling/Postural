@@ -63,6 +63,14 @@ export async function getUser(email: string, role: string) {
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
+export async function getUserByEmail(email: string) {
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email = $1",
+    [email]
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 export async function getUsers(filters?: { role?: string; therapistId?: string }) {
@@ -295,8 +303,8 @@ export async function getTemplates(therapistId: string) {
               ) FILTER (WHERE te.id IS NOT NULL),
               '[]'
             ) AS exercises
-     FROM exercise_templates et
-     LEFT JOIN template_exercises te ON te.template_id = et.id
+     FROM exercise_programs et
+     LEFT JOIN program_exercises te ON te.program_id = et.id
      WHERE et.therapist_id = $1
      GROUP BY et.id
      ORDER BY et.created_at DESC`,
@@ -337,8 +345,8 @@ async function insertTemplateExercises(
 ) {
   for (const ex of exercises) {
     await client.query(
-      `INSERT INTO template_exercises
-         (template_id, exercise_id, name, description, is_custom, sets, reps)
+      `INSERT INTO program_exercises
+         (program_id, exercise_id, name, description, is_custom, sets, reps)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         templateId,
@@ -358,12 +366,12 @@ export async function createTemplate(data: {
   name: string;
   exercises: TemplateExerciseInput[];
 }) {
-  const id = `tmpl_${Date.now()}`;
+  const id = `program_${Date.now()}`;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query(
-      "INSERT INTO exercise_templates (id, therapist_id, name) VALUES ($1, $2, $3)",
+      "INSERT INTO exercise_programs (id, therapist_id, name) VALUES ($1, $2, $3)",
       [id, data.therapistId, data.name]
     );
     await insertTemplateExercises(client, id, data.exercises);
@@ -386,15 +394,15 @@ export async function updateTemplate(
   try {
     await client.query("BEGIN");
     const check = await client.query(
-      "SELECT id FROM exercise_templates WHERE id = $1 AND therapist_id = $2",
+      "SELECT id FROM exercise_programs WHERE id = $1 AND therapist_id = $2",
       [id, therapistId]
     );
     if (check.rows.length === 0) throw new Error("Not found or forbidden");
     await client.query(
-      "UPDATE exercise_templates SET name = $1, updated_at = NOW() WHERE id = $2",
+      "UPDATE exercise_programs SET name = $1, updated_at = NOW() WHERE id = $2",
       [data.name, id]
     );
-    await client.query("DELETE FROM template_exercises WHERE template_id = $1", [id]);
+    await client.query("DELETE FROM program_exercises WHERE program_id = $1", [id]);
     await insertTemplateExercises(client, id, data.exercises);
     await client.query("COMMIT");
   } catch (err) {
@@ -407,7 +415,7 @@ export async function updateTemplate(
 
 export async function deleteTemplate(id: string, therapistId: string) {
   const result = await pool.query(
-    "DELETE FROM exercise_templates WHERE id = $1 AND therapist_id = $2",
+    "DELETE FROM exercise_programs WHERE id = $1 AND therapist_id = $2",
     [id, therapistId]
   );
   return (result.rowCount ?? 0) > 0;

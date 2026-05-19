@@ -5,6 +5,56 @@
 
 --- 
 
+## 📌 Update-5-19-26 | *ralmeyda*
+- Completed responsive sidebar layout for all dashboard pages (patient, therapist, admin) — collapsible slide-in sidebar with dark overlay on mobile, static on desktop
+- Made the navbar responsive with a hamburger dropdown for mobile
+- Renamed "Assign Patient" tab to "Assign Exercise" and "Exercise Templates" to "Exercise Program" on the therapist dashboard
+- Renamed all user-visible "Template" labels to "Program" on the Exercise Program page
+- Added horizontal scroll to the Manage Users and Currently Assigned Patients tables so action buttons remain accessible when zoomed in
+- Added a browser-level `window.confirm` dialog as a second confirmation step before deleting a user
+- Added an Assignment History table at the bottom of the Assign Patients tab that logs all assign/unassign actions with date and time (session only)
+- Removed the ACC Bacoor logo from all pages
+
+### *web\src\app\(app)\layout.tsx*
+- Added `menuOpen` state and a hamburger button visible only on mobile (`sm:hidden`)
+- Desktop nav links and logout button hidden on mobile (`hidden sm:flex` / `hidden sm:block`)
+- Mobile dropdown renders below the navbar when hamburger is toggled, containing all nav links and logout
+- Logo removed from the navbar
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Added `sidebarOpen` state for mobile sidebar toggle
+- Changed `<aside>` from static `w-64` to `fixed` slide-in on mobile with `translate-x`; reverts to `md:static` on desktop
+- Added dark backdrop overlay (`fixed inset-0 z-30 bg-black/50 md:hidden`) that closes sidebar on tap
+- Added `☰ Menu` hamburger button at top of `<main>` visible only on mobile (`md:hidden`)
+- Sidebar nav items call `setSidebarOpen(false)` on click to auto-close on mobile
+- Changed main padding to `p-4 sm:p-6` and added `min-w-0`
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Added `sidebarOpen` state; same slide-in sidebar pattern as patient dashboard
+- Added mobile backdrop overlay and `☰ Menu` hamburger button in `<main>`
+- Changed main padding to `p-4 sm:p-6` and added `min-w-0`
+- Renamed "Assign Patient" sidebar tab label → "Assign Exercise"
+- Renamed "Exercise Templates" sidebar link → "Exercise Program"
+- Updated all visible "template/Template" strings in the Assign Exercise tab to "program/Program"
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Added `sidebarOpen` state; same responsive sidebar pattern as other dashboards
+- Added dark backdrop overlay and `☰ Menu` hamburger button in `<main>`
+- Changed main padding from `p-8` to `p-4 sm:p-8` and added `min-w-0`
+- Added `window.confirm` inside `confirmDeleteUser` — fires after the modal's Delete button is clicked; cancelling aborts deletion without closing the modal
+- Wrapped Manage Users table in `overflow-x-auto` with `min-w-[600px]` on the table for horizontal scroll on small screens
+- Wrapped Currently Assigned Patients table in `overflow-x-auto` with `min-w-[600px]`
+- Added `assignHistory` state and `addHistory` helper to record assign/unassign events
+- `handleAssignPatient` calls `addHistory("assigned", ...)` on success
+- `handleUnassignPatient` calls `addHistory("unassigned", ...)` on success
+- Added Assignment History section at the bottom of the Assign Patients tab — table with Action badge (green/red), Patient, Therapist, Date, and Time columns; newest entries appear first; session-only (clears on refresh)
+
+### *web\src\app\(app)\dashboard\therapist\templates\page.tsx*
+- Renamed page title: "Exercise Templates" → "Exercise Program"
+- Updated subtitle, loading text, form section heading ("Template Name" → "Program Name"), button labels ("Create New Template" → "Create New Program", "Update Template" → "Update Program", "Create Template" → "Create Program"), list heading ("Your Templates" → "Your Programs"), empty state text, and all alert/confirm dialog strings
+
+---
+
 ## 📌 Update-5-12-26 | *Enah*
 - Removed **Profile** nav link and deleted the placeholder profile page — profile functionality is now inside each role's dashboard under the View Profile tab
 - Fixed `TypeError` in Login page — removed invalid `setUser` destructure from `useAuth()` which is not exposed by `AuthContextType`

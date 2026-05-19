@@ -38,6 +38,7 @@ export default function AdminDashboard() {
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<Tab>("users");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
 
@@ -94,6 +95,21 @@ export default function AdminDashboard() {
   // Assignment state
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedTherapistId, setSelectedTherapistId] = useState<string | null>(null);
+
+  // Assignment history (session-only)
+  const [assignHistory, setAssignHistory] = useState<{
+    id: number;
+    action: "assigned" | "unassigned";
+    patientName: string;
+    therapistName: string;
+    timestamp: Date;
+  }[]>([]);
+  const addHistory = (action: "assigned" | "unassigned", patientName: string, therapistName: string) => {
+    setAssignHistory((prev) => [
+      { id: Date.now(), action, patientName, therapistName, timestamp: new Date() },
+      ...prev,
+    ]);
+  };
 
   // Exercise form state
   const [newExercise, setNewExercise] = useState<{
@@ -180,6 +196,11 @@ export default function AdminDashboard() {
   const confirmDeleteUser = async () => {
     if (!deleteUserId) return;
 
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${deleteUserName}"? This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
     try {
       const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
       if (!res.ok) {
@@ -231,6 +252,9 @@ export default function AdminDashboard() {
   const handleAssignPatient = async () => {
     if (!selectedPatientId || !selectedTherapistId) return;
 
+    const patientName = patients.find((p) => p.id === selectedPatientId)?.name ?? selectedPatientId;
+    const therapistName = therapists.find((t) => t.id === selectedTherapistId)?.name ?? selectedTherapistId;
+
     try {
       const res = await fetch(`/api/users/${selectedPatientId}`, {
         method: "PUT",
@@ -241,6 +265,7 @@ export default function AdminDashboard() {
         setUsers(users.map((u) =>
           u.id === selectedPatientId ? { ...u, therapistId: selectedTherapistId } : u
         ));
+        addHistory("assigned", patientName, therapistName);
       }
     } catch (err) {
       console.error("Failed to assign patient:", err);
@@ -251,6 +276,12 @@ export default function AdminDashboard() {
   };
 
   const handleUnassignPatient = async (patientId: string) => {
+    const patient = users.find((u) => u.id === patientId);
+    const patientName = patient?.name ?? patientId;
+    const therapistName = patient?.therapistId
+      ? (therapists.find((t) => t.id === patient.therapistId)?.name ?? patient.therapistId)
+      : "Unknown";
+
     try {
       const res = await fetch(`/api/users/${patientId}`, {
         method: "PUT",
@@ -261,6 +292,7 @@ export default function AdminDashboard() {
         setUsers(users.map((u) =>
           u.id === patientId ? { ...u, therapistId: undefined } : u
         ));
+        addHistory("unassigned", patientName, therapistName);
       }
     } catch (err) {
       console.error("Failed to unassign patient:", err);
@@ -308,8 +340,19 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen flex bg-gray-100">
+
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 text-white p-6">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-gray-900 text-white p-6 flex flex-col transform transition-transform duration-200
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Admin Panel</h1>
           <p className="text-sm text-gray-400 mt-1">{user?.name}</p>
@@ -317,7 +360,7 @@ export default function AdminDashboard() {
 
         <nav className="space-y-2">
           <button
-            onClick={() => setActiveTab("users")}
+            onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
             className={`w-full text-left px-4 py-3 rounded transition ${
               activeTab === "users"
                 ? "bg-blue-600 text-white"
@@ -327,7 +370,7 @@ export default function AdminDashboard() {
             👥 Manage Users
           </button>
           <button
-            onClick={() => setActiveTab("exercises")}
+            onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
             className={`w-full text-left px-4 py-3 rounded transition ${
               activeTab === "exercises"
                 ? "bg-blue-600 text-white"
@@ -337,7 +380,7 @@ export default function AdminDashboard() {
             💪 Manage Exercises
           </button>
           <button
-            onClick={() => setActiveTab("assignments")}
+            onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
             className={`w-full text-left px-4 py-3 rounded transition ${
               activeTab === "assignments"
                 ? "bg-blue-600 text-white"
@@ -350,7 +393,13 @@ export default function AdminDashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-8">
+      <main className="flex-1 p-4 sm:p-8 overflow-y-auto min-w-0">
+        <button
+          className="md:hidden mb-4 px-3 py-2 border border-gray-300 rounded text-sm text-gray-600 hover:bg-gray-50 bg-white"
+          onClick={() => setSidebarOpen(true)}
+        >
+          ☰ Menu
+        </button>
         {/* Users Tab */}
         {activeTab === "users" && (
           <div>
@@ -885,8 +934,8 @@ export default function AdminDashboard() {
             )}
 
             {/* Users List */}
-            <div className="bg-white rounded shadow overflow-hidden">
-              <table className="w-full">
+            <div className="bg-white rounded shadow overflow-x-auto">
+              <table className="w-full min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
@@ -1099,8 +1148,8 @@ export default function AdminDashboard() {
               <h3 className="text-2xl font-semibold text-gray-900 mb-4">
                 Currently Assigned Patients ({assignedPatients.length})
               </h3>
-              <div className="bg-white rounded shadow overflow-hidden">
-                <table className="w-full">
+              <div className="bg-white rounded shadow overflow-x-auto">
+                <table className="w-full min-w-[600px]">
                   <thead className="bg-gray-50 border-b">
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
@@ -1137,6 +1186,53 @@ export default function AdminDashboard() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            {/* Assignment History */}
+            <div className="mt-8">
+              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+                Assignment History ({assignHistory.length})
+              </h3>
+              <div className="bg-white rounded shadow overflow-x-auto">
+                {assignHistory.length === 0 ? (
+                  <p className="px-6 py-6 text-sm text-gray-500">No assignment actions yet this session.</p>
+                ) : (
+                  <table className="w-full min-w-[520px]">
+                    <thead className="bg-gray-50 border-b">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Therapist</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {assignHistory.map((entry) => (
+                        <tr key={entry.id}>
+                          <td className="px-6 py-4 text-sm">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              entry.action === "assigned"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-red-100 text-red-700"
+                            }`}>
+                              {entry.action === "assigned" ? "Assigned" : "Unassigned"}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-900">{entry.patientName}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{entry.therapistName}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {entry.timestamp.toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {entry.timestamp.toLocaleTimeString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
           </div>

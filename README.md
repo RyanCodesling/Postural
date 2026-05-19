@@ -34,7 +34,7 @@
 - Updated `DELETE FROM program_exercises WHERE template_id` → `WHERE program_id` in `updateTemplate()`
 - Updated `DELETE FROM exercise_templates` → `DELETE FROM exercise_programs` in `deleteTemplate()`
 
-### *web\src\app\(app)\dashboard\therapist\programs\page.tsx* (renamed from templates\page.tsx)
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx (renamed from templates\page.tsx)* 
 - Renamed route folder from `templates` to `programs`
 - `interface TemplateExercise` → `interface ProgramExercise`
 - `interface ExerciseTemplate` → `interface ExerciseProgram`
@@ -90,7 +90,7 @@
 ### *web\src\app\globals.css*
 - Added `-webkit-autofill` override scoped to `.dark-autofill` class — sets inset box-shadow to `rgba(22, 101, 52, 0.55)` to match the card background, `-webkit-text-fill-color: white`, and `transition: background-color 5000s` to prevent the browser autofill white background from flashing; scoped to avoid affecting dashboard and other pages
 
-### *web\media\* (new)
+### *web\media\ (new)* 
 - Added `acc_bacoor_landing_page.png` (1640×924) and `acc_bacoor_logo.png` (2000×2000) to version control via `git add web/media/` — both files are now tracked and will be included in commits so the app works correctly on any device that pulls the branch
 
 ### *web\src\app\(app)\dashboard\admin\page.tsx*
@@ -130,7 +130,7 @@
 ### *web\src\app\(app)\session\page.tsx*
 - Applied green color palette: page background `bg-green-50`; headings and labels `text-green-900`/`text-green-700`; progress bar track `bg-green-100` with `bg-green-700` fill; "Back to Dashboard" link `text-green-700`; "Start Exercise" button `bg-green-700 hover:bg-green-800`; summary stat colors unified to green shades; pending status badge changed from blue to `bg-green-100 text-green-700`
 
-### *web\src\app\(app)\dashboard\therapist\layout.tsx* (new)
+### *web\src\app\(app)\dashboard\therapist\layout.tsx (new)* 
 - Created shared layout for all therapist sub-routes — renders `bg-green-900` sidebar with `usePathname()` active detection, mobile hamburger + overlay, and `{children}` in `<main>`
 - NAV array: 🏠 Dashboard (exact match), 👤 View Profile, 👥 Manage Patients, 🏋️ Manage Exercises, 📋 Assign Exercise, 📝 Exercise Program, 📷 Camera
 - Active item: `bg-green-700 text-white font-medium`; inactive: `text-green-200 hover:bg-green-800`
@@ -141,19 +141,19 @@
 - Auth redirect preserved: redirects non-therapist users to `/dashboard`
 - All other tab content moved to dedicated route pages
 
-### *web\src\app\(app)\dashboard\therapist\profile\page.tsx* (new)
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx (new)* 
 - View Profile page — fetches therapist profile (`/api/users/${user.id}`) and assigned patients (`/api/users?role=patient&therapistId=`) in parallel
 - Renders Therapist Information card (full name, email, ID, specialty, clinic, gender, age, DOB) and Assigned Patients list
 
-### *web\src\app\(app)\dashboard\therapist\patients\page.tsx* (new)
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx (new)* 
 - Manage Patients page — fetches patients for the therapist and loads each patient's exercises in parallel
 - Search filter, Refresh button, and View/Start Session action buttons per patient card
 - "← Back to Patients" link in patient detail now correctly routes to `/dashboard/therapist/patients`
 
-### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx* (new)
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx (new)* 
 - Manage Exercises page — fetches all exercises and renders System and Custom exercise sections with inline edit (name + description) via `ExerciseRow` sub-component
 
-### *web\src\app\(app)\dashboard\therapist\assign\page.tsx* (new)
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx (new)* 
 - Assign Exercise page — loads patients, exercises, and templates; pre-fills existing patient exercises when a patient is selected; template merges into current selection; validates sets/reps before submitting to `/api/patient-exercises`; uses `AssignRow` sub-component
 
 ### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
@@ -197,22 +197,22 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 - Added hold-duration tests (explicit hold at peak; snappy one-frame hold) and premature-descent-latch recovery test
 - Removed the three-tier classification tests with the revert; net 21 tests
 
-### *web\src\lib\pose\bidirectionalRepCounter.ts* (new)
+### *web\src\lib\pose\bidirectionalRepCounter.ts (new)* 
 - Wrapper around `RepCounter` for signed bidirectional exercises (`ex_004` Neck Lateral Flexion)
 - Feeds `|angle|` to the state machine, tags side from sign-at-peak
 - Post-rep neutral-settle gate with decoupled `restSettleBand` (default = `startThreshold`) + short refractory — suppresses return-stroke overshoot phantoms while allowing realistic loose-neutral alternation
 - Bounded synthetic-neutral completion for missed-neutral cross-frame side changes at low frame rate; internal completion threshold derived from the settle band (registry `repCompleteThreshold` is too strict at webcam frame rate)
 
-### *web\src\lib\pose\bidirectionalRepCounter.test.ts* (new)
+### *web\src\lib\pose\bidirectionalRepCounter.test.ts (new)* 
 - Synthetic regression coverage: side tagging both directions, overshoot suppression, loose-neutral alternation, refractory release, limited-ROM partials, missed-neutral crossing (12 tests)
 
-### *web\src\lib\pose\neckSideAgreement.test.ts* (new)
+### *web\src\lib\pose\neckSideAgreement.test.ts (new)* 
 - Pins that the display path and the rep-tag path produce the same side for the same input (2 tests)
 
-### *web\src\lib\pose\scapularElevation.test.ts* (new)
+### *web\src\lib\pose\scapularElevation.test.ts (new)* 
 - Rest sanity, shrug direction, asymmetry preservation, forward-lean rejection, scale invariance, visibility gating (9 tests)
 
-### *web\src\lib\pose\shoulderFlexion.test.ts* (new)
+### *web\src\lib\pose\shoulderFlexion.test.ts (new)* 
 - Overhead-range (150°–180°) coverage, monotonicity, cross-body `null`, visibility gating (11 tests)
 
 ### *web\src\lib\exercises\registry.ts*
@@ -232,7 +232,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ### *web\package.json*
 - Added `profile:filter` and `profile:sweep` npm scripts
 
-### *web\scripts* (new)
+### *web\scripts (new)* 
 - `profileOneEuroFilter.ts`, `sweepOneEuroFilter.ts` — OneEuroFilter profiling/sweep tooling; CSV output under `scripts/out/` (gitignored)
 
 

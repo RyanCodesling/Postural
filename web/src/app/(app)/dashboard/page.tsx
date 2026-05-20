@@ -18,16 +18,16 @@ export default function DashboardPage() {
 
     switch (user.role) {
       case 'admin':
-        router.push('/dashboard/admin');
+        router.replace('/dashboard/admin');
         break;
       case 'therapist':
-        router.push('/dashboard/therapist');
+        router.replace('/dashboard/therapist');
         break;
       case 'patient':
-        router.push('/dashboard/patient');
+        router.replace('/dashboard/patient');
         break;
       default:
-        router.push('/login');
+        router.replace('/login');
     }
   }, [router, user, loading]);
 

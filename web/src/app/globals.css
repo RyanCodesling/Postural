@@ -29,3 +29,12 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.dark-autofill input:-webkit-autofill,
+.dark-autofill input:-webkit-autofill:hover,
+.dark-autofill input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px rgba(22, 101, 52, 0.55) inset;
+  -webkit-text-fill-color: white;
+  transition: background-color 5000s ease-in-out 0s;
+  caret-color: white;
+}
+

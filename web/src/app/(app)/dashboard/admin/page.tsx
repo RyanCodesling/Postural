@@ -1,14 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 
-type Tab = "users" | "exercises" | "assignments";
+type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
 interface User {
   id: string;
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
   email?: string;
   role: "patient" | "therapist";
   therapistId?: string;
@@ -34,51 +38,18 @@ export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<Tab>("users");
-  const [users, setUsers] = useState<User[]>([
-    { id: "patient_001", name: "John Patient", email: "patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "patient_002", name: "Jane Patient", email: "jane.patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "patient_003", name: "Mike Patient", email: "mike.patient@example.com", role: "patient", therapistId: "therapist_001" },
-    { id: "therapist_001", name: "Sarah Therapist", email: "therapist@clinic.com", role: "therapist" },
-  ]);
-  const [exercises, setExercises] = useState<Exercise[]>([
-    {
-      id: "ex_001",
-      name: "Lateral Arm Raises",
-      description: "Raise arms to the side at shoulder height. Improves shoulder strength and posture.",
-    },
-    {
-      id: "ex_002",
-      name: "Overhead Arm Raises",
-      description: "Raise arms straight up overhead. Strengthens shoulders and improves upper back flexibility.",
-    },
-    {
-      id: "ex_003",
-      name: "Shoulder Shrugs",
-      description: "Lift shoulders towards ears and release. Relieves tension and strengthens trapezius.",
-    },
-    {
-      id: "ex_004",
-      name: "Neck Lateral Flexion",
-      description: "Bend neck to each side gently. Improves neck flexibility and reduces stiffness.",
-    },
-    {
-      id: "ex_005",
-      name: "Standing Side Bends",
-      description: "Bend torso to the side while standing. Strengthens obliques and improves spinal mobility.",
-    },
-    {
-      id: "ex_006",
-      name: "Arm Abduction at 90°",
-      description: "Raise arms to 90 degrees from body. Targets shoulder stability and strength.",
-    },
-  ]);
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [users, setUsers] = useState<User[]>([]);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
 
   // User form state
   const [selectedRole, setSelectedRole] = useState<"patient" | "therapist" | null>(null);
-  const [newUser, setNewUser] = useState<Partial<User>>({ 
-    name: "", 
-    email: "", 
+  const [newUser, setNewUser] = useState<Partial<User>>({
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    email: "",
     role: "patient",
     dateOfBirth: "",
     age: undefined,
@@ -92,10 +63,57 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusType, setStatusType] = useState<"success" | "error" | null>(null);
+  const [statusVisible, setStatusVisible] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isFinalConfirmOpen, setIsFinalConfirmOpen] = useState(false);
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+  const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
+  const [showAddPreview, setShowAddPreview] = useState(false);
+  const [showEditPreview, setShowEditPreview] = useState(false);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      setStatusVisible(false);
+      return;
+    }
+
+    setStatusVisible(true);
+
+    const hideTimer = window.setTimeout(() => {
+      setStatusVisible(false);
+    }, 4700);
+
+    const clearTimer = window.setTimeout(() => {
+      setStatusMessage(null);
+      setStatusType(null);
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(hideTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [statusMessage]);
 
   // Assignment state
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedTherapistId, setSelectedTherapistId] = useState<string | null>(null);
+
+  // Assignment history (session-only)
+  const [assignHistory, setAssignHistory] = useState<{
+    id: number;
+    action: "assigned" | "unassigned";
+    patientName: string;
+    therapistName: string;
+    timestamp: Date;
+  }[]>([]);
+  const addHistory = (action: "assigned" | "unassigned", patientName: string, therapistName: string) => {
+    setAssignHistory((prev) => [
+      { id: Date.now(), action, patientName, therapistName, timestamp: new Date() },
+      ...prev,
+    ]);
+  };
 
   // Exercise form state
   const [newExercise, setNewExercise] = useState<{
@@ -107,94 +125,107 @@ export default function AdminDashboard() {
   });
   const [showExerciseForm, setShowExerciseForm] = useState(false);
 
-  // Initialize and persist users data to localStorage
+  // Load users and exercises from PostgreSQL on mount
   useEffect(() => {
-    // Load from localStorage if exists, otherwise use initial state
-    const storedUsers = localStorage.getItem("admin_users");
-    if (storedUsers) {
-      try {
-        setUsers(JSON.parse(storedUsers));
-      } catch (error) {
-        console.error("Error loading users from storage:", error);
-      }
-    } else {
-      // Initialize localStorage with initial users on first load
-      localStorage.setItem("admin_users", JSON.stringify(users));
-    }
-  }, []); // Only run on mount
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((data) => setUsers(data.users ?? []))
+      .catch((err) => console.error("Failed to load users:", err));
 
-  // Persist users data to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem("admin_users", JSON.stringify(users));
-  }, [users]);
-
-  // Initialize and persist exercises data to localStorage
-  useEffect(() => {
-    const storedExercises = localStorage.getItem("admin_exercises");
-    if (storedExercises) {
-      try {
-        setExercises(JSON.parse(storedExercises));
-      } catch (error) {
-        console.error("Error loading exercises from storage:", error);
-      }
-    } else {
-      // Initialize localStorage with initial exercises on first load
-      localStorage.setItem("admin_exercises", JSON.stringify(exercises));
-    }
-  }, []); // Only run on mount
-
-  // Persist exercises data to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem("admin_exercises", JSON.stringify(exercises));
-  }, [exercises]);
+    fetch("/api/exercises")
+      .then((r) => r.json())
+      .then((data) => setExercises(data.exercises ?? []))
+      .catch((err) => console.error("Failed to load exercises:", err));
+  }, []);
 
   const handleAddUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUser.name || !newUser.role) return;
+    if (!newUser.firstName || !newUser.lastName || !newUser.role) return;
 
-    // Validate role-specific required fields
     if (newUser.role === "patient") {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.diagnosis || !newUser.prescription || !newUser.condition) return;
     } else if (newUser.role === "therapist") {
-      if (!newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.therapistIDNum || !newUser.specialty) return;
+      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
 
-    const user: User = {
-      id: `user_${Date.now()}`,
-      name: newUser.name!,
-      email: newUser.email,
-      role: newUser.role as "patient" | "therapist",
-      dateOfBirth: newUser.dateOfBirth,
-      age: newUser.age,
-      gender: newUser.gender,
-      diagnosis: newUser.diagnosis,
-      prescription: newUser.prescription,
-      condition: newUser.condition,
-      therapistIDNum: newUser.therapistIDNum,
-      specialty: newUser.specialty,
-    };
-    setUsers([...users, user]);
-    setNewUser({ 
-      name: "", 
-      email: "", 
-      role: "patient",
-      dateOfBirth: "",
-      age: undefined,
-      gender: "",
-      diagnosis: "",
-      prescription: "",
-      condition: "",
-      therapistIDNum: "",
-      specialty: ""
-    });
+    setShowAddPreview(true);
+  };
+
+  const handleConfirmAdd = async () => {
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newUser),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUsers([...users, data.user]);
+        const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
+        setStatusType("success");
+        setStatusMessage(`${fullName} successfully added.`);
+      } else {
+        setStatusType("error");
+        setStatusMessage(data?.error || "Unable to add user. Please try again.");
+      }
+    } catch (err) {
+      console.error("Failed to add user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to add user. Please try again.");
+    }
+
+    setShowAddPreview(false);
+    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", diagnosis: "", prescription: "", condition: "", therapistIDNum: "", specialty: "" });
     setSelectedRole(null);
     setShowUserForm(false);
     setEditingUserId(null);
     setEditingUser(null);
   };
 
-  const handleDeleteUser = (id: string) => {
-    setUsers(users.filter((u) => u.id !== id));
+  const handleDeleteUser = async (id: string) => {
+    try {
+      await fetch(`/api/users/${id}`, { method: "DELETE" });
+      setUsers(users.filter((u) => u.id !== id));
+    } catch (err) {
+      console.error("Failed to delete user:", err);
+    }
+  };
+
+  const openDeleteModal = (user: User) => {
+    setDeleteUserId(user.id);
+    setDeleteUserName(user.name || `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "this user");
+    setIsDeleteModalOpen(true);
+  };
+
+  const closeDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setDeleteUserId(null);
+    setDeleteUserName(null);
+  };
+
+  const confirmDeleteUser = () => {
+    if (!deleteUserId) return;
+    setIsDeleteModalOpen(false);
+    setIsFinalConfirmOpen(true);
+  };
+
+  const handleFinalDelete = async () => {
+    if (!deleteUserId) return;
+    try {
+      const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete user.");
+      setUsers(users.filter((u) => u.id !== deleteUserId));
+      setStatusType("success");
+      setStatusMessage(`${deleteUserName} successfully deleted.`);
+    } catch (err) {
+      console.error("Failed to delete user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to delete user. Please try again.");
+    } finally {
+      setIsFinalConfirmOpen(false);
+      setDeleteUserId(null);
+      setDeleteUserName(null);
+    }
   };
 
   const handleEditUser = (user: User) => {
@@ -205,11 +236,34 @@ export default function AdminDashboard() {
 
   const handleSaveEditUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser || !editingUser.name) return;
+    if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
+    setShowEditPreview(true);
+  };
 
-    setUsers(
-      users.map((u) => (u.id === editingUserId ? editingUser : u))
-    );
+  const handleConfirmEdit = async () => {
+    if (!editingUser) return;
+    try {
+      const res = await fetch(`/api/users/${editingUserId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingUser),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
+        const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
+        setStatusType("success");
+        setStatusMessage(`${fullName} successfully updated.`);
+      } else {
+        setStatusType("error");
+        setStatusMessage(data?.error || "Unable to update user. Please try again.");
+      }
+    } catch (err) {
+      console.error("Failed to update user:", err);
+      setStatusType("error");
+      setStatusMessage("Unable to update user. Please try again.");
+    }
+    setShowEditPreview(false);
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -219,41 +273,93 @@ export default function AdminDashboard() {
     setEditingUser(null);
   };
 
-  const handleAssignPatient = () => {
+  const handleAssignPatient = async () => {
     if (!selectedPatientId || !selectedTherapistId) return;
 
-    setUsers(
-      users.map((u) =>
-        u.id === selectedPatientId ? { ...u, therapistId: selectedTherapistId } : u
-      )
-    );
+    const patientName = patients.find((p) => p.id === selectedPatientId)?.name ?? selectedPatientId;
+    const therapistName = therapists.find((t) => t.id === selectedTherapistId)?.name ?? selectedTherapistId;
+
+    try {
+      const res = await fetch(`/api/users/${selectedPatientId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ therapistId: selectedTherapistId }),
+      });
+      if (res.ok) {
+        setUsers(users.map((u) =>
+          u.id === selectedPatientId ? { ...u, therapistId: selectedTherapistId } : u
+        ));
+        addHistory("assigned", patientName, therapistName);
+      }
+    } catch (err) {
+      console.error("Failed to assign patient:", err);
+    }
+
     setSelectedPatientId(null);
     setSelectedTherapistId(null);
   };
 
-  const handleUnassignPatient = (patientId: string) => {
-    setUsers(
-      users.map((u) =>
-        u.id === patientId ? { ...u, therapistId: undefined } : u
-      )
-    );
+  const handleUnassignPatient = async (patientId: string) => {
+    const patient = users.find((u) => u.id === patientId);
+    const patientName = patient?.name ?? patientId;
+    const therapistName = patient?.therapistId
+      ? (therapists.find((t) => t.id === patient.therapistId)?.name ?? patient.therapistId)
+      : "Unknown";
+
+    try {
+      const res = await fetch(`/api/users/${patientId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ therapistId: null }),
+      });
+      if (res.ok) {
+        setUsers(users.map((u) =>
+          u.id === patientId ? { ...u, therapistId: undefined } : u
+        ));
+        addHistory("unassigned", patientName, therapistName);
+      }
+    } catch (err) {
+      console.error("Failed to unassign patient:", err);
+    }
   };
 
-  const handleAddExercise = (e: React.FormEvent) => {
+  const handleAddExercise = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newExercise.name || !newExercise.description) return;
 
-    const exercise: Exercise = {
-      id: `ex_${Date.now()}`,
-      ...newExercise,
-    };
-    setExercises([...exercises, exercise]);
+    try {
+      const res = await fetch("/api/exercises", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newExercise),
+      });
+      const data = await res.json();
+      if (res.ok) setExercises([...exercises, data.exercise]);
+    } catch (err) {
+      console.error("Failed to add exercise:", err);
+    }
+
     setNewExercise({ name: "", description: "" });
     setShowExerciseForm(false);
   };
 
-  const handleDeleteExercise = (id: string) => {
-    setExercises(exercises.filter((e) => e.id !== id));
+  const handleDeleteExercise = async (id: string) => {
+    try {
+      await fetch(`/api/exercises/${id}`, { method: "DELETE" });
+      setExercises(exercises.filter((e) => e.id !== id));
+    } catch (err) {
+      console.error("Failed to delete exercise:", err);
+    }
+  };
+
+  const computeAgePhilippines = (dob: string): number => {
+    if (!dob) return 0;
+    const phToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const [ty, tm, td] = phToday.split("-").map(Number);
+    const [by, bm, bd] = dob.split("-").map(Number);
+    let age = ty - by;
+    if (tm < bm || (tm === bm && td < bd)) age--;
+    return Math.max(0, age);
   };
 
   // Helper functions
@@ -267,50 +373,113 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-100">
+    <div className="min-h-screen flex bg-green-50">
+
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 text-white p-6">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
+        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
-          <h1 className="text-2xl font-bold">Admin Panel</h1>
-          <p className="text-sm text-gray-400 mt-1">{user?.name}</p>
+          <div className="text-sm text-green-400">Admin</div>
+          <div className="mt-1 text-lg font-semibold text-white">{user?.name}</div>
         </div>
 
-        <nav className="space-y-2">
-          <button
-            onClick={() => setActiveTab("users")}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "users"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            👥 Manage Users
-          </button>
-          <button
-            onClick={() => setActiveTab("exercises")}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "exercises"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            💪 Manage Exercises
-          </button>
-          <button
-            onClick={() => setActiveTab("assignments")}
-            className={`w-full text-left px-4 py-3 rounded transition ${
-              activeTab === "assignments"
-                ? "bg-blue-600 text-white"
-                : "text-gray-300 hover:bg-gray-800"
-            }`}
-          >
-            🔗 Assign Patients
-          </button>
+        <nav>
+          <ul className="space-y-1">
+            <li>
+              <button
+                onClick={() => { setActiveTab("dashboard"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "dashboard"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                🏠 Dashboard
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "users"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                👥 Manage Users
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "exercises"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                💪 Manage Exercises
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                  activeTab === "assignments"
+                    ? "bg-green-700 text-white font-medium"
+                    : "text-green-200 hover:bg-green-800"
+                }`}
+              >
+                🔗 Assign Patients
+              </button>
+            </li>
+            <li>
+              <Link
+                href="/camera"
+                className="flex px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
+                onClick={() => setSidebarOpen(false)}
+              >
+                📷 Camera
+              </Link>
+            </li>
+          </ul>
         </nav>
+
+        <div className="mt-auto pt-6 mb-4">
+          <button
+            onClick={async () => { await logout(); router.push("/"); }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
+          >
+            🚪 Log Out
+          </button>
+        </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-8">
+      <main className="flex-1 p-4 sm:p-8 overflow-y-auto min-w-0">
+        <button
+          className="md:hidden mb-4 px-3 py-2 border border-gray-300 rounded text-sm text-gray-600 hover:bg-gray-50 bg-white"
+          onClick={() => setSidebarOpen(true)}
+        >
+          ☰ Menu
+        </button>
+        {/* Dashboard Tab */}
+        {activeTab === "dashboard" && (
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+            <p className="text-gray-500 mt-1">Welcome, {user?.name}.</p>
+          </div>
+        )}
+
         {/* Users Tab */}
         {activeTab === "users" && (
           <div>
@@ -325,7 +494,9 @@ export default function AdminDashboard() {
                     if (showUserForm) {
                       setSelectedRole(null);
                       setNewUser({
-                        name: "",
+                        firstName: "",
+                        middleName: "",
+                        lastName: "",
                         email: "",
                         role: "patient",
                         dateOfBirth: "",
@@ -342,8 +513,8 @@ export default function AdminDashboard() {
                 }}
                 className={`px-4 py-2 rounded transition text-white ${
                   editingUserId
-                    ? "bg-gray-600 hover:bg-gray-700"
-                    : "bg-blue-600 hover:bg-blue-700"
+                    ? "bg-green-800 hover:bg-green-900"
+                    : "bg-green-700 hover:bg-green-800"
                 }`}
               >
                 {editingUserId ? "Cancel Edit" : showUserForm ? "Cancel" : "+ Add User"}
@@ -367,7 +538,7 @@ export default function AdminDashboard() {
                               setSelectedRole("patient");
                               setNewUser({ ...newUser, role: "patient" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-blue-500 hover:bg-blue-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
                           >
                             👤 Patient
                           </button>
@@ -377,7 +548,7 @@ export default function AdminDashboard() {
                               setSelectedRole("therapist");
                               setNewUser({ ...newUser, role: "therapist" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-blue-500 hover:bg-blue-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
                           >
                             👨‍⚕️ Therapist
                           </button>
@@ -393,24 +564,49 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setSelectedRole(null)}
-                          className="text-sm text-blue-600 hover:text-blue-800"
+                          className="text-sm text-green-700 hover:text-green-900"
                         >
                           Change Role
                         </button>
                       </div>
 
                       {/* Common Fields */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Full Name <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={newUser.name || ""}
-                          onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                          required
-                        />
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            First Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.firstName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Middle Name
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.middleName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, middleName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Last Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newUser.lastName || ""}
+                            onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            required
+                          />
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -421,8 +617,13 @@ export default function AdminDashboard() {
                           <input
                             type="date"
                             value={newUser.dateOfBirth || ""}
-                            onChange={(e) => setNewUser({ ...newUser, dateOfBirth: e.target.value })}
+                            onChange={(e) => {
+                              const dob = e.target.value;
+                              setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
+                            }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
+                            max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                            min="1900-01-01"
                             required
                           />
                         </div>
@@ -432,12 +633,9 @@ export default function AdminDashboard() {
                           </label>
                           <input
                             type="number"
-                            value={newUser.age || ""}
-                            onChange={(e) => setNewUser({ ...newUser, age: e.target.value ? parseInt(e.target.value) : undefined })}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
-                            min="0"
-                            max="150"
-                            required
+                            value={newUser.age ?? ""}
+                            readOnly
+                            className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
                           />
                         </div>
                       </div>
@@ -455,8 +653,6 @@ export default function AdminDashboard() {
                           <option value="">-- Select Gender --</option>
                           <option value="male">Male</option>
                           <option value="female">Female</option>
-                          <option value="other">Other</option>
-                          <option value="prefer-not-to-say">Prefer Not To Say</option>
                         </select>
                       </div>
 
@@ -522,12 +718,12 @@ export default function AdminDashboard() {
                         <>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Therapist ID <span className="text-red-500">*</span>
+                              Email <span className="text-red-500">*</span>
                             </label>
                             <input
-                              type="text"
-                              value={newUser.therapistIDNum || ""}
-                              onChange={(e) => setNewUser({ ...newUser, therapistIDNum: e.target.value })}
+                              type="email"
+                              value={newUser.email || ""}
+                              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                               className="w-full border border-gray-300 rounded px-3 py-2"
                               required
                             />
@@ -550,7 +746,7 @@ export default function AdminDashboard() {
 
                       <button
                         type="submit"
-                        className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
+                        className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                       >
                         Add User
                       </button>
@@ -570,19 +766,46 @@ export default function AdminDashboard() {
                   </h4>
 
                   {/* Common Fields */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Full Name
-                    </label>
-                    <input
-                      type="text"
-                      value={editingUser.name}
-                      onChange={(e) =>
-                        setEditingUser({ ...editingUser, name: e.target.value })
-                      }
-                      className="w-full border border-gray-300 rounded px-3 py-2"
-                      required
-                    />
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        First Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.firstName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, firstName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Middle Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.middleName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, middleName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Last Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editingUser.lastName || ""}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, lastName: e.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded px-3 py-2"
+                      />
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -593,10 +816,13 @@ export default function AdminDashboard() {
                       <input
                         type="date"
                         value={editingUser.dateOfBirth || ""}
-                        onChange={(e) =>
-                          setEditingUser({ ...editingUser, dateOfBirth: e.target.value })
-                        }
+                        onChange={(e) => {
+                          const dob = e.target.value;
+                          setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
+                        }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
+                        max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                        min="1900-01-01"
                       />
                     </div>
                     <div>
@@ -605,13 +831,9 @@ export default function AdminDashboard() {
                       </label>
                       <input
                         type="number"
-                        value={editingUser.age || ""}
-                        onChange={(e) =>
-                          setEditingUser({ ...editingUser, age: e.target.value ? parseInt(e.target.value) : undefined })
-                        }
-                        className="w-full border border-gray-300 rounded px-3 py-2"
-                        min="0"
-                        max="150"
+                        value={editingUser.age ?? ""}
+                        readOnly
+                        className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -630,8 +852,6 @@ export default function AdminDashboard() {
                       <option value="">-- Select Gender --</option>
                       <option value="male">Male</option>
                       <option value="female">Female</option>
-                      <option value="other">Other</option>
-                      <option value="prefer-not-to-say">Prefer Not To Say</option>
                     </select>
                   </div>
 
@@ -701,18 +921,18 @@ export default function AdminDashboard() {
                     <>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Therapist ID
+                          Email
                         </label>
                         <input
-                          type="text"
-                          value={editingUser.therapistIDNum || ""}
+                          type="email"
+                          value={editingUser.email || ""}
                           onChange={(e) =>
-                            setEditingUser({ ...editingUser, therapistIDNum: e.target.value })
+                            setEditingUser({ ...editingUser, email: e.target.value })
                           }
                           className="w-full border border-gray-300 rounded px-3 py-2"
                         />
                       </div>
-
+                      
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Specialty
@@ -732,7 +952,7 @@ export default function AdminDashboard() {
                   <div className="flex gap-3">
                     <button
                       type="submit"
-                      className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition"
+                      className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                     >
                       Save Changes
                     </button>
@@ -748,9 +968,205 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {statusMessage && (
+              <div className={`mb-4 rounded-lg border p-3 text-sm transition-opacity duration-300 ${statusVisible ? "opacity-100" : "opacity-0"} ${statusType === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900 shadow-sm" : "border-red-200 bg-red-50 text-red-900"}`} aria-live="polite">
+                {statusMessage}
+              </div>
+            )}
+
+            {isDeleteModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                  <h3 className="text-xl font-semibold text-gray-900">Confirm Delete</h3>
+                  <p className="mt-3 text-sm text-gray-600">
+                    Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteUserName}</span>?
+                    This action cannot be undone.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={closeDeleteModal}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeleteUser}
+                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isFinalConfirmOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                  <h3 className="text-xl font-semibold text-gray-900">Final Confirmation</h3>
+                  <p className="mt-3 text-sm text-gray-600">
+                    This is your final confirmation. Deleting <span className="font-semibold text-gray-900">{deleteUserName}</span> is permanent and cannot be recovered.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinalDelete}
+                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                      Yes, Delete Permanently
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showAddPreview && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+                  <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm New User</h3>
+                  <p className="text-sm text-gray-500 mb-4">Please review the details below before adding the user.</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Role</span>
+                      <span className="font-medium text-gray-900 capitalize">{newUser.role}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Full Name</span>
+                      <span className="font-medium text-gray-900">{[newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ")}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Email</span>
+                      <span className="font-medium text-gray-900">{newUser.email}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Date of Birth</span>
+                      <span className="font-medium text-gray-900">{newUser.dateOfBirth}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Age</span>
+                      <span className="font-medium text-gray-900">{newUser.age}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="w-32 shrink-0 text-gray-500">Gender</span>
+                      <span className="font-medium text-gray-900 capitalize">{newUser.gender}</span>
+                    </div>
+                    {newUser.role === "patient" && (
+                      <>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Diagnosis</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.diagnosis}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Prescription</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.prescription}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Condition</span>
+                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.condition}</span>
+                        </div>
+                      </>
+                    )}
+                    {newUser.role === "therapist" && (
+                      <div className="flex gap-2">
+                        <span className="w-32 shrink-0 text-gray-500">Specialty</span>
+                        <span className="font-medium text-gray-900">{newUser.specialty}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddPreview(false)}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Go Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmAdd}
+                      className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                    >
+                      Confirm & Add User
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showEditPreview && editingUser && (() => {
+              const original = users.find(u => u.id === editingUserId);
+              const fields: { label: string; oldVal: string | number | undefined; newVal: string | number | undefined }[] = [
+                { label: "First Name", oldVal: original?.firstName, newVal: editingUser.firstName },
+                { label: "Middle Name", oldVal: original?.middleName, newVal: editingUser.middleName },
+                { label: "Last Name", oldVal: original?.lastName, newVal: editingUser.lastName },
+                { label: "Email", oldVal: original?.email, newVal: editingUser.email },
+                { label: "Date of Birth", oldVal: original?.dateOfBirth, newVal: editingUser.dateOfBirth },
+                { label: "Age", oldVal: original?.age, newVal: editingUser.age },
+                { label: "Gender", oldVal: original?.gender, newVal: editingUser.gender },
+                ...(editingUser.role === "patient" ? [
+                  { label: "Diagnosis", oldVal: original?.diagnosis, newVal: editingUser.diagnosis },
+                  { label: "Prescription", oldVal: original?.prescription, newVal: editingUser.prescription },
+                  { label: "Condition", oldVal: original?.condition, newVal: editingUser.condition },
+                ] : []),
+                ...(editingUser.role === "therapist" ? [
+                  { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
+                ] : []),
+              ];
+              return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                  <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+                    <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm Edit</h3>
+                    <p className="text-sm text-gray-500 mb-4">Review changes before saving. Highlighted rows have been modified.</p>
+                    <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b pb-2 mb-1">
+                      <span>Field</span>
+                      <span>Before</span>
+                      <span>After</span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {fields.map(({ label, oldVal, newVal }) => {
+                        const changed = String(oldVal ?? "") !== String(newVal ?? "");
+                        return (
+                          <div key={label} className={`grid grid-cols-3 gap-2 text-sm py-2 px-2 rounded ${changed ? "bg-yellow-50" : ""}`}>
+                            <span className="text-gray-500">{label}</span>
+                            <span className={changed ? "line-through text-red-400" : "text-gray-700"}>{oldVal || "—"}</span>
+                            <span className={changed ? "font-medium text-green-700" : "text-gray-700"}>{newVal || "—"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-6 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowEditPreview(false)}
+                        className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        Go Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmEdit}
+                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                      >
+                        Confirm & Save Changes
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Users List */}
-            <div className="bg-white rounded shadow overflow-hidden">
-              <table className="w-full">
+            <div className="bg-white rounded shadow overflow-x-auto">
+              <table className="w-full min-w-[600px]">
                 <thead className="bg-gray-50 border-b">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
@@ -773,7 +1189,7 @@ export default function AdminDashboard() {
                       <td className="px-6 py-4 text-sm text-gray-900">{u.name}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
                       <td className="px-6 py-4 text-sm">
-                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                           {u.role}
                         </span>
                       </td>
@@ -781,12 +1197,12 @@ export default function AdminDashboard() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleEditUser(u)}
-                            className="text-blue-600 hover:text-blue-800 font-medium"
+                            className="text-green-700 hover:text-green-900 font-medium"
                           >
                             Edit
                           </button>
                           <button
-                            onClick={() => handleDeleteUser(u.id)}
+                            onClick={() => openDeleteModal(u)}
                             className="text-red-600 hover:text-red-800 font-medium"
                           >
                             Delete
@@ -808,7 +1224,7 @@ export default function AdminDashboard() {
               <h2 className="text-3xl font-bold text-gray-900">Manage Exercises</h2>
               <button
                 onClick={() => setShowExerciseForm(!showExerciseForm)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition"
+                className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
               >
                 {showExerciseForm ? "Cancel" : "+ Add Exercise"}
               </button>
@@ -850,7 +1266,7 @@ export default function AdminDashboard() {
 
                   <button
                     type="submit"
-                    className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition"
+                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
                   >
                     Add Exercise
                   </button>
@@ -945,7 +1361,7 @@ export default function AdminDashboard() {
                         <button
                           onClick={handleAssignPatient}
                           disabled={!selectedTherapistId}
-                          className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded transition font-medium"
+                          className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white rounded transition font-medium"
                         >
                           Assign Patient
                         </button>
@@ -959,21 +1375,29 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assigned Patients */}
-            {assignedPatients.length > 0 && (
-              <div className="mt-8">
-                <h3 className="text-2xl font-semibold text-gray-900 mb-4">Currently Assigned Patients</h3>
-                <div className="bg-white rounded shadow overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b">
+            <div className="mt-8">
+              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+                Currently Assigned Patients ({assignedPatients.length})
+              </h3>
+              <div className="bg-white rounded shadow overflow-x-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Assigned Therapist</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {assignedPatients.length === 0 ? (
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Assigned Therapist</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                        <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">
+                          No patients have been assigned yet.
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {assignedPatients.map((patient) => (
+                    ) : (
+                      assignedPatients.map((patient) => (
                         <tr key={patient.id}>
                           <td className="px-6 py-4 text-sm font-medium text-gray-900">{patient.name}</td>
                           <td className="px-6 py-4 text-sm text-gray-600">{patient.email}</td>
@@ -989,12 +1413,59 @@ export default function AdminDashboard() {
                             </button>
                           </td>
                         </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Assignment History */}
+            <div className="mt-8">
+              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+                Assignment History ({assignHistory.length})
+              </h3>
+              <div className="bg-white rounded shadow overflow-x-auto">
+                {assignHistory.length === 0 ? (
+                  <p className="px-6 py-6 text-sm text-gray-500">No assignment actions yet this session.</p>
+                ) : (
+                  <table className="w-full min-w-[520px]">
+                    <thead className="bg-gray-50 border-b">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Therapist</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {assignHistory.map((entry) => (
+                        <tr key={entry.id}>
+                          <td className="px-6 py-4 text-sm">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              entry.action === "assigned"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-red-100 text-red-700"
+                            }`}>
+                              {entry.action === "assigned" ? "Assigned" : "Unassigned"}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-900">{entry.patientName}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{entry.therapistName}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {entry.timestamp.toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {entry.timestamp.toLocaleTimeString()}
+                          </td>
+                        </tr>
                       ))}
                     </tbody>
                   </table>
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
       </main>

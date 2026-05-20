@@ -1,63 +1,58 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import Image from "next/image";
+import bgImage from "../../media/acc_bacoor_landing_page.png";
+import logoImage from "../../media/acc_bacoor_logo.png";
 
 export default function HomePage() {
-  const [open, setOpen] = useState(false);
-  const router = useRouter();
-
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center space-y-4">
-        <h1 className="text-3xl font-bold">Postural Monitoring System</h1>
-        <p className="text-gray-600">AI-assisted posture and movement analysis</p>
-        <button
-          onClick={() => setOpen(true)}
-          className="inline-block px-6 py-2 rounded bg-black text-white"
+    <main className="relative min-h-screen flex items-center justify-end pr-56 overflow-hidden">
+
+      {/* Background image — full opacity */}
+      <Image
+        src={bgImage}
+        alt=""
+        fill
+        unoptimized
+        className="object-cover object-center"
+        priority
+      />
+
+      {/* Card */}
+      <div className="relative z-10 flex flex-col items-center gap-7 px-12 py-14 rounded-3xl bg-green-800/55 backdrop-blur-sm border border-green-700/50 shadow-2xl text-center max-w-md w-11/12">
+
+        {/* ACC Bacoor logo */}
+        <div className="w-32 h-32 rounded-full overflow-hidden bg-green-600 shadow-lg ring-4 ring-white/30 flex items-center justify-center">
+          <Image
+            src={logoImage}
+            alt="ACC Bacoor Logo"
+            width={128}
+            height={128}
+            unoptimized
+            priority
+            className="w-full h-full object-cover"
+          />
+        </div>
+
+        <div className="space-y-3">
+          <h1 className="text-4xl font-bold text-white tracking-tight">
+            ACC Bacoor
+          </h1>
+          <p className="text-lg font-medium text-white">
+            Postural Monitoring System
+          </p>
+          <p className="text-base text-white leading-relaxed">
+            Machine Learning-assisted posture and movement analysis
+          </p>
+        </div>
+
+        <Link
+          href="/login"
+          className="w-full py-3.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold shadow-lg transition-colors text-base tracking-wide"
         >
-          Go to Login
-        </button>
-
-        {open && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div
-              className="fixed inset-0 bg-black/50"
-              onClick={() => setOpen(false)}
-            />
-
-            <div className="bg-white rounded-lg p-6 z-10 w-11/12 max-w-sm text-center">
-              <h2 className="text-lg font-semibold mb-4">Login as</h2>
-              <div className="flex gap-3 flex-col">
-                <button
-                  onClick={() => router.push('/login?role=patient')}
-                  className="flex-1 px-4 py-2 rounded bg-gray-800 text-white"
-                >
-                  Patient
-                </button>
-                <button
-                  onClick={() => router.push('/login?role=therapist')}
-                  className="flex-1 px-4 py-2 rounded bg-blue-600 text-white"
-                >
-                  Therapist
-                </button>
-                <button
-                  onClick={() => router.push('/login?role=admin')}
-                  className="flex-1 px-4 py-2 rounded bg-purple-600 text-white"
-                >
-                  Admin
-                </button>
-              </div>
-              <button
-                onClick={() => setOpen(false)}
-                className="mt-4 text-sm text-gray-500"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+          Log In
+        </Link>
       </div>
+
     </main>
   );
 }

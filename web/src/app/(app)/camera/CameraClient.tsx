@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import {
   PoseLandmarker,
@@ -10,7 +11,23 @@ import {
 
 import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
-import { computePoseMetrics, type PoseMetrics, type Severity } from "@/lib/pose/poseMetrics";
+import {
+  computePoseMetricsForExercise,
+  computeCompensationScore,
+  type ExerciseFrameMetrics,
+} from "@/lib/pose/poseMetrics";
+import {
+  getExerciseDefinition,
+  type ExerciseDefinition,
+  type MetricName,
+} from "@/lib/exercises/registry";
+import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
+import { RepCounter, type RepEvent } from "@/lib/pose/repCounter";
+import {
+  BidirectionalRepCounter,
+  type BidirectionalRepCounterDebugSnapshot,
+  type BidirectionalSide,
+} from "@/lib/pose/bidirectionalRepCounter";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -28,8 +45,50 @@ interface PatientExercise {
   status: "pending" | "in-progress" | "completed";
 }
 
+type NeckRepDebugRecord = {
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  exerciseId: string;
+  signedDeg: number;
+  absDeg: number;
+  before: BidirectionalRepCounterDebugSnapshot;
+  after: BidirectionalRepCounterDebugSnapshot;
+  blockedBySettleGate: boolean;
+  gateReleasedThisFrame: boolean;
+  emitted: {
+    side: BidirectionalSide;
+    index: number;
+    peakValue: number;
+    classification: RepEvent["classification"];
+    endTimeMs: number;
+  } | null;
+  counts: { left: number; right: number };
+};
+
+type NeckRepDebugDump = {
+  generatedAt: string;
+  recordCount: number;
+  records: NeckRepDebugRecord[];
+};
+
+declare global {
+  interface Window {
+    __neckRepDebug?: NeckRepDebugRecord[];
+    dumpNeckRepDebug?: (limit?: number) => string;
+    clearNeckRepDebug?: () => void;
+  }
+}
+
+const MAX_NECK_REP_DEBUG_RECORDS = 3000;
+const CAPTURE_READINESS_RESET_GRACE_MS = 300;
+
 export default function CameraClient() {
   const { user } = useAuth();
+  const dashboardHref =
+    user?.role === "admin" ? "/dashboard/admin"
+    : user?.role === "therapist" ? "/dashboard/therapist"
+    : "/dashboard/patient";
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -37,6 +96,52 @@ export default function CameraClient() {
 
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
+
+  const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
+  const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
+  // Dedicated smoothing filters for per-limb primary metrics. Separate from
+  // the metricFiltersRef map because per-limb exercises need TWO filters for
+  // the same MetricName — one per side. Cleared on exercise change, reset on
+  // capture dropout, same lifecycle as metricFiltersRef.
+  const leftPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
+  const rightPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
+  // Per-side resting baseline for metrics whose raw value is a positive
+  // absolute distance (currently only scapularElevation for ex_003). Only
+  // active when the primary metric has requiresBaselineCapture set. Reset
+  // on exercise change and capture-readiness dropout.
+  type BaselineState = { samples: number[]; value: number | null };
+  const leftBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  const rightBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  const lastMetricsUpdateRef = useRef(0);
+
+  const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
+  left: 0,
+  right: 0,
+  });
+
+  // Rep counters. Per-limb exercises use both refs (one per side). Bidirectional
+  // exercises use only the left counter (it's just "the counter," but reusing
+  // the slot keeps allocation simple). When the active exercise changes, both
+  // refs are recreated based on the new definition.
+  const leftRepCounterRef = useRef<RepCounter | null>(null);
+  const rightRepCounterRef = useRef<RepCounter | null>(null);
+
+  // Bidirectional exercises use one signed metric. The wrapper feeds |angle|
+  // into RepCounter, tags the side from the sign at peak, and gates immediate
+  // opposite-side return-stroke overshoot until neutral has settled.
+  const bidirectionalRepCounterRef = useRef<BidirectionalRepCounter | null>(null);
+  const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
+  const neckRepDebugStartMsRef = useRef<number | null>(null);
+  const neckRepDebugSeqRef = useRef(0);
+  
+  // In-memory per-rep event log, keyed by side. Cleared when the exercise
+  // changes. This is the buffer that will eventually feed Postgres in a later
+  // step — for now, console.log on each rep is the only output beyond the
+  // live counter.
+  const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
+    left: [],
+    right: [],
+  });
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -47,8 +152,26 @@ export default function CameraClient() {
   const [captureOk, setCaptureOk] = useState(true);
   const [captureMessage, setCaptureMessage] = useState("Captured");
 
+  // Resting-baseline phase. "capturing" while the per-side baseline samples
+  // are being accumulated, "captured" once both sides have enough samples,
+  // "not-needed" for exercises whose primary metric is already baseline-
+  // relative (everything except scapularElevation today).
+  //
+  // The ref is what predictWebcam reads — the rAF chain holds a stale
+  // closure on the React state, mirroring the lastCaptureOkRef pattern
+  // used for captureOk. The state is only for re-rendering the JSX banner.
+  type BaselinePhase = "not-needed" | "capturing" | "captured";
+  const baselinePhaseRef = useRef<BaselinePhase>("not-needed");
+  const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
+  const setBaselinePhase = (phase: BaselinePhase) => {
+    baselinePhaseRef.current = phase;
+    setBaselinePhaseState(phase);
+  };
+
   const lastBadCaptureAtRef = useRef<number>(0);
   const stableOkSinceRef = useRef<number>(0);
+  const captureDropoutStartedAtRef = useRef<number | null>(null);
+  const captureDropoutResetDoneRef = useRef(false);
 
   const lastCaptureOkRef = useRef<boolean>(true);
   const lastCaptureMsgRef = useRef<string>("Captured");
@@ -65,36 +188,102 @@ export default function CameraClient() {
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>("");
 
-  const [liveMetrics, setLiveMetrics] = useState<PoseMetrics>({
-    tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-    neckTilt:         null,
-    shoulderSymmetry: null,
-    postureScore:     null,
+  const [activeDefinition, setActiveDefinition] =
+    useState<ExerciseDefinition | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.__neckRepDebug = neckRepDebugRef.current;
+    window.clearNeckRepDebug = () => {
+      neckRepDebugRef.current = [];
+      neckRepDebugStartMsRef.current = null;
+      neckRepDebugSeqRef.current = 0;
+      window.__neckRepDebug = neckRepDebugRef.current;
+      console.info("[neck-rep-debug] cleared");
+    };
+    window.dumpNeckRepDebug = (limit = 1200) => {
+      const records = neckRepDebugRef.current.slice(-limit);
+      const dump: NeckRepDebugDump = {
+        generatedAt: new Date().toISOString(),
+        recordCount: records.length,
+        records,
+      };
+      const text = JSON.stringify(dump, null, 2);
+      console.info(text);
+      return text;
+    };
+    console.info(
+      "[neck-rep-debug] available: clearNeckRepDebug(); dumpNeckRepDebug(limit)",
+    );
+
+    return () => {
+      delete window.__neckRepDebug;
+      delete window.clearNeckRepDebug;
+      delete window.dumpNeckRepDebug;
+    };
+  }, []);
+  
+  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
+    tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+    metrics: {},
+    compensationScore: null,
   });
  
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
  
-  const neckDisplay = liveMetrics.neckTilt
-    ? `${liveMetrics.neckTilt.angleDeg}° ${liveMetrics.neckTilt.direction}`
-    : "--";
+  const showTiltWarning = frameMetrics.tiltReference.confidence === "low";
  
-  const shoulderDisplay = liveMetrics.shoulderSymmetry
-    ? liveMetrics.shoulderSymmetry.severity === "normal"
-      ? "Level"
-      : `${liveMetrics.shoulderSymmetry.angleDeg}° ${liveMetrics.shoulderSymmetry.elevatedSide} high`
-    : "--";
+  // `metricCards` is the list of cards to render in the bottom-left overlay.
+  // Built dynamically from the active exercise definition. Primary metric
+  // renders first (severity-styled), then each compensation metric (compensation-styled).
+  type CardSpec = {
+    key: MetricName;
+    label: string;
+    value: number | null;
+    kind: "primary" | "compensation";
+    warningThreshold?: number;
+  };
+  
+  const metricCards: CardSpec[] = (() => {
+    if (!activeDefinition) return [];
+    const cards: CardSpec[] = [];
+  
+    if (activeDefinition.kind === "dynamic") {
+      const p = activeDefinition.primaryMetric;
+      cards.push({
+        key: p.name,
+        label: metricLabel(p.name),
+        value: frameMetrics.metrics[p.name] ?? null,
+        kind: "primary",
+      });
+    } else {
+      const i = activeDefinition.isometric;
+      cards.push({
+        key: i.metric,
+        label: metricLabel(i.metric),
+        value: frameMetrics.metrics[i.metric] ?? null,
+        kind: "primary",
+      });
+    }
+  
+    for (const comp of activeDefinition.compensationMetrics) {
+      cards.push({
+        key: comp.name,
+        label: metricLabel(comp.name),
+        value: frameMetrics.metrics[comp.name] ?? null,
+        kind: "compensation",
+        warningThreshold: comp.warningThreshold,
+      });
+    }
+    return cards;
+  })();
  
-  const scoreDisplay = liveMetrics.postureScore !== null
-    ? `${liveMetrics.postureScore}`
-    : "--";
  
-  // Shown when hips and ears disagree — body asymmetry is affecting
-  // the tilt correction and metric reliability is reduced.
-  const showTiltWarning = liveMetrics.tiltReference.confidence === "low";
- 
+  
   const sets = 3;
-  const reps = 12;
+
   const progressPct = 65;
   const timer = "05:32";
 
@@ -125,31 +314,149 @@ export default function CameraClient() {
     initLandmarker();
   }, []);
 
-  // Load assigned exercises (localStorage)
+  // Load exercises from database.
+  // Admin/therapist: fetch all exercises and show ex_001–ex_006 for troubleshooting.
+  // Patient: fetch only their assigned exercises.
   useEffect(() => {
     if (!user?.id) return;
 
-    try {
-      const storedExercises = localStorage.getItem("admin_exercises");
-      const exercises: Exercise[] = storedExercises ? JSON.parse(storedExercises) : [];
+    const isStaff = user.role === "admin" || user.role === "therapist";
 
-      const storedAssignments = localStorage.getItem("patient_exercises");
-      const assignments: PatientExercise[] = storedAssignments ? JSON.parse(storedAssignments) : [];
-      const patientAssignments = assignments.filter((a) => a.patientId === user.id);
-
-      const assigned = exercises.filter((e) =>
-        patientAssignments.some((a) => a.exerciseId === e.id)
-      );
-
-      setAssignedExercises(assigned);
-      if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
-    } catch (err) {
-      console.error("Error loading exercises:", err);
+    if (isStaff) {
+      fetch("/api/exercises")
+        .then((r) => r.json())
+        .then((data) => {
+          const DEBUG_IDS = ["ex_001", "ex_002", "ex_003", "ex_004", "ex_005", "ex_006"];
+          const exercises: Exercise[] = (data.exercises ?? [])
+            .filter((e: any) => DEBUG_IDS.includes(e.id))
+            .sort((a: any, b: any) => a.id.localeCompare(b.id))
+            .map((e: any) => ({
+              id: e.id,
+              name: e.name,
+              description: e.description,
+            }));
+          setAssignedExercises(exercises);
+          if (exercises.length > 0 && !selectedExercise) setSelectedExercise(exercises[0].id);
+        })
+        .catch((err) => console.error("Error loading exercises:", err));
+    } else {
+      fetch("/api/patient-exercises")
+        .then((r) => r.json())
+        .then((data) => {
+          const assigned: Exercise[] = (data.exercises ?? []).map((e: any) => ({
+            id: e.exercise_id,
+            name: e.name,
+            description: e.description,
+          }));
+          setAssignedExercises(assigned);
+          if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
+        })
+        .catch((err) => console.error("Error loading exercises:", err));
     }
-  }, [user?.id, selectedExercise]);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!selectedExercise) {
+      setActiveDefinition(null);
+      leftRepCounterRef.current = null;
+      rightRepCounterRef.current = null;
+      bidirectionalRepCounterRef.current = null;
+      repLogRef.current = { left: [], right: [] };
+      neckRepDebugRef.current = [];
+      neckRepDebugStartMsRef.current = null;
+      neckRepDebugSeqRef.current = 0;
+      if (typeof window !== "undefined") {
+        window.__neckRepDebug = neckRepDebugRef.current;
+      }
+      setRepCounts({ left: 0, right: 0 });
+      return;
+    }
+
+    const def = getExerciseDefinition(selectedExercise);
+    setActiveDefinition(def);
+
+    // Reset filters whenever the exercise changes — old filter history would
+    // bleed across exercises and produce a misleading first-frame jump.
+    // The per-side primary filters are RECREATED (rather than reset) so they
+    // can pick up the per-exercise smoothing override when present. Falls
+    // back to the global degree-scale default for exercises without one.
+    metricFiltersRef.current.clear();
+    const primaryParams =
+      def?.kind === "dynamic" && def.primaryMetric.smoothing
+        ? def.primaryMetric.smoothing
+        : { minCutoff: 1.0, beta: 0.1 };
+    leftPrimaryFilterRef.current = new OneEuroFilter(
+      primaryParams.minCutoff,
+      primaryParams.beta,
+    );
+    rightPrimaryFilterRef.current = new OneEuroFilter(
+      primaryParams.minCutoff,
+      primaryParams.beta,
+    );
+
+    // Rebuild rep counters based on the new definition. Isometric exercises
+    // get no counter (they use time-in-band, handled separately when we
+    // implement ex_006).
+    leftRepCounterRef.current = null;
+    rightRepCounterRef.current = null;
+    bidirectionalRepCounterRef.current = null;
+    repLogRef.current = { left: [], right: [] };
+    neckRepDebugRef.current = [];
+    neckRepDebugStartMsRef.current = null;
+    neckRepDebugSeqRef.current = 0;
+    if (typeof window !== "undefined") {
+      window.__neckRepDebug = neckRepDebugRef.current;
+    }
+    setRepCounts({ left: 0, right: 0 });
+
+    // Reset baseline state on every exercise change. If the new exercise
+    // needs a baseline, enter "capturing"; otherwise "not-needed".
+    leftBaselineRef.current = { samples: [], value: null };
+    rightBaselineRef.current = { samples: [], value: null };
+    setBaselinePhase(
+      def?.kind === "dynamic" && def.primaryMetric.requiresBaselineCapture
+        ? "capturing"
+        : "not-needed",
+    );
+
+    if (def && def.kind === "dynamic") {
+      const thresholds = def.primaryMetric.thresholds;
+      const options =
+        def.primaryMetric.descentEpsilon !== undefined
+          ? { descentEpsilon: def.primaryMetric.descentEpsilon }
+          : {};
+
+      if (def.bilateral && def.bilateralMode === "per-limb") {
+        // Two limbs in parallel — one counter per side.
+        leftRepCounterRef.current = new RepCounter(thresholds, options);
+        rightRepCounterRef.current = new RepCounter(thresholds, options);
+      } else if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
+        // One signed metric, sides distinguished by sign at peak time.
+        bidirectionalRepCounterRef.current = new BidirectionalRepCounter(
+          thresholds,
+          options,
+        );
+      } else {
+        // Unilateral — single counter on the left ref.
+        leftRepCounterRef.current = new RepCounter(thresholds, options);
+      }
+    }
+  }, [selectedExercise]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
+      // Transition into not-ok: any already-captured baseline is now stale
+      // (patient may have shifted while we couldn't see them). Drop it and
+      // require re-capture when readiness returns.
+      if (
+        !ok &&
+        activeDefinition?.kind === "dynamic" &&
+        activeDefinition.primaryMetric.requiresBaselineCapture
+      ) {
+        leftBaselineRef.current = { samples: [], value: null };
+        rightBaselineRef.current = { samples: [], value: null };
+        setBaselinePhase("capturing");
+      }
       lastCaptureOkRef.current = ok;
       setCaptureOk(ok);
     }
@@ -200,8 +507,13 @@ export default function CameraClient() {
           if (!r.ok) {
             lastBadCaptureAtRef.current = now;
             stableOkSinceRef.current = 0;
+            if (captureDropoutStartedAtRef.current === null) {
+              captureDropoutStartedAtRef.current = now;
+            }
             commitCaptureState(false, r.message);
           } else {
+            captureDropoutStartedAtRef.current = null;
+            captureDropoutResetDoneRef.current = false;
             if (stableOkSinceRef.current === 0) stableOkSinceRef.current = now;
             const okStable = now - stableOkSinceRef.current > 400;
             const badGone = now - lastBadCaptureAtRef.current > 400;
@@ -213,14 +525,310 @@ export default function CameraClient() {
           }
 
           if (r.ok) {
-            const metrics = computePoseMetrics(landmarks as any);
-            setLiveMetrics(metrics);
+            if (!activeDefinition) {
+              // No exercise selected — nothing to compute. Clear stale state.
+              setFrameMetrics({
+                tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+                metrics: {},
+                compensationScore: null,
+              });
+            } else {
+              const raw = computePoseMetricsForExercise(landmarks as any, activeDefinition);
+              const tNow = performance.now();
+
+              // Smooth the camera-tilt estimate (still always needed)
+              const smoothedTilt = tiltFilterRef.current.filter(
+                raw.tiltReference.cameraTiltDeg,
+                tNow
+              );
+
+              // Per-metric filtering. Lazily allocate a filter the first time
+              // we see each metric for the active exercise. The filter map
+              // gets cleared when the exercise changes (see the
+              // `selectedExercise` effect).
+              const smoothedMetrics: Partial<Record<MetricName, number | null>> = {};
+              for (const [metricName, value] of Object.entries(raw.metrics) as Array<
+                [MetricName, number | null]
+              >) {
+                if (typeof value !== "number") {
+                  smoothedMetrics[metricName] = null;
+                  continue;
+                }
+                let filter = metricFiltersRef.current.get(metricName);
+                if (!filter) {
+                  // The primary metric of a dynamic exercise may declare a
+                  // smoothing override (small-signal-scale metrics like
+                  // neckLateralFlexion or scapularElevation, where the global
+                  // degree-scale default is too light and landmark jitter
+                  // accumulates phantom reps while the patient is still). The
+                  // per-limb path already honors this via the dedicated
+                  // per-side filters; the bidirectional/unilateral path reads
+                  // smoothedMetrics[primaryName], so the override must be
+                  // applied HERE too or it is silently ignored for those modes.
+                  const isPrimary =
+                    activeDefinition.kind === "dynamic" &&
+                    activeDefinition.primaryMetric.name === metricName;
+                  const params =
+                    isPrimary && activeDefinition.primaryMetric.smoothing
+                      ? activeDefinition.primaryMetric.smoothing
+                      : { minCutoff: 1.0, beta: 0.1 };
+                  filter = new OneEuroFilter(params.minCutoff, params.beta);
+                  metricFiltersRef.current.set(metricName, filter);
+                }
+                smoothedMetrics[metricName] =
+                  Math.round(filter.filter(value, tNow) * 10) / 10;
+              }
+
+              // ── Rep counting ──────────────────────────────────────────
+              // Feeds the appropriate counter(s) based on the exercise's
+              // bilateralMode. Skipped for isometric exercises and for
+              // exercises whose primary metric is still a stub (null).
+              if (activeDefinition.kind === "dynamic") {
+                const primaryName = activeDefinition.primaryMetric.name;
+
+                if (
+                  activeDefinition.bilateral &&
+                  activeDefinition.bilateralMode === "per-limb"
+                ) {
+                  // Two counters, each fed its own per-side metric.
+                  // raw.perSideMetrics is populated by computePoseMetricsForExercise
+                  // for per-limb bilateral exercises. Each side gets its own
+                  // OneEuroFilter so left-arm jitter doesn't bleed into the
+                  // right-arm angle stream (or vice versa).
+                  //
+                  // This branch is NOT guarded by a single rawValue check because
+                  // each side can independently be null (e.g., left elbow occluded
+                  // while right elbow is visible). Each side handles its own null.
+                  const perSide = raw.perSideMetrics;
+                  if (perSide) {
+                    // Read via ref — the rAF chain captured a stale state value.
+                    if (baselinePhaseRef.current === "capturing") {
+                      // Accumulate raw projections until each side has enough
+                      // samples to summarize. Rep counting stays paused while
+                      // the patient is in calibration.
+                      if (typeof perSide.left === "number") {
+                        leftBaselineRef.current.samples.push(perSide.left);
+                      }
+                      if (typeof perSide.right === "number") {
+                        rightBaselineRef.current.samples.push(perSide.right);
+                      }
+                      const N_REQUIRED = 90; // ~3 s at 30 fps
+                      if (
+                        leftBaselineRef.current.samples.length >= N_REQUIRED &&
+                        rightBaselineRef.current.samples.length >= N_REQUIRED
+                      ) {
+                        // Median, not mean — robust to single-frame spikes
+                        // if the patient briefly shifted during capture.
+                        const median = (xs: number[]) => {
+                          const sorted = [...xs].sort((a, b) => a - b);
+                          const mid = Math.floor(sorted.length / 2);
+                          return sorted.length % 2 === 0
+                            ? (sorted[mid - 1] + sorted[mid]) / 2
+                            : sorted[mid];
+                        };
+                        leftBaselineRef.current.value = median(
+                          leftBaselineRef.current.samples,
+                        );
+                        rightBaselineRef.current.value = median(
+                          rightBaselineRef.current.samples,
+                        );
+                        setBaselinePhase("captured");
+                      }
+                    } else {
+                      // For requiresBaselineCapture exercises, the registry's
+                      // thresholds expect (baseline − raw): a shrug DECREASES
+                      // the raw projection, so subtracting from the captured
+                      // resting value yields a positive delta that increases
+                      // during the rep — matching what the state machine expects.
+                      // Pass-through when no baseline was captured.
+                      const lb = leftBaselineRef.current.value;
+                      const rb = rightBaselineRef.current.value;
+                      const inputLeft =
+                        typeof perSide.left === "number"
+                          ? lb !== null ? lb - perSide.left : perSide.left
+                          : null;
+                      const inputRight =
+                        typeof perSide.right === "number"
+                          ? rb !== null ? rb - perSide.right : perSide.right
+                          : null;
+
+                      const smoothedLeft =
+                        inputLeft !== null
+                          ? Math.round(
+                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) * 10,
+                            ) / 10
+                          : null;
+                      const smoothedRight =
+                        inputRight !== null
+                          ? Math.round(
+                              rightPrimaryFilterRef.current.filter(inputRight, tNow) * 10,
+                            ) / 10
+                          : null;
+
+                      if (typeof smoothedLeft === "number" && leftRepCounterRef.current) {
+                        const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
+                        if (event) {
+                          repLogRef.current.left.push(event);
+                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} left`, event);
+                        }
+                      }
+                      if (typeof smoothedRight === "number" && rightRepCounterRef.current) {
+                        const event = rightRepCounterRef.current.update(smoothedRight, tNow);
+                        if (event) {
+                          repLogRef.current.right.push(event);
+                          setRepCounts((p) => ({ ...p, right: p.right + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} right`, event);
+                        }
+                      }
+                    }
+                  }
+                } else {
+                  // Bidirectional-alternating or unilateral — single smoothed value.
+                  const rawValue = smoothedMetrics[primaryName];
+
+                  if (typeof rawValue === "number") {
+                    if (
+                      activeDefinition.bilateral &&
+                      activeDefinition.bilateralMode === "bidirectional-alternating"
+                    ) {
+                      // One wrapper around RepCounter: it feeds |value| to the
+                      // state machine, tags the side from the sign at peak, and
+                      // blocks immediate opposite-side return-stroke overshoot
+                      // until the signed metric has settled near neutral.
+                      const counter = bidirectionalRepCounterRef.current;
+                      if (counter) {
+                        const before = counter.getDebugSnapshot(tNow, rawValue);
+                        const rep = counter.update(rawValue, tNow);
+                        if (rep) {
+                          const { side, event } = rep;
+                          repLogRef.current[side].push(event);
+                          setRepCounts((prev) => ({
+                            ...prev,
+                            [side]: prev[side] + 1,
+                          }));
+
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id} ${side}`, event);
+                        }
+                        const after = counter.getDebugSnapshot(tNow, rawValue);
+
+                        if (activeDefinition.id === "ex_004") {
+                          if (neckRepDebugStartMsRef.current === null) {
+                            neckRepDebugStartMsRef.current = tNow;
+                          }
+
+                          const record: NeckRepDebugRecord = {
+                            seq: ++neckRepDebugSeqRef.current,
+                            tMs: Math.round(tNow),
+                            elapsedMs: Math.round(
+                              tNow - neckRepDebugStartMsRef.current,
+                            ),
+                            exerciseId: activeDefinition.id,
+                            signedDeg: Math.round(rawValue * 10) / 10,
+                            absDeg: Math.round(Math.abs(rawValue) * 10) / 10,
+                            before,
+                            after,
+                            blockedBySettleGate:
+                              before.awaitingRestSettle &&
+                              after.awaitingRestSettle &&
+                              rep === null,
+                            gateReleasedThisFrame:
+                              before.awaitingRestSettle &&
+                              !after.awaitingRestSettle,
+                            emitted: rep
+                              ? {
+                                  side: rep.side,
+                                  index: rep.event.index,
+                                  peakValue:
+                                    Math.round(rep.event.peakValue * 10) / 10,
+                                  classification: rep.event.classification,
+                                  endTimeMs: Math.round(rep.event.endTimeMs),
+                                }
+                              : null,
+                            counts: {
+                              left: repLogRef.current.left.length,
+                              right: repLogRef.current.right.length,
+                            },
+                          };
+
+                          neckRepDebugRef.current.push(record);
+                          if (
+                            neckRepDebugRef.current.length >
+                            MAX_NECK_REP_DEBUG_RECORDS
+                          ) {
+                            neckRepDebugRef.current.splice(
+                              0,
+                              neckRepDebugRef.current.length -
+                                MAX_NECK_REP_DEBUG_RECORDS,
+                            );
+                          }
+                          if (typeof window !== "undefined") {
+                            window.__neckRepDebug = neckRepDebugRef.current;
+                          }
+                        }
+                      }
+                    } else {
+                      // Unilateral.
+                      const counter = leftRepCounterRef.current;
+                      if (counter) {
+                        const event = counter.update(rawValue, tNow);
+                        if (event) {
+                          repLogRef.current.left.push(event);
+                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
+                          // eslint-disable-next-line no-console
+                          console.log(`[rep] ${activeDefinition.id}`, event);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              if (tNow - lastMetricsUpdateRef.current > 150) {
+                lastMetricsUpdateRef.current = tNow;
+                setFrameMetrics({
+                  tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
+                  metrics: smoothedMetrics,
+                  // PC (handover §3.10): recompute the score from the SAME
+                  // smoothed values the metric cards render, not from raw.
+                  // Otherwise a card sitting just under a warning threshold
+                  // can pair with a score that just penalized it. raw.metrics
+                  // is still available separately for the ML/log pipeline.
+                  compensationScore: computeCompensationScore(
+                    activeDefinition,
+                    smoothedMetrics
+                  ),
+                });
+              }
+            }
           } else {
-            setLiveMetrics({
-              tiltReference:    { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-              neckTilt:         null,
-              shoulderSymmetry: null,
-              postureScore:     null,
+            const dropoutStartedAt = captureDropoutStartedAtRef.current ?? now;
+            const dropoutElapsedMs = now - dropoutStartedAt;
+            if (
+              !captureDropoutResetDoneRef.current &&
+              dropoutElapsedMs >= CAPTURE_READINESS_RESET_GRACE_MS
+            ) {
+              // A sustained not-ready interval is a true capture dropout:
+              // reset filters/counters so the next good frame does not blend
+              // against stale pre-dropout state. Short flickers only pause
+              // computation; resetting on those was discarding valid reps.
+              tiltFilterRef.current.reset();
+              metricFiltersRef.current.forEach((f) => f.reset());
+              leftPrimaryFilterRef.current.reset();
+              rightPrimaryFilterRef.current.reset();
+              leftRepCounterRef.current?.reset();
+              rightRepCounterRef.current?.reset();
+              bidirectionalRepCounterRef.current?.reset();
+              captureDropoutResetDoneRef.current = true;
+            }
+
+            setFrameMetrics({
+              tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
+              metrics: {},
+              compensationScore: null,
             });
           }
         } else {
@@ -342,6 +950,9 @@ export default function CameraClient() {
         {/* Header stays compact so content fits */}
         <header className="flex items-center justify-between gap-3">
           <div className="min-w-0">
+            <Link href={dashboardHref} className="text-sm text-green-700 hover:text-green-900 inline-block mb-1">
+              ← Back to Dashboard
+            </Link>
             <h1 className="text-xl font-bold leading-tight">Camera</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />
@@ -400,6 +1011,15 @@ export default function CameraClient() {
                 </div>
               )}
 
+              {/* Baseline-capture prompt: only when capture is good but we
+                  still need to calibrate the resting reference. The yellow
+                  capture-paused banner above already covers the not-ok case. */}
+              {captureOk && baselinePhase === "capturing" && (
+                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-blue-900/80 text-white text-base font-semibold shadow-lg">
+                  Stand naturally with arms relaxed — capturing baseline…
+                </div>
+              )}
+
               {/* ── Tilt confidence warning — top center, own absolute element ── */}
               {showTiltWarning && (
                 <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-yellow-500/90 backdrop-blur-sm text-black text-xs font-semibold shadow-lg whitespace-nowrap">
@@ -410,34 +1030,39 @@ export default function CameraClient() {
  
               {/* ── Posture metrics — bottom left ── */}
               <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2">
-                <MetricCard
-                  label="NECK TILT"
-                  value={liveMetrics.neckTilt ? `${liveMetrics.neckTilt.angleDeg}°` : "--"}
-                  sub={
-                    liveMetrics.neckTilt
-                      ? `${liveMetrics.neckTilt.direction.charAt(0).toUpperCase() + liveMetrics.neckTilt.direction.slice(1)} · ${severityText(liveMetrics.neckTilt.severity)}`
-                      : "No data"
-                  }
-                  severity={liveMetrics.neckTilt?.severity ?? null}
-                />
-                <MetricCard
-                  label="SHOULDER"
-                  value={liveMetrics.shoulderSymmetry ? `${liveMetrics.shoulderSymmetry.angleDeg}°` : "--"}
-                  sub={
-                    liveMetrics.shoulderSymmetry
-                      ? liveMetrics.shoulderSymmetry.severity === "normal"
-                        ? "Level · Normal"
-                        : `${liveMetrics.shoulderSymmetry.elevatedSide.charAt(0).toUpperCase() + liveMetrics.shoulderSymmetry.elevatedSide.slice(1)} high · ${severityText(liveMetrics.shoulderSymmetry.severity)}`
-                      : "No data"
-                  }
-                  severity={liveMetrics.shoulderSymmetry?.severity ?? null}
-                />
-                <ScoreCard score={liveMetrics.postureScore} />
+                {metricCards.length === 0 ? (
+                  <div className="px-4 py-3 rounded-xl bg-black/65 backdrop-blur-sm text-white/60 text-xs w-44">
+                    Select an exercise to begin
+                  </div>
+                ) : (
+                  metricCards.map((card) => (
+                    <DynamicMetricCard
+                      key={card.key}
+                      label={card.label}
+                      value={card.value}
+                      kind={card.kind}
+                      warningThreshold={card.warningThreshold}
+                    />
+                  ))
+                )}
+                <ScoreCard score={frameMetrics.compensationScore} />
               </div>
  
               {/* ── Exercise stats — bottom right ── */}
               <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
-                <StatPanel sets={sets} reps={reps} timer={timer} />
+                {activeDefinition?.bilateral ? (
+                  <BidirectionalStatPanel
+                    leftReps={repCounts.left}
+                    rightReps={repCounts.right}
+                    timer={timer}
+                  />
+                ) : (
+                  <StatPanel
+                    sets={sets}
+                    reps={repCounts.left + repCounts.right}
+                    timer={timer}
+                  />
+                )}
                 <ProgressCard progressPct={progressPct} />
               </div>
             </div>
@@ -561,19 +1186,6 @@ export default function CameraClient() {
   );
 }
 
-function severityAccent(s: Severity | null): string {
-  if (!s) return "bg-white/25";
-  if (s === "normal")   return "bg-emerald-400";
-  if (s === "mild")     return "bg-yellow-400";
-  if (s === "moderate") return "bg-orange-500";
-  return "bg-red-500";
-}
- 
-function severityText(s: Severity | null): string {
-  if (!s) return "";
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
- 
 function scoreAccent(score: number | null): string {
   if (score === null) return "bg-white/25";
   if (score >= 80)   return "bg-emerald-400";
@@ -588,35 +1200,6 @@ function scoreValueColor(score: number | null): string {
   if (score >= 60)   return "text-yellow-400";
   if (score >= 40)   return "text-orange-400";
   return "text-red-400";
-}
-
-function MetricCard({
-  label,
-  value,
-  sub,
-  severity,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-  severity: Severity | null;
-}) {
-  return (
-    <div className="flex overflow-hidden rounded-xl bg-black/65 backdrop-blur-sm shadow-lg w-44">
-      {/* Severity accent bar */}
-      <div className={`w-1.5 shrink-0 ${severityAccent(severity)}`} />
-      <div className="px-4 py-3 flex-1 min-w-0">
-        <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
-          {label}
-        </div>
-        {/* tabular-nums prevents layout shift as digits change each frame */}
-        <div className="text-4xl font-bold text-white leading-none tabular-nums">
-          {value}
-        </div>
-        <div className="text-xs text-white/55 mt-1.5 truncate">{sub}</div>
-      </div>
-    </div>
-  );
 }
 
 function ScoreCard({ score }: { score: number | null }) {
@@ -671,6 +1254,26 @@ function StatCell({ label, value }: { label: string; value: string }) {
   );
 }
 
+function BidirectionalStatPanel({
+  leftReps,
+  rightReps,
+  timer,
+}: {
+  leftReps: number;
+  rightReps: number;
+  timer: string;
+}) {
+  return (
+    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
+      <div className="flex divide-x divide-white/10">
+        <StatCell label="LEFT" value={String(leftReps)} />
+        <StatCell label="RIGHT" value={String(rightReps)} />
+        <StatCell label="TIME" value={timer} />
+      </div>
+    </div>
+  );
+}
+
 function ProgressCard({ progressPct }: { progressPct: number }) {
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
@@ -685,6 +1288,84 @@ function ProgressCard({ progressPct }: { progressPct: number }) {
           className="h-full bg-white/75 rounded-full transition-all duration-500"
           style={{ width: `${progressPct}%` }}
         />
+      </div>
+    </div>
+  );
+}
+
+function metricLabel(name: MetricName): string {
+  switch (name) {
+    case "shoulderAbduction":   return "SHOULDER ABD";
+    case "shoulderFlexion":     return "SHOULDER FLEX";
+    case "scapularElevation":   return "SHRUG";
+    case "neckLateralFlexion":  return "NECK FLEX";
+    case "trunkLateralFlexion": return "TRUNK FLEX";
+    case "shoulderHorizAbd":    return "T-POSE";
+    case "neckTilt":            return "NECK TILT";
+    case "shoulderSymmetry":    return "SHOULDER SYM";
+    case "trunkLean":           return "TRUNK LEAN";
+  }
+}
+ 
+/**
+ * Compensation metrics get a calm gray accent below their warning threshold,
+ * red above. Primary metrics show neutral white — they're an information
+ * display, not a quality flag.
+ */
+function compensationAccent(value: number | null, threshold: number): string {
+  if (value === null) return "bg-white/25";
+  return Math.abs(value) >= threshold ? "bg-red-500" : "bg-white/40";
+}
+ 
+function DynamicMetricCard({
+  label,
+  value,
+  kind,
+  warningThreshold,
+}: {
+  label: string;
+  value: number | null;
+  kind: "primary" | "compensation";
+  warningThreshold?: number;
+}) {
+  const accentClass =
+    kind === "primary"
+      ? "bg-white/60"
+      : compensationAccent(value, warningThreshold ?? Infinity);
+ 
+  const isFlagging =
+    kind === "compensation" &&
+    value !== null &&
+    Math.abs(value) >= (warningThreshold ?? Infinity);
+ 
+  // Display string: degrees for angles, just the rounded number for now
+  // for displacement metrics. Consumers can refine units later per metric.
+  const display = value === null ? "--" : `${value.toFixed(1)}°`;
+ 
+  return (
+    <div
+      className={`flex overflow-hidden rounded-xl backdrop-blur-sm shadow-lg w-44 transition-colors ${
+        isFlagging ? "bg-red-900/70 ring-1 ring-red-400/60" : "bg-black/65"
+      }`}
+    >
+      <div className={`w-1.5 shrink-0 ${accentClass}`} />
+      <div className="px-4 py-3 flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] tracking-widest text-white/50 uppercase">
+            {label}
+          </span>
+          {isFlagging && (
+            <span className="text-[9px] tracking-wider text-red-300 uppercase font-semibold">
+              ⚠ Compensation
+            </span>
+          )}
+        </div>
+        <div className="text-4xl font-bold text-white leading-none tabular-nums">
+          {display}
+        </div>
+        <div className="text-xs text-white/55 mt-1.5 truncate">
+          {kind === "primary" ? "Primary" : isFlagging ? "Above threshold" : "Within range"}
+        </div>
       </div>
     </div>
   );

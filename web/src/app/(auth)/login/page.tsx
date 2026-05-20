@@ -1,17 +1,15 @@
 "use client";
 
-import { useState, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import { loginUser, setStoredUser } from "@/lib/auth";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
+import { loginUser } from "@/lib/auth";
+import { useAuth } from "@/lib/AuthContext";
+import bgImage from "../../../../media/acc_bacoor_landing_page.png";
 
-function LoginPageContent() {
+export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const roleParam = (searchParams?.get("role") as string) || "patient";
-  const role = roleParam.toLowerCase();
-  const isTherapist = role === "therapist";
-  const isAdmin = role === "admin";
+  const { login } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,11 +23,13 @@ function LoginPageContent() {
     setLoading(true);
 
     try {
-      const result = await loginUser(email, password, role);
-      setStoredUser(result.user);
-      if (isAdmin) {
+      const result = await loginUser(email, password);
+      login(result.user);
+
+      const id: string = result.user.id;
+      if (id.startsWith("admin_")) {
         router.push("/dashboard/admin");
-      } else if (isTherapist) {
+      } else if (id.startsWith("therapist_")) {
         router.push("/dashboard/therapist");
       } else {
         router.push("/dashboard/patient");
@@ -42,108 +42,92 @@ function LoginPageContent() {
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="w-full max-w-sm bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">
-          Login — {isAdmin ? "Admin" : isTherapist ? "Therapist" : "Patient"}
-        </h2>
+    <main className="relative min-h-screen flex items-center justify-end pr-56 overflow-hidden">
 
-        <p className="text-sm text-gray-500 mb-4">
-          {isAdmin
-            ? "Sign in to manage the system and content."
-            : isTherapist
-            ? "Sign in to manage your patients and sessions."
-            : "Sign in to access your posture and movement data."}
-        </p>
+      {/* Background image */}
+      <Image
+        src={bgImage}
+        alt=""
+        fill
+        unoptimized
+        className="object-cover object-center"
+        priority
+      />
 
-        {/* Temporary Credentials Display */}
-        <div className="bg-blue-50 border border-blue-200 p-3 rounded mb-4 text-xs">
-          <p className="font-semibold text-blue-900 mb-2">Demo Credentials:</p>
-          {isAdmin ? (
-            <>
-              <p className="text-blue-800">Email: admin@postural.com</p>
-              <p className="text-blue-800">Password: admin123</p>
-            </>
-          ) : isTherapist ? (
-            <>
-              <p className="text-blue-800">Email: therapist@clinic.com</p>
-              <p className="text-blue-800">Password: therapist123</p>
-            </>
-          ) : (
-            <>
-              <p className="text-blue-800">Email: patient@example.com</p>
-              <p className="text-blue-800">Password: patient123</p>
-            </>
-          )}
+      {/* Card */}
+      <div className="dark-autofill relative z-10 flex flex-col items-center gap-9 px-14 py-16 rounded-3xl bg-green-800/55 backdrop-blur-sm border border-green-700/50 shadow-2xl text-center max-w-md w-11/12">
+
+        <div className="space-y-2 w-full">
+          <h1 className="text-3xl font-bold text-white tracking-tight">ACC Bacoor</h1>
+          <p className="text-base font-medium text-white">Postural Monitoring System</p>
         </div>
 
-        <form onSubmit={handleLogin}>
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border p-2 mb-3 rounded"
-            required
-          />
-
-          <div className="relative mb-2">
+        <form onSubmit={handleLogin} className="w-full flex flex-col gap-5">
+          <p className="text-lg font-semibold text-white text-left">Log In to access your dashboard</p>
+          <div className="relative">
             <input
-              type={showPassword ? "text" : "password"}
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full border p-2 pr-10 rounded"
+              type="email"
+              id="email"
+              placeholder=" "
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="peer w-full bg-white/10 border border-green-600/50 text-white rounded-xl px-4 pt-6 pb-2 text-base focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
               required
             />
+            <label
+              htmlFor="email"
+              className="absolute left-4 top-3 text-xs text-white/80 transition-all duration-200 pointer-events-none peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-base peer-placeholder-shown:text-white/50 peer-focus:top-3 peer-focus:translate-y-0 peer-focus:text-xs peer-focus:text-white/80"
+            >
+              Email
+            </label>
+          </div>
+
+          <div className="relative">
+            <input
+              type={showPassword ? "text" : "password"}
+              id="password"
+              placeholder=" "
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="peer w-full bg-white/10 border border-green-600/50 text-white rounded-xl px-4 pt-6 pb-2 pr-11 text-base focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
+              required
+            />
+            <label
+              htmlFor="password"
+              className="absolute left-4 top-3 text-xs text-white/80 transition-all duration-200 pointer-events-none peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-base peer-placeholder-shown:text-white/50 peer-focus:top-3 peer-focus:translate-y-0 peer-focus:text-xs peer-focus:text-white/80"
+            >
+              Password
+            </label>
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/70 hover:text-white transition-colors"
             >
               {showPassword ? "👁️" : "👁️‍🗨️"}
             </button>
           </div>
 
-          {role === "patient" && (
-            <div className="text-right mb-4">
-              <Link
-                href={`/forgot-password?role=patient`}
-                className="text-sm text-blue-600 hover:underline"
-              >
-                Forgot password?
-              </Link>
-            </div>
-          )}
-
           {error && (
-            <p className="text-red-600 text-sm mb-3">{error}</p>
+            <p className="text-sm text-left px-3 py-2 rounded-lg bg-red-500/20 border border-red-400/40 text-red-200">{error}</p>
           )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-black text-white py-2 rounded disabled:opacity-50"
+            className="w-full py-3.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-60 text-white font-semibold shadow-lg transition-colors text-base tracking-wide"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Logging in..." : "Log In"}
           </button>
         </form>
 
         <button
           onClick={() => router.push("/")}
-          className="mt-4 text-sm text-gray-500 w-full text-center block"
+          className="px-4 py-1.5 rounded-lg bg-black/70 hover:bg-black text-white text-sm font-medium transition-colors"
         >
-          Cancel
+          ← Back
         </button>
+
       </div>
     </main>
-  );
-}
-
-export default function LoginPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
-      <LoginPageContent />
-    </Suspense>
   );
 }

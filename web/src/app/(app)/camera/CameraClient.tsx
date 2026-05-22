@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import {
@@ -9,7 +9,7 @@ import {
   DrawingUtils,
 } from "@mediapipe/tasks-vision";
 
-import { evaluateCaptureReadiness } from "@/lib/pose/captureReadiness";
+import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import {
   computePoseMetricsForExercise,
@@ -22,7 +22,7 @@ import {
   type MetricName,
 } from "@/lib/exercises/registry";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
-import { RepCounter, type RepEvent } from "@/lib/pose/repCounter";
+import { RepCounter, type RepCounterOptions, type RepEvent } from "@/lib/pose/repCounter";
 import {
   BidirectionalRepCounter,
   type BidirectionalRepCounterDebugSnapshot,
@@ -36,6 +36,100 @@ interface Exercise {
   name: string;
   description: string;
   duration: number;
+  /**
+   * Per-side rep target. Added 2026-05-22. For patient
+   * assignments this comes from `patient_exercises.reps` via
+   * `/api/patient-exercises`. For staff debug catalog (`/api/exercises`)
+   * no prescription is attached, so a fallback of 12 is used.
+   */
+  reps: number;
+  /**
+   * Target number of sets. Same provenance pattern as `reps`. Fallback 3.
+   */
+  sets: number;
+}
+
+/**
+ * Session lifecycle (added 2026-05-22). Drives whether the
+ * rep counter ticks, whether the timer runs, and which Start/End controls
+ * are enabled. Transitions:
+ *   idle    → active : sidebar Start button (manual).
+ *   active  → ended  : sidebar End button (manual) OR auto on
+ *                      `completedSets >= targetSets`.
+ *   ended   → idle   : exercise change OR sidebar Start again (restart).
+ *
+ * Distinct from the camera hardware Start/Stop in the header — the camera
+ * can be running with the session in any state. Rep counting only happens
+ * when the session is `active`.
+ */
+type SessionState = "idle" | "active" | "ended";
+
+/**
+ * P4-friendly in-memory record of a completed set, shape-aligned with the
+ * future Postgres `sets` table. This implementation keeps these in
+ * memory only; a future P4 swap writes them to the DB without changing
+   * this shape while the current implementation remains in-session UI only.
+   * `pairedReps` / `asymmetryIndex` are tracked as
+ * placeholders for now (paired-rep matching is not implemented yet).
+ */
+type CompletedSetRecord = {
+  setIndex: number;
+  targetReps: number;
+  leftReps: number;
+  rightReps: number;
+  pairedReps: number;
+  durationMs: number;
+  terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
+  asymmetryIndex: number;
+};
+
+type Prescription = { sets: number; reps: number };
+
+const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12 };
+
+type RepCounterSet = {
+  left: RepCounter | null;
+  right: RepCounter | null;
+  bidirectional: BidirectionalRepCounter | null;
+};
+
+function createRepCountersForDefinition(
+  def: ExerciseDefinition | null,
+): RepCounterSet {
+  const empty: RepCounterSet = {
+    left: null,
+    right: null,
+    bidirectional: null,
+  };
+  if (!def || def.kind !== "dynamic") return empty;
+
+  const thresholds = def.primaryMetric.thresholds;
+  const options: RepCounterOptions =
+    def.primaryMetric.descentEpsilon !== undefined
+      ? { descentEpsilon: def.primaryMetric.descentEpsilon }
+      : {};
+
+  if (def.bilateral && def.bilateralMode === "per-limb") {
+    return {
+      left: new RepCounter(thresholds, options),
+      right: new RepCounter(thresholds, options),
+      bidirectional: null,
+    };
+  }
+
+  if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
+    return {
+      left: null,
+      right: null,
+      bidirectional: new BidirectionalRepCounter(thresholds, options),
+    };
+  }
+
+  return {
+    left: new RepCounter(thresholds, options),
+    right: null,
+    bidirectional: null,
+  };
 }
 
 interface PatientExercise {
@@ -163,10 +257,10 @@ export default function CameraClient() {
   type BaselinePhase = "not-needed" | "capturing" | "captured";
   const baselinePhaseRef = useRef<BaselinePhase>("not-needed");
   const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
-  const setBaselinePhase = (phase: BaselinePhase) => {
+  const setBaselinePhase = useCallback((phase: BaselinePhase) => {
     baselinePhaseRef.current = phase;
     setBaselinePhaseState(phase);
-  };
+  }, []);
 
   const lastBadCaptureAtRef = useRef<number>(0);
   const stableOkSinceRef = useRef<number>(0);
@@ -190,6 +284,251 @@ export default function CameraClient() {
 
   const [activeDefinition, setActiveDefinition] =
     useState<ExerciseDefinition | null>(null);
+
+  /**
+   * Ref mirror of `activeDefinition` state, read by `predictWebcam` to avoid
+   * the stale-closure issue: the rAF loop kicked off in `startCamera` keeps
+   * scheduling the same function instance, whose closure captured whatever
+   * `activeDefinition` was at definition time. Without this ref, switching
+   * exercises mid-session leaves the loop running with the previous
+   * exercise's definition — wrong primary metric, wrong framing mode,
+   * wrong rep counter state. The ref is sync'd via a dedicated useEffect
+   * below so the rAF callback always reads the latest value.
+   *
+   * Added 2026-05-22. Replaces the pre-existing pattern where
+   * `predictWebcam` read `activeDefinition` directly from the
+   * closure and required a Stop → Start to pick up exercise changes.
+   */
+  const activeDefinitionRef = useRef<ExerciseDefinition | null>(null);
+  useEffect(() => {
+    activeDefinitionRef.current = activeDefinition;
+  }, [activeDefinition]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Session lifecycle state (added 2026-05-22)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Session state machine. `sessionStateRef` mirrors the React state for
+   * rAF-callback access (same pattern as `baselinePhaseRef`,
+   * `activeDefinitionRef`, etc.). Rep counting in `predictWebcam` is
+   * gated on `sessionStateRef.current === "active"`.
+   */
+  const sessionStateRef = useRef<SessionState>("idle");
+  const [sessionState, setSessionStateRaw] = useState<SessionState>("idle");
+  const setSessionState = (s: SessionState) => {
+    sessionStateRef.current = s;
+    setSessionStateRaw(s);
+  };
+
+  /**
+   * Session start timestamp (performance.now() at the sidebar Start click).
+   * Drives the elapsed-time display, refreshed once per second by the
+   * timer useEffect when `sessionState === "active"`.
+   */
+  const sessionStartMsRef = useRef<number | null>(null);
+  const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
+
+  /**
+   * Completed sets count for the current session. State + ref pair so
+   * `predictWebcam` can both read it (set-completion check) and write
+   * it (auto-end when target reached). Resets to 0 on session start or
+   * exercise change.
+   */
+  const completedSetsRef = useRef(0);
+  const [completedSets, setCompletedSetsRaw] = useState(0);
+  const setCompletedSets = (n: number) => {
+    completedSetsRef.current = n;
+    setCompletedSetsRaw(n);
+  };
+
+  /**
+   * Active prescription (target sets × per-side reps) for the currently
+   * selected exercise. Comes from `assignedExercises[selectedExercise]`
+   * (which is sourced from `patient_exercises` via API for patients, or
+   * a fallback 3 × 12 for staff debug catalog). Drives the set-completion
+   * threshold and the progress-bar denominator.
+   */
+  const prescriptionRef = useRef<Prescription>(DEFAULT_PRESCRIPTION);
+  const [prescription, setPrescriptionRaw] = useState<Prescription>(DEFAULT_PRESCRIPTION);
+
+  /**
+   * Ref mirror of `repCounts` state so the rAF loop's set-completion
+   * check reads fresh per-side rep counts after each rep emit (instead
+   * of the closure-captured stale value). The state is what the UI
+   * renders; the ref is what predictWebcam reads/writes.
+   *
+   * Semantic note: `repCounts` now means "CURRENT SET reps,"
+   * not "session-total reps." It resets to {0,0} on each set completion
+   * and on session restart. Current-session rep events still
+   * accumulate in `repLogRef.current.{left,right}` (a P4-friendly buffer
+   * shape-aligned with the future `rep_events` table).
+   */
+  const repCountsRef = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
+
+  /**
+   * P4-friendly log of completed sets in the current session. Shape-aligned
+   * with the future Postgres `sets` table. In-memory
+   * only for v1; a future P4 swap reads this and writes to DB. Cleared
+   * on session start (Start button) and on exercise change.
+   */
+  const completedSetsLogRef = useRef<CompletedSetRecord[]>([]);
+
+  /**
+   * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
+   * Reset on session start and on each set completion.
+   */
+  const currentSetStartMsRef = useRef<number | null>(null);
+
+  /**
+   * Session timer: ticks `sessionElapsedSec` once per second while the
+   * session is active. Driven off `performance.now()` against the start
+   * timestamp captured in `sessionStartMsRef` so it's monotonic and
+   * doesn't drift when the tab is backgrounded (the cleanup interval is
+   * paused by the browser, but on re-tick the next tick computes from the
+   * fresh real-time delta, not by incrementing a counter).
+   */
+  useEffect(() => {
+    if (sessionState !== "active") return;
+    if (sessionStartMsRef.current === null) return;
+    const tick = () => {
+      if (sessionStartMsRef.current === null) return;
+      const elapsed = Math.floor(
+        (performance.now() - sessionStartMsRef.current) / 1000,
+      );
+      setSessionElapsedSec(elapsed);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [sessionState]);
+
+  /**
+   * Asymmetry index for the future `sets` table shape. `|left − right| / max(left, right)`,
+   * clamped to 0 when there are no reps. Pure number; no side effects.
+   */
+  const computeAsymmetryIndex = (left: number, right: number): number => {
+    const max = Math.max(left, right);
+    if (max === 0) return 0;
+    return Math.abs(left - right) / max;
+  };
+
+  /**
+   * Check whether the current set is complete under Model C
+   * (`min(left,right) >= targetReps` for bilateral, `left >= targetReps`
+   * for unilateral). If complete:
+   *  - Log a `CompletedSetRecord` to `completedSetsLogRef` (P4-friendly).
+   *  - Bump `completedSets`.
+   *  - Reset `repCounts` / `repCountsRef` to {0,0} for the next set.
+   *  - Reset the underlying `RepCounter` instances so each set starts
+   *    with a fresh state machine (continuity gate, peak tracking, etc.).
+   *  - If `completedSets` now meets `targetSets`, auto-transition the
+   *    session to `ended`.
+   *
+   * Called from each rep-emit site in `predictWebcam` AFTER the per-side
+   * count has been incremented. Reads everything from refs so the
+   * decision uses fresh values (no stale-closure issue).
+   */
+  const checkAndHandleSetCompletion = (tNow: number) => {
+    const def = activeDefinitionRef.current;
+    if (!def || def.kind !== "dynamic") return;
+    const target = prescriptionRef.current.reps;
+    const left = repCountsRef.current.left;
+    const right = repCountsRef.current.right;
+    const setComplete = def.bilateral
+      ? Math.min(left, right) >= target
+      : left >= target;
+    if (!setComplete) return;
+
+    const setRecord: CompletedSetRecord = {
+      setIndex: completedSetsRef.current + 1,
+      targetReps: target,
+      leftReps: left,
+      rightReps: right,
+      pairedReps: Math.min(left, right),
+      durationMs:
+        currentSetStartMsRef.current !== null
+          ? tNow - currentSetStartMsRef.current
+          : 0,
+      terminatedBy: "min_reached",
+      asymmetryIndex: computeAsymmetryIndex(left, right),
+    };
+    completedSetsLogRef.current.push(setRecord);
+
+    setCompletedSets(completedSetsRef.current + 1);
+    repCountsRef.current = { left: 0, right: 0 };
+    setRepCounts({ left: 0, right: 0 });
+    leftRepCounterRef.current?.reset();
+    rightRepCounterRef.current?.reset();
+    bidirectionalRepCounterRef.current?.reset();
+    currentSetStartMsRef.current = tNow;
+
+    if (completedSetsRef.current >= prescriptionRef.current.sets) {
+      setSessionState("ended");
+    }
+  };
+
+  /**
+   * Sidebar Start button handler. Resets the session lifecycle and
+   * transitions to `active`. The rep event log is cleared and rep counters
+   * are rebuilt so a restarted session does not inherit stale event buffers
+   * or lifetime-of-instance rep indices from the previous session.
+   */
+  const handleSessionStart = () => {
+    if (!activeDefinition) return;
+    const now = performance.now();
+    const counters = createRepCountersForDefinition(activeDefinition);
+    sessionStartMsRef.current = now;
+    currentSetStartMsRef.current = now;
+    setSessionElapsedSec(0);
+    setCompletedSets(0);
+    completedSetsLogRef.current = [];
+    repLogRef.current = { left: [], right: [] };
+    neckRepDebugRef.current = [];
+    neckRepDebugStartMsRef.current = null;
+    neckRepDebugSeqRef.current = 0;
+    if (typeof window !== "undefined") {
+      window.__neckRepDebug = neckRepDebugRef.current;
+    }
+    repCountsRef.current = { left: 0, right: 0 };
+    setRepCounts({ left: 0, right: 0 });
+    leftRepCounterRef.current = counters.left;
+    rightRepCounterRef.current = counters.right;
+    bidirectionalRepCounterRef.current = counters.bidirectional;
+    setSessionState("active");
+  };
+
+  /**
+   * Sidebar End button handler. Transitions to `ended`. If there are
+   * reps in flight in the current set, log a partial set record with
+   * `terminatedBy: "user"` so the session timeline reflects the
+   * incomplete attempt.
+   */
+  const handleSessionEnd = () => {
+    if (sessionStateRef.current !== "active") {
+      // Idempotent: clicking End in idle/ended state has no effect.
+      return;
+    }
+    const left = repCountsRef.current.left;
+    const right = repCountsRef.current.right;
+    if (left > 0 || right > 0) {
+      const setRecord: CompletedSetRecord = {
+        setIndex: completedSetsRef.current + 1,
+        targetReps: prescriptionRef.current.reps,
+        leftReps: left,
+        rightReps: right,
+        pairedReps: Math.min(left, right),
+        durationMs:
+          currentSetStartMsRef.current !== null
+            ? performance.now() - currentSetStartMsRef.current
+            : 0,
+        terminatedBy: "user",
+        asymmetryIndex: computeAsymmetryIndex(left, right),
+      };
+      completedSetsLogRef.current.push(setRecord);
+    }
+    setSessionState("ended");
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -244,6 +583,16 @@ export default function CameraClient() {
     value: number | null;
     kind: "primary" | "compensation";
     warningThreshold?: number;
+    /**
+     * Direction the warningThreshold compares against. Default "above"
+     * preserves pre-2026-05-21 behavior: flag when `Math.abs(value) >=
+     * warningThreshold` (typical "higher = worse" compensation like
+     * trunkLean). "below" flags when `value < warningThreshold` ("lower
+     * = worse", used by ex_007/ex_008 for elbowFlexion + the Wall Angels
+     * foreshortening signal). See `CompensationMetricSpec` JSDoc in
+     * registry.ts.
+     */
+    compareDirection?: "above" | "below";
   };
   
   const metricCards: CardSpec[] = (() => {
@@ -275,6 +624,7 @@ export default function CameraClient() {
         value: frameMetrics.metrics[comp.name] ?? null,
         kind: "compensation",
         warningThreshold: comp.warningThreshold,
+        compareDirection: comp.compareDirection,
       });
     }
     return cards;
@@ -282,10 +632,53 @@ export default function CameraClient() {
  
  
   
-  const sets = 3;
+  // Derived stat-panel values (replacing the hardcoded
+  // placeholders that lived here pre-2026-05-22).
 
-  const progressPct = 65;
-  const timer = "05:32";
+  /**
+   * SETS cell value: completed sets in this session. The StatPanel/
+   * BidirectionalStatPanel renders this as a number; the progress bar
+   * below the panel shows progress through the session.
+   */
+  const sets = completedSets;
+
+  /**
+   * Progress through the entire session.
+   *   completedSets * targetReps    — reps already locked in from finished sets.
+   *   min(currentLeft, currentRight) — reps that count toward the CURRENT set
+   *                                   under Model C (the slower side gates set
+   *                                   completion; the faster side's surplus
+   *                                   doesn't advance progress further).
+   *   Divided by (targetSets * targetReps) for a 0–100 percentage.
+   *
+   * Isometric exercises (ex_006) don't track reps yet (P3b unbuilt) — we
+   * fall back to 0 so the bar doesn't show a misleading value.
+   */
+  const currentSetMinReps = activeDefinition?.bilateral
+    ? Math.min(repCounts.left, repCounts.right)
+    : repCounts.left;
+  const targetTotalReps = Math.max(1, prescription.sets * prescription.reps);
+  const progressPct =
+    activeDefinition?.kind === "dynamic"
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round(
+              ((completedSets * prescription.reps + currentSetMinReps) /
+                targetTotalReps) *
+                100,
+            ),
+          ),
+        )
+      : 0;
+
+  /**
+   * TIME cell value: session elapsed time, formatted MM:SS. Driven by
+   * `sessionElapsedSec` (ticked every 1 s by the session-timer useEffect
+   * while `sessionState === "active"`). Shows 00:00 in idle/ended states.
+   */
+  const timer = formatElapsedTime(sessionElapsedSec);
 
   // ---------------------------------------------------------
   // Init model
@@ -326,7 +719,12 @@ export default function CameraClient() {
       fetch("/api/exercises")
         .then((r) => r.json())
         .then((data) => {
-          const DEBUG_IDS = ["ex_001", "ex_002", "ex_003", "ex_004", "ex_005", "ex_006"];
+          // Staff debug catalog: the active ex_NNN list after EX_SWAP (2026-05-21).
+          // ex_002 (Overhead Arm Raises) and ex_003 (Shoulder Shrugs) are
+          // deprecated — see the @deprecated JSDocs on those entries in
+          // `registry.ts`. They remain in the DB and registry for audit,
+          // but should not surface in the staff dropdown.
+          const DEBUG_IDS = ["ex_001", "ex_004", "ex_005", "ex_006", "ex_007", "ex_008"];
           const exercises: Exercise[] = (data.exercises ?? [])
             .filter((e: any) => DEBUG_IDS.includes(e.id))
             .sort((a: any, b: any) => a.id.localeCompare(b.id))
@@ -334,9 +732,17 @@ export default function CameraClient() {
               id: e.id,
               name: e.name,
               description: e.description,
-            }));
+              // Staff debug catalog has no per-patient prescription —
+              // fall back to the patient_exercises DB defaults (3 × 12)
+              // so the session lifecycle still has a target to gate
+              // set completion.
+              sets: DEFAULT_PRESCRIPTION.sets,
+              reps: DEFAULT_PRESCRIPTION.reps,
+          }));
           setAssignedExercises(exercises);
-          if (exercises.length > 0 && !selectedExercise) setSelectedExercise(exercises[0].id);
+          if (exercises.length > 0) {
+            setSelectedExercise((prev) => prev || exercises[0].id);
+          }
         })
         .catch((err) => console.error("Error loading exercises:", err));
     } else {
@@ -347,13 +753,33 @@ export default function CameraClient() {
             id: e.exercise_id,
             name: e.name,
             description: e.description,
+            // `patient_exercises.reps` is the per-side target: prescription
+            // reps = 10 means 10 reps per side. `patient_exercises.sets`
+            // is total set count.
+            // Both default in the DB schema to 12 / 3 respectively;
+            // mirror those if the API response omits them.
+            reps: typeof e.reps === "number" ? e.reps : DEFAULT_PRESCRIPTION.reps,
+            sets: typeof e.sets === "number" ? e.sets : DEFAULT_PRESCRIPTION.sets,
           }));
           setAssignedExercises(assigned);
-          if (assigned.length > 0 && !selectedExercise) setSelectedExercise(assigned[0].id);
+          if (assigned.length > 0) {
+            setSelectedExercise((prev) => prev || assigned[0].id);
+          }
         })
         .catch((err) => console.error("Error loading exercises:", err));
     }
-  }, [user?.id]);
+  }, [user?.id, user?.role]);
+
+  useEffect(() => {
+    const assignedEntry = selectedExercise
+      ? assignedExercises.find((e) => e.id === selectedExercise)
+      : undefined;
+    const nextPrescription = assignedEntry
+      ? { sets: assignedEntry.sets, reps: assignedEntry.reps }
+      : DEFAULT_PRESCRIPTION;
+    prescriptionRef.current = nextPrescription;
+    setPrescriptionRaw(nextPrescription);
+  }, [selectedExercise, assignedExercises]);
 
   useEffect(() => {
     if (!selectedExercise) {
@@ -374,6 +800,18 @@ export default function CameraClient() {
 
     const def = getExerciseDefinition(selectedExercise);
     setActiveDefinition(def);
+
+    // Reset the session lifecycle on every exercise change.
+    // The user has to click sidebar Start on the new exercise to begin a
+    // fresh session; rep counting stays gated until they do. completedSets,
+    // currentSetReps (repCounts), and the completed-sets log all clear.
+    setSessionState("idle");
+    sessionStartMsRef.current = null;
+    setSessionElapsedSec(0);
+    setCompletedSets(0);
+    completedSetsLogRef.current = [];
+    repCountsRef.current = { left: 0, right: 0 };
+    currentSetStartMsRef.current = null;
 
     // Reset filters whenever the exercise changes — old filter history would
     // bleed across exercises and produce a misleading first-frame jump.
@@ -419,29 +857,11 @@ export default function CameraClient() {
         : "not-needed",
     );
 
-    if (def && def.kind === "dynamic") {
-      const thresholds = def.primaryMetric.thresholds;
-      const options =
-        def.primaryMetric.descentEpsilon !== undefined
-          ? { descentEpsilon: def.primaryMetric.descentEpsilon }
-          : {};
-
-      if (def.bilateral && def.bilateralMode === "per-limb") {
-        // Two limbs in parallel — one counter per side.
-        leftRepCounterRef.current = new RepCounter(thresholds, options);
-        rightRepCounterRef.current = new RepCounter(thresholds, options);
-      } else if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
-        // One signed metric, sides distinguished by sign at peak time.
-        bidirectionalRepCounterRef.current = new BidirectionalRepCounter(
-          thresholds,
-          options,
-        );
-      } else {
-        // Unilateral — single counter on the left ref.
-        leftRepCounterRef.current = new RepCounter(thresholds, options);
-      }
-    }
-  }, [selectedExercise]);
+    const counters = createRepCountersForDefinition(def);
+    leftRepCounterRef.current = counters.left;
+    rightRepCounterRef.current = counters.right;
+    bidirectionalRepCounterRef.current = counters.bidirectional;
+  }, [selectedExercise, setBaselinePhase]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
@@ -475,6 +895,14 @@ export default function CameraClient() {
     const landmarker = landmarkerRef.current;
     if (!video || !canvas || !landmarker) return;
 
+    // Read activeDefinition through the ref instead of the closure-captured
+    // state binding. The rAF loop kicked off in `startCamera` keeps
+    // scheduling THIS function instance, so its closure
+    // captured `activeDefinition` at definition time. Without this local
+    // shadow, switching exercises mid-session would run the loop with the
+    // previous exercise's definition. The ref is sync'd by a useEffect.
+    const activeDefinition = activeDefinitionRef.current;
+
     if (video.readyState === 4 && video.videoWidth > 0) {
       if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
       if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
@@ -501,7 +929,15 @@ export default function CameraClient() {
             radius: 3,
           });
 
-          const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height);
+          // Framing mode is per-exercise: exercises that reach above head
+          // height (ex_007 Press, ex_008 Wall Angels — `requiresOverheadRoom:
+          // true`) get a relaxed head-y range and skip the wrist gate so the
+          // patient can stand further back without losing metrics when
+          // wrists briefly leave the frame at peak. Defaults to "default"
+          // when no exercise is selected.
+          const framingMode: FramingMode =
+            activeDefinition?.requiresOverheadRoom ? "overhead" : "default";
+          const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height, framingMode);
 
           const now = performance.now();
           if (!r.ok) {
@@ -665,21 +1101,50 @@ export default function CameraClient() {
                             ) / 10
                           : null;
 
-                      if (typeof smoothedLeft === "number" && leftRepCounterRef.current) {
+                      // Rep counting is gated on
+                      // `sessionStateRef.current === "active"`. When the
+                      // session is idle or ended, metrics still compute
+                      // (display updates) but the rep counter never sees
+                      // a frame, so its state machine stays in
+                      // WAITING_FOR_REP_START. `handleSessionStart` rebuilds
+                      // counters before transitioning to active, so the next
+                      // session begins with clean state and rep indices.
+                      const sessionIsActive =
+                        sessionStateRef.current === "active";
+
+                      if (
+                        sessionIsActive &&
+                        typeof smoothedLeft === "number" &&
+                        leftRepCounterRef.current
+                      ) {
                         const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
                         if (event) {
                           repLogRef.current.left.push(event);
-                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
-                          // eslint-disable-next-line no-console
+                          const newReps = {
+                            ...repCountsRef.current,
+                            left: repCountsRef.current.left + 1,
+                          };
+                          repCountsRef.current = newReps;
+                          setRepCounts(newReps);
+                          checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} left`, event);
                         }
                       }
-                      if (typeof smoothedRight === "number" && rightRepCounterRef.current) {
+                      if (
+                        sessionIsActive &&
+                        typeof smoothedRight === "number" &&
+                        rightRepCounterRef.current
+                      ) {
                         const event = rightRepCounterRef.current.update(smoothedRight, tNow);
                         if (event) {
                           repLogRef.current.right.push(event);
-                          setRepCounts((p) => ({ ...p, right: p.right + 1 }));
-                          // eslint-disable-next-line no-console
+                          const newReps = {
+                            ...repCountsRef.current,
+                            right: repCountsRef.current.right + 1,
+                          };
+                          repCountsRef.current = newReps;
+                          setRepCounts(newReps);
+                          checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} right`, event);
                         }
                       }
@@ -699,18 +1164,29 @@ export default function CameraClient() {
                       // blocks immediate opposite-side return-stroke overshoot
                       // until the signed metric has settled near neutral.
                       const counter = bidirectionalRepCounterRef.current;
+                      // Gate on active session state.
+                      // The debug-ring-buffer below still records before/
+                      // after snapshots so the neck-rep analysis tooling
+                      // remains functional during idle/ended states, but
+                      // the .update() call is suppressed.
+                      const sessionIsActive =
+                        sessionStateRef.current === "active";
                       if (counter) {
                         const before = counter.getDebugSnapshot(tNow, rawValue);
-                        const rep = counter.update(rawValue, tNow);
+                        const rep = sessionIsActive
+                          ? counter.update(rawValue, tNow)
+                          : null;
                         if (rep) {
                           const { side, event } = rep;
                           repLogRef.current[side].push(event);
-                          setRepCounts((prev) => ({
-                            ...prev,
-                            [side]: prev[side] + 1,
-                          }));
+                          const newReps = {
+                            ...repCountsRef.current,
+                            [side]: repCountsRef.current[side] + 1,
+                          };
+                          repCountsRef.current = newReps;
+                          setRepCounts(newReps);
+                          checkAndHandleSetCompletion(tNow);
 
-                          // eslint-disable-next-line no-console
                           console.log(`[rep] ${activeDefinition.id} ${side}`, event);
                         }
                         const after = counter.getDebugSnapshot(tNow, rawValue);
@@ -771,14 +1247,19 @@ export default function CameraClient() {
                         }
                       }
                     } else {
-                      // Unilateral.
+                      // Unilateral. Gate on active session.
                       const counter = leftRepCounterRef.current;
-                      if (counter) {
+                      if (counter && sessionStateRef.current === "active") {
                         const event = counter.update(rawValue, tNow);
                         if (event) {
                           repLogRef.current.left.push(event);
-                          setRepCounts((p) => ({ ...p, left: p.left + 1 }));
-                          // eslint-disable-next-line no-console
+                          const newReps = {
+                            ...repCountsRef.current,
+                            left: repCountsRef.current.left + 1,
+                          };
+                          repCountsRef.current = newReps;
+                          setRepCounts(newReps);
+                          checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id}`, event);
                         }
                       }
@@ -792,8 +1273,8 @@ export default function CameraClient() {
                 setFrameMetrics({
                   tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
                   metrics: smoothedMetrics,
-                  // PC (handover §3.10): recompute the score from the SAME
-                  // smoothed values the metric cards render, not from raw.
+                  // Recompute the score from the SAME smoothed values the
+                  // metric cards render, not from raw.
                   // Otherwise a card sitting just under a warning threshold
                   // can pair with a score that just penalized it. raw.metrics
                   // is still available separately for the ML/log pipeline.
@@ -917,7 +1398,6 @@ export default function CameraClient() {
     return () => {
       stopCamera();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1042,6 +1522,7 @@ export default function CameraClient() {
                       value={card.value}
                       kind={card.kind}
                       warningThreshold={card.warningThreshold}
+                      compareDirection={card.compareDirection}
                     />
                   ))
                 )}
@@ -1055,15 +1536,27 @@ export default function CameraClient() {
                     leftReps={repCounts.left}
                     rightReps={repCounts.right}
                     timer={timer}
+                    targetReps={
+                      activeDefinition.kind === "dynamic" ? prescription.reps : undefined
+                    }
                   />
                 ) : (
                   <StatPanel
                     sets={sets}
                     reps={repCounts.left + repCounts.right}
                     timer={timer}
+                    targetReps={
+                      activeDefinition?.kind === "dynamic" ? prescription.reps : undefined
+                    }
+                    targetSets={prescription.sets}
                   />
                 )}
-                <ProgressCard progressPct={progressPct} />
+                <ProgressCard
+                  progressPct={progressPct}
+                  completedSets={completedSets}
+                  targetSets={prescription.sets}
+                  sessionState={sessionState}
+                />
               </div>
             </div>
           </div>
@@ -1170,11 +1663,29 @@ export default function CameraClient() {
                 </video>
               </div>
 
+              {/*
+                Sidebar session controls (wired 2026-05-22).
+                Distinct from the header Start/Stop which control the camera
+                hardware. These control the EXERCISE SESSION lifecycle:
+                Start enters `active` (rep counter ticks, timer runs); End
+                enters `ended` (counter freezes, timer stops, optional
+                partial-set record logged). The Start button reads "Restart"
+                when the session is in the ended state so it's clear that
+                clicking it resets completedSets / repCounts / timer.
+              */}
               <div className="mt-2 flex gap-2">
-                <button className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700">
-                  Start
+                <button
+                  onClick={handleSessionStart}
+                  disabled={!activeDefinition || sessionState === "active"}
+                  className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {sessionState === "ended" ? "Restart" : "Start"}
                 </button>
-                <button className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                <button
+                  onClick={handleSessionEnd}
+                  disabled={sessionState !== "active"}
+                  className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
                   End
                 </button>
               </div>
@@ -1229,26 +1740,76 @@ function ScoreCard({ score }: { score: number | null }) {
   );
 }
 
-function StatPanel({ sets, reps, timer }: { sets: number; reps: number; timer: string }) {
+function StatPanel({
+  sets,
+  reps,
+  timer,
+  targetReps,
+  targetSets,
+}: {
+  sets: number;
+  reps: number;
+  timer: string;
+  /** Per-side rep target. undefined for isometric (no rep target). */
+  targetReps?: number;
+  /** Total set target. undefined hides the `/target` suffix. */
+  targetSets?: number;
+}) {
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
       <div className="flex divide-x divide-white/10">
-        <StatCell label="SETS" value={String(sets)} />
-        <StatCell label="REPS" value={String(reps)} />
+        <StatCell
+          label="SETS"
+          value={String(sets)}
+          target={targetSets}
+          done={targetSets !== undefined && sets >= targetSets}
+        />
+        <StatCell
+          label="REPS"
+          value={String(reps)}
+          target={targetReps}
+          done={targetReps !== undefined && reps >= targetReps}
+        />
         <StatCell label="TIME" value={timer} />
       </div>
     </div>
   );
 }
  
-function StatCell({ label, value }: { label: string; value: string }) {
+function StatCell({
+  label,
+  value,
+  target,
+  done,
+}: {
+  label: string;
+  value: string;
+  /** When provided, renders a dimmed `/target` suffix after the value. */
+  target?: number;
+  /**
+   * When true, the cell turns emerald and a ✓ appears next to the label —
+   * the per-side "this side hit its target" cue (added
+   * 2026-05-22). Note this does NOT block further reps on that side
+   * (synchronization philosophy: the side keeps counting; only the
+   * progress bar is gated by the slower side via min()).
+   */
+  done?: boolean;
+}) {
   return (
     <div className="px-5 py-3 text-center">
-      <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
-        {label}
+      <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5 flex items-center justify-center gap-1">
+        <span>{label}</span>
+        {done && <span className="text-emerald-400 leading-none">✓</span>}
       </div>
-      <div className="text-3xl font-bold text-white leading-none tabular-nums">
+      <div
+        className={`text-3xl font-bold leading-none tabular-nums ${
+          done ? "text-emerald-400" : "text-white"
+        }`}
+      >
         {value}
+        {target !== undefined && (
+          <span className="text-base font-medium text-white/40">{`/${target}`}</span>
+        )}
       </div>
     </div>
   );
@@ -1258,28 +1819,64 @@ function BidirectionalStatPanel({
   leftReps,
   rightReps,
   timer,
+  targetReps,
 }: {
   leftReps: number;
   rightReps: number;
   timer: string;
+  /** Per-side rep target. undefined for isometric (no rep target shown). */
+  targetReps?: number;
 }) {
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
       <div className="flex divide-x divide-white/10">
-        <StatCell label="LEFT" value={String(leftReps)} />
-        <StatCell label="RIGHT" value={String(rightReps)} />
+        <StatCell
+          label="LEFT"
+          value={String(leftReps)}
+          target={targetReps}
+          done={targetReps !== undefined && leftReps >= targetReps}
+        />
+        <StatCell
+          label="RIGHT"
+          value={String(rightReps)}
+          target={targetReps}
+          done={targetReps !== undefined && rightReps >= targetReps}
+        />
         <StatCell label="TIME" value={timer} />
       </div>
     </div>
   );
 }
 
-function ProgressCard({ progressPct }: { progressPct: number }) {
+function ProgressCard({
+  progressPct,
+  completedSets,
+  targetSets,
+  sessionState,
+}: {
+  progressPct: number;
+  completedSets: number;
+  targetSets: number;
+  sessionState: SessionState;
+}) {
+  // The label communicates session lifecycle
+  // + set position in addition to the raw percentage. Mid-session it
+  // reads "SET X OF Y" (1-indexed, capped at Y). After session end it
+  // reads "COMPLETE" if all sets done, or "ENDED EARLY" with the set
+  // count when the user clicked End before reaching the target.
+  const setLabel =
+    sessionState === "ended"
+      ? completedSets >= targetSets
+        ? "SESSION COMPLETE"
+        : `ENDED AT SET ${completedSets} / ${targetSets}`
+      : sessionState === "active"
+        ? `SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
+        : `READY • ${targetSets} SETS`;
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
       <div className="flex items-center justify-between mb-2.5">
         <span className="text-[10px] tracking-widest text-white/50 uppercase">
-          Session Progress
+          {setLabel}
         </span>
         <span className="text-sm font-bold text-white tabular-nums">{progressPct}%</span>
       </div>
@@ -1293,50 +1890,100 @@ function ProgressCard({ progressPct }: { progressPct: number }) {
   );
 }
 
+/**
+ * Format a non-negative second count as `MM:SS` with zero-padded fields.
+ * Used for the session timer cell. Handles sessions longer than an hour
+ * by letting the minute count grow past 59 (e.g., `01:30:00 → "90:00"`),
+ * which matches the StatPanel's tight 5-char display budget better than
+ * spilling into hours.
+ */
+function formatElapsedTime(sec: number): string {
+  const safe = Math.max(0, Math.floor(sec));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
 function metricLabel(name: MetricName): string {
   switch (name) {
-    case "shoulderAbduction":   return "SHOULDER ABD";
-    case "shoulderFlexion":     return "SHOULDER FLEX";
-    case "scapularElevation":   return "SHRUG";
-    case "neckLateralFlexion":  return "NECK FLEX";
-    case "trunkLateralFlexion": return "TRUNK FLEX";
-    case "shoulderHorizAbd":    return "T-POSE";
-    case "neckTilt":            return "NECK TILT";
-    case "shoulderSymmetry":    return "SHOULDER SYM";
-    case "trunkLean":           return "TRUNK LEAN";
+    case "shoulderAbduction":      return "SHOULDER ABD";
+    case "shoulderFlexion":        return "SHOULDER FLEX";
+    case "scapularElevation":      return "SHRUG";
+    case "neckLateralFlexion":     return "NECK FLEX";
+    case "trunkLateralFlexion":    return "TRUNK FLEX";
+    case "shoulderHorizAbd":       return "T-POSE";
+    case "neckTilt":               return "NECK TILT";
+    case "shoulderSymmetry":       return "SHOULDER SYM";
+    case "trunkLean":              return "TRUNK LEAN";
+    case "elbowFlexion":           return "ELBOW FLEX";
+    case "wristShoulderVertical":  return "OVERHEAD";
+    case "shoulderElbowDistance":  return "ELBOW POS";
   }
 }
  
+/**
+ * True iff a compensation metric value crosses its `warningThreshold` in
+ * the bad direction.
+ *
+ *   "above" (default): flag when `Math.abs(value) >= warningThreshold`.
+ *     Use for "higher = worse" metrics (trunkLean, neckTilt,
+ *     shoulderSymmetry, scapularElevation-as-compensation).
+ *   "below":           flag when `value < warningThreshold`.
+ *     Use for "lower = worse" metrics added in EX_SWAP 2026-05-21:
+ *     `elbowFlexion` (180° = arm straight = good; warn if bent below
+ *     threshold) and `shoulderElbowDistance` (~0.5 = on-wall = good;
+ *     warn if foreshortened below threshold).
+ *
+ * Mirrors `CompensationMetricSpec.compareDirection` in registry.ts.
+ */
+function isCompensationFlagging(
+  value: number | null,
+  threshold: number,
+  direction: "above" | "below",
+): boolean {
+  if (value === null) return false;
+  return direction === "below"
+    ? value < threshold
+    : Math.abs(value) >= threshold;
+}
+
 /**
  * Compensation metrics get a calm gray accent below their warning threshold,
  * red above. Primary metrics show neutral white — they're an information
  * display, not a quality flag.
  */
-function compensationAccent(value: number | null, threshold: number): string {
+function compensationAccent(
+  value: number | null,
+  threshold: number,
+  direction: "above" | "below",
+): string {
   if (value === null) return "bg-white/25";
-  return Math.abs(value) >= threshold ? "bg-red-500" : "bg-white/40";
+  return isCompensationFlagging(value, threshold, direction) ? "bg-red-500" : "bg-white/40";
 }
- 
+
 function DynamicMetricCard({
   label,
   value,
   kind,
   warningThreshold,
+  compareDirection,
 }: {
   label: string;
   value: number | null;
   kind: "primary" | "compensation";
   warningThreshold?: number;
+  compareDirection?: "above" | "below";
 }) {
+  const direction = compareDirection ?? "above";
+  const threshold = warningThreshold ?? Infinity;
   const accentClass =
     kind === "primary"
       ? "bg-white/60"
-      : compensationAccent(value, warningThreshold ?? Infinity);
- 
+      : compensationAccent(value, threshold, direction);
+
   const isFlagging =
     kind === "compensation" &&
-    value !== null &&
-    Math.abs(value) >= (warningThreshold ?? Infinity);
+    isCompensationFlagging(value, threshold, direction);
  
   // Display string: degrees for angles, just the rounded number for now
   // for displacement metrics. Consumers can refine units later per metric.
@@ -1364,7 +2011,11 @@ function DynamicMetricCard({
           {display}
         </div>
         <div className="text-xs text-white/55 mt-1.5 truncate">
-          {kind === "primary" ? "Primary" : isFlagging ? "Above threshold" : "Within range"}
+          {kind === "primary"
+            ? "Primary"
+            : isFlagging
+              ? (direction === "below" ? "Below threshold" : "Above threshold")
+              : "Within range"}
         </div>
       </div>
     </div>

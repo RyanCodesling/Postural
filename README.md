@@ -5,6 +5,42 @@
 
 --- 
 
+## 📌 Update-5-22-26 | RyanCodesling
+
+- **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
+- **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug surfaces
+- **Real session lifecycle** replaced the hardcoded SETS / progress / timer placeholders: idle→active→ended state machine, slower-side-gated set counter (`min(left,right) ≥ targetReps`), live session timer, progress bar, wired sidebar Start/End controls, per-side `reps/target` display with a green ✓ "done" cue
+- Live-webcam tuning adjusted smoothing/framing and narrowed compensation scope; thresholds remain starting values that still need pilot/live-webcam calibration. Two compensation signals (shrug, elbow-off-wall) were deferred pending baseline-capture / stronger setup constraints
+
+### *web\src\lib\exercises\registry.ts*
+- Added `ex_007` (Overhead Shoulder Press, primary `wristShoulderVertical`) and `ex_008` (Wall Angels, primary `shoulderAbduction` reused)
+- `@deprecated` JSDoc on `ex_002` / `ex_003` (kept structurally so `scapularElevation.test.ts` still asserts against `ex_003`)
+- Extended `MetricName` (+`elbowFlexion`, `wristShoulderVertical`, `shoulderElbowDistance`); added `compareDirection?: "above" | "below"` and `requiresOverheadRoom?: boolean` to the relevant specs
+
+### *web\src\lib\pose\poseMetrics.ts*
+- New `computeElbowFlexion` (interior-angle, 180° = straight), `computeWristShoulderVertical` (trunk-up projection, camera-roll invariant — ex_007 primary), `computeShoulderElbowDistance` (foreshortening signal, retained for future use)
+- `inFrame01()` guards added to active wrist/elbow-dependent rep metrics (`shoulderAbduction`, `elbowFlexion`, `wristShoulderVertical`) — rejects MediaPipe landmarks extrapolated outside `[0,1]`, preventing phantom rep peaks during overhead reach
+- `computeCompensationScore` now skips stub-band (warning-only) metrics so they don't dilute the score; added per-side worst-value aggregation (`pickWorstSide`) for per-limb compensation metrics
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Per-exercise framing mode: `requiresOverheadRoom` exercises (ex_007 / ex_008) get a relaxed head-y band (0.10–0.45 vs the default 0.05–0.25) and skip the readiness-level wrist gate; metric-level in-frame guards still reject extrapolated wrist/elbow readings
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Session lifecycle state + refs; rep counting gated on `active`; slower-side-gated set completion (resets per-set counts and counter state); true Start/Restart clears current-session logs and rebuilds rep counters so rep indices start fresh; session timer; derived progress; wired sidebar Start/End buttons; per-side target + green ✓ done cues on the stat panels
+- Fixed a stale-closure bug — `predictWebcam` now reads `activeDefinition` through a ref, so switching exercises mid-session works without a camera restart
+- `metricLabel` extended for the three new metrics
+
+### *web\src\app\api\exercises\route.ts*
+- Filters deprecated `ex_002` / `ex_003` from the default catalog (with a `?includeDeprecated=true` opt-in for history views), so new assignment/catalog surfaces do not show them while existing patient assignments can still load
+
+### *web\src\lib\pose\ (new test files)*
+- `elbowFlexion.test.ts`, `wristShoulderVertical.test.ts`, `shoulderElbowDistance.test.ts` — synthetic-landmark coverage for the new metrics; elbow/wrist active-metric tests include off-frame-extrapolation rejection
+
+### *scripts\exercises_pg.sql*
+- Seeds `ex_007` / `ex_008`; switched the EX_SWAP insert block to `ON CONFLICT (id) DO UPDATE` so re-running the script refreshes stale descriptions on already-seeded rows
+
+---
+
 ## 📌 Update-5-20-26 | *Enah*
 - Renamed `scripts\exercise_templates_pg.sql` → `scripts\exercise_programs_pg.sql` — table `exercise_templates` renamed to `exercise_programs`, `template_exercises` renamed to `program_exercises`
 - Updated all SQL queries in `web\src\lib\db.ts` to reference the new table names

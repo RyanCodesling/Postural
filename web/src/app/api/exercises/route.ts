@@ -1,9 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExercises, createExercise, getNextExerciseId } from "@/lib/db";
 
-export async function GET() {
+/**
+ * Exercise IDs that are deprecated and should not appear in catalog-listing
+ * surfaces (therapist assignment dropdown, programs builder, staff debug
+ * dropdown, etc.). Their rows stay in the `exercises` table for audit/history
+ * — a patient with an existing ex_002 prescription can still load it from
+ * `/api/patient-exercises`. The deprecation only hides the entry from the
+ * "assign a new exercise" surface.
+ *
+ * Added 2026-05-21 for the EX_SWAP. See `registry.ts` for the matching
+ * `@deprecated` JSDoc on the registry entries themselves.
+ */
+const DEPRECATED_EXERCISE_IDS = new Set(["ex_002", "ex_003"]);
+
+export async function GET(request: NextRequest) {
   try {
-    const exercises = await getExercises();
+    // Special-case opt-in for callers that need the full catalog (e.g., a
+    // future historical view that wants to render a patient's past
+    // assignments including deprecated ones). Defaults to false so the
+    // common assignment-flow case gets the filtered list automatically.
+    const includeDeprecated =
+      request.nextUrl.searchParams.get("includeDeprecated") === "true";
+
+    const all = await getExercises();
+    const exercises = includeDeprecated
+      ? all
+      : all.filter((e) => !DEPRECATED_EXERCISE_IDS.has(e.id));
+
     return NextResponse.json({ exercises });
   } catch (error) {
     console.error("GET /api/exercises error:", error);

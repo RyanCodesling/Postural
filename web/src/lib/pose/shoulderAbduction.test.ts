@@ -268,6 +268,15 @@ test("missing left elbow → null for left side, right still reports", () => {
   assertCloseTo(right, 0, 1, "right still computable");
 });
 
+test("off-frame elbow with good visibility → null", () => {
+  const lms = neutralPose();
+  lms[13] = { x: 0.70, y: -0.05, visibility: 1 }; // extrapolated above frame
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
+  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  assertNull(left, "left abduction with off-frame elbow");
+  assertCloseTo(right, 0, 1, "right still computable");
+});
+
 test("missing one hip → null for both sides (trunk reference is shared)", () => {
   const lms = neutralPose();
   lms[24] = { x: 0.42, y: 0.55, visibility: 0.2 };

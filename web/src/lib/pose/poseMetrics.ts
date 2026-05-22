@@ -87,6 +87,27 @@ function pairVisible(a: LM | undefined, b: LM | undefined): boolean {
 }
 
 /**
+ * True iff a landmark sits inside the normalized [0,1] image frame.
+ *
+ * MediaPipe Pose can EXTRAPOLATE landmark positions outside the visible
+ * frame when the body extends past the camera's field of view. The
+ * extrapolated points often carry non-low visibility scores, so a simple
+ * `vis() >= MIN_VIS` check accepts them as if they were real readings. For
+ * rep-counting peak detection that's dangerous: an off-frame wrist with
+ * fictional coordinates can produce a "peak" that the state machine
+ * counts as a real rep.
+ *
+ * Use this guard for any metric whose input landmark might cross the
+ * visible-frame boundary during normal motion (overhead reach → wrist;
+ * lateral abduction at full ROM → elbow; etc.).
+ *
+ * Added 2026-05-22.
+ */
+function inFrame01(p: LM): boolean {
+  return p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
+}
+
+/**
  * bodyPairAngleDeg
  *
  * Returns the angle of the line connecting a left/right body landmark pair,
@@ -285,7 +306,7 @@ export type NeckTiltResult = {
  * degrees, or null if either ear landmark is unreliable.
  *
  * SIGN CONVENTION (authoritative — pinned by neckSideAgreement.test.ts and
- * matching `computeLateralNeckTilt` + CLAUDE.md; do NOT "correct" this back
+ * matching `computeLateralNeckTilt`; do NOT "correct" this back
  * to a right-positive reading — that was a long-standing doc error):
  *
  *   correctedAngle > 0  →  head tilting to the patient's LEFT
@@ -339,8 +360,8 @@ function signedNeckFlexionAngle(
  * ── SIGN CONVENTION (authoritative; pinned by neckSideAgreement.test.ts) ─────
  *   correctedAngle > 0  →  head tilting to the patient's LEFT
  *   correctedAngle < 0  →  head tilting to the patient's RIGHT
- * The code below maps `correctedAngle > 0 ? "left" : "right"`. Matches
- * CLAUDE.md. Do not flip this comment back to a right-positive reading.
+ * The code below maps `correctedAngle > 0 ? "left" : "right"`. Do not flip
+ * this comment back to a right-positive reading.
  *
  * ── NOTE ON EAR-LINE AND TILT REFERENCE ─────────────────────────────────────
  * This is why we do NOT use the ear line as the tilt reference for shoulder
@@ -675,6 +696,20 @@ const COMPENSATION_BANDS: Record<MetricName, Band[]> = {
   neckLateralFlexion:       [{ max: 0, deductionMin: 0, deductionMax: 0 }],
   trunkLateralFlexion:      [{ max: 0, deductionMin: 0, deductionMax: 0 }],
   shoulderHorizAbd:         [{ max: 0, deductionMin: 0, deductionMax: 0 }],
+
+  // V1 stubs (2026-05-21) — these are compensation metrics on ex_007/ex_008
+  // and contribute via the `warningThreshold` UI flag, but are NOT scored
+  // by `bandedDeduction` in v1. Reason: `elbowFlexion` (interior-angle
+  // convention: lower = worse) and `shoulderElbowDistance` (lower = worse)
+  // would need inverted-bandedDeduction logic to score correctly. Deferred
+  // until live-tuning produces empirical data on what the thresholds should
+  // be. The `warningThreshold` mechanism already provides the per-card UI
+  // flag; the score is the marginal feature for these two.
+  // `wristShoulderVertical` is a primary metric and never scored — stub is
+  // here for type completeness only.
+  elbowFlexion:             [{ max: 180, deductionMin: 0, deductionMax: 0 }],
+  wristShoulderVertical:    [{ max:   1, deductionMin: 0, deductionMax: 0 }],
+  shoulderElbowDistance:    [{ max:   1, deductionMin: 0, deductionMax: 0 }],
 };
 
 /**
@@ -729,8 +764,24 @@ export function computeCompensationScore(
     return null;
   }
 
+  // Stub-band filter (added 2026-05-21): a
+  // compensation metric whose `COMPENSATION_BANDS` entry has no band with a
+  // positive `deductionMax` is intentionally WARNING-ONLY — visible on the
+  // metric card via its `warningThreshold` flag, but with no contribution
+  // to the 0–100 score. Including it in the equal-weighting would dilute
+  // every real metric's share (e.g., on ex_008 with 4 compensations of which
+  // 2 are stubs, real metrics would only contribute 1/4 each instead of 1/2,
+  // capping the maximum penalty at 50 instead of 100). Filter stubs out
+  // BEFORE computing weights.
+  const isScoredBand = (bands: Band[]): boolean =>
+    bands.some((b) => b.deductionMax > 0);
+  const scored = compensations.filter((c) =>
+    isScoredBand(COMPENSATION_BANDS[c.name]),
+  );
+  if (scored.length === 0) return null;
+
   // Filter to compensation metrics that have a non-null reading this frame.
-  const active = compensations.filter((c) => {
+  const active = scored.filter((c) => {
     const v = metricValues[c.name];
     return typeof v === "number";
   });
@@ -861,6 +912,11 @@ export function computeShoulderAbduction(
   const shoulder = side === "left" ? leftShoulder! : rightShoulder!;
   const elbow    = side === "left" ? landmarks[13] : landmarks[14];
   if (!elbow || vis(elbow) < MIN_VIS) return null;
+  // Reject extrapolated elbow positions outside the visible frame —
+  // MediaPipe can place an extrapolated landmark at, say, y = -0.05 with
+  // normal visibility, which would otherwise feed a fictional peak into
+  // the rep counter on overhead motions.
+  if (!inFrame01(elbow)) return null;
 
   // Trunk-down vector: from shoulder-midpoint down to hip-midpoint.
   // Direction matters — we want it pointing DOWN so it parallels the
@@ -1050,7 +1106,7 @@ export function computeScapularElevation(
  *
  * Returns the tilt-corrected ear-line angle in body-relative frame.
  * Sign convention (authoritative; pinned by neckSideAgreement.test.ts,
- * matches `computeLateralNeckTilt` + CLAUDE.md):
+ * matches `computeLateralNeckTilt`):
  *   positive  →  head tilting to the patient's LEFT
  *   negative  →  head tilting to the patient's RIGHT
  *   ~0        →  head level
@@ -1104,6 +1160,306 @@ export function computeShoulderHorizAbduction(
   _side: "left" | "right"
 ): number | null {
   return null;
+}
+
+/**
+ * Elbow flexion angle (degrees, interior-angle convention) — used by ex_007
+ * Overhead Shoulder Press and ex_008 Wall Angels as a compensation/quality
+ * signal flagging incomplete arm extension.
+ *
+ * ── CONVENTION (read this before "fixing" the formula) ───────────────────────
+ * INTERIOR ANGLE between upper-arm and forearm, NOT the anatomical "flexion
+ * angle." This means:
+ *   arm straight (extended)  →  180°
+ *   elbow at right angle     →   90°
+ *   fully flexed (hand to shoulder) →  ~30°
+ *
+ * Why the inverted-from-anatomical convention: the warning thresholds for
+ * both consuming exercises (Wall Angels: "stay straight against the wall";
+ * Press: "extend fully overhead") read naturally as "warn when flexion <
+ * 160°", i.e., warn when the elbow is bent. The anatomical convention
+ * (0° straight, ~150° flexed) would require inverted "warn when flexion >
+ * 20°" thresholds that read backwards. Stay with this convention.
+ *
+ * ── THE MATH ─────────────────────────────────────────────────────────────────
+ * Three-point angle at the elbow vertex. Two vectors originating at the elbow:
+ *   A = elbow → shoulder (upper-arm direction, away from elbow)
+ *   B = elbow → wrist    (forearm direction, away from elbow)
+ *
+ * The angle BETWEEN them, measured at the elbow, is what we want:
+ *   - straight arm: A and B are anti-parallel → angle 180°
+ *   - bent arm:     A and B converge          → angle < 180°
+ *
+ * angleDiffDeg(lineAngleDeg(elbow, shoulder), lineAngleDeg(elbow, wrist))
+ * returns a SIGNED difference in (-180°, +180°]. Math.abs gives the magnitude
+ * of the angular separation, which is exactly the interior angle.
+ *
+ * NO `180 − Math.abs(...)` subtraction. At straight arm the two atan2 values
+ * differ by ±180°, Math.abs is already 180°, and that IS the result we want.
+ *
+ * ── ±180° BOUNDARY ───────────────────────────────────────────────────────────
+ * angleDiffDeg's wrap-loop uses strict `< -180`, so a result of exactly -180
+ * stays -180 instead of folding to +180. Math.abs handles this naturally —
+ * both signs map to 180. No boundary patching needed (unlike
+ * computeShoulderAbduction, which keeps the sign and needs explicit mapping).
+ *
+ * ── CAMERA-ROLL INVARIANCE ──────────────────────────────────────────────────
+ * Camera roll rotates both vectors by the same amount; their angular
+ * difference is invariant. No tilt subtraction needed. (Same situation as
+ * computeShoulderAbduction; `_tiltRef` is in the signature for shape-
+ * compatibility with the metric family.)
+ *
+ * ── LANDMARKS REQUIRED ───────────────────────────────────────────────────────
+ *   side="left":  11 (shoulder), 13 (elbow), 15 (wrist)
+ *   side="right": 12 (shoulder), 14 (elbow), 16 (wrist)
+ * Returns null on any landmark below MIN_VIS.
+ */
+export function computeElbowFlexion(
+  landmarks: LM[],
+  _tiltRef: TiltReference,
+  side: "left" | "right"
+): number | null {
+  const shoulder = side === "left" ? landmarks[11] : landmarks[12];
+  const elbow    = side === "left" ? landmarks[13] : landmarks[14];
+  const wrist    = side === "left" ? landmarks[15] : landmarks[16];
+
+  if (!shoulder || vis(shoulder) < MIN_VIS) return null;
+  if (!elbow    || vis(elbow)    < MIN_VIS) return null;
+  if (!wrist    || vis(wrist)    < MIN_VIS) return null;
+  // Reject extrapolated landmarks outside the visible frame — MediaPipe
+  // can place these with normal visibility scores during overhead reach
+  // (wrist) or extreme lateral abduction (elbow), which would otherwise
+  // produce phantom-angle readings.
+  if (!inFrame01(elbow) || !inFrame01(wrist)) return null;
+
+  const upperArmAngle = lineAngleDeg(elbow, shoulder);
+  const forearmAngle  = lineAngleDeg(elbow, wrist);
+
+  // Magnitude of angular separation = interior angle (see doc above).
+  const interiorAngle = Math.abs(angleDiffDeg(upperArmAngle, forearmAngle));
+
+  return Math.round(interiorAngle * 10) / 10;
+}
+
+/**
+ * Wrist-vs-shoulder position along the TRUNK-UP axis (normalized trunk-length
+ * units) — primary metric for ex_007 Overhead Shoulder Press.
+ *
+ * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
+ * Signed displacement of the wrist from the shoulder, projected onto the
+ * body's own trunk-up axis (hip-mid → shoulder-mid direction), and
+ * normalized by trunk length. The trunk-axis projection makes the metric
+ * **camera-roll invariant** — same as `computeScapularElevation`. Image-y
+ * displacement alone would let a tilted camera shrink or inflate the
+ * apparent "overhead" position; the trunk-relative projection cancels it
+ * out the same way ear-line tilt subtraction does for neck flexion.
+ *
+ *   arms at sides (rest)         →  NEGATIVE  (wrist below shoulder along trunk-up)
+ *   arms horizontal              →  ~0
+ *   arms fully extended overhead →  positive, ~0.5–0.7 trunk-lengths
+ *
+ * ── SIGN DISCIPLINE (CRITICAL — DO NOT "FIX") ────────────────────────────────
+ * This metric LETS NEGATIVES FLOW THROUGH. At rest with arms at the sides,
+ * the wrist sits below the shoulder along the trunk-up axis, so the
+ * projection is NEGATIVE. That is the CORRECT starting state for ex_007
+ * Press, not an out-of-range condition.
+ *
+ * Do NOT add a `value < 0 ? null : value` clamp like `computeShoulderAbduction`
+ * does for cross-body motion. The shoulderAbduction null-gate exists because
+ * cross-body and lateral abduction produce the same |angle| under Math.abs;
+ * the rep counter needs the time-gap to break continuity. THIS metric has
+ * no such collapse — the negative-to-positive range is continuous and
+ * physically meaningful. The RepCounter's `startThreshold` filter (e.g.,
+ * +0.1 for ex_007) naturally handles it: ASCENDING is never entered until
+ * the signed value crosses +startThreshold, so the rest position is simply
+ * "below startThreshold," same as any pre-rep waiting state.
+ *
+ * ── THE MATH ─────────────────────────────────────────────────────────────────
+ * trunkUp = (shoulderMid − hipMid) / trunkLen          (unit vector, body-relative "up")
+ * result  = ((wrist − shoulder) · trunkUp) / trunkLen  (signed scalar; trunk-length-normalized)
+ *
+ * At rest, (wrist − shoulder) points in the trunk-DOWN direction (anti-parallel
+ * to trunkUp), so the dot product is NEGATIVE. Overhead, (wrist − shoulder)
+ * is roughly parallel to trunkUp → positive.
+ *
+ * Because the projection is taken onto trunkUp (defined entirely by body
+ * landmarks), the result is invariant to camera roll. An earlier
+ * implementation used `(shoulder.y − wrist.y) / trunkLen` — equivalent
+ * only when the camera is perfectly level; degrades by cos(roll) under any
+ * tilt. Replaced 2026-05-21.
+ *
+ * Trunk length is the shoulder-midpoint to hip-midpoint distance, the same
+ * normalization reference used by `computeScapularElevation`.
+ *
+ * ── DEGENERATE-POSE GUARD ────────────────────────────────────────────────────
+ * Reuses TRUNK_LEN_EPSILON = 0.05. If shoulder-mid and hip-mid coincide
+ * (patient too close to camera, weird pose), return null.
+ *
+ * ── LANDMARKS REQUIRED ───────────────────────────────────────────────────────
+ *   11, 12 — both shoulders (per-side shoulder + shoulder-midpoint)
+ *   23, 24 — both hips (hip-midpoint, completes trunk axis)
+ *   side="left":  15 (left wrist)
+ *   side="right": 16 (right wrist)
+ */
+export function computeWristShoulderVertical(
+  landmarks: LM[],
+  _tiltRef: TiltReference,
+  side: "left" | "right"
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip))           return null;
+
+  const shoulder = side === "left" ? leftShoulder! : rightShoulder!;
+  const wrist    = side === "left" ? landmarks[15] : landmarks[16];
+  if (!wrist || vis(wrist) < MIN_VIS) return null;
+  // Reject extrapolated wrist positions outside the visible frame —
+  // overhead reach can push the wrist past y=0 while MediaPipe extrapolates
+  // a position with normal visibility, which would otherwise feed a
+  // fictional peak into the rep counter. Overhead-framing mode in
+  // captureReadiness.ts is supposed to keep the wrist
+  // in-frame at peak by relaxing head positioning + skipping the wrist
+  // capture-gate, but the in-frame check at the METRIC layer is the
+  // safety net that prevents extrapolated values from miscounting reps.
+  if (!inFrame01(wrist)) return null;
+
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  // Trunk-up vector (hip → shoulder). In normalized image coords with y
+  // increasing downward, "up" in the image corresponds to NEGATIVE dy.
+  const trunkVecX = shoulderMid.x - hipMid.x;
+  const trunkVecY = shoulderMid.y - hipMid.y;
+  const trunkLen  = Math.hypot(trunkVecX, trunkVecY);
+
+  const TRUNK_LEN_EPSILON = 0.05;
+  if (trunkLen < TRUNK_LEN_EPSILON) return null;
+
+  const trunkUpX = trunkVecX / trunkLen;
+  const trunkUpY = trunkVecY / trunkLen;
+
+  // Wrist offset from same-side shoulder, projected onto trunkUp, then
+  // normalized by trunk length. Negative at rest, positive overhead.
+  // Camera-roll invariant — trunkUp is body-relative, not image-relative.
+  const wristOffsetX = wrist.x - shoulder.x;
+  const wristOffsetY = wrist.y - shoulder.y;
+  const projection = wristOffsetX * trunkUpX + wristOffsetY * trunkUpY;
+
+  return projection / trunkLen;
+}
+
+/**
+ * Shoulder-to-elbow Euclidean distance (normalized trunk-length units) —
+ * compensation/quality signal for ex_008 Wall Angels, flagging elbow-off-wall
+ * via foreshortening of the upper-arm in 2D projection.
+ *
+ * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
+ * Apparent length of the upper-arm in the image plane, normalized by trunk
+ * length. At rest with the arm flat against the wall (W-position for Wall
+ * Angels), the upper-arm is in the image plane and reads its full
+ * anatomical length (typically ~0.45–0.55 × trunk length for adults).
+ *
+ * When the elbow rotates forward off the wall (toward the camera), the
+ * upper-arm is no longer in the image plane — it foreshortens. The
+ * apparent 2D shoulder-to-elbow distance drops.
+ *
+ * ── WHAT THIS METRIC DETECTS — narrowed scope ────────────────────────────────
+ * The Wall Angels warning fires when the ratio drops below `warningThreshold`
+ * (registry value 0.4, `compareDirection: "below"`). So this is a one-sided
+ * "foreshortening only" check, not a generic "elbow off the wall in any
+ * direction" check. Specifically:
+ *
+ *   ✅ DETECTS: elbow rotating off the wall TOWARD THE CAMERA. In 2D
+ *      projection this shortens the apparent upper-arm length, which drops
+ *      the shoulder→elbow distance and (if large enough) trips the warning.
+ *      Significant rotation (30–60° toward camera) produces 13–50% shortening
+ *      and reliably trips.
+ *
+ *   ⚠️ DOES NOT DETECT (correctly narrowed 2026-05-21): elbow DROP — elbow
+ *      falling vertically below shoulder level. This motion INCREASES the
+ *      shoulder→elbow Euclidean distance (elbow further from shoulder in
+ *      the image plane), so the ratio rises ABOVE baseline ~0.5 and never
+ *      crosses the below-threshold gate. Detection of elbow-drop requires
+ *      a separate signal (e.g., shoulder→elbow vertical component projected
+ *      onto trunk-up axis) — out of scope for v1; `elbowFlexion` partially
+ *      catches it via the upper-arm/forearm geometry instead.
+ *
+ *   ⚠️ ALSO DOES NOT DETECT: subtle elbow-off-wall (< 15° rotation toward
+ *      camera) — produces only ~3% ratio change (cos(15°) ≈ 0.97), well
+ *      inside threshold.
+ *
+ * An earlier revision of this comment claimed elbow-drop was caught via the
+ * y-coord component changing. That was true numerically (the distance does
+ * change) but misleading clinically (the change is in the WRONG direction
+ * for the below-threshold warning). Removed.
+ *
+ * A 3D pose backend or a side-facing camera would resolve both blind spots;
+ * accepted thesis limitations, not bugs.
+ *
+ * ── BASELINE ─────────────────────────────────────────────────────────────────
+ * No per-session baseline capture — trunk-length normalization handles
+ * patient-to-patient variation. A typical adult's upper-arm length is
+ * ~0.5 × trunk length; "elbow off wall" is detected when this ratio drops
+ * meaningfully below that anatomical norm (registry threshold for
+ * ex_008 = 0.4 — TBD via live tuning).
+ *
+ * ── DEGENERATE-POSE GUARD ────────────────────────────────────────────────────
+ * Reuses TRUNK_LEN_EPSILON = 0.05 (same as computeScapularElevation:1028).
+ *
+ * ── LANDMARKS REQUIRED ───────────────────────────────────────────────────────
+ *   11, 12 — both shoulders (per-side shoulder + shoulder-midpoint)
+ *   23, 24 — both hips (hip-midpoint, completes trunk axis)
+ *   side="left":  13 (left elbow)
+ *   side="right": 14 (right elbow)
+ */
+export function computeShoulderElbowDistance(
+  landmarks: LM[],
+  _tiltRef: TiltReference,
+  side: "left" | "right"
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip))           return null;
+
+  const shoulder = side === "left" ? leftShoulder! : rightShoulder!;
+  const elbow    = side === "left" ? landmarks[13] : landmarks[14];
+  if (!elbow || vis(elbow) < MIN_VIS) return null;
+
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+  const trunkLen = Math.hypot(
+    shoulderMid.x - hipMid.x,
+    shoulderMid.y - hipMid.y,
+  );
+
+  const TRUNK_LEN_EPSILON = 0.05;
+  if (trunkLen < TRUNK_LEN_EPSILON) return null;
+
+  const dx = elbow.x - shoulder.x;
+  const dy = elbow.y - shoulder.y;
+  const distance = Math.hypot(dx, dy);
+
+  return distance / trunkLen;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1193,10 +1549,42 @@ export function computePoseMetricsForExercise(
   }
 
   // ── Compensation metrics ────────────────────────────────────────────────
+  //
+  // For per-limb bilateral exercises (ex_001/ex_002/ex_003/ex_006/ex_007/ex_008),
+  // compensation metrics that are inherently per-side (e.g., elbowFlexion,
+  // scapularElevation, shoulderElbowDistance) must be computed for BOTH sides
+  // — otherwise a right-side compensation silently fails to flag because
+  // `computeMetricByName` defaults `side` to `"left"`. We then aggregate to
+  // the worst-side value per the metric's `compareDirection`:
+  //
+  //   "above" (higher = worse, default):
+  //     Pick the value with larger |magnitude|, preserve sign for display.
+  //     Examples: trunkLean, shoulderSymmetry, neckTilt — signed metrics
+  //     where the direction matters for the UI label, but the magnitude
+  //     drives the warning. (For genuinely body-relative metrics that
+  //     ignore `side` like trunkLean, both sides return the same value,
+  //     so the aggregation is a no-op.)
+  //
+  //   "below" (lower = worse):
+  //     Pick `Math.min(left, right)`. Used by `elbowFlexion` and
+  //     `shoulderElbowDistance` on ex_007/ex_008. Worst = most-bent
+  //     elbow / smallest shoulder→elbow ratio.
+  //
+  // For unilateral or bidirectional-alternating exercises, the original
+  // single-side behavior is preserved.
+  //
+  // Added 2026-05-21: the prior code passed
+  // `side=undefined` for every compensation metric, which fell back to
+  // "left" inside the dispatcher and silently dropped right-side warnings
+  // on per-limb exercises.
   for (const comp of definition.compensationMetrics) {
-    // Compensation metrics in the current registry don't carry a `side`,
-    // so pass undefined and let the metric resolver pick the bilateral form.
-    if (metrics[comp.name] === undefined) {
+    if (metrics[comp.name] !== undefined) continue;
+    if (definition.bilateral && definition.bilateralMode === "per-limb") {
+      const left  = computeMetricByName(landmarks, tiltReference, comp.name, "left");
+      const right = computeMetricByName(landmarks, tiltReference, comp.name, "right");
+      const direction = comp.compareDirection ?? "above";
+      metrics[comp.name] = pickWorstSide(left, right, direction);
+    } else {
       metrics[comp.name] = computeMetricByName(landmarks, tiltReference, comp.name, undefined);
     }
   }
@@ -1204,6 +1592,38 @@ export function computePoseMetricsForExercise(
   const compensationScore = computeCompensationScore(definition, metrics);
 
   return { tiltReference, metrics, perSideMetrics, compensationScore };
+}
+
+/**
+ * Picks the worst-side compensation value for per-limb bilateral exercises.
+ *
+ *   direction = "above" (higher = worse, default):
+ *     Returns the value with larger |magnitude|, preserving sign so the
+ *     UI's directional indicators (e.g., "leaning RIGHT") still read
+ *     correctly. Matches the UI's `Math.abs(value) >= warningThreshold`
+ *     flagging logic.
+ *
+ *   direction = "below" (lower = worse):
+ *     Returns `Math.min(left, right)`. Used by `elbowFlexion` and
+ *     `shoulderElbowDistance` on ex_007/ex_008 — worst = the most-bent
+ *     elbow or the most-foreshortened shoulder→elbow ratio.
+ *
+ * Null-handling: if exactly one side is null (low visibility on that
+ * limb), return the other side's value. If both are null, return null.
+ */
+function pickWorstSide(
+  left: number | null,
+  right: number | null,
+  direction: "above" | "below",
+): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  if (direction === "below") {
+    return Math.min(left, right);
+  }
+  // "above": pick the value with the larger absolute magnitude, preserve
+  // sign for the UI's directional display ("LEFT" / "RIGHT" / etc.).
+  return Math.abs(left) >= Math.abs(right) ? left : right;
 }
 
 /**
@@ -1249,6 +1669,12 @@ function computeMetricByName(
       return computeTrunkLateralFlexionSigned(landmarks, tiltRef, side ?? "left");
     case "shoulderHorizAbd":
       return computeShoulderHorizAbduction(landmarks, tiltRef, side ?? "left");
+    case "elbowFlexion":
+      return computeElbowFlexion(landmarks, tiltRef, side ?? "left");
+    case "wristShoulderVertical":
+      return computeWristShoulderVertical(landmarks, tiltRef, side ?? "left");
+    case "shoulderElbowDistance":
+      return computeShoulderElbowDistance(landmarks, tiltRef, side ?? "left");
     default: {
       // Exhaustiveness guard — TypeScript will complain if a MetricName is
       // ever added without a case here.

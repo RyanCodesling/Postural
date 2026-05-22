@@ -20,10 +20,21 @@
  *                                (must be < startThreshold; the gap is the
  *                                hysteresis band that prevents jitter-induced
  *                                double counts; ~10–20° works well)
- *   - `minimumPeakThreshold`   — minimum peak angle for "complete" classification;
- *                                below this counts as "partial"
- *   - `targetROM`              — clinically prescribed full ROM; reps reaching
- *                                this are classified "complete" rather than partial
+ *   - `minimumPeakThreshold`   — DISCARD FLOOR. Peaks below this are silently
+ *                                dropped as false starts — NO rep counted at all.
+ *                                Peaks ≥ minimumPeakThreshold count as at least
+ *                                "partial"; ≥ targetROM count as "complete."
+ *                                (Fixed 2026-05-21 — earlier doc here said this
+ *                                was the partial/complete boundary, which is
+ *                                wrong; that boundary is `targetROM`. See
+ *                                the classification comments in repCounter.ts and the
+ *                                ex_004 inline comment for the authoritative
+ *                                semantics.)
+ *   - `targetROM`              — clinically prescribed full ROM. THIS is the
+ *                                "complete" vs "partial" classification boundary:
+ *                                peak ≥ targetROM             → "complete";
+ *                                minimumPeakThreshold ≤ peak < targetROM → "partial";
+ *                                peak < minimumPeakThreshold  → discarded silently.
  *
  * For an `isometric` exercise, the state machine is NOT used. Instead, the
  * camera loop accumulates time-in-target-band using `isometric.targetBand`.
@@ -61,15 +72,18 @@
  * computation in `poseMetrics.ts` to be usable end-to-end.
  */
 export type MetricName =
-  | "shoulderAbduction"   // arm out to the side, used by lateral arm raise
-  | "shoulderFlexion"     // arm forward/overhead, used by overhead arm raise
-  | "scapularElevation"   // shoulder-to-ear vertical distance, used by shrugs
-  | "neckLateralFlexion"  // head tilting ear-to-shoulder, used by neck flexion ex
-  | "trunkLateralFlexion" // torso side-bending, used by standing side bends
-  | "shoulderHorizAbd"    // arm held at 90° abduction (T-pose), used by isometric hold
-  | "trunkLean"           // existing — used as compensation metric
-  | "shoulderSymmetry"    // existing — used as compensation metric
-  | "neckTilt";           // existing — used as compensation metric
+  | "shoulderAbduction"      // arm out to the side, used by ex_001 lateral arm raise + ex_008 wall angels
+  | "shoulderFlexion"        // arm forward/overhead, used by ex_002 (DEPRECATED 2026-05-21, kept for back-compat)
+  | "scapularElevation"      // shoulder-to-ear vertical distance, used by ex_003 (DEPRECATED 2026-05-21, kept for back-compat) + compensation on ex_001/ex_006 only; ex_007/ex_008 deferred pending compensation-baseline capture
+  | "neckLateralFlexion"     // head tilting ear-to-shoulder, used by ex_004 neck lateral flexion
+  | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
+  | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
+  | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_005/ex_006/ex_007/ex_008
+  | "shoulderSymmetry"       // existing — used as compensation metric on ex_003/ex_004
+  | "neckTilt"               // existing — used as compensation metric on ex_005
+  | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
+  | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
+  | "shoulderElbowDistance"; // NEW 2026-05-21 — retained for future Wall Angels variants; removed from active ex_008 v1 compensation after live testing showed 2D foreshortening was too noisy
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRY TYPES
@@ -157,13 +171,35 @@ export type PrimaryMetricSpec = {
 
 /**
  * A metric displayed and logged but NOT used for rep counting.
- * `warningThreshold` is the value above which the metric is visually
- * flagged in the UI as a likely compensation pattern. Same units as the
- * underlying metric.
+ * `warningThreshold` is the value at which the UI flags the metric as
+ * a likely compensation pattern. Same units as the underlying metric.
+ *
+ * `compareDirection` controls which side of `warningThreshold` triggers
+ * the flag:
+ *   - `"above"` (DEFAULT): flag when `Math.abs(value) >= warningThreshold`.
+ *     Use when the metric's "good" reading is near zero and HIGHER values
+ *     indicate worse compensation (the typical case: trunkLean, neckTilt,
+ *     shoulderSymmetry, scapularElevation-as-compensation).
+ *   - `"below"`: flag when `value < warningThreshold`. Use when the
+ *     metric's "good" reading is HIGH and LOWER values indicate worse
+ *     compensation. Examples added 2026-05-21: `elbowFlexion` (interior-
+ *     angle convention, 180° = straight = good; warn when bent below
+ *     `warningThreshold`) and `shoulderElbowDistance` (foreshortening
+ *     signal, ~0.5 = on-wall = good; warn when ratio drops below
+ *     `warningThreshold` = elbow rotating off the wall).
+ *
+ * Why this exists: prior to 2026-05-21 every compensation metric had
+ * "higher = worse" semantics, so the UI's `Math.abs(value) >=
+ * warningThreshold` check was sufficient. The EX_SWAP additions
+ * introduced compensation metrics where LOWER is worse (anatomically
+ * straight vs bent / on-wall vs off-wall), which the single-direction
+ * logic could not express. Defaulting to "above" preserves existing
+ * behavior for all pre-2026-05-21 compensation declarations.
  */
 export type CompensationMetricSpec = {
   name: MetricName;
   warningThreshold: number;
+  compareDirection?: "above" | "below";
 };
 
 /**
@@ -191,6 +227,23 @@ export type ExerciseDefinition =
        * routes angles into RepCounter instances. Ignored when `bilateral: false`.
        */
       bilateralMode?: BilateralMode;
+      /**
+       * When true, the exercise involves reaching above head height (e.g.,
+       * overhead press, wall angels). The capture-readiness framing rule
+       * shifts to allow the head LOWER in the frame so the patient can
+       * stand further from the camera and keep wrists visible at peak
+       * extension. See `captureReadiness.ts` HEAD_Y_MIN/HEAD_Y_MAX bounds
+       * for the per-mode values. Defaults to false (treat as a
+       * "ground-to-shoulder" exercise that doesn't need overhead clearance).
+       *
+       * Added 2026-05-21 (live-tuning iter #2): the default framing forces
+       * head into the top quarter (y ∈ [0.05, 0.25]), which means the
+       * patient stands close to the camera with no overhead room — wrists
+       * leave the frame at the top of an overhead press and capture
+       * readiness pauses metrics. Overhead-mode framing relocates the head
+       * to the middle-upper zone so the patient can back up.
+       */
+      requiresOverheadRoom?: boolean;
       primaryMetric: PrimaryMetricSpec;
       compensationMetrics: CompensationMetricSpec[];
     }
@@ -200,6 +253,8 @@ export type ExerciseDefinition =
       kind: "isometric";
       bilateral: boolean;
       bilateralMode?: BilateralMode;
+      /** See dynamic variant — same flag, same semantics. */
+      requiresOverheadRoom?: boolean;
       isometric: IsometricSpec;
       compensationMetrics: CompensationMetricSpec[];
     };
@@ -230,10 +285,18 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // 10° gap below start gives a hysteresis band wide enough to absorb
         // post-smoothing residual jitter without missing real returns to rest.
         repCompleteThreshold: 10,
-        // 60° distinguishes a partial (struggle / fatigue) rep from a full one.
-        // Patients in early rehab often plateau around 45–60° before regaining
-        // full ROM. Below 60°, count as partial; at or above, count as complete.
-        minimumPeakThreshold: 60,
+        // Minimum peak to count as a rep at all. Peaks below this are
+        // silently discarded as false starts (NOT classified "partial" — that
+        // boundary is `targetROM`; see `RepCounter` semantics in repCounter.ts).
+        // 45° (lowered from 60° on 2026-05-21 for reduced-ROM leniency; user
+        // decision via the global-floor approach, NOT classification tiers.
+        // ex_001 is per-limb, so the bidirectional `abs()` phantom that
+        // gated ex_004's reduced-ROM does not apply here. `targetROM` stays
+        // 90°, so peaks in [45°, 90°) still classify as `partial` — the
+        // weakness/asymmetry signal is preserved, the rep is no longer
+        // silently dropped. Patients in early rehab often plateau around
+        // 45–60° before regaining full ROM.
+        minimumPeakThreshold: 45,
         // Clinical full ROM for shoulder abduction in the frontal plane is
         // ~180° anatomically, but home-exercise prescription typically targets
         // 90° (arm horizontal) for upper-body rehab. Source: standard PT
@@ -260,6 +323,15 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // foreshortened on a front-facing camera (acknowledged limitation,
   // proposal page 10, depth ambiguity).
   // ────────────────────────────────────────────────────────────────────────
+  /**
+   * @deprecated 2026-05-21 — superseded by ex_007 (Overhead Shoulder Press)
+   * because front-facing-camera projection makes shoulder flexion measurement
+   * unreliable (depth ambiguity + unavoidable foreshortening).
+   * Kept in the registry for audit/historical reference;
+   * filtered out of the staff DEBUG_IDS list in `CameraClient.tsx`, not
+   * assigned to patients. `computeShoulderFlexion` stays live (delegates to
+   * `computeShoulderAbduction`; no harm in keeping the path).
+   */
   ex_002: {
     id: "ex_002",
     name: "Overhead Arm Raises",
@@ -301,6 +373,28 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // displacement, so thresholds are normalized to torso length for scale
   // invariance across patients of different sizes.
   // ────────────────────────────────────────────────────────────────────────
+  /**
+   * @deprecated 2026-05-21 — superseded by ex_008 (Wall Angels)
+   * because scapular elevation amplitude (~0.04 trunk-length range) sits at
+   * MediaPipe Full's ~3° landmark noise floor — the SNR is too low for
+   * reliable rep counting under real-home conditions. Wall Angels uses
+   * shoulderAbduction (a much larger-amplitude signal) as primary and keeps
+   * only the v1 compensation signals that survived live testing (`trunkLean`
+   * and `elbowFlexion`). Kept in the registry for audit and because
+   * `scapularElevation` is still used as a COMPENSATION metric on ex_001 /
+   * ex_006. It was removed from ex_007 / ex_008 until compensation-metric
+   * baseline capture exists. Filtered out of staff DEBUG_IDS in
+   * `CameraClient.tsx`; not assigned to patients. `computeScapularElevation`
+   * stays live. Baseline-capture wiring in CameraClient remains in place for
+   * the moment (dead code once DEBUG_IDS is updated) — preserved for the
+   * possibility of future revival without redo.
+   *
+   * IMPORTANT for tests: `scapularElevation.test.ts` references this entry
+   * structurally (assertions on `EXERCISE_REGISTRY.ex_003.kind === "dynamic"`
+   * and `primaryMetric.requiresBaselineCapture`). The entry MUST stay
+   * unchanged in shape and field values — only this deprecation JSDoc was
+   * added. Do not "tidy up" the entry below.
+   */
   ex_003: {
     id: "ex_003",
     name: "Shoulder Shrugs",
@@ -475,6 +569,177 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       { name: "scapularElevation", warningThreshold: 0.04 },
       // Trunk lean during T-pose hold = unbalanced load between arms.
       { name: "trunkLean", warningThreshold: 5 },
+    ],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // ex_007 — Overhead Shoulder Press (NEW 2026-05-21 — replaces deprecated ex_002)
+  // Patient stands, presses both arms straight up overhead from shoulder
+  // height. Bilateral, per-limb tracked. Frontal-plane (front-camera-clean,
+  // unlike the deprecated ex_002 which had unavoidable depth/foreshortening).
+  // Selected as the front-camera-safe replacement for deprecated ex_002.
+  //
+  // PRIMARY METRIC: wristShoulderVertical = (shoulder.y − wrist.y) / trunk_length.
+  //   negative at rest (wrist below shoulder), positive overhead. The metric
+  //   LETS NEGATIVES FLOW — see poseMetrics.ts SIGN DISCIPLINE block.
+  //
+  // THRESHOLD STATUS (2026-05-21): starting estimates. NOT pilot-calibrated.
+  //   Live-tuning pass expected before final validation; revise here when
+  //   empirical traces come in. Don't treat current values as final.
+  // ────────────────────────────────────────────────────────────────────────
+  ex_007: {
+    id: "ex_007",
+    name: "Overhead Shoulder Press",
+    kind: "dynamic",
+    bilateral: true,
+    bilateralMode: "per-limb",
+    // Overhead reach — relax the framing rule so the patient can stand
+    // further from the camera and keep wrists visible at peak extension.
+    requiresOverheadRoom: true,
+    primaryMetric: {
+      name: "wristShoulderVertical",
+      thresholds: {
+        // Units: trunk-length-normalized fraction. Wrist at rest is well
+        // below shoulder (negative value, typically ~-0.5 trunk-lengths).
+        // startThreshold 0.1 requires the wrist to actually rise above
+        // shoulder before ascent is detected — filters out arm-swing
+        // wobble at rest.
+        startThreshold: 0.1,
+        // 0.05 gap below start for hysteresis.
+        repCompleteThreshold: 0.05,
+        // DISCARD FLOOR (NOT the partial/complete boundary — that is
+        // `targetROM`; see repCounter.ts REP CLASSIFICATION). Peaks below
+        // this are silently dropped as false starts (no rep counted).
+        // 0.4 = ~40% of trunk length above shoulder; below this we treat
+        // any wrist motion above the start threshold as wobble rather than
+        // a deliberate press. Peaks in [0.4, 0.6) classify as `partial`;
+        // ≥ 0.6 (targetROM) classify as `complete`. STARTING value,
+        // live-tuning required.
+        minimumPeakThreshold: 0.4,
+        // 0.6 = ~60% of trunk length above shoulder, ≈ arms fully extended
+        // overhead. STARTING value.
+        targetROM: 0.6,
+      },
+      // Default 0.5 would be ~5× the entire signal range; descent could
+      // never fire. 0.025 = half of repCompleteThreshold, well within
+      // hysteresis band, an order of magnitude above expected post-smoothing
+      // jitter at this small numeric scale.
+      descentEpsilon: 0.025,
+      // Smoothing override REMOVED 2026-05-21 (live-tuning iteration #1):
+      // an earlier attempt used `{ minCutoff: 0.3, beta: 0.01 }` modeled on
+      // ex_003's tiny ~0.05 signal range. That was wrong: wristShoulderVertical
+      // spans ~−0.5 to +1.5 trunk-lengths (≈30× larger than ex_003), and
+      // minCutoff=0.3 Hz gives a ~3.3 s step-response time at 20 fps — for
+      // a 2–3 s press the smoothed peak never reached `minimumPeakThreshold:
+      // 0.4` even when raw signal did, so no reps emitted. Falling back to
+      // the global `(1.0, 0.1)` default which tracks the press motion in
+      // ~1 s. If at-rest jitter at the hip-level wrist position turns out
+      // to phantom-fire reps, the right knob is a slightly higher minCutoff
+      // (1.5–2.0), NOT a return to the ex_003 setting.
+    },
+    compensationMetrics: [
+      // Trunk lean (esp. backward lean) is the classic shoulder press cheat.
+      { name: "trunkLean", warningThreshold: 5 },
+      // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
+      // compensation list. The metric returns a raw signed projection that
+      // is ~0.30 positive at rest (ear naturally sits above shoulder along
+      // the trunk-up axis). The warningThreshold of 0.04 was designed for
+      // a baseline-subtracted delta, not the raw absolute, so the card
+      // would have been permanently flagged red. Restoring a meaningful
+      // shrug compensation here requires per-session baseline-capture
+      // for compensation metrics, deferred for v1. Trapezius
+      // substitution is still partially caught by `trunkLean` (compensatory
+      // backward lean) and `elbowFlexion` (incomplete overhead extension).
+      // Elbow flexion < 160° at peak = incomplete overhead extension.
+      // Interior-angle convention: 180° = arms fully straight overhead.
+      // `compareDirection: "below"` because LOWER value = MORE bent = worse.
+      { name: "elbowFlexion", warningThreshold: 160, compareDirection: "below" },
+    ],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // ex_008 — Wall Angels (NEW 2026-05-21 — replaces deprecated ex_003)
+  // Patient stands with back/shoulders/arms against a wall, slides arms
+  // from W-position (elbows at shoulder height, bent ~90°) up to Y-position
+  // (arms extended overhead), keeping contact with the wall throughout.
+  // Bilateral, per-limb tracked. Frontal-plane, MediaPipe-clean.
+  // Selected as the front-camera-safe replacement for deprecated ex_003.
+  //
+  // PRIMARY METRIC: shoulderAbduction (reused from ex_001 — same math, same
+  //   cross-body null contract). targetROM raised to overhead range.
+  //
+  // COMPENSATION STATUS: v1 keeps only trunkLean + elbowFlexion. The earlier
+  //   shoulderElbowDistance foreshortening signal was removed after live
+  //   testing because front-camera 2D projection could not separate normal
+  //   overhead motion from elbow-off-wall drift without a real wall or a
+  //   per-patient baseline. The function/test remain for future restoration.
+  //
+  // THRESHOLD STATUS (2026-05-21): starting estimates. NOT pilot-calibrated.
+  //   Live-tuning pass expected before final validation.
+  // ────────────────────────────────────────────────────────────────────────
+  ex_008: {
+    id: "ex_008",
+    name: "Wall Angels",
+    kind: "dynamic",
+    bilateral: true,
+    bilateralMode: "per-limb",
+    // Overhead reach (arms slide up the wall toward Y-position) — relax
+    // the framing rule for the same reason as ex_007.
+    requiresOverheadRoom: true,
+    primaryMetric: {
+      name: "shoulderAbduction",
+      thresholds: {
+        // Reuse ex_001's resting noise floor and hysteresis band — same
+        // underlying metric, same noise profile.
+        startThreshold: 20,
+        repCompleteThreshold: 10,
+        // 100° = arm well into the overhead range. Wall Angels' ROM goes
+        // past horizontal (90°) up toward overhead (~150°), so a 60° floor
+        // (ex_001's value) is too lax here — it would count a horizontal
+        // arm raise as a "partial" Wall Angel, which it isn't.
+        // STARTING value, live-tuning required.
+        minimumPeakThreshold: 100,
+        // 150° ≈ arms-overhead position at full extension along the wall.
+        // Foreshortening at full overhead is an accepted thesis limitation
+        // (known foreshortening limitation in computeShoulderAbduction).
+        // STARTING value.
+        targetROM: 150,
+      },
+      // No descentEpsilon override (degree-scale, global 0.5 is fine).
+      // No smoothing override (global degree-scale default fine).
+    },
+    compensationMetrics: [
+      // Trunk lean = patient is using torso shift to slide arms up the wall
+      // instead of recruiting shoulder muscles.
+      { name: "trunkLean", warningThreshold: 5 },
+      // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
+      // compensation list for the same reason as ex_007 — see that comment
+      // for full rationale. Trapezius-hiking is partially caught by
+      // `trunkLean` and `elbowFlexion` in the meantime. Restore once
+      // compensation-metric baseline-capture lands as a follow-up.
+      // Elbow flexion < 160° = patient bending the elbow to cheat the
+      // motion (forearm pulls away from wall instead of arms sliding
+      // straight). Interior-angle convention: 180° = arms straight.
+      // `compareDirection: "below"` because LOWER value = MORE bent = worse.
+      { name: "elbowFlexion", warningThreshold: 160, compareDirection: "below" },
+      // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
+      // elbow-off-wall detection) was REMOVED from this compensation list
+      // after live-tuning iter #4. The metric was designed to flag an elbow
+      // rotating forward off the wall (which foreshortens the projected
+      // upper-arm length). Two issues made it noise rather than signal in
+      // practice: (1) the test setup didn't use an actual wall, so natural
+      // arm trajectory during the motion involves forward elbow drift that
+      // permanently triggered the flag; (2) the 2D projection can't cleanly
+      // distinguish "elbow drifted forward (compensation)" from "elbow moved
+      // overhead (the actual exercise)" — both shorten the apparent
+      // shoulder-elbow distance, so the threshold has no margin between
+      // good form and bad form. Properly using this metric requires either
+      // (a) a real wall in the patient's setup giving the elbow a physical
+      // constraint and a stable on-wall baseline, or (b) a 3D pose backend
+      // / per-patient anatomical baseline-capture. Neither is v1 scope.
+      // The `computeShoulderElbowDistance` function + tests remain in the
+      // codebase for future restoration. Elbow-bend compensation is still
+      // partially caught by `elbowFlexion`.
     ],
   },
 };

@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPatientExercises, getUsers, assignExercisesToPatient } from "@/lib/db";
+import {
+  DEFAULT_REST_SECONDS,
+  assignExercisesToPatient,
+  getPatientExercises,
+  getUsers,
+} from "@/lib/db";
+
+type PatientExerciseAssignmentRequest = {
+  exerciseId?: unknown;
+  sets?: unknown;
+  reps?: unknown;
+  restSeconds?: unknown;
+};
 
 export async function GET(request: NextRequest) {
   try {
@@ -64,7 +76,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
-    await assignExercisesToPatient(patientId, exercises);
+    const normalizedExercises = exercises.map((rawExercise: unknown) => {
+      const exercise =
+        rawExercise !== null && typeof rawExercise === "object"
+          ? (rawExercise as PatientExerciseAssignmentRequest)
+          : {};
+      const restSeconds =
+        typeof exercise.restSeconds === "number" &&
+        Number.isFinite(exercise.restSeconds) &&
+        exercise.restSeconds >= 0
+          ? Math.floor(exercise.restSeconds)
+          : DEFAULT_REST_SECONDS;
+
+      return {
+        exerciseId: exercise.exerciseId,
+        sets: exercise.sets,
+        reps: exercise.reps,
+        restSeconds,
+      };
+    });
+
+    const invalidExercise = normalizedExercises.find(
+      (exercise) =>
+        typeof exercise.exerciseId !== "string" ||
+        exercise.exerciseId.trim().length === 0 ||
+        typeof exercise.sets !== "number" ||
+        !Number.isFinite(exercise.sets) ||
+        exercise.sets < 1 ||
+        typeof exercise.reps !== "number" ||
+        !Number.isFinite(exercise.reps) ||
+        exercise.reps < 1,
+    );
+    if (invalidExercise) {
+      return NextResponse.json(
+        { error: "Each exercise requires exerciseId, sets, and reps" },
+        { status: 400 },
+      );
+    }
+
+    await assignExercisesToPatient(
+      patientId,
+      normalizedExercises.map((exercise) => ({
+        exerciseId: exercise.exerciseId as string,
+        sets: Math.floor(exercise.sets as number),
+        reps: Math.floor(exercise.reps as number),
+        restSeconds: exercise.restSeconds,
+      })),
+    );
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("POST /api/patient-exercises error:", error);

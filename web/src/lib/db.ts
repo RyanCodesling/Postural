@@ -246,20 +246,41 @@ export async function deleteExercise(id: string) {
 
 // ── Patient exercises ─────────────────────────────────────────────────────────
 
+export const DEFAULT_REST_SECONDS = 60;
+
+type PatientExerciseAssignment = {
+  exerciseId: string;
+  sets: number;
+  reps: number;
+  restSeconds?: number;
+};
+
+function normalizeRestSeconds(restSeconds: unknown): number {
+  if (
+    typeof restSeconds !== "number" ||
+    !Number.isFinite(restSeconds) ||
+    restSeconds < 0
+  ) {
+    return DEFAULT_REST_SECONDS;
+  }
+  return Math.floor(restSeconds);
+}
+
 export async function assignExercisesToPatient(
   patientId: string,
-  exercises: { exerciseId: string; sets: number; reps: number }[]
+  exercises: PatientExerciseAssignment[]
 ) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     for (const ex of exercises) {
+      const restSeconds = normalizeRestSeconds(ex.restSeconds);
       await client.query(
-        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (exercise_id, patient_id) DO UPDATE
-         SET sets = EXCLUDED.sets, reps = EXCLUDED.reps`,
-        [ex.exerciseId, patientId, ex.sets, ex.reps]
+         SET sets = EXCLUDED.sets, reps = EXCLUDED.reps, rest_seconds = EXCLUDED.rest_seconds`,
+        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds]
       );
     }
     await client.query("COMMIT");
@@ -274,7 +295,7 @@ export async function assignExercisesToPatient(
 export async function getPatientExercises(patientId: string) {
   const result = await pool.query(
     `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
-            pe.status, pe.sets, pe.reps, e.name, e.description
+            pe.status, pe.sets, pe.reps, pe.rest_seconds, e.name, e.description
      FROM patient_exercises pe
      JOIN exercises e ON e.id = pe.exercise_id
      WHERE pe.patient_id = $1

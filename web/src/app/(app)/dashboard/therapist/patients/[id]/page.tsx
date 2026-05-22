@@ -24,6 +24,7 @@ interface PatientExercise {
   status: "pending" | "in_progress" | "completed";
   sets: number;
   reps: number;
+  rest_seconds: number;
   assigned_date: string;
 }
 
@@ -186,7 +187,7 @@ export default function PatientDetailPage() {
                 <div>
                   <h3 className="font-semibold text-green-700">{ex.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    {ex.sets} sets × {ex.reps} reps
+                    {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
                   </p>
                   <span className="inline-block mt-2 px-3 py-1 bg-blue-50 text-blue-600 text-xs rounded-full">
                     {ex.status === "in_progress" ? "In Progress" : "Pending"}
@@ -217,7 +218,7 @@ export default function PatientDetailPage() {
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    {ex.sets} sets × {ex.reps} reps
+                    {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
                   </p>
                 </div>
                 <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">

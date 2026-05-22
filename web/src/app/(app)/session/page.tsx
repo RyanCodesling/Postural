@@ -10,6 +10,7 @@ interface ScheduledExercise {
   description: string;
   sets: number;
   reps: number;
+  rest_seconds: number;
   status: "pending" | "completed" | "skipped";
   assigned_date: string;
 }
@@ -133,6 +134,10 @@ export default function SessionPage() {
                   <div>
                     <p className="text-xs text-gray-600 mb-1">Reps</p>
                     <p className="text-xl font-bold text-gray-900">{exercise.reps}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 mb-1">Rest</p>
+                    <p className="text-xl font-bold text-gray-900">{exercise.rest_seconds}s</p>
                   </div>
                   {exercise.status === "pending" && (
                     <button className="ml-auto px-4 py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 text-sm font-medium">

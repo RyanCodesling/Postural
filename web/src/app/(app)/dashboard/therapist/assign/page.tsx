@@ -26,7 +26,12 @@ interface PatientExercise {
   exercise_id: string;
   sets: number;
   reps: number;
+  rest_seconds: number;
 }
+
+// Default rest between sets (seconds) when the therapist leaves the field
+// blank. Mirrors the patient_exercises.rest_seconds DB default.
+const DEFAULT_REST_SECONDS = 60;
 
 interface PatientData {
   id: string;
@@ -44,7 +49,7 @@ export default function AssignExercisePage() {
   const [assignPatientId, setAssignPatientId] = useState("");
   const [assignTemplateId, setAssignTemplateId] = useState("");
   const [assignSelected, setAssignSelected] = useState<Set<string>>(new Set());
-  const [assignParams, setAssignParams] = useState<Record<string, { sets?: number; reps?: number }>>({});
+  const [assignParams, setAssignParams] = useState<Record<string, { sets?: number; reps?: number; restSeconds?: number }>>({});
   const [assigning, setAssigning] = useState(false);
   const [assignSuccess, setAssignSuccess] = useState("");
   const [assignError, setAssignError] = useState("");
@@ -78,10 +83,10 @@ export default function AssignExercisePage() {
         const existing: PatientExercise[] = d.exercises ?? [];
         if (existing.length === 0) return;
         const selected = new Set<string>();
-        const params: Record<string, { sets?: number; reps?: number }> = {};
+        const params: Record<string, { sets?: number; reps?: number; restSeconds?: number }> = {};
         existing.forEach((ex) => {
           selected.add(ex.exercise_id);
-          params[ex.exercise_id] = { sets: ex.sets, reps: ex.reps };
+          params[ex.exercise_id] = { sets: ex.sets, reps: ex.reps, restSeconds: ex.rest_seconds };
         });
         setAssignSelected(selected);
         setAssignParams(params);
@@ -128,7 +133,7 @@ export default function AssignExercisePage() {
     if (!assignPatientId) { setAssignError("Please select a patient."); return; }
     if (assignSelected.size === 0) { setAssignError("Please select at least one exercise."); return; }
 
-    const payload: { exerciseId: string; sets: number; reps: number }[] = [];
+    const payload: { exerciseId: string; sets: number; reps: number; restSeconds: number }[] = [];
     for (const exId of assignSelected) {
       const p = assignParams[exId] ?? {};
       if (!p.sets || p.sets < 1 || !p.reps || p.reps < 1) {
@@ -136,7 +141,12 @@ export default function AssignExercisePage() {
         setAssignError(`Please enter valid sets and reps for "${ex?.name ?? exId}".`);
         return;
       }
-      payload.push({ exerciseId: exId, sets: p.sets, reps: p.reps });
+      // Rest defaults to DEFAULT_REST_SECONDS when left blank; 0 = no rest.
+      const restSeconds =
+        p.restSeconds === undefined || p.restSeconds < 0
+          ? DEFAULT_REST_SECONDS
+          : p.restSeconds;
+      payload.push({ exerciseId: exId, sets: p.sets, reps: p.reps, restSeconds });
     }
 
     setAssigning(true);
@@ -324,9 +334,9 @@ function AssignRow({
 }: {
   exercise: Exercise;
   checked: boolean;
-  params: { sets?: number; reps?: number };
+  params: { sets?: number; reps?: number; restSeconds?: number };
   onToggle: () => void;
-  onParam: (field: "sets" | "reps", val: number | undefined) => void;
+  onParam: (field: "sets" | "reps" | "restSeconds", val: number | undefined) => void;
 }) {
   return (
     <div className={`rounded-xl border p-3 transition ${checked ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
@@ -344,7 +354,7 @@ function AssignRow({
         </div>
       </label>
       {checked && (
-        <div className="mt-3 grid grid-cols-2 gap-3 pl-7">
+        <div className="mt-3 grid grid-cols-3 gap-3 pl-7">
           <div>
             <label className="block text-xs text-gray-500 mb-1">Sets <span className="text-red-500">*</span></label>
             <input
@@ -360,6 +370,15 @@ function AssignRow({
               type="number" min={1} value={params.reps ?? ""}
               onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
               placeholder="e.g. 12"
+              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Rest (sec)</label>
+            <input
+              type="number" min={0} value={params.restSeconds ?? ""}
+              onChange={(e) => onParam("restSeconds", e.target.value ? Number(e.target.value) : undefined)}
+              placeholder="60"
               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
             />
           </div>

@@ -47,6 +47,12 @@ interface Exercise {
    * Target number of sets. Same provenance pattern as `reps`. Fallback 3.
    */
   sets: number;
+  /**
+   * Rest between sets, in seconds. From `patient_exercises.rest_seconds`
+   * for patient assignments; falls back to the default for the staff debug
+   * catalog. Drives the hard-block rest countdown between sets.
+   */
+  restSeconds: number;
 }
 
 /**
@@ -62,7 +68,10 @@ interface Exercise {
  * can be running with the session in any state. Rep counting only happens
  * when the session is `active`.
  */
-type SessionState = "idle" | "active" | "ended";
+// "resting" = hard-block rest between sets: rep counting is suspended and a
+// countdown is shown. Auto-entered after a completed set when sets remain and
+// restSeconds > 0; auto-resumes to "active" when the countdown elapses.
+type SessionState = "idle" | "active" | "resting" | "ended";
 
 /**
  * P4-friendly in-memory record of a completed set, shape-aligned with the
@@ -83,9 +92,9 @@ type CompletedSetRecord = {
   asymmetryIndex: number;
 };
 
-type Prescription = { sets: number; reps: number };
+type Prescription = { sets: number; reps: number; restSeconds: number };
 
-const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12 };
+const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60 };
 
 type RepCounterSet = {
   left: RepCounter | null;
@@ -304,6 +313,25 @@ export default function CameraClient() {
     activeDefinitionRef.current = activeDefinition;
   }, [activeDefinition]);
 
+  /**
+   * Ref mirrors of the selected exercise id and the ordered assigned-exercise
+   * list, used by the guided-flow navigation. Auto-advance (all prescribed
+   * sets complete) is triggered from inside the rAF loop via the
+   * set-completion check, so it cannot read the closure-captured state — it
+   * must read the current id and list from refs, same rationale as
+   * `activeDefinitionRef`. `goToAdjacentExercise` also writes
+   * `selectedExerciseRef.current` synchronously so rapid stepper clicks in the
+   * same tick compute from a fresh base instead of a not-yet-synced ref.
+   */
+  const selectedExerciseRef = useRef<string>("");
+  useEffect(() => {
+    selectedExerciseRef.current = selectedExercise;
+  }, [selectedExercise]);
+  const assignedExercisesRef = useRef<Exercise[]>([]);
+  useEffect(() => {
+    assignedExercisesRef.current = assignedExercises;
+  }, [assignedExercises]);
+
   // ─────────────────────────────────────────────────────────────────────────
   // Session lifecycle state (added 2026-05-22)
   // ─────────────────────────────────────────────────────────────────────────
@@ -353,6 +381,14 @@ export default function CameraClient() {
   const [prescription, setPrescriptionRaw] = useState<Prescription>(DEFAULT_PRESCRIPTION);
 
   /**
+   * When true, the sidebar shows an inline confirm step instead of ending the
+   * session immediately — guards against an accidental End click discarding an
+   * in-progress exercise. Only meaningful while `active`; reset on session
+   * start and on exercise change.
+   */
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+
+  /**
    * Ref mirror of `repCounts` state so the rAF loop's set-completion
    * check reads fresh per-side rep counts after each rep emit (instead
    * of the closure-captured stale value). The state is what the UI
@@ -381,6 +417,15 @@ export default function CameraClient() {
   const currentSetStartMsRef = useRef<number | null>(null);
 
   /**
+   * Rest-between-sets countdown. `restEndsAtMsRef` is the performance.now()
+   * timestamp at which rest ends (monotonic, same clock as the session timer);
+   * `restRemainingSec` is the displayed countdown. Meaningful only while
+   * `sessionState === "resting"`.
+   */
+  const restEndsAtMsRef = useRef<number | null>(null);
+  const [restRemainingSec, setRestRemainingSec] = useState(0);
+
+  /**
    * Session timer: ticks `sessionElapsedSec` once per second while the
    * session is active. Driven off `performance.now()` against the start
    * timestamp captured in `sessionStartMsRef` so it's monotonic and
@@ -389,7 +434,9 @@ export default function CameraClient() {
    * fresh real-time delta, not by incrementing a counter).
    */
   useEffect(() => {
-    if (sessionState !== "active") return;
+    // Total session time keeps running through rest, so it reflects wall-clock
+    // (per-set durationMs excludes rest separately via currentSetStartMsRef).
+    if (sessionState !== "active" && sessionState !== "resting") return;
     if (sessionStartMsRef.current === null) return;
     const tick = () => {
       if (sessionStartMsRef.current === null) return;
@@ -404,6 +451,33 @@ export default function CameraClient() {
   }, [sessionState]);
 
   /**
+   * Rest countdown. While `sessionState === "resting"`, tick down the seconds
+   * remaining against `restEndsAtMsRef` (performance.now()-delta, so it
+   * survives tab backgrounding). When it elapses, resume the next set: stamp a
+   * fresh `currentSetStartMsRef` (so the next set's durationMs excludes the
+   * rest) and flip back to "active". Rep counting stays gated off the whole
+   * time because the rep gate requires "active".
+   */
+  useEffect(() => {
+    if (sessionState !== "resting") return;
+    const tick = () => {
+      if (restEndsAtMsRef.current === null) return;
+      const remainingMs = restEndsAtMsRef.current - performance.now();
+      if (remainingMs <= 0) {
+        restEndsAtMsRef.current = null;
+        setRestRemainingSec(0);
+        currentSetStartMsRef.current = performance.now();
+        setSessionState("active");
+      } else {
+        setRestRemainingSec(Math.ceil(remainingMs / 1000));
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 250);
+    return () => clearInterval(interval);
+  }, [sessionState]);
+
+  /**
    * Asymmetry index for the future `sets` table shape. `|left − right| / max(left, right)`,
    * clamped to 0 when there are no reps. Pure number; no side effects.
    */
@@ -411,6 +485,32 @@ export default function CameraClient() {
     const max = Math.max(left, right);
     if (max === 0) return 0;
     return Math.abs(left - right) / max;
+  };
+
+  /**
+   * Guided-flow navigation: move the selected exercise by `offset` positions
+   * within the assigned-exercise list (−1 = previous, +1 = next). Returns true
+   * if it navigated, false if the move was out of bounds (already at an end) or
+   * the current id was not found.
+   *
+   * Reads/writes refs so it is safe to call from BOTH the rAF-driven
+   * auto-advance path (which only sees stale closure state) and the stepper
+   * buttons. The synchronous `selectedExerciseRef` write keeps rapid same-tick
+   * clicks consistent — without it, a second click would recompute from the
+   * not-yet-synced previous id. Changing `selectedExercise` triggers the
+   * exercise-change reset effect, which lands the new exercise idle and
+   * rebuilds counters / filters / baseline state.
+   */
+  const goToAdjacentExercise = (offset: number): boolean => {
+    const ids = assignedExercisesRef.current;
+    const curIdx = ids.findIndex((e) => e.id === selectedExerciseRef.current);
+    if (curIdx === -1) return false;
+    const nextIdx = curIdx + offset;
+    if (nextIdx < 0 || nextIdx >= ids.length) return false;
+    const nextId = ids[nextIdx].id;
+    selectedExerciseRef.current = nextId;
+    setSelectedExercise(nextId);
+    return true;
   };
 
   /**
@@ -422,8 +522,9 @@ export default function CameraClient() {
    *  - Reset `repCounts` / `repCountsRef` to {0,0} for the next set.
    *  - Reset the underlying `RepCounter` instances so each set starts
    *    with a fresh state machine (continuity gate, peak tracking, etc.).
-   *  - If `completedSets` now meets `targetSets`, auto-transition the
-   *    session to `ended`.
+   *  - If `completedSets` now meets `targetSets`, advance to the next
+   *    assigned exercise (guided flow), or end the session if this was the
+   *    last exercise.
    *
    * Called from each rep-emit site in `predictWebcam` AFTER the per-side
    * count has been incremented. Reads everything from refs so the
@@ -462,9 +563,32 @@ export default function CameraClient() {
     rightRepCounterRef.current?.reset();
     bidirectionalRepCounterRef.current?.reset();
     currentSetStartMsRef.current = tNow;
+    setConfirmingEnd(false);
 
     if (completedSetsRef.current >= prescriptionRef.current.sets) {
-      setSessionState("ended");
+      // All prescribed sets done. Guided flow: advance to the next assigned
+      // exercise if there is one, otherwise the whole session is complete.
+      // Close the rep gate synchronously FIRST. This runs from the rAF loop,
+      // and the exercise-change reset effect that also lands the next exercise
+      // idle is async — so without this immediate flip there is a brief window
+      // where the gate (sessionStateRef.current === "active") stays open and a
+      // rep could still register against the just-finished exercise.
+      // `goToAdjacentExercise(1)` returns false when already at the last
+      // exercise, in which case the session ends instead.
+      setSessionState("idle");
+      if (!goToAdjacentExercise(1)) {
+        setSessionState("ended");
+      }
+    } else if (prescriptionRef.current.restSeconds > 0) {
+      // More sets remain → hard-block rest between sets. Flip to "resting"
+      // synchronously (closes the rep gate this frame), then start the
+      // countdown; the rest-timer effect resumes "active" and re-stamps
+      // currentSetStartMs when it elapses. restSeconds === 0 means no rest —
+      // stay active and the next set begins immediately.
+      restEndsAtMsRef.current =
+        performance.now() + prescriptionRef.current.restSeconds * 1000;
+      setRestRemainingSec(prescriptionRef.current.restSeconds);
+      setSessionState("resting");
     }
   };
 
@@ -495,6 +619,9 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
+    setConfirmingEnd(false);
+    restEndsAtMsRef.current = null;
+    setRestRemainingSec(0);
     setSessionState("active");
   };
 
@@ -505,10 +632,18 @@ export default function CameraClient() {
    * incomplete attempt.
    */
   const handleSessionEnd = () => {
-    if (sessionStateRef.current !== "active") {
+    if (
+      sessionStateRef.current !== "active" &&
+      sessionStateRef.current !== "resting"
+    ) {
       // Idempotent: clicking End in idle/ended state has no effect.
       return;
     }
+    // Ending during rest: clear the countdown so the rest-timer effect can't
+    // resume into "active" after we transition to "ended". (Reps are already
+    // {0,0} during rest, so no partial set is logged below.)
+    setConfirmingEnd(false);
+    restEndsAtMsRef.current = null;
     const left = repCountsRef.current.left;
     const right = repCountsRef.current.right;
     if (left > 0 || right > 0) {
@@ -528,6 +663,20 @@ export default function CameraClient() {
       completedSetsLogRef.current.push(setRecord);
     }
     setSessionState("ended");
+  };
+
+  /**
+   * TEMPORARY (2026-05-22): the rest period is specified as a HARD BLOCK with
+   * NO skip. This Skip control is a stopgap for proof-of-concept testing and
+   * should be REMOVED so rest is non-skippable per the spec. Resumes the next
+   * set immediately: stamp a fresh currentSetStartMs and flip back to "active".
+   */
+  const skipRest = () => {
+    if (sessionStateRef.current !== "resting") return;
+    restEndsAtMsRef.current = null;
+    setRestRemainingSec(0);
+    currentSetStartMsRef.current = performance.now();
+    setSessionState("active");
   };
 
   useEffect(() => {
@@ -738,6 +887,7 @@ export default function CameraClient() {
               // set completion.
               sets: DEFAULT_PRESCRIPTION.sets,
               reps: DEFAULT_PRESCRIPTION.reps,
+              restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
           }));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
@@ -760,6 +910,10 @@ export default function CameraClient() {
             // mirror those if the API response omits them.
             reps: typeof e.reps === "number" ? e.reps : DEFAULT_PRESCRIPTION.reps,
             sets: typeof e.sets === "number" ? e.sets : DEFAULT_PRESCRIPTION.sets,
+            restSeconds:
+              typeof e.rest_seconds === "number"
+                ? e.rest_seconds
+                : DEFAULT_PRESCRIPTION.restSeconds,
           }));
           setAssignedExercises(assigned);
           if (assigned.length > 0) {
@@ -775,7 +929,11 @@ export default function CameraClient() {
       ? assignedExercises.find((e) => e.id === selectedExercise)
       : undefined;
     const nextPrescription = assignedEntry
-      ? { sets: assignedEntry.sets, reps: assignedEntry.reps }
+      ? {
+          sets: assignedEntry.sets,
+          reps: assignedEntry.reps,
+          restSeconds: assignedEntry.restSeconds,
+        }
       : DEFAULT_PRESCRIPTION;
     prescriptionRef.current = nextPrescription;
     setPrescriptionRaw(nextPrescription);
@@ -806,6 +964,9 @@ export default function CameraClient() {
     // fresh session; rep counting stays gated until they do. completedSets,
     // currentSetReps (repCounts), and the completed-sets log all clear.
     setSessionState("idle");
+    setConfirmingEnd(false);
+    restEndsAtMsRef.current = null;
+    setRestRemainingSec(0);
     sessionStartMsRef.current = null;
     setSessionElapsedSec(0);
     setCompletedSets(0);
@@ -865,13 +1026,14 @@ export default function CameraClient() {
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
+      const currentDefinition = activeDefinitionRef.current;
       // Transition into not-ok: any already-captured baseline is now stale
       // (patient may have shifted while we couldn't see them). Drop it and
       // require re-capture when readiness returns.
       if (
         !ok &&
-        activeDefinition?.kind === "dynamic" &&
-        activeDefinition.primaryMetric.requiresBaselineCapture
+        currentDefinition?.kind === "dynamic" &&
+        currentDefinition.primaryMetric.requiresBaselineCapture
       ) {
         leftBaselineRef.current = { samples: [], value: null };
         rightBaselineRef.current = { samples: [], value: null };
@@ -1422,6 +1584,42 @@ export default function CameraClient() {
   }
 
   const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+  const selectedExerciseIndex = assignedExercises.findIndex((e) => e.id === selectedExercise);
+  const hasPrevExercise = selectedExerciseIndex > 0;
+  const hasNextExercise =
+    selectedExerciseIndex !== -1 &&
+    selectedExerciseIndex < assignedExercises.length - 1;
+
+  // Hero panel state. "Complete" = the session ended with every prescribed set
+  // finished (emerald). "Ended early" = ended before completion via the End
+  // button (slate). Otherwise idle/active shows the default indigo→blue.
+  // Note: completing a non-last exercise auto-advances to the next one (which
+  // lands idle), so the emerald "complete" hero is seen on the final exercise
+  // when the whole session finishes.
+  const isResting = sessionState === "resting";
+  // Stepper navigation is locked while a session is in progress (active OR
+  // resting) so an exercise can't be abandoned mid-session by accident.
+  const sessionBusy = sessionState === "active" || sessionState === "resting";
+  const exerciseComplete =
+    sessionState === "ended" && completedSets >= prescription.sets;
+  const endedEarly =
+    sessionState === "ended" && completedSets < prescription.sets;
+  const heroGradient = isResting
+    ? "from-sky-500 to-cyan-600"
+    : exerciseComplete
+      ? "from-emerald-500 to-green-600"
+      : endedEarly
+        ? "from-slate-400 to-slate-500"
+        : "from-indigo-500 to-blue-600";
+  const heroCaption = isResting
+    ? "Resting"
+    : exerciseComplete
+      ? "✓ Complete"
+      : endedEarly
+        ? "Ended early"
+        : selectedExerciseIndex >= 0
+          ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length}`
+          : `${assignedExercises.length} exercises`;
 
   return (
     <main className="h-screen overflow-hidden bg-gray-50">
@@ -1566,29 +1764,52 @@ export default function CameraClient() {
             <div className="p-3 rounded-2xl bg-white shadow-sm border">
               <h2 className="font-semibold text-sm mb-2">Controls</h2>
 
-              <label className="block text-xs font-medium mb-1">Exercise</label>
               {assignedExercises.length === 0 ? (
                 <div className="w-full p-2 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 text-xs">
                   No exercises assigned yet.
                 </div>
               ) : (
-                <select
-                  value={selectedExercise}
-                  onChange={(e) => setSelectedExercise(e.target.value)}
-                  className="w-full border rounded px-2 py-2 bg-white text-sm"
-                >
-                  {assignedExercises.map((exercise) => (
-                    <option key={exercise.id} value={exercise.id}>
-                      {exercise.name}
-                    </option>
-                  ))}
-                </select>
+                // Guided-flow stepper (hero). The current exercise name is the
+                // focal point — large type on a colored panel — flanked by
+                // Prev/Next. Both arrows are disabled while a session is active
+                // so an in-progress set can't be lost by accidental navigation
+                // (End first). Ends of the list disable the respective arrow
+                // (no wraparound).
+                <div className="flex items-stretch gap-2">
+                  <button
+                    type="button"
+                    onClick={() => goToAdjacentExercise(-1)}
+                    disabled={!hasPrevExercise || sessionBusy}
+                    aria-label="Previous exercise"
+                    className="shrink-0 w-9 rounded-xl border bg-white text-gray-700 flex items-center justify-center hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ◀
+                  </button>
+                  <div
+                    className={`flex-1 min-w-0 rounded-xl bg-gradient-to-br ${heroGradient} px-3 py-3 text-center text-white shadow-sm transition-colors`}
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
+                      {heroCaption}
+                    </div>
+                    <div className="text-lg font-bold leading-tight truncate">
+                      {selectedExerciseObj?.name ?? "—"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => goToAdjacentExercise(1)}
+                    disabled={!hasNextExercise || sessionBusy}
+                    aria-label="Next exercise"
+                    className="shrink-0 w-9 rounded-xl border bg-white text-gray-700 flex items-center justify-center hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ▶
+                  </button>
+                </div>
               )}
 
               {selectedExerciseObj && (
                 <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-200 text-xs text-gray-700">
-                  <div className="font-semibold text-gray-900">{selectedExerciseObj.name}</div>
-                  <div className="line-clamp-3 mt-1">{selectedExerciseObj.description}</div>
+                  <div className="line-clamp-3">{selectedExerciseObj.description}</div>
                   <div className="mt-2 flex gap-2 text-[11px] text-gray-600">
                     <span>⏱ {selectedExerciseObj.duration}s</span>
                   </div>
@@ -1673,22 +1894,109 @@ export default function CameraClient() {
                 when the session is in the ended state so it's clear that
                 clicking it resets completedSets / repCounts / timer.
               */}
-              <div className="mt-2 flex gap-2">
+              {sessionState === "resting" ? (
+                // Hard-block rest between sets. Rep counting is suspended (the
+                // rep gate requires "active"); the next set resumes
+                // automatically when the countdown elapses.
+                <div className="mt-2 rounded-xl border border-sky-300 bg-sky-50 p-3 text-center">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-700">
+                    Rest
+                  </p>
+                  <p className="text-3xl font-bold text-sky-900 tabular-nums leading-tight">
+                    {formatElapsedTime(restRemainingSec)}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-sky-700">
+                    Next set starts automatically
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    {/*
+                      TEMPORARY: rest is specified as a HARD BLOCK with no skip.
+                      This Skip button is a stopgap for testing and should be
+                      removed so rest is non-skippable per the spec.
+                    */}
+                    <button
+                      type="button"
+                      onClick={skipRest}
+                      className="flex-1 px-3 py-2 rounded border bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Skip rest
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSessionEnd}
+                      className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+                    >
+                      End
+                    </button>
+                  </div>
+                </div>
+              ) : sessionState === "active" && confirmingEnd ? (
+                // Inline confirm step for ending an exercise early. Ending now
+                // logs the in-progress set as a user-terminated partial (it
+                // won't count as complete). Shown in place of Start/End so the
+                // End action can't be double-triggered; Cancel resumes the
+                // running session untouched (reps kept counting underneath).
+                <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-900">
+                    End this exercise early?
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-amber-700">
+                    The current set won&apos;t count as complete.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleSessionEnd();
+                        setConfirmingEnd(false);
+                      }}
+                      className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+                    >
+                      Yes, end
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingEnd(false)}
+                      className="flex-1 px-3 py-2 rounded border bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={handleSessionStart}
+                    disabled={!activeDefinition || sessionState === "active"}
+                    className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {sessionState === "ended" ? "Restart" : "Start"}
+                  </button>
+                  <button
+                    onClick={() => setConfirmingEnd(true)}
+                    disabled={sessionState !== "active"}
+                    className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    End
+                  </button>
+                </div>
+              )}
+              {/*
+                After a manual End on a non-last exercise, offer to move on.
+                Completing all prescribed sets auto-advances (never lands here
+                with a next exercise available), so this prompt only appears
+                when the user ended early — they can either Restart this
+                exercise above or step forward here.
+              */}
+              {sessionState === "ended" && hasNextExercise && (
                 <button
-                  onClick={handleSessionStart}
-                  disabled={!activeDefinition || sessionState === "active"}
-                  className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  type="button"
+                  onClick={() => goToAdjacentExercise(1)}
+                  className="mt-2 w-full px-3 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
                 >
-                  {sessionState === "ended" ? "Restart" : "Start"}
+                  Next exercise →
                 </button>
-                <button
-                  onClick={handleSessionEnd}
-                  disabled={sessionState !== "active"}
-                  className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  End
-                </button>
-              </div>
+              )}
             </div>
           </aside>
         </section>
@@ -1869,9 +2177,11 @@ function ProgressCard({
       ? completedSets >= targetSets
         ? "SESSION COMPLETE"
         : `ENDED AT SET ${completedSets} / ${targetSets}`
-      : sessionState === "active"
-        ? `SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
-        : `READY • ${targetSets} SETS`;
+      : sessionState === "resting"
+        ? `RESTING • NEXT: SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
+        : sessionState === "active"
+          ? `SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
+          : `READY • ${targetSets} SETS`;
   return (
     <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
       <div className="flex items-center justify-between mb-2.5">

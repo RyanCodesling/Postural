@@ -5,6 +5,7 @@ import {
   getPatientExercises,
   getUsers,
 } from "@/lib/db";
+import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 
 type PatientExerciseAssignmentRequest = {
   exerciseId?: unknown;
@@ -21,6 +22,12 @@ export async function GET(request: NextRequest) {
     }
 
     const user = JSON.parse(authToken.value);
+    const includeDeprecated =
+      request.nextUrl.searchParams.get("includeDeprecated") === "true";
+    const filterDeprecated = <T extends { exercise_id: string }>(exercises: T[]) =>
+      includeDeprecated
+        ? exercises
+        : exercises.filter((exercise) => !DEPRECATED_EXERCISE_IDS.has(exercise.exercise_id));
 
     // Therapist: must supply ?patientId= and the patient must be assigned to them
     if (user.role === "therapist") {
@@ -36,7 +43,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Patient not found or not assigned to you" }, { status: 403 });
       }
 
-      const exercises = await getPatientExercises(patientId);
+      const exercises = filterDeprecated(await getPatientExercises(patientId));
       return NextResponse.json({ exercises });
     }
 
@@ -45,7 +52,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const exercises = await getPatientExercises(user.id);
+    const exercises = filterDeprecated(await getPatientExercises(user.id));
     return NextResponse.json({ exercises });
   } catch (error) {
     console.error("GET /api/patient-exercises error:", error);

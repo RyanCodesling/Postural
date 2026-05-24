@@ -8,7 +8,7 @@
 ## 📌 Update-5-22-26 | RyanCodesling
 
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
-- **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug surfaces
+- **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
 - **Real session lifecycle** replaced the hardcoded SETS / progress / timer placeholders: idle→active→ended state machine, slower-side-gated set counter (`min(left,right) ≥ targetReps`), live session timer, progress bar, wired sidebar Start/End controls, per-side `reps/target` display with a green ✓ "done" cue
 - **Guided exercise flow** replaced the camera exercise dropdown with a Prev / Next stepper hero: current exercise is emphasized, navigation is disabled while a session is active/resting, completed non-final exercises auto-advance to the next exercise idle, and manually ended exercises show a "Next exercise →" prompt
 - **Rest periods between sets** were restored as a therapist-configurable prescription field (`rest_seconds`): camera sessions now enter a hard-block `resting` state between sets, show a countdown, pause rep counting, auto-resume the next set, and keep per-set duration separate from rest time
@@ -40,8 +40,8 @@
 - POST assignment payloads now validate `exerciseId`, `sets`, and `reps` server-side
 - Optional/missing `restSeconds` defaults to 60 seconds; malformed exercise entries return 400 instead of falling through to a server error
 
-### *web\src\app\api\exercises\route.ts*
-- Filters deprecated `ex_002` / `ex_003` from the default catalog (with a `?includeDeprecated=true` opt-in for history views), so new assignment/catalog surfaces do not show them while existing patient assignments can still load
+### *web\src\app\api\exercises\route.ts* and *web\src\app\api\patient-exercises\route.ts*
+- Filters deprecated `ex_002` / `ex_003` from active catalog and patient-assignment responses by default, with `?includeDeprecated=true` retained for history/audit views
 
 ### *web\src\lib\db.ts*
 - `assignExercisesToPatient()` writes `rest_seconds` and defensively defaults missing/invalid rest values to 60 seconds for older or direct callers

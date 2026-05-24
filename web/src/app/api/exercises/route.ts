@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExercises, createExercise, getNextExerciseId } from "@/lib/db";
+import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 
 /**
  * Exercise IDs that are deprecated and should not appear in catalog-listing
- * surfaces (therapist assignment dropdown, programs builder, staff debug
- * dropdown, etc.). Their rows stay in the `exercises` table for audit/history
- * — a patient with an existing ex_002 prescription can still load it from
- * `/api/patient-exercises`. The deprecation only hides the entry from the
- * "assign a new exercise" surface.
+ * surfaces (therapist assignment dropdown, programs builder, patient active
+ * exercise flow, staff debug dropdown, etc.). Their rows stay in the
+ * `exercises` table for audit/history and can be returned through explicit
+ * `includeDeprecated=true` opt-ins.
  *
  * Added 2026-05-21 for the EX_SWAP. See `registry.ts` for the matching
  * `@deprecated` JSDoc on the registry entries themselves.
  */
-const DEPRECATED_EXERCISE_IDS = new Set(["ex_002", "ex_003"]);
-
 export async function GET(request: NextRequest) {
   try {
     // Special-case opt-in for callers that need the full catalog (e.g., a

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import {
   PoseLandmarker,
@@ -193,6 +194,8 @@ export default function CameraClient() {
     : user?.role === "therapist" ? "/dashboard/therapist"
     : "/dashboard/patient";
 
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -288,8 +291,11 @@ export default function CameraClient() {
   const [currentTime, setCurrentTime] = useState<string>("");
   const [currentDate, setCurrentDate] = useState<string>("");
 
+  const searchParams = useSearchParams();
+  const initialExerciseId = searchParams.get("exerciseId") ?? "";
+
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
-  const [selectedExercise, setSelectedExercise] = useState<string>("");
+  const [selectedExercise, setSelectedExercise] = useState<string>(initialExerciseId);
 
   const [activeDefinition, setActiveDefinition] =
     useState<ExerciseDefinition | null>(null);
@@ -891,7 +897,11 @@ export default function CameraClient() {
           }));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
-            setSelectedExercise((prev) => prev || exercises[0].id);
+            setSelectedExercise((prev) => {
+              if (prev) return prev;
+              const found = exercises.find((e) => e.id === initialExerciseId);
+              return found ? initialExerciseId : exercises[0].id;
+            });
           }
         })
         .catch((err) => console.error("Error loading exercises:", err));
@@ -1622,28 +1632,78 @@ export default function CameraClient() {
           : `${assignedExercises.length} exercises`;
 
   return (
+    <>
+      {/* Sidebar overlay backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Slide-in navigation sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="mb-8">
+          <div className="text-lg font-semibold text-white">{user?.name}</div>
+        </div>
+
+        <nav>
+          <ul className="space-y-1">
+            <li>
+              <Link
+                href={dashboardHref}
+                className="flex items-center gap-2 px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
+                onClick={() => setSidebarOpen(false)}
+              >
+                <CameraHomeIcon /> Back to Dashboard
+              </Link>
+            </li>
+          </ul>
+        </nav>
+
+        <div className="mt-auto pt-6">
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="w-full px-3 py-2 rounded bg-green-800 text-white text-sm hover:bg-green-700"
+          >
+            ✕ Close Menu
+          </button>
+        </div>
+      </aside>
+
     <main className="h-screen overflow-hidden bg-gray-50">
       {/* Full-width container (no max-w) */}
       <div className="h-full w-full px-4 lg:px-6 py-4 flex flex-col gap-3">
         {/* Header stays compact so content fits */}
         <header className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <Link href={dashboardHref} className="text-sm text-green-700 hover:text-green-900 inline-block mb-1">
-              ← Back to Dashboard
-            </Link>
-            <h1 className="text-xl font-bold leading-tight">Camera</h1>
-            <div className="flex flex-wrap items-center gap-2 mt-1">
-              <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />
-              <span className="text-xs text-gray-600">{modelLoaded ? "AI Ready" : "Loading Model..."}</span>
-              <span
-                className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                  captureOk ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
-                }`}
-                title={captureMessage}
-              >
-                {captureOk ? "Capture OK" : "Paused"}
-              </span>
-              {!captureOk && <span className="text-xs text-gray-600 truncate">{captureMessage}</span>}
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Hamburger — always visible on all screen sizes */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="shrink-0 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
+              aria-label="Open menu"
+            >
+              ☰ Menu
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold leading-tight">Camera</h1>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />
+                <span className="text-xs text-gray-600">{modelLoaded ? "AI Ready" : "Loading Model..."}</span>
+                <span
+                  className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                    captureOk ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                  }`}
+                  title={captureMessage}
+                >
+                  {captureOk ? "Capture OK" : "Paused"}
+                </span>
+                {!captureOk && <span className="text-xs text-gray-600 truncate">{captureMessage}</span>}
+              </div>
             </div>
           </div>
 
@@ -2002,6 +2062,7 @@ export default function CameraClient() {
         </section>
       </div>
     </main>
+    </>
   );
 }
 
@@ -2329,5 +2390,13 @@ function DynamicMetricCard({
         </div>
       </div>
     </div>
+  );
+}
+
+function CameraHomeIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+    </svg>
   );
 }

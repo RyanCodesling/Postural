@@ -63,38 +63,15 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [statusType, setStatusType] = useState<"success" | "error" | null>(null);
-  const [statusVisible, setStatusVisible] = useState(false);
+  const [showStatusModal,  setShowStatusModal]  = useState(false);
+  const [statusModalMsg,   setStatusModalMsg]   = useState("");
+  const [statusModalType,  setStatusModalType]  = useState<"success" | "error">("success");
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isFinalConfirmOpen, setIsFinalConfirmOpen] = useState(false);
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
   const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
   const [showAddPreview, setShowAddPreview] = useState(false);
   const [showEditPreview, setShowEditPreview] = useState(false);
-
-  useEffect(() => {
-    if (!statusMessage) {
-      setStatusVisible(false);
-      return;
-    }
-
-    setStatusVisible(true);
-
-    const hideTimer = window.setTimeout(() => {
-      setStatusVisible(false);
-    }, 4700);
-
-    const clearTimer = window.setTimeout(() => {
-      setStatusMessage(null);
-      setStatusType(null);
-    }, 5000);
-
-    return () => {
-      window.clearTimeout(hideTimer);
-      window.clearTimeout(clearTimer);
-    };
-  }, [statusMessage]);
 
   // Assignment state
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -162,16 +139,19 @@ export default function AdminDashboard() {
       if (res.ok) {
         setUsers([...users, data.user]);
         const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
-        setStatusType("success");
-        setStatusMessage(`${fullName} successfully added.`);
+        setStatusModalType("success");
+        setStatusModalMsg(`${fullName} successfully added.`);
+        setShowStatusModal(true);
       } else {
-        setStatusType("error");
-        setStatusMessage(data?.error || "Unable to add user. Please try again.");
+        setStatusModalType("error");
+        setStatusModalMsg(data?.error || "Unable to add user. Please try again.");
+        setShowStatusModal(true);
       }
     } catch (err) {
       console.error("Failed to add user:", err);
-      setStatusType("error");
-      setStatusMessage("Unable to add user. Please try again.");
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to add user. Please try again.");
+      setShowStatusModal(true);
     }
 
     setShowAddPreview(false);
@@ -215,12 +195,14 @@ export default function AdminDashboard() {
       const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete user.");
       setUsers(users.filter((u) => u.id !== deleteUserId));
-      setStatusType("success");
-      setStatusMessage(`${deleteUserName} successfully deleted.`);
+      setStatusModalType("success");
+      setStatusModalMsg(`${deleteUserName} successfully deleted.`);
+      setShowStatusModal(true);
     } catch (err) {
       console.error("Failed to delete user:", err);
-      setStatusType("error");
-      setStatusMessage("Unable to delete user. Please try again.");
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to delete user. Please try again.");
+      setShowStatusModal(true);
     } finally {
       setIsFinalConfirmOpen(false);
       setDeleteUserId(null);
@@ -252,16 +234,19 @@ export default function AdminDashboard() {
       if (res.ok) {
         setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
         const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
-        setStatusType("success");
-        setStatusMessage(`${fullName} successfully updated.`);
+        setStatusModalType("success");
+        setStatusModalMsg(`${fullName} successfully updated.`);
+        setShowStatusModal(true);
       } else {
-        setStatusType("error");
-        setStatusMessage(data?.error || "Unable to update user. Please try again.");
+        setStatusModalType("error");
+        setStatusModalMsg(data?.error || "Unable to update user. Please try again.");
+        setShowStatusModal(true);
       }
     } catch (err) {
       console.error("Failed to update user:", err);
-      setStatusType("error");
-      setStatusMessage("Unable to update user. Please try again.");
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to update user. Please try again.");
+      setShowStatusModal(true);
     }
     setShowEditPreview(false);
     setEditingUserId(null);
@@ -388,8 +373,7 @@ export default function AdminDashboard() {
         ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
-          <div className="text-sm text-green-400">Admin</div>
-          <div className="mt-1 text-lg font-semibold text-white">{user?.name}</div>
+          <div className="text-lg font-semibold text-white">{user?.name}</div>
         </div>
 
         <nav>
@@ -397,58 +381,63 @@ export default function AdminDashboard() {
             <li>
               <button
                 onClick={() => { setActiveTab("dashboard"); setSidebarOpen(false); }}
-                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
                   activeTab === "dashboard"
                     ? "bg-green-700 text-white font-medium"
                     : "text-green-200 hover:bg-green-800"
                 }`}
               >
-                🏠 Dashboard
+                <AdminHomeIcon />
+                Dashboard
               </button>
             </li>
             <li>
               <button
                 onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
-                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
                   activeTab === "users"
                     ? "bg-green-700 text-white font-medium"
                     : "text-green-200 hover:bg-green-800"
                 }`}
               >
-                👥 Manage Users
+                <AdminUsersIcon />
+                Manage Users
               </button>
             </li>
             <li>
               <button
                 onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
-                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
                   activeTab === "exercises"
                     ? "bg-green-700 text-white font-medium"
                     : "text-green-200 hover:bg-green-800"
                 }`}
               >
-                💪 Manage Exercises
+                <AdminDumbbellIcon />
+                Manage Exercises
               </button>
             </li>
             <li>
               <button
                 onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
-                className={`w-full text-left px-3 py-2 rounded text-sm transition ${
+                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
                   activeTab === "assignments"
                     ? "bg-green-700 text-white font-medium"
                     : "text-green-200 hover:bg-green-800"
                 }`}
               >
-                🔗 Assign Patients
+                <AdminAssignIcon />
+                Assign Patients
               </button>
             </li>
             <li>
               <Link
                 href="/camera"
-                className="flex px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
+                className="flex items-center gap-2 px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
                 onClick={() => setSidebarOpen(false)}
               >
-                📷 Camera
+                <AdminCameraIcon />
+                Camera
               </Link>
             </li>
           </ul>
@@ -459,7 +448,8 @@ export default function AdminDashboard() {
             onClick={async () => { await logout(); router.push("/"); }}
             className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
           >
-            🚪 Log Out
+            <AdminLogoutIcon />
+            Log Out
           </button>
         </div>
       </aside>
@@ -467,7 +457,7 @@ export default function AdminDashboard() {
       {/* Main Content */}
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto min-w-0">
         <button
-          className="md:hidden mb-4 px-3 py-2 border border-gray-300 rounded text-sm text-gray-600 hover:bg-gray-50 bg-white"
+          className="md:hidden mb-4 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
           onClick={() => setSidebarOpen(true)}
         >
           ☰ Menu
@@ -968,70 +958,81 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {statusMessage && (
-              <div className={`mb-4 rounded-lg border p-3 text-sm transition-opacity duration-300 ${statusVisible ? "opacity-100" : "opacity-0"} ${statusType === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900 shadow-sm" : "border-red-200 bg-red-50 text-red-900"}`} aria-live="polite">
-                {statusMessage}
-              </div>
-            )}
-
             {isDeleteModalOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-                  <h3 className="text-xl font-semibold text-gray-900">Confirm Delete</h3>
-                  <p className="mt-3 text-sm text-gray-600">
-                    Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteUserName}</span>?
-                    This action cannot be undone.
-                  </p>
-                  <div className="mt-6 flex justify-end gap-3">
-                    <button
-                      type="button"
-                      onClick={closeDeleteModal}
-                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={confirmDeleteUser}
-                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-                    >
-                      Delete
-                    </button>
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={closeDeleteModal} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Confirm Delete</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteUserName}</span>? This action cannot be undone.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={closeDeleteModal}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmDeleteUser}
+                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
 
             {isFinalConfirmOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-                <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-                  <h3 className="text-xl font-semibold text-gray-900">Final Confirmation</h3>
-                  <p className="mt-3 text-sm text-gray-600">
-                    This is your final confirmation. Deleting <span className="font-semibold text-gray-900">{deleteUserName}</span> is permanent and cannot be recovered.
-                  </p>
-                  <div className="mt-6 flex justify-end gap-3">
-                    <button
-                      type="button"
-                      onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }}
-                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleFinalDelete}
-                      className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-                    >
-                      Yes, Delete Permanently
-                    </button>
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Final Confirmation</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      This is your final confirmation. Deleting <span className="font-semibold text-gray-900">{deleteUserName}</span> is permanent and cannot be recovered.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFinalDelete}
+                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Yes, Delete Permanently
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
 
             {showAddPreview && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-                <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowAddPreview(false)} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl p-6 max-h-[90vh] overflow-y-auto">
                   <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm New User</h3>
                   <p className="text-sm text-gray-500 mb-4">Please review the details below before adding the user.</p>
                   <div className="space-y-2 text-sm">
@@ -1082,24 +1083,25 @@ export default function AdminDashboard() {
                       </div>
                     )}
                   </div>
-                  <div className="mt-6 flex justify-end gap-3">
+                  <div className="mt-6 flex gap-3">
                     <button
                       type="button"
                       onClick={() => setShowAddPreview(false)}
-                      className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
                     >
                       Go Back
                     </button>
                     <button
                       type="button"
                       onClick={handleConfirmAdd}
-                      className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                      className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
                     >
                       Confirm & Add User
                     </button>
                   </div>
                 </div>
-              </div>
+                </div>
+              </>
             )}
 
             {showEditPreview && editingUser && (() => {
@@ -1122,45 +1124,48 @@ export default function AdminDashboard() {
                 ] : []),
               ];
               return (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-                  <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-                    <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm Edit</h3>
-                    <p className="text-sm text-gray-500 mb-4">Review changes before saving. Highlighted rows have been modified.</p>
-                    <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b pb-2 mb-1">
-                      <span>Field</span>
-                      <span>Before</span>
-                      <span>After</span>
-                    </div>
-                    <div className="space-y-0.5">
-                      {fields.map(({ label, oldVal, newVal }) => {
-                        const changed = String(oldVal ?? "") !== String(newVal ?? "");
-                        return (
-                          <div key={label} className={`grid grid-cols-3 gap-2 text-sm py-2 px-2 rounded ${changed ? "bg-yellow-50" : ""}`}>
-                            <span className="text-gray-500">{label}</span>
-                            <span className={changed ? "line-through text-red-400" : "text-gray-700"}>{oldVal || "—"}</span>
-                            <span className={changed ? "font-medium text-green-700" : "text-gray-700"}>{newVal || "—"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-6 flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setShowEditPreview(false)}
-                        className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        Go Back
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleConfirmEdit}
-                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                      >
-                        Confirm & Save Changes
-                      </button>
+                <>
+                  <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowEditPreview(false)} />
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl p-6 max-h-[90vh] overflow-y-auto">
+                      <h3 className="text-xl font-semibold text-gray-900 mb-1">Confirm Edit</h3>
+                      <p className="text-sm text-gray-500 mb-4">Review changes before saving. Highlighted rows have been modified.</p>
+                      <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide border-b pb-2 mb-1">
+                        <span>Field</span>
+                        <span>Before</span>
+                        <span>After</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        {fields.map(({ label, oldVal, newVal }) => {
+                          const changed = String(oldVal ?? "") !== String(newVal ?? "");
+                          return (
+                            <div key={label} className={`grid grid-cols-3 gap-2 text-sm py-2 px-2 rounded ${changed ? "bg-yellow-50" : ""}`}>
+                              <span className="text-gray-500">{label}</span>
+                              <span className={changed ? "line-through text-red-400" : "text-gray-700"}>{oldVal || "—"}</span>
+                              <span className={changed ? "font-medium text-green-700" : "text-gray-700"}>{newVal || "—"}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-6 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowEditPreview(false)}
+                          className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                        >
+                          Go Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleConfirmEdit}
+                          className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
+                        >
+                          Confirm & Save Changes
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </>
               );
             })()}
 
@@ -1469,6 +1474,88 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Status Modal */}
+      {showStatusModal && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowStatusModal(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+              <div className={`flex items-center justify-center w-12 h-12 rounded-full mx-auto mb-4 ${statusModalType === "success" ? "bg-green-100" : "bg-red-100"}`}>
+                {statusModalType === "success" ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-green-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                  </svg>
+                )}
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">
+                {statusModalType === "success" ? "Success" : "Something Went Wrong"}
+              </h2>
+              <p className="text-sm text-gray-500 mb-5">{statusModalMsg}</p>
+              <button
+                onClick={() => setShowStatusModal(false)}
+                className={`px-6 py-2 text-white text-sm font-medium rounded-lg transition ${statusModalType === "success" ? "bg-green-700 hover:bg-green-800" : "bg-red-600 hover:bg-red-700"}`}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
+  );
+}
+
+// ── Sidebar icons ──────────────────────────────────────────────────────────
+
+function AdminHomeIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+    </svg>
+  );
+}
+
+function AdminUsersIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+    </svg>
+  );
+}
+
+function AdminDumbbellIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/>
+    </svg>
+  );
+}
+
+function AdminAssignIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+    </svg>
+  );
+}
+
+function AdminCameraIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 14c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/>
+    </svg>
+  );
+}
+
+function AdminLogoutIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+    </svg>
   );
 }

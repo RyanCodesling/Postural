@@ -5,6 +5,163 @@
 
 --- 
 
+## 📌 Update-5-24-26 | *Enah*
+
+### *scripts\patient_exercises_pg.sql*
+- Added `ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NULL DEFAULT CURRENT_DATE` — safe to re-run on existing tables that pre-date the column
+
+### *scripts\exercise_programs_pg.sql*
+- `rest_seconds INT NOT NULL DEFAULT 60` added to the `program_exercises` `CREATE TABLE` definition
+- `ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS rest_seconds INT NOT NULL DEFAULT 60` added — safe to re-run on existing tables that pre-date the column
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added `sidebarOpen` state (`useState(false)`)
+- Return refactored from `<main>` root to a fragment (`<>`) — sidebar and backdrop rendered as fixed overlays outside `<main>` so they layer correctly over the full camera view
+- Hamburger `<button>` (`☰ Menu`) added to the header left side, always visible, replaces the removed back link; styled `bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition flex items-center gap-2` matching the dashboard hamburger buttons
+- Header left area restructured: hamburger button + nested `<div>` holding the "Camera" `<h1>` and status badges
+- Sidebar `<aside>` — `fixed inset-y-0 left-0 z-40 w-64 bg-green-900`, slides in/out via `translate-x-0` / `-translate-x-full` with `transition-transform duration-200`
+- Added `useSearchParams` import from `next/navigation`
+- Reads `?exerciseId` query parameter on mount; uses it as the initial `selectedExercise` state value
+- Exercise-loading effects prefer the query-param exercise if it exists in the loaded list, falling back to the first exercise otherwise
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*
+- Full rewrite — removed old flat `ProfileField` list and Assigned Patients section
+- Layout: `lg:grid-cols-3` grid; Personal Information `col-span-2` left, Account Information + Account Actions stacked on the right `col-span-1`
+- Account Actions card: Change Password (green, `disabled`, non-functional), Log Out (red outlined, calls `logout()` → redirects to `/`)
+- Added `logout` from `useAuth` and `useRouter` for the Log Out action; added `React` import for `React.ReactNode`
+- Added `formatMemberSince()` helper — formats ISO timestamp as `"Month YYYY"` locale string
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Added `createdAt: string | null` to `PatientProfile` interface
+- View Profile tab fully redesigned — replaced old `ProfileField` grid and exercise list with the new card layout
+- Layout: same `lg:grid-cols-3` grid; left column holds Personal Information + Ongoing Exercises (stacked), right column holds Account Information + Account Actions (stacked)
+- Account Information + Account Actions match the therapist layout; Log Out is functional, Change Password is non-functional
+- Replaced old `ProfileField` with `PatInfoField`, `PatAccountField`, `formatMemberSince`, and icon components; added `React` import
+
+### *web\src\lib\db.ts*
+- Added `createdAt: row.created_at ?? null` to `mapUser` — exposes the `users.created_at` timestamp to all API responses that use `mapUser`, enabling the "Member Since" display on both profile 
+- Added `deletePatientExercises(patientId, exerciseIds)` — issues a single `DELETE FROM patient_exercises WHERE patient_id = $1 AND exercise_id = ANY($2::varchar[])` query; no-ops safely when `exerciseIds` is empty
+- `TemplateExerciseRow` extended with `restSeconds: number | null`
+- `TemplateExerciseInput` extended with `restSeconds?: number`
+- `getTemplates` query updated — `json_build_object` now includes `'restSeconds', te.rest_seconds`
+- `insertTemplateExercises` INSERT updated to include `rest_seconds` column — defaults to `60` when the input value is null or negative
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Progress Status badge is now color-coded: red (`bg-red-100 text-red-700`) for "not started", blue (`bg-blue-100 text-blue-700`) for "in progress" / "progressing", green (`bg-green-100 text-green-700`) for "completed"
+- Assigned Exercises status badge is now color-coded: red for "pending" (shown as "Not Started"), blue for "in_progress" (shown as "In Progress")
+- `PatientExerciseAssignment` type extended with `scheduledDate?: string`
+- `assignExercisesToPatient` INSERT now includes `assigned_date` column, using the provided date (validated `YYYY-MM-DD`) or falling back to today; `ON CONFLICT DO UPDATE` also updates `assigned_date` so re-assigning an exercise can change its schedule
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Renamed "Ongoing Exercises" section to "Assigned Exercises" on the My Profile tab
+- Removed the `status !== "completed"` filter — all assigned exercises are now shown regardless of status
+- Empty state message updated to "No assigned exercises" / "You currently have no exercises assigned"
+- Exercise status badge is now color-coded: red (`bg-red-100 text-red-700`) for "pending" (shown as "Not Started"), blue (`bg-blue-100 text-blue-700`) for "in_progress" (shown as "In Progress"), green (`bg-green-100 text-green-700`) for "completed" (shown as "Completed"); replaces the previous gray "Active" static badge
+- Added `"session"` to `ActiveTab` union; "Session" sidebar item converted from `<Link href="/session">` to a tab `<button>` — clicking it now stays within the patient dashboard with the sidebar visible, matching "View Profile" behaviour
+- `AssignedExercise` interface extended with `rest_seconds: number` and `assigned_date: string` to support the session tab
+- Session tab content added inline: progress card (completed/total count + progress bar), exercise list with scheduled date, color-coded card backgrounds and status badges, date-gated "Start Session" button (green when `assigned_date ≤ today PH`, gray + disabled when future), green → `/camera?exerciseId=xxx` redirect
+- Added `sessionTodayPH()` helper (returns `YYYY-MM-DD` in `Asia/Manila` timezone) used for date-gating logic in the session tab
+
+### *web\src\app\(app)\session\page.tsx*
+- `getStatusBadgeColor` updated: "completed" → `bg-green-100 text-green-700`, "in_progress" → `bg-blue-100 text-blue-700`, default/pending → `bg-red-100 text-red-700`; replaces the previous green "Pending" badge
+- `getStatusColor` (card background) updated to match: green tint for completed, blue tint for in_progress, red tint for pending/not started
+- `getStatusText` updated: "pending" → "Not Started", "in_progress" → "In Progress", "completed" → "Completed"; removes "Skipped" label in favour of the unified not-started default
+- Each exercise card now shows **Scheduled date** (formatted "Month D, YYYY") sourced from `assigned_date` instead of the computed weekday/date label
+- "Start Session" button is **date-gated**: green + clickable when `assigned_date ≤ today` (Philippine time via `en-CA` locale), gray + `disabled` + tooltip showing the available date when the scheduled date is still in the future
+- Clicking an active "Start Session" redirects to `/camera?exerciseId=<exercise_id>` so the camera pre-selects that exercise
+- Added `todayPH()` helper — returns today's date as `YYYY-MM-DD` using `Asia/Manila` timezone
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Added **Scheduled Date** field (required) to each exercise row when checked — `<input type="date">` rendered below the Sets/Reps/Rest grid inside `AssignRow`
+- `assignParams` state extended to include `scheduledDate?: string` per exercise
+- `handleAssign` validates that `scheduledDate` is provided for every selected exercise before submitting
+- `AssignRow` receives new `onDate` prop; both system and custom exercise maps wire it to update `scheduledDate` in `assignParams`
+- Payload sent to `POST /api/patient-exercises` now includes `scheduledDate` per exercise
+- Added **Currently Assigned** section (between Step 1 patient selection and Step 2 exercise picker) — lists all exercises already assigned to the selected patient with checkboxes, exercise name, scheduled date, sets × reps × rest, and an "assigned" blue badge on matching `AssignRow` entries
+- **Delete Selected** button opens a Delete Confirmation Modal showing a red preview card of every checked exercise; confirming calls `DELETE /api/patient-exercises` and refreshes the assignment list
+- **Assign Preview Modal** added — before saving, `handleAssign` builds a diff (`PreviewItem[]`) classifying each selected exercise as "new" (green), "updated" (blue, shows Before/After sets/reps/rest/date), or "unchanged" (gray); the modal renders all three categories before the user confirms
+- `handleConfirmAssign` performs the actual `POST /api/patient-exercises` call after the preview is confirmed
+- **Scheduled Date** `<input type="date">` per exercise now has `min={minDate}` (today's date in `Asia/Manila` timezone) — calendar picker is restricted to present date onwards
+- `AssignRow` receives `isExisting` prop and renders a blue "assigned" badge when the exercise is already in the patient's current assignments
+- Added `todayStr()` helper (returns `YYYY-MM-DD` in `Asia/Manila` timezone) and `fmtDate()` helper (formats `YYYY-MM-DD` as `"Month D, YYYY"`)
+- Added `fmtDateFull()` helper — formats `YYYY-MM-DD` as `"Month D, YYYY Weekday"` (e.g. `"May 26, 2026 Tuesday"`) for use in confirmation modals
+- **Delete Confirmation Modal** updated — each exercise now renders a stacked full-detail card: exercise name (bold), then `Sets:`, `Reps:`, `Rest:`, `Scheduled Date:` on separate lines using `fmtDateFull`; replaces the previous single-line inline summary
+- **Assign Preview Modal — New** section updated — each new exercise renders the same stacked full-detail card (green border) instead of the previous condensed one-liner
+- **Assign Preview Modal — Updated** section updated — Before (red border) and After (green border) columns each show the full stacked `Sets` / `Reps` / `Rest` / `Scheduled Date` breakdown side by side instead of the previous abbreviated `sets×reps · Xs` line
+- **Assign Preview Modal — Unchanged** section updated — each exercise now shows the full stacked detail card (gray) instead of the previous "No changes" label
+- Assigned exercises in Step 3 are **locked by default** — all four fields (Sets, Reps, Rest, Scheduled Date) are disabled (`bg-gray-100 cursor-not-allowed`) until the therapist explicitly unlocks them; a red **Edit** pill button (pencil icon) appears beside the "assigned" badge for each locked exercise
+- Clicking **Edit** enters edit mode for that exercise: fields become interactive, an "editing" red badge appears, and a gray **✕ Cancel Edit** button appears beside it
+- Clicking **Cancel Edit** exits edit mode and restores all four field values to the original DB values — any mid-edit changes are fully discarded
+- **"Assign Exercises" / "Update Changes" button** logic: no existing assignments → always shows "Assign Exercises"; existing assignments present → shows "Update Changes" only when at least one change is detected (new exercise added, or an exercise in edit mode has values differing from the DB); shows nothing if no changes are detected (e.g. only deletions were made)
+- **Delete success popup modal** replaces the previous inline success banner — after a delete is confirmed, a green checkmark modal appears stating "Deleted Successfully" with the patient name; dismissed with an OK button
+- **`toggleAssign` fix** — unchecking an assigned exercise no longer wipes its `assignParams`; the filled-in values persist in state so re-checking the checkbox immediately restores all fields to their previous values, preventing accidental data loss from an unintended uncheck
+- Added `editingExercises: Set<string>` state to track which assigned exercises are currently in edit mode; reset to empty on patient change
+- Added `showDeleteSuccess: boolean` state to control the delete success popup
+- Added `hasAssignChanges` derived boolean — checks `assignSelected` for any exercise not in `existingAssignments` (new) or any exercise in `editingExercises` whose current params differ from the DB record
+- Added `PencilIcon` SVG function (Material Design edit path, `w-3 h-3 shrink-0`)
+
+### *web\src\app\api\patient-exercises\route.ts*
+- POST handler accepts `scheduledDate` per exercise — validated as a `YYYY-MM-DD` string; passed through to `assignExercisesToPatient`
+
+### *web\src\app\(app)\camera\page.tsx*
+- Wrapped `<CameraClient />` in `<Suspense>` — required by Next.js for components that call `useSearchParams`
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Added `DELETE` handler — authenticates therapist, verifies patient ownership, accepts `{ patientId, exerciseIds: string[] }` body, calls `deletePatientExercises`, returns `{ success: true }`
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Session tab heading renamed **"Weekly Exercise Schedule" → "Session Schedule"**; subtitle updated to "Track your exercises by scheduled date"
+- Progress card heading renamed "Weekly Progress" → "Overall Progress"
+- Exercises are now sorted ascending by `assigned_date` before rendering
+- Exercise list is now grouped by date — each unique date renders a `Scheduled: Month D, YYYY` header with a green hairline rule, followed by all exercises assigned on that date as cards below it; the per-card "Scheduled: …" line was removed since the date is now the group header
+
+### *web\src\app\(app)\session\page.tsx* *(deleted)*
+- File deleted — the `/session` route is fully redundant; the "Session" sidebar button in `patient/page.tsx` was already converted to a tab button (sets `activeTab("session")`) and all content (progress card, exercise list, date-gating, Start Session) lives inside the patient dashboard session tab; no internal navigation linked to this route
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Removed `customError` inline banner state — validation errors for the custom exercise form now use the shared error modal instead
+- Added `showSuccessModal`, `successMsg`, `showErrorModal`, `errorMsg`, `errorTitle`, `showConfirmDelete`, `confirmDeleteId` states
+- `handleAddCustomExercise` validation failures open the error modal with title "Required Fields" instead of setting an inline banner
+- `handleSave`: all `alert()` calls replaced with modal; captures `wasEditing = !!editingId` before `resetForm()` so the correct success message is used — "Program updated successfully." vs "Program created successfully."
+- Delete flow split into `handleDelete` (sets `confirmDeleteId`, opens confirm modal) and `handleConfirmDeleteProgram` (performs DELETE API call, shows success modal on completion)
+- Three modals added at end of return: **Success** (green checkmark circle, dynamic `successMsg`, green OK button), **Error** (red X circle, dynamic `errorTitle` + `errorMsg`, red OK button), **Confirm Delete** (red trash icon circle, Cancel + red Delete buttons)
+- All modals use the consistent pattern: `fixed inset-0 z-40 bg-black/50` backdrop + `fixed inset-0 z-50 flex items-center justify-center p-4` + `bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center` + icon circle
+- "Add New Custom Exercise" block removed from inside the Create/Edit Program form — custom exercise creation is now a standalone flow separate from program authoring
+- `customSets` and `customReps` states removed — sets and reps are program-specific prescriptions, not properties of an exercise itself
+- `resetCustomForm()` call removed from `resetForm()` — the two forms are now fully independent
+- Added `showCustomForm` state to control the standalone custom exercise form visibility
+- Added **"+ Add New Custom Exercise"** button alongside **"+ Create New Program"** — both visible when no program form is open; the custom button toggles to **"✕ Cancel"** when the form is open; clicking **"+ Create New Program"** collapses the custom form if open
+- Standalone **Add New Custom Exercise** form — name and description fields only (no sets/reps); on save POSTs to `/api/exercises`, updates the exercises list, collapses the form, and shows the success modal with the new exercise name; validates both fields before submission
+- **Your Custom Exercises** section added below **Your Programs** — grid of cards (same 2-col layout) showing exercise name, "custom" green badge, exercise ID, and description; empty state directs to the add button
+- Renamed all remaining "Template" → "Program" terminology in TypeScript code (see full rename notes below)
+- Added **Rest (sec)** field to each exercise row in the Create/Edit Program form — sits in a 3-column grid alongside Sets and Reps; blank input defaults to 60 seconds when the program is saved; `placeholder="60"` communicates the default; `min={0}` allows 0 (no rest)
+- `exerciseParams` type extended with `restSeconds?: number`
+- `buildExercisePayload` now includes `restSeconds` — applies `60` default when the field is left blank or negative; the value is passed to the API on both create and update
+- `handleEdit` now populates `restSeconds` from the existing program exercise so the field is pre-filled when editing
+- Program exercise cards in **Your Programs** now show rest duration alongside sets×reps (e.g. `3×12 · 45s`)
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Replaced `statusMessage` / `statusType` / `statusVisible` states and their timer `useEffect` with `showStatusModal`, `statusModalMsg`, `statusModalType` — status feedback is now a popup modal instead of a fading inline banner
+- `handleConfirmAdd`, `handleFinalDelete`, `handleConfirmEdit`: all `setStatusType` / `setStatusMessage` calls replaced with `setStatusModalType` / `setStatusModalMsg` / `setShowStatusModal(true)` for both success and error paths
+- Removed inline status banner JSX (`{statusMessage && <div ...>}`)
+- **Confirm Delete modal** restyled: `rounded-2xl shadow-xl`, backdrop + centered container pattern, red trash icon circle (`bg-red-100`, Material Design delete path), centered text layout, full-width Cancel + Delete buttons with `rounded-lg` styling
+- **Final Confirmation modal** restyled: same pattern, red warning triangle icon (`bg-red-100`, Material Design warning path)
+- **Add User preview modal** restyled: `rounded-2xl shadow-xl`, backdrop overlay added, full-width Go Back + Confirm buttons with `rounded-lg`, "Confirm & Add User" button changed from `bg-green-600` to `bg-green-700`
+- **Edit User preview modal** restyled: same `rounded-2xl shadow-xl` container, backdrop overlay added, full-width Go Back + Confirm buttons with `rounded-lg`, "Confirm & Save Changes" button changed from `bg-blue-600` to `bg-green-700`
+- **Status modal** added after `</main>`: green checkmark for success, red X for error, `"Success"` / `"Something Went Wrong"` heading, dynamic message, color-matched OK button (`bg-green-700` / `bg-red-600`)
+
+### *Full "Template → Program" rename across all TypeScript files*
+- **`web\src\lib\db.ts`**: `getTemplates` → `getPrograms`, `createTemplate` → `createProgram`, `updateTemplate` → `updateProgram`, `deleteTemplate` → `deleteProgram`, `insertTemplateExercises` → `insertProgramExercises`, `TemplateExerciseRow` → `ProgramExerciseRow`, `TemplateExerciseInput` → `ProgramExerciseInput`; section comment updated to `// ── Exercise programs`
+- **`web\src\app\api\programs\route.ts`** *(new)*: new route at `/api/programs` — GET returns `{ programs }`, POST creates program; imports renamed db functions; all error messages use "program"
+- **`web\src\app\api\programs\[id]\route.ts`** *(new)*: new route at `/api/programs/[id]` — PUT updates, DELETE removes; imports renamed db functions
+- **`web\src\app\(app)\dashboard\therapist\assign\page.tsx`**: `interface Template` → `interface Program`; `templates`/`setTemplates` → `programs`/`setPrograms`; `assignTemplateId`/`setAssignTemplateId` → `assignProgramId`/`setAssignProgramId`; `handleTemplateSelect` → `handleProgramSelect`; fetch URL `/api/templates` → `/api/programs`; response key `templatesData.templates` → `programsData.programs`
+- **`web\src\app\(app)\dashboard\therapist\programs\page.tsx`**: all fetch URLs updated from `/api/templates` and `/api/templates/${id}` → `/api/programs` and `/api/programs/${id}`; response key `d.templates` → `d.programs`
+
+### *web\src\app\api\templates\* (deleted)*
+- Entire `api/templates/` folder deleted — `route.ts` and `[id]/route.ts` were dead code after all frontend fetch calls were migrated to `/api/programs`; no route in the app calls `/api/templates` anymore
+
+--- 
+
 ## 📌 Update-5-22-26 | RyanCodesling
 
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)

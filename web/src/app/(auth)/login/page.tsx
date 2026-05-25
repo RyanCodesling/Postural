@@ -124,7 +124,7 @@ export default function LoginPage() {
           onClick={() => router.push("/")}
           className="px-4 py-1.5 rounded-lg bg-black/70 hover:bg-black text-white text-sm font-medium transition-colors"
         >
-          ← Back
+          Back
         </button>
 
       </div>

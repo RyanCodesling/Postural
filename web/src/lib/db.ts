@@ -17,7 +17,7 @@ function mapUser(row: any) {
     role:           row.role,
     clinicId:       row["clinicId"]       ?? null,
     therapistId:    row.therapist_id      ?? null,
-    dateOfBirth:    row.date_of_birth ?? null,
+    dateOfBirth:    row.date_of_birth     ?? null,
     age:            row.age               ?? null,
     gender:         row.gender            ?? null,
     diagnosis:      row.diagnosis         ?? null,
@@ -25,6 +25,7 @@ function mapUser(row: any) {
     condition:      row.condition         ?? null,
     therapistIDNum: row.therapist_id_num  ?? null,
     specialty:      row.specialty         ?? null,
+    createdAt:      row.created_at        ?? null,
   };
 }
 
@@ -253,6 +254,7 @@ type PatientExerciseAssignment = {
   sets: number;
   reps: number;
   restSeconds?: number;
+  scheduledDate?: string; // YYYY-MM-DD; falls back to CURRENT_DATE if omitted
 };
 
 function normalizeRestSeconds(restSeconds: unknown): number {
@@ -275,12 +277,19 @@ export async function assignExercisesToPatient(
     await client.query("BEGIN");
     for (const ex of exercises) {
       const restSeconds = normalizeRestSeconds(ex.restSeconds);
+      const assignedDate =
+        ex.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.scheduledDate)
+          ? ex.scheduledDate
+          : new Date().toISOString().split("T")[0];
       await client.query(
-        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (exercise_id, patient_id) DO UPDATE
-         SET sets = EXCLUDED.sets, reps = EXCLUDED.reps, rest_seconds = EXCLUDED.rest_seconds`,
-        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds]
+         SET sets          = EXCLUDED.sets,
+             reps          = EXCLUDED.reps,
+             rest_seconds  = EXCLUDED.rest_seconds,
+             assigned_date = EXCLUDED.assigned_date`,
+        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, assignedDate]
       );
     }
     await client.query("COMMIT");
@@ -290,6 +299,14 @@ export async function assignExercisesToPatient(
   } finally {
     client.release();
   }
+}
+
+export async function deletePatientExercises(patientId: string, exerciseIds: string[]) {
+  if (exerciseIds.length === 0) return;
+  await pool.query(
+    `DELETE FROM patient_exercises WHERE patient_id = $1 AND exercise_id = ANY($2::varchar[])`,
+    [patientId, exerciseIds]
+  );
 }
 
 export async function getPatientExercises(patientId: string) {
@@ -305,9 +322,9 @@ export async function getPatientExercises(patientId: string) {
   return result.rows;
 }
 
-// ── Exercise templates ────────────────────────────────────────────────────────
+// ── Exercise programs ────────────────────────────────────────────────────────
 
-export async function getTemplates(therapistId: string) {
+export async function getPrograms(therapistId: string) {
   const result = await pool.query(
     `SELECT et.id, et.name, et.created_at, et.updated_at,
             COALESCE(
@@ -319,7 +336,8 @@ export async function getTemplates(therapistId: string) {
                   'description', te.description,
                   'isCustom',    te.is_custom,
                   'sets',        te.sets,
-                  'reps',        te.reps
+                  'reps',        te.reps,
+                  'restSeconds', te.rest_seconds
                 ) ORDER BY te.id
               ) FILTER (WHERE te.id IS NOT NULL),
               '[]'
@@ -336,11 +354,11 @@ export async function getTemplates(therapistId: string) {
     name:      row.name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    exercises: row.exercises as TemplateExerciseRow[],
+    exercises: row.exercises as ProgramExerciseRow[],
   }));
 }
 
-interface TemplateExerciseRow {
+interface ProgramExerciseRow {
   id: number;
   exerciseId: string | null;
   name: string;
@@ -348,44 +366,47 @@ interface TemplateExerciseRow {
   isCustom: boolean;
   sets: number | null;
   reps: number | null;
+  restSeconds: number | null;
 }
 
-interface TemplateExerciseInput {
+interface ProgramExerciseInput {
   exerciseId?: string;
   name: string;
   description?: string;
   isCustom: boolean;
   sets?: number;
   reps?: number;
+  restSeconds?: number;
 }
 
-async function insertTemplateExercises(
+async function insertProgramExercises(
   client: PoolClient,
-  templateId: string,
-  exercises: TemplateExerciseInput[]
+  programId: string,
+  exercises: ProgramExerciseInput[]
 ) {
   for (const ex of exercises) {
     await client.query(
       `INSERT INTO program_exercises
-         (program_id, exercise_id, name, description, is_custom, sets, reps)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (program_id, exercise_id, name, description, is_custom, sets, reps, rest_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        templateId,
+        programId,
         ex.exerciseId ?? null,
         ex.name,
         ex.description ?? null,
         ex.isCustom,
         ex.sets ?? null,
         ex.reps ?? null,
+        ex.restSeconds != null && ex.restSeconds >= 0 ? ex.restSeconds : 60,
       ]
     );
   }
 }
 
-export async function createTemplate(data: {
+export async function createProgram(data: {
   therapistId: string;
   name: string;
-  exercises: TemplateExerciseInput[];
+  exercises: ProgramExerciseInput[];
 }) {
   const id = `program_${Date.now()}`;
   const client = await pool.connect();
@@ -395,7 +416,7 @@ export async function createTemplate(data: {
       "INSERT INTO exercise_programs (id, therapist_id, name) VALUES ($1, $2, $3)",
       [id, data.therapistId, data.name]
     );
-    await insertTemplateExercises(client, id, data.exercises);
+    await insertProgramExercises(client, id, data.exercises);
     await client.query("COMMIT");
     return id;
   } catch (err) {
@@ -406,10 +427,10 @@ export async function createTemplate(data: {
   }
 }
 
-export async function updateTemplate(
+export async function updateProgram(
   id: string,
   therapistId: string,
-  data: { name: string; exercises: TemplateExerciseInput[] }
+  data: { name: string; exercises: ProgramExerciseInput[] }
 ) {
   const client = await pool.connect();
   try {
@@ -424,7 +445,7 @@ export async function updateTemplate(
       [data.name, id]
     );
     await client.query("DELETE FROM program_exercises WHERE program_id = $1", [id]);
-    await insertTemplateExercises(client, id, data.exercises);
+    await insertProgramExercises(client, id, data.exercises);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -434,7 +455,7 @@ export async function updateTemplate(
   }
 }
 
-export async function deleteTemplate(id: string, therapistId: string) {
+export async function deleteProgram(id: string, therapistId: string) {
   const result = await pool.query(
     "DELETE FROM exercise_programs WHERE id = $1 AND therapist_id = $2",
     [id, therapistId]

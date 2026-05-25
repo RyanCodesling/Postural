@@ -63,16 +63,16 @@ export default function PatientDetailPage() {
     }
   };
 
-  const ongoingExercises = exercises.filter(
+  const assignedExercises = exercises.filter(
     (e) => e.status === "pending" || e.status === "in_progress"
   );
-  const finishedExercises = exercises.filter((e) => e.status === "completed");
+const completedExercises = exercises.filter((e) => e.status === "completed");
 
   const progressStatus = () => {
     if (exercises.length === 0) return "not started";
-    if (finishedExercises.length === exercises.length) return "completed";
+    if (completedExercises.length === exercises.length) return "completed";
     if (exercises.some((e) => e.status === "in_progress")) return "in progress";
-    if (finishedExercises.length > 0) return "progressing";
+    if (completedExercises.length > 0) return "progressing";
     return "not started";
   };
 
@@ -105,7 +105,7 @@ export default function PatientDetailPage() {
         href="/dashboard/therapist/patients"
         className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-6"
       >
-        ← Back to Patients
+        ← Back to Manage Patients
       </Link>
 
       {/* Header */}
@@ -118,47 +118,53 @@ export default function PatientDetailPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
           <div className="flex items-start gap-3">
-            <span className="text-green-600 text-lg">👤</span>
+            <div className="mt-0.5 shrink-0 text-green-600"><PersonIcon /></div>
             <div>
-              <p className="text-xs text-gray-400">Full Name</p>
-              <p className="font-semibold text-gray-900">{patient.name}</p>
+              <p className="text-xs text-gray-500 mb-0.5">Full Name</p>
+              <p className="text-sm font-semibold text-gray-900">{patient.name}</p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <span className="text-green-600 text-lg">👤</span>
+            <div className="mt-0.5 shrink-0 text-green-600"><PersonIcon /></div>
             <div>
-              <p className="text-xs text-gray-400">Age</p>
-              <p className="font-semibold text-gray-900">
-                {patient.age ? `${patient.age} years old` : "N/A"}
+              <p className="text-xs text-gray-500 mb-0.5">Age</p>
+              <p className="text-sm font-semibold text-gray-900">
+                {patient.age ? `${patient.age} years old` : "—"}
               </p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <span className="text-green-600 text-lg">✉️</span>
+            <div className="mt-0.5 shrink-0 text-green-600"><EmailIcon /></div>
             <div>
-              <p className="text-xs text-gray-400">Email</p>
-              <p className="font-semibold text-gray-900">{patient.email || "N/A"}</p>
+              <p className="text-xs text-gray-500 mb-0.5">Email</p>
+              <p className="text-sm font-semibold text-gray-900">{patient.email || "—"}</p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <span className="text-green-600 text-lg">📊</span>
+            <div className="mt-0.5 shrink-0 text-green-600"><TrendingIcon /></div>
             <div>
-              <p className="text-xs text-gray-400">Progress Status</p>
-              <span className="inline-block mt-1 px-3 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+              <p className="text-xs text-gray-500 mb-0.5">Progress Status</p>
+              <span className={`inline-block mt-1 px-3 py-1 text-xs rounded-full font-medium ${
+                progressStatus() === "completed"
+                  ? "bg-green-100 text-green-700"
+                  : progressStatus() === "not started"
+                  ? "bg-red-100 text-red-700"
+                  : "bg-blue-100 text-blue-700"
+              }`}>
                 {progressStatus()}
               </span>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <span className="text-green-600 text-lg">👤</span>
+            <div className="mt-0.5 shrink-0 text-green-600"><PulseIcon /></div>
             <div>
-              <p className="text-xs text-gray-400">Assigned Specialist</p>
-              <p className="font-semibold text-gray-900">
-                {patient.therapistName || "Not assigned"}
+              <p className="text-xs text-gray-500 mb-0.5">Assigned Specialist</p>
+              <p className="text-sm font-semibold text-gray-900">
+                {patient.therapistName || "—"}
               </p>
             </div>
           </div>
@@ -166,20 +172,20 @@ export default function PatientDetailPage() {
         </div>
       </div>
 
-      {/* Ongoing Exercises */}
+      {/* Assigned Exercises */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-green-700 font-semibold text-lg">Ongoing Exercises</h2>
+          <h2 className="text-green-700 font-semibold text-lg">Assigned Exercises</h2>
           <button className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition">
             View Patient Progress
           </button>
         </div>
 
-        {ongoingExercises.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No ongoing exercises.</p>
+        {assignedExercises.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-6">No assigned exercises.</p>
         ) : (
           <div className="space-y-4">
-            {ongoingExercises.map((ex) => (
+            {assignedExercises.map((ex) => (
               <div
                 key={ex.exercise_id}
                 className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
@@ -189,8 +195,12 @@ export default function PatientDetailPage() {
                   <p className="text-sm text-gray-500 mt-1">
                     {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
                   </p>
-                  <span className="inline-block mt-2 px-3 py-1 bg-blue-50 text-blue-600 text-xs rounded-full">
-                    {ex.status === "in_progress" ? "In Progress" : "Pending"}
+                  <span className={`inline-block mt-2 px-3 py-1 text-xs rounded-full font-medium ${
+                    ex.status === "in_progress"
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-red-100 text-red-700"
+                  }`}>
+                    {ex.status === "in_progress" ? "In Progress" : "Not Started"}
                   </span>
                 </div>
                 <button className="px-4 py-2 border border-green-700 text-green-700 text-sm rounded-lg hover:bg-green-50 transition">
@@ -202,15 +212,15 @@ export default function PatientDetailPage() {
         )}
       </div>
 
-      {/* Finished Exercises */}
+      {/* Completed Exercises */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">Finished Exercises</h2>
+        <h2 className="text-green-700 font-semibold text-lg mb-6">Completed Exercises</h2>
 
-        {finishedExercises.length === 0 ? (
+        {completedExercises.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-6">No completed exercises yet.</p>
         ) : (
           <div className="space-y-4">
-            {finishedExercises.map((ex) => (
+            {completedExercises.map((ex) => (
               <div
                 key={ex.exercise_id}
                 className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
@@ -237,5 +247,39 @@ export default function PatientDetailPage() {
       </div>
 
     </div>
+  );
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────
+
+function PersonIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v1h20v-1c0-3.3-6.7-5-10-5z"/>
+    </svg>
+  );
+}
+
+function EmailIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/>
+    </svg>
+  );
+}
+
+function TrendingIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/>
+    </svg>
+  );
+}
+
+function PulseIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99l1.5 1.5z"/>
+    </svg>
   );
 }

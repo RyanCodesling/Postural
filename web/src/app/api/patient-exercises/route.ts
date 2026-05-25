@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   DEFAULT_REST_SECONDS,
   assignExercisesToPatient,
+  deletePatientExercises,
   getPatientExercises,
   getUsers,
 } from "@/lib/db";
@@ -12,6 +13,7 @@ type PatientExerciseAssignmentRequest = {
   sets?: unknown;
   reps?: unknown;
   restSeconds?: unknown;
+  scheduledDate?: unknown;
 };
 
 export async function GET(request: NextRequest) {
@@ -60,6 +62,38 @@ export async function GET(request: NextRequest) {
   }
 }
 
+export async function DELETE(request: NextRequest) {
+  try {
+    const authToken = request.cookies.get("auth_token");
+    if (!authToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const user = JSON.parse(authToken.value);
+    if (user.role !== "therapist") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const body = await request.json();
+    const { patientId, exerciseIds } = body;
+
+    if (!patientId || !Array.isArray(exerciseIds) || exerciseIds.length === 0) {
+      return NextResponse.json({ error: "patientId and exerciseIds are required" }, { status: 400 });
+    }
+
+    // Verify the patient belongs to this therapist
+    const assignedPatients = await getUsers({ role: "patient", therapistId: user.id });
+    const isAssigned = assignedPatients.some((p) => p.id === patientId);
+    if (!isAssigned) {
+      return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
+    }
+
+    await deletePatientExercises(patientId, exerciseIds as string[]);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /api/patient-exercises error:", error);
+    return NextResponse.json({ error: "Failed to delete exercises" }, { status: 500 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const authToken = request.cookies.get("auth_token");
@@ -95,11 +129,18 @@ export async function POST(request: NextRequest) {
           ? Math.floor(exercise.restSeconds)
           : DEFAULT_REST_SECONDS;
 
+      const scheduledDate =
+        typeof exercise.scheduledDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(exercise.scheduledDate)
+          ? exercise.scheduledDate
+          : undefined;
+
       return {
         exerciseId: exercise.exerciseId,
         sets: exercise.sets,
         reps: exercise.reps,
         restSeconds,
+        scheduledDate,
       };
     });
 
@@ -124,10 +165,11 @@ export async function POST(request: NextRequest) {
     await assignExercisesToPatient(
       patientId,
       normalizedExercises.map((exercise) => ({
-        exerciseId: exercise.exerciseId as string,
-        sets: Math.floor(exercise.sets as number),
-        reps: Math.floor(exercise.reps as number),
-        restSeconds: exercise.restSeconds,
+        exerciseId:    exercise.exerciseId    as string,
+        sets:          Math.floor(exercise.sets as number),
+        reps:          Math.floor(exercise.reps as number),
+        restSeconds:   exercise.restSeconds,
+        scheduledDate: exercise.scheduledDate as string | undefined,
       })),
     );
     return NextResponse.json({ success: true });

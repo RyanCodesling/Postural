@@ -27,8 +27,8 @@ ON CONFLICT (id) DO NOTHING;
 -- Deprecated rows stay for audit/history and are filtered from active UI.
 -- Use DO UPDATE here so rerunning the seed refreshes name/description text.
 INSERT INTO exercises (id, name, description) VALUES
-  ('ex_007', 'Overhead Shoulder Press', 'Press both arms straight up overhead from shoulder height. Bilateral, frontal-plane (front-camera-clean). Replaces the deprecated ex_002 Overhead Arm Raises.'),
-  ('ex_008', 'Wall Angels',             'Slide arms up a wall from a W-position (elbows at shoulder height) to a Y-position (arms extended overhead), keeping back and arms against the wall. Replaces the deprecated ex_003 Shoulder Shrugs.')
+  ('ex_007', 'Overhead Shoulder Press', 'Press both arms straight up overhead from shoulder height. Bilateral, frontal-plane (front-camera-clean).'),
+  ('ex_008', 'Wall Angels',             'Slide arms up a wall from a W-position (elbows at shoulder height) to a Y-position (arms extended overhead), keeping back and arms against the wall.')
 ON CONFLICT (id) DO UPDATE
   SET name = EXCLUDED.name,
       description = EXCLUDED.description;

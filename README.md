@@ -6,6 +6,19 @@
 --- 
 
 ## 📌 Update-5-24-26 | *Enah*
+- Replaced all emoji sidebar nav icons with inline SVG components (w-4 h-4 shrink-0, Material Design paths) across admin, therapist, patient dashboards, and Camera page
+- Restyled ☰ Menu hamburger button to green-filled (bg-green-700 hover:bg-green-800 text-white) across all dashboards and Camera page
+- Removed role label ("Admin" / "Therapist" / "Patient") from the top of all sidebars — user's full name now sits directly at the top
+- Redesigned My Profile pages for therapist and patient — 2-column card layout with Personal Information, Account Information, and Account Actions panels; added color-coded status badges and formatMemberSince() helper sourced from createdAt in db.ts
+- Refactored Camera page — added slide-in sidebar with backdrop overlay replacing the "← Back to Dashboard" header link; added ?exerciseId query param support so camera pre-selects the exercise on load; wrapped in <Suspense> for Next.js compatibility
+- Overhauled Assign Exercise page — added Scheduled Date field (PH timezone, date-gated), Currently Assigned section, Delete modal, Assign Preview modal with new/updated/unchanged diff, locked-by-default assigned exercises with Edit/Cancel Edit, "Update Changes" vs "Assign Exercises" smart button, and delete success popup
+- Replaced all alert() and inline banners with consistent popup modals (rounded-2xl shadow-xl) across Therapist-side and Admin-side
+- "Exercise Programs" — separated Add New Custom Exercise into a standalone form, added Your Custom Exercises section, added Rest (sec) field with 60s default
+- Patient dashboard — added Session tab (inline, no route change), date-grouped exercise list, date-gated Start Session button, color-coded status badges; renamed "Ongoing Exercises" → "Assigned Exercises", "Weekly Exercise Schedule" → "Session Schedule"
+- Deleted /session route — all session content moved into the patient dashboard Session tab
+- Manage Patients page — removed Start Session button, restyled View button and Refresh button with SVG icon
+- Full Template → Program rename across all TypeScript files (db.ts, assign/page.tsx, programs/page.tsx); new /api/programs and /api/programs/[id] routes; deleted dead api/templates/ folder
+- DB: added assigned_date, rest_seconds columns; deletePatientExercises(); ProgramExerciseRow/Input with restSeconds; createdAt in mapUser
 
 ### *scripts\patient_exercises_pg.sql*
 - Added `ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NULL DEFAULT CURRENT_DATE` — safe to re-run on existing tables that pre-date the column

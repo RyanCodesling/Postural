@@ -437,8 +437,8 @@ export type ShoulderSymmetryResult = {
  * already prioritizes the hip line as its primary estimate.
  *
  * ── SIGN CONVENTION ──────────────────────────────────────────────────────────
- *   correctedAngle > 0  →  right shoulder lower → LEFT shoulder is elevated
- *   correctedAngle < 0  →  left shoulder lower  → RIGHT shoulder is elevated
+ *   correctedAngle > 0  →  left shoulder lower  → RIGHT shoulder is elevated
+ *   correctedAngle < 0  →  right shoulder lower → LEFT shoulder is elevated
  */
 export function computeShoulderSymmetry(
   landmarks: LM[],
@@ -502,6 +502,62 @@ function classifyTrunkLean(absDeg: number): Severity {
 }
  
 /**
+ * signedTrunkLeanAngle
+ *
+ * Internal helper — returns the tilt-corrected signed lateral deviation of the
+ * trunk from vertical, in degrees, or null if the trunk landmarks are
+ * unreliable. Used by `computeTrunkLateralLean` (which absolute-values it for
+ * the display direction enum + the `trunkLean` compensation metric). NOTE: this
+ * is NOT the ex_005 primary metric — that is `computeTrunkLateralFlexionSigned`,
+ * which measures shoulder-line-vs-hip-line tilt instead (see its doc for why).
+ *
+ * SIGN CONVENTION (image space, matches `computeTrunkLateralLean.direction`):
+ *   deviation > 0  →  trunk top leans toward image-right  → direction "right"
+ *   deviation < 0  →  trunk top leans toward image-left   → direction "left"
+ *
+ * See the `computeTrunkLateralLean` doc below for the full coordinate /
+ * tilt-correction rationale; the math here is exactly what used to live inline
+ * in that function.
+ */
+function signedTrunkLeanAngle(
+  landmarks: LM[],
+  tiltRef: TiltReference,
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  // All four landmarks must be reliable — this metric depends on midpoints
+  // of two pairs, so a single weak landmark corrupts a midpoint and from
+  // there the entire angle.
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip)) return null;
+
+  // Midpoints. Averaging two landmarks per endpoint roughly halves the
+  // landmark-placement noise relative to single-landmark angle metrics.
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  const rawTrunkAngle = lineAngleDeg(hipMid, shoulderMid);
+
+  // Step 1: remove camera tilt. After this, the angle is in body-relative
+  // image space — what the trunk angle would be if the camera were level.
+  const tiltCorrected = angleDiffDeg(rawTrunkAngle, tiltRef.cameraTiltDeg);
+
+  // Step 2: express as deviation from vertical. Subtracting −90° (i.e.,
+  // adding 90°) shifts the reference so 0° means "perfectly upright".
+  // angleDiffDeg keeps the result in [−180°, +180°] and handles the wrap.
+  return angleDiffDeg(tiltCorrected, -90);
+}
+
+/**
  * computeTrunkLateralLean
  *
  * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
@@ -552,43 +608,9 @@ export function computeTrunkLateralLean(
   landmarks: LM[],
   tiltRef: TiltReference
 ): TrunkLeanResult | null {
-  const leftShoulder  = landmarks[11];
-  const rightShoulder = landmarks[12];
-  const leftHip       = landmarks[23];
-  const rightHip      = landmarks[24];
- 
-  // All four landmarks must be reliable — this metric depends on midpoints
-  // of two pairs, so a single weak landmark corrupts a midpoint and from
-  // there the entire angle.
-  if (!pairVisible(leftShoulder, rightShoulder)) return null;
-  if (!pairVisible(leftHip, rightHip)) return null;
- 
-  // Midpoints. Averaging two landmarks per endpoint roughly halves the
-  // landmark-placement noise relative to single-landmark angle metrics.
-  const shoulderMid: LM = {
-    x: (leftShoulder!.x + rightShoulder!.x) / 2,
-    y: (leftShoulder!.y + rightShoulder!.y) / 2,
-  };
-  const hipMid: LM = {
-    x: (leftHip!.x + rightHip!.x) / 2,
-    y: (leftHip!.y + rightHip!.y) / 2,
-  };
- 
+  const deviation = signedTrunkLeanAngle(landmarks, tiltRef);
+  if (deviation === null) return null;
 
-  // ── TEMPORARY DEBUG ──
-  const rawTrunkAngle = lineAngleDeg(hipMid, shoulderMid);
-
-  // ── END DEBUG ──
- 
-  // Step 1: remove camera tilt. After this, the angle is in body-relative
-  // image space — what the trunk angle would be if the camera were level.
-  const tiltCorrected = angleDiffDeg(rawTrunkAngle, tiltRef.cameraTiltDeg);
- 
-  // Step 2: express as deviation from vertical. Subtracting −90° (i.e.,
-  // adding 90°) shifts the reference so 0° means "perfectly upright".
-  // angleDiffDeg keeps the result in [−180°, +180°] and handles the wrap.
-  const deviation = angleDiffDeg(tiltCorrected, -90);
- 
   const absDeg   = Math.abs(deviation);
   const severity = classifyTrunkLean(absDeg);
  
@@ -1126,18 +1148,112 @@ export function computeNeckLateralFlexionSigned(
 }
 
 /**
- * Trunk lateral flexion (degrees) — used by ex_005.
+ * Signed trunk lateral flexion angle (degrees) — primary metric for ex_005
+ * Standing Side Bends (bidirectional-alternating rep counting).
  *
- * Same situation as neck flexion: existing `computeTrunkLateralLean`
- * returns absolute angle + direction enum; the state machine needs the
- * signed continuous value. Wrapper TBD.
+ * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
+ * The lateral lean of the HEAD relative to the hips: the angle of the
+ * hip-midpoint → head-midpoint (ear-midpoint) line away from vertical, after
+ * removing camera roll.
+ *
+ *   upright          → head directly above hips → ~0°
+ *   bend to one side → head swings laterally     → grows
+ *
+ * ── WHY THE HEAD, NOT THE SHOULDERS ──────────────────────────────────────────
+ * With only shoulder+hip landmarks, the shoulder point moves the same way
+ * whether the SPINE bent or the SHOULDER GIRDLE tilted — so a shoulder-line
+ * angle (and equally a shoulder-hip distance) counts a deliberate shoulder tilt
+ * as a rep. Live testing (2026-05-25) confirmed: just tilting the shoulders
+ * minted reps. The head only translates laterally when the upper trunk actually
+ * leans; a shoulder-girdle-only tilt leaves the head centered, so this reads
+ * ~0. Neck lateral flexion adds a small head displacement, but trunk lean
+ * dominates it. (Accepted trade-off: a whole-body lateral lean/shift also
+ * registers — that is still genuine trunk lateral movement. The midpoint-lean
+ * `computeTrunkLateralLean` is unchanged and remains the `trunkLean`
+ * COMPENSATION signal elsewhere; only ex_005's PRIMARY metric is head-based.)
+ *
+ * ── EAR-MIDPOINT, NOT NOSE ───────────────────────────────────────────────────
+ * The ear midpoint is the head's rotational center and a 2-point average (less
+ * noisy, less gaze/yaw-sensitive), and it moves LESS than the nose during a
+ * pure neck tilt — so it captures more trunk-driven displacement and less
+ * neck-tilt contamination. Requires both ears ≥ MIN_VIS (frontal stance).
+ *
+ * ── CAMERA-ROLL CORRECTION ───────────────────────────────────────────────────
+ * Camera roll rotates the hip→head line; subtracting a tilt reference isolates
+ * the body-relative lean. In the generic stateless helper below that reference
+ * is the current frame's `tiltRef`. The live camera loop uses the exported
+ * neutral-baseline helper instead for ex_005 rep counting, because live testing
+ * showed the per-frame hip-line reference can move with the side bend and
+ * cancel the rep signal.
+ *
+ * ── SIGN CONVENTION (pinned by trunkSideAgreement.test.ts) ───────────────────
+ * Matches the project's other bidirectional metrics (positive → the side the
+ * counter labels "left"); cross-checked in the test against
+ * `computeShoulderSymmetry` for a realistic bend (a rep's side is the OPPOSITE
+ * of the elevated shoulder). No negation. `_side` is ignored (bidirectional
+ * metric; the parameter exists for signature compatibility with
+ * `computeMetricByName`). NB: the absolute left/right labeling rides on the
+ * front-camera mirroring conventions used across this file — verify live and
+ * flip the sign here if a bend tags the opposite side.
+ *
+ * Returns null if either ear or either hip is below MIN_VIS, or if either ear
+ * is outside the visible frame.
  */
 export function computeTrunkLateralFlexionSigned(
-  _landmarks: LM[],
-  _tiltRef: TiltReference,
+  landmarks: LM[],
+  tiltRef: TiltReference,
   _side: "left" | "right"
 ): number | null {
-  return null;
+  return computeTrunkLateralFlexionWithCameraTiltSigned(
+    landmarks,
+    tiltRef.cameraTiltDeg,
+  );
+}
+
+export function computeTrunkLateralFlexionUncorrectedSigned(
+  landmarks: LM[],
+): number | null {
+  const leftEar  = landmarks[7];
+  const rightEar = landmarks[8];
+  const leftHip  = landmarks[23];
+  const rightHip = landmarks[24];
+
+  if (!pairVisible(leftEar, rightEar)) return null;
+  if (!pairVisible(leftHip, rightHip)) return null;
+  if (!inFrame01(leftEar!) || !inFrame01(rightEar!)) return null;
+
+  const headMid: LM = {
+    x: (leftEar!.x + rightEar!.x) / 2,
+    y: (leftEar!.y + rightEar!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  // Angle of the hip→head line expressed as deviation from image vertical.
+  // The camera loop stores this at neutral and subtracts that stable baseline
+  // during ex_005 reps, avoiding per-frame hip-line cancellation.
+  const rawAngle = lineAngleDeg(hipMid, headMid);
+  return angleDiffDeg(rawAngle, -90);
+}
+
+export function computeTrunkLateralFlexionWithCameraTiltSigned(
+  landmarks: LM[],
+  cameraTiltDeg: number,
+): number | null {
+  const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(landmarks);
+  if (uncorrected === null) return null;
+  return angleDiffDeg(uncorrected, cameraTiltDeg);
+}
+
+export function computeTrunkLateralFlexionFromNeutralSigned(
+  landmarks: LM[],
+  neutralUncorrectedDeg: number,
+): number | null {
+  const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(landmarks);
+  if (uncorrected === null) return null;
+  return angleDiffDeg(uncorrected, neutralUncorrectedDeg);
 }
 
 /**
@@ -1147,19 +1263,31 @@ export function computeTrunkLateralFlexionSigned(
  * trunk-horizontal axis, measured in the transverse plane projection.
  * 0° = arm forward, 90° = arm out to side at shoulder height (T-pose).
  *
- * For the isometric hold, the camera loop checks whether this value stays
- * within the registry's targetBand (center 90°, tolerance 10°).
+ * ── WHY THIS DELEGATES TO computeShoulderAbduction ───────────────────────────
+ * With a single front-facing 2D webcam, anatomical "horizontal abduction"
+ * (transverse-plane swing) and frontal-plane abduction project to the same
+ * measurable quantity: the image-plane angle between the trunk-down vector and
+ * the upper-arm vector. For the T-pose hold the clinically relevant reading is
+ * "is the arm out at shoulder height (~90°)?", which the abduction math already
+ * answers (arm at side → 0°, arm out to side → 90° — the target band center).
  *
- * TODO: implement. For a frontal-camera setup, this ends up being
- * essentially the same calculation as shoulder abduction — they only
- * differ in clinical interpretation, not in the geometric measurement.
+ * The camera loop checks whether this value stays within the registry's
+ * `isometric.targetBand` (center 90°, tolerance 10°) to accumulate
+ * time-in-band; it never feeds a rep state machine.
+ *
+ * ── INHERITED CONTRACT ───────────────────────────────────────────────────────
+ * All of `computeShoulderAbduction`'s behavior carries over verbatim: per-side
+ * sign normalization, null during cross-body motion and on any landmark below
+ * MIN_VIS / outside the frame, and camera-roll invariance. Keeping one source
+ * of truth means the T-pose geometry can't drift from ex_001's abduction math.
+ * If ex_006 ever needs to diverge, break the delegation and implement inline.
  */
 export function computeShoulderHorizAbduction(
-  _landmarks: LM[],
-  _tiltRef: TiltReference,
-  _side: "left" | "right"
+  landmarks: LM[],
+  tiltRef: TiltReference,
+  side: "left" | "right"
 ): number | null {
-  return null;
+  return computeShoulderAbduction(landmarks, tiltRef, side);
 }
 
 /**
@@ -1545,7 +1673,18 @@ export function computePoseMetricsForExercise(
     }
   } else {
     const i = definition.isometric;
-    metrics[i.metric] = computeMetricByName(landmarks, tiltReference, i.metric, i.side);
+    if (definition.bilateral && definition.bilateralMode === "per-limb") {
+      // Bilateral isometric (ex_006 T-pose): the camera loop accumulates
+      // time-in-band PER SIDE, so both arms need their own value. Without this
+      // the metric would default to "left" only and the right arm's hold would
+      // never accrue. Left also goes into the main metrics map for the card.
+      const leftVal  = computeMetricByName(landmarks, tiltReference, i.metric, "left");
+      const rightVal = computeMetricByName(landmarks, tiltReference, i.metric, "right");
+      metrics[i.metric] = leftVal;
+      perSideMetrics = { left: leftVal, right: rightVal };
+    } else {
+      metrics[i.metric] = computeMetricByName(landmarks, tiltReference, i.metric, i.side);
+    }
   }
 
   // ── Compensation metrics ────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
+import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 
 interface PatientExercise {
   exercise_id: string;
@@ -10,6 +11,7 @@ interface PatientExercise {
   status: string;
   sets: number;
   reps: number;
+  hold_seconds: number;
 }
 
 interface PatientData {
@@ -133,7 +135,12 @@ export default function ManagePatientsPage() {
                             key={ex.exercise_id}
                             className={`text-xs px-2 py-1 rounded-full font-medium ${statusColor(ex.status)}`}
                           >
-                            {ex.name} — {ex.sets}×{ex.reps}
+                            {ex.name} — {ex.sets}×
+                            {prescriptionTargetText({
+                              exerciseId: ex.exercise_id,
+                              reps: ex.reps,
+                              holdSeconds: ex.hold_seconds,
+                            })}
                           </span>
                         ))}
                       </div>

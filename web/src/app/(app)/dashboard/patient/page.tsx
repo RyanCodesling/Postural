@@ -4,6 +4,11 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import {
+  prescriptionMetricLabel,
+  prescriptionMetricValue,
+  prescriptionTargetText,
+} from "@/lib/exercises/prescriptionDisplay";
 
 interface PatientProfile {
   id: string;
@@ -31,6 +36,7 @@ interface AssignedExercise {
   sets: number;
   reps: number;
   rest_seconds: number;
+  hold_seconds: number;
   assigned_date: string;
 }
 
@@ -288,8 +294,16 @@ export default function PatientDashboardPage() {
                                   <p className="text-lg font-bold text-gray-900">{ex.sets}</p>
                                 </div>
                                 <div>
-                                  <p className="text-xs text-gray-500 mb-1">Reps</p>
-                                  <p className="text-lg font-bold text-gray-900">{ex.reps}</p>
+                                  <p className="text-xs text-gray-500 mb-1">
+                                    {prescriptionMetricLabel(ex.exercise_id)}
+                                  </p>
+                                  <p className="text-lg font-bold text-gray-900">
+                                    {prescriptionMetricValue({
+                                      exerciseId: ex.exercise_id,
+                                      reps: ex.reps,
+                                      holdSeconds: ex.hold_seconds,
+                                    })}
+                                  </p>
                                 </div>
                                 <div>
                                   <p className="text-xs text-gray-500 mb-1">Rest</p>
@@ -385,7 +399,12 @@ export default function PatientDashboardPage() {
                           <div>
                             <p className="text-sm font-semibold text-green-700">{ex.name}</p>
                             <p className="text-xs text-gray-500 mt-0.5">
-                              {ex.sets} sets × {ex.reps} reps
+                              {ex.sets} sets ×{" "}
+                              {prescriptionTargetText({
+                                exerciseId: ex.exercise_id,
+                                reps: ex.reps,
+                                holdSeconds: ex.hold_seconds,
+                              })}
                             </p>
                           </div>
                           <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${

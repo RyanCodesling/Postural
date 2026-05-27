@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 
 interface Patient {
   id: string;
@@ -25,6 +26,7 @@ interface PatientExercise {
   sets: number;
   reps: number;
   rest_seconds: number;
+  hold_seconds: number;
   assigned_date: string;
 }
 
@@ -193,7 +195,12 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
                 <div>
                   <h3 className="font-semibold text-green-700">{ex.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
+                    {ex.sets} sets ×{" "}
+                    {prescriptionTargetText({
+                      exerciseId: ex.exercise_id,
+                      reps: ex.reps,
+                      holdSeconds: ex.hold_seconds,
+                    })} · {ex.rest_seconds}s rest
                   </p>
                   <span className={`inline-block mt-2 px-3 py-1 text-xs rounded-full font-medium ${
                     ex.status === "in_progress"
@@ -228,7 +235,12 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    {ex.sets} sets × {ex.reps} reps · {ex.rest_seconds}s rest
+                    {ex.sets} sets ×{" "}
+                    {prescriptionTargetText({
+                      exerciseId: ex.exercise_id,
+                      reps: ex.reps,
+                      holdSeconds: ex.hold_seconds,
+                    })} · {ex.rest_seconds}s rest
                   </p>
                 </div>
                 <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">

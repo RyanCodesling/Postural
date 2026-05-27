@@ -200,6 +200,16 @@ export type CompensationMetricSpec = {
   name: MetricName;
   warningThreshold: number;
   compareDirection?: "above" | "below";
+  /**
+   * When true, the camera loop captures a per-side resting baseline at the
+   * start of the exercise and feeds `(baseline − raw)` as the metric value
+   * instead of the raw absolute reading. Required for `scapularElevation`,
+   * whose raw value is a positive absolute projection that is always above
+   * the warningThreshold at rest (~0.18–0.22 trunk lengths >> 0.04 threshold).
+   * After baseline capture the value is near zero at rest and increases only
+   * when the patient actually shrugs.
+   */
+  requiresBaselineCapture?: boolean;
 };
 
 /**
@@ -244,6 +254,17 @@ export type ExerciseDefinition =
        * to the middle-upper zone so the patient can back up.
        */
       requiresOverheadRoom?: boolean;
+      /**
+       * When true, the exercise involves lateral motion that swings the head
+       * sideways (and somewhat down) out of the default head-centering gate —
+       * e.g. standing side bends. The capture-readiness framing rule switches to
+       * "lateral" mode (wider head x-tolerance, lower head-y cap) so metrics
+       * don't pause mid-rep, while the shoulders/hips/knees the metric needs stay
+       * in frame. See `captureReadiness.ts` headXTol/headYBounds. Defaults false.
+       * Mutually exclusive with `requiresOverheadRoom` in practice (overhead wins
+       * if both were ever set — see the CameraClient framing-mode derivation).
+       */
+      requiresLateralRoom?: boolean;
       primaryMetric: PrimaryMetricSpec;
       compensationMetrics: CompensationMetricSpec[];
     }
@@ -255,6 +276,8 @@ export type ExerciseDefinition =
       bilateralMode?: BilateralMode;
       /** See dynamic variant — same flag, same semantics. */
       requiresOverheadRoom?: boolean;
+      /** See dynamic variant — same flag, same semantics. */
+      requiresLateralRoom?: boolean;
       isometric: IsometricSpec;
       compensationMetrics: CompensationMetricSpec[];
     };
@@ -313,7 +336,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // compensation — patients hike the trapezius to substitute for
       // weak deltoid. Surfaced as a warning when shrug exceeds the
       // shrug exercise's own start threshold.
-      { name: "scapularElevation", warningThreshold: 0.04 },
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
     ],
   },
 
@@ -514,16 +537,38 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     kind: "dynamic",
     bilateral: true,
     bilateralMode: "bidirectional-alternating",
+    // Lateral motion — a side bend swings the head sideways (and down) well past
+    // the default head-centering gate, which would pause metrics mid-rep. The
+    // "lateral" framing mode widens the head x-tolerance and lowers the head-y
+    // cap; the shoulders/hips/knees the metric needs stay in frame. (Added
+    // 2026-05-24 after live testing — see captureReadiness.ts headXTol/headYBounds.)
+    requiresLateralRoom: true,
     primaryMetric: {
+      // trunkLateralFlexion = HEAD lateral lean: the angle of the hip-midpoint →
+      // ear-midpoint line from vertical (camera-roll corrected). Re-based twice
+      // after live testing (2026-05-25): the trunk-midpoint lean fired on a pure
+      // sideways shift, and the shoulder-vs-hip tilt fired on a shoulder-girdle
+      // tilt with no real bend. The head only swings laterally when the trunk
+      // truly leans. Thresholds below are degrees of head lean — STARTING values
+      // carried over; they NEED a live re-tuning pass on this signal (the head's
+      // long lever arm above the hips shifts the scale vs the earlier metrics).
       name: "trunkLateralFlexion",
+      // Live testing showed per-frame hip-line camera correction can move with
+      // the side bend and cancel the head-lean signal. The camera loop captures
+      // a neutral hip-to-head baseline and counts side-bend delta from that
+      // stable neutral reference.
+      requiresBaselineCapture: true,
       thresholds: {
-        // Above the 2° dead-band used by trunkLean.
+        // Small neutral band: the head sits ~above the hips at rest, so a few
+        // degrees of lean is noise.
         startThreshold: 5,
         repCompleteThreshold: 2,
-        // 15° is a meaningful side bend; below this counts as partial.
+        // 15° of head lean is a meaningful side bend; below this counts as
+        // partial. STARTING value — re-tune live.
         minimumPeakThreshold: 15,
-        // Healthy adult lumbar lateral flexion ROM is 20–30°. Target the
-        // conservative end for home prescription. Source: AAOS norms.
+        // Healthy adult lumbar lateral flexion ROM is 20–30°; the head's lean
+        // angle at full bend lands in a similar range. Target the conservative
+        // end for home prescription. STARTING value — re-tune live.
         targetROM: 25,
       },
     },
@@ -534,7 +579,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       { name: "neckTilt", warningThreshold: 5 },
       // Shoulder shrug during side bend = bracing through the shoulder
       // girdle instead of moving from the spine.
-      { name: "scapularElevation", warningThreshold: 0.04 },
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
     ],
   },
 
@@ -566,7 +611,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Shoulder shrug while holding T-pose = trapezius substituting for
       // deltoid endurance. Common after the first 15–20 seconds of hold.
-      { name: "scapularElevation", warningThreshold: 0.04 },
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
       // Trunk lean during T-pose hold = unbalanced load between arms.
       { name: "trunkLean", warningThreshold: 5 },
     ],

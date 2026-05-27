@@ -3,6 +3,117 @@
 ## 📌 New sprint update here (●'◡'●) | *author_name*
 -
 
+---
+
+## 📌 Update-5-28-26 | *RyanCodesling*
+
+- Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
+- Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
+- Added compensation warning boxes on the camera canvas — warning metrics now draw red bounding boxes around the affected joint area with readable text badges such as "Trunk lean", "Shoulder elevated", and directional neck-tilt labels
+- Added scapular-elevation baseline capture for compensation warnings on `ex_001`, `ex_005`, and `ex_006`; raw shoulder-to-ear distance is suppressed until baseline is ready, then converted to a baseline-relative shrug delta
+- Fixed baseline routing so compensation-only calibration cannot alter primary rep-counting inputs; `ex_001` arm-raise reps remain normal shoulder-abduction angles while the separate shoulder-shrug compensation baseline runs
+- `ex_005` Standing Side Bends now uses a neutral hip-to-head baseline for its primary metric instead of per-frame hip-line correction, preserving real side-bend signal that was previously cancelled by moving hip tilt
+- `ex_005` capture readiness now uses lateral framing mode: wider head x-tolerance, lower accepted head-y range, matching wider overlay target box, and no wrist/hand gate for side bends
+- `ex_006` Arm Abduction at 90° now runs as a true isometric time-in-target-band exercise in the camera loop; it accumulates paired hold time only while both arms are inside the 90° ± 10° band and does not run a rep counter
+- Added per-side hold-duration prescription support (`holdSeconds` / `hold_seconds`) for isometric exercises, defaulting to 30 seconds when older data does not provide a value
+- Patient and therapist read-only views now display `ex_006` as timed holds instead of misleading `1 reps` text
+- Therapist assignment and program flows now show a Hold (sec) field for isometric exercises, carry hold durations through previews, existing-assignment edit/cancel logic, program templates, and assignment payloads
+- Added `web/src/lib/exercises/prescriptionDisplay.ts` to centralize isometric-aware display text such as `30s hold`, `Hold`, and `30s`
+- Added `program_exercises.hold_seconds` and `patient_exercises.hold_seconds` SQL migration-safe columns, plus DB read/write plumbing for program and patient prescriptions
+- Added `/debug/pose-simulator` for local threshold visualization of `ex_005` side-bend counting and `ex_006` T-pose hold-band behavior
+- Added `trunkSideAgreement.test.ts` to pin `ex_005` side-tag direction, shoulder-tilt rejection, off-frame ear handling, and neutral-baseline preservation
+- Updated pose metric plumbing so bilateral isometric exercises compute per-side values, `shoulderHorizAbd` delegates to shoulder-abduction geometry, and `computePoseMetricsForExercise()` exposes per-side isometric metrics for the camera loop
+- Corrected shoulder-symmetry side documentation and preserved the existing front-camera left/right conventions used by the metric code
+- Added `dumpEx005Debug()` / `enableEx005Debug()` browser-console diagnostics for live side-bend traces, including raw signed angle, smoothed angle, neutral baseline, old per-frame-corrected comparison, capture status, and rep emissions
+- Validation completed from `web/`: full pose test suite passed (104 tests, 0 failed), `npx tsc --noEmit --pretty false` passed, and `git diff --check` passed with line-ending warnings only
+
+### *scripts\patient_exercises_pg.sql*
+- Added `hold_seconds INT NOT NULL DEFAULT 30` to `patient_exercises`
+- Added safe `ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30`
+- Documented that `hold_seconds` is used for isometric targets and ignored by dynamic rep-counted exercises
+
+### *scripts\exercise_programs_pg.sql*
+- Added `hold_seconds INT NOT NULL DEFAULT 30` to `program_exercises`
+- Added safe `ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30`
+
+### *web\src\lib\db.ts*
+- Added `DEFAULT_HOLD_SECONDS = 30`
+- Added `normalizeHoldSeconds()` with a minimum valid hold of 1 second
+- `assignExercisesToPatient()` now inserts and updates `hold_seconds`
+- `getPatientExercises()` now returns `hold_seconds`
+- Program read/write helpers now include `holdSeconds` in JSON output and `program_exercises` inserts
+
+### *web\src\app\api\patient-exercises\route.ts*
+- POST payload accepts `holdSeconds`
+- Invalid/missing hold values fall back to `DEFAULT_HOLD_SECONDS`
+- Assignment requests pass `holdSeconds` through to `assignExercisesToPatient()`
+
+### *web\src\lib\exercises\registry.ts*
+- Added `CompensationMetricSpec.requiresBaselineCapture`
+- Added `requiresLateralRoom` support for exercise definitions
+- Marked `ex_005` as requiring lateral room and neutral baseline capture
+- Marked `scapularElevation` compensation as baseline-required on `ex_001`, `ex_005`, and `ex_006`
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Added `FramingMode = "lateral"`
+- Lateral mode accepts wider head motion (`x` tolerance around 84% of frame width) and lower head positions during side bends
+- Lateral overlay target now matches the widened gate
+- Wrist visibility gate is skipped for lateral mode because `ex_005` does not use wrists for primary or compensation metrics
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added head-based `computeTrunkLateralFlexionSigned()` implementation for `ex_005`
+- Added `computeTrunkLateralFlexionUncorrectedSigned()`, `computeTrunkLateralFlexionWithCameraTiltSigned()`, and `computeTrunkLateralFlexionFromNeutralSigned()`
+- Added per-side isometric metric output for bilateral isometric exercises
+- Implemented `computeShoulderHorizAbduction()` by delegating to `computeShoulderAbduction()`
+- Refactored trunk-lean signed-angle math into a reusable helper
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added countdown session state and countdown overlay
+- Added `holdSeconds` prescription handling and paired hold accumulation for `ex_006`
+- Added baseline progress state and baseline countdown overlay
+- Added `ex_005` neutral-baseline capture and debug dump support
+- Added scapular-elevation compensation baseline capture and fixed baseline gating so primary rep metrics are not transformed unless the primary metric explicitly requires it
+- Added compensation overlay rendering with metric direction support for neck tilt
+- Rep counting and isometric hold accumulation now wait until required baseline capture completes
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- New helper for compensation warning overlays
+- Draws red rounded boxes around relevant MediaPipe landmark groups
+- Draws mirrored-safe text badges so labels read correctly in selfie view
+- Supports `compareDirection: "above" | "below"` and optional directional label suffixes
+
+### *web\src\lib\exercises\prescriptionDisplay.ts*
+- New helper for isometric-aware prescription display
+- Provides `isIsometricExercise()`, `getDisplayHoldSeconds()`, `prescriptionTargetText()`, `prescriptionMetricLabel()`, and `prescriptionMetricValue()`
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Assigned exercise types now include `hold_seconds`
+- Session schedule and profile assigned-exercise cards show isometric targets as holds instead of reps
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
+- Patient exercise summaries now include `hold_seconds`
+- Assigned-exercise chips render isometric prescriptions as timed holds
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Patient detail assigned/completed exercise cards now render isometric prescriptions as timed holds
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Assignment state, previews, existing assignments, edit/cancel handling, and API payloads now include `holdSeconds`
+- Isometric rows show `Hold (sec)` instead of required reps
+- Preview/delete modals show Hold for isometric exercises and Reps for dynamic exercises
+- Program-based assignment carries `holdSeconds` from selected programs into patient assignment parameters
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Program exercise parameters now support `holdSeconds`
+- Isometric program rows show `Hold (sec)` instead of Reps
+- Program cards summarize isometric exercises as timed holds and persist hold duration through edit/save
+
+### *web\src\app\(app)\debug\pose-simulator\page.tsx*
+- New debug route for visualizing `ex_005` side-bend thresholds, signed side tags, shoulder-cheat rejection, and `ex_006` bilateral T-pose hold-band behavior
+
+### *web\src\lib\pose\trunkSideAgreement.test.ts*
+- New regression test covering `ex_005` side direction, shoulder-tilt rejection, off-frame ear nulling, and fixed-neutral baseline preservation
+
 --- 
 
 ## 📌 Update-5-24-26 | *Enah*

@@ -12,9 +12,14 @@ import {
 
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
+import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
+  computeLateralNeckTilt,
+  computeScapularElevation,
+  computeTrunkLateralFlexionFromNeutralSigned,
+  computeTrunkLateralFlexionUncorrectedSigned,
   type ExerciseFrameMetrics,
 } from "@/lib/pose/poseMetrics";
 import {
@@ -54,6 +59,12 @@ interface Exercise {
    * catalog. Drives the hard-block rest countdown between sets.
    */
   restSeconds: number;
+  /**
+   * Per-side target hold duration, in seconds, for isometric exercises (e.g.
+   * ex_006 T-pose). From `patient_exercises.hold_seconds`; falls back to the
+   * default for the staff debug catalog. Dynamic exercises ignore it.
+   */
+  holdSeconds: number;
 }
 
 /**
@@ -72,7 +83,7 @@ interface Exercise {
 // "resting" = hard-block rest between sets: rep counting is suspended and a
 // countdown is shown. Auto-entered after a completed set when sets remain and
 // restSeconds > 0; auto-resumes to "active" when the countdown elapses.
-type SessionState = "idle" | "active" | "resting" | "ended";
+type SessionState = "idle" | "countdown" | "active" | "resting" | "ended";
 
 /**
  * P4-friendly in-memory record of a completed set, shape-aligned with the
@@ -91,11 +102,25 @@ type CompletedSetRecord = {
   durationMs: number;
   terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
   asymmetryIndex: number;
+  /**
+   * Isometric-only (ex_006): milliseconds the patient held a valid T-pose (BOTH
+   * arms in the target band simultaneously) for this set, plus the target.
+   * Absent for dynamic (rep-counted) sets, where reps/pairedReps carry the
+   * equivalent information.
+   */
+  pairedHoldMs?: number;
+  targetHoldMs?: number;
 };
 
-type Prescription = { sets: number; reps: number; restSeconds: number };
+type Prescription = { sets: number; reps: number; restSeconds: number; holdSeconds: number };
 
-const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60 };
+const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60, holdSeconds: 30 };
+
+// Max dt (ms) credited to an isometric hold in a single accumulation frame.
+// Caps the time added after a brief not-ready flicker so a gap can't dump a
+// large chunk into the accumulator; normal frames (~33–50 ms at 20–30 fps) are
+// well under it.
+const MAX_ISO_TICK_MS = 250;
 
 type RepCounterSet = {
   left: RepCounter | null;
@@ -176,15 +201,94 @@ type NeckRepDebugDump = {
   records: NeckRepDebugRecord[];
 };
 
+type Ex005DebugLandmark = {
+  x: number | null;
+  y: number | null;
+  visibility: number | null;
+  inFrame: boolean;
+};
+
+type Ex005DebugPoint = {
+  x: number | null;
+  y: number | null;
+};
+
+type Ex005DebugRecord = {
+  seq: number;
+  kind: "frame" | "not-ready" | "rep";
+  tMs: number;
+  elapsedMs: number;
+  exerciseId: "ex_005";
+  sessionState: SessionState;
+  capture: {
+    ok: boolean;
+    message: string | null;
+    framingMode: FramingMode;
+  };
+  metric: {
+    rawSignedDeg: number | null;
+    smoothedSignedDeg: number | null;
+    uncorrectedHeadLeanDeg: number | null;
+    neutralBaselineDeg: number | null;
+    perFrameCorrectedSignedDeg: number | null;
+    absDeg: number | null;
+    screenDirection: "image-left" | "image-right" | "center" | "unknown";
+    counterSide: BidirectionalSide | "neutral" | "unknown";
+    signConvention: "positive signed angle -> counter left";
+  };
+  tilt: {
+    cameraTiltDeg: number | null;
+    confidence: "high" | "low" | "insufficient" | null;
+    divergenceDeg: number | null;
+    hipLineDeg: number | null;
+    earLineDeg: number | null;
+  };
+  landmarks: {
+    leftEar: Ex005DebugLandmark;
+    rightEar: Ex005DebugLandmark;
+    leftHip: Ex005DebugLandmark;
+    rightHip: Ex005DebugLandmark;
+    earMid: Ex005DebugPoint;
+    hipMid: Ex005DebugPoint;
+    headOffsetX: number | null;
+  };
+  counter: {
+    before: BidirectionalRepCounterDebugSnapshot | null;
+    after: BidirectionalRepCounterDebugSnapshot | null;
+  };
+  emitted: {
+    side: BidirectionalSide;
+    index: number;
+    peakValue: number;
+    classification: RepEvent["classification"];
+  } | null;
+  counts: { left: number; right: number };
+};
+
+type Ex005DebugDump = {
+  generatedAt: string;
+  enabled: boolean;
+  recordCount: number;
+  records: Ex005DebugRecord[];
+};
+
 declare global {
   interface Window {
     __neckRepDebug?: NeckRepDebugRecord[];
     dumpNeckRepDebug?: (limit?: number) => string;
     clearNeckRepDebug?: () => void;
+    __ex005Debug?: Ex005DebugRecord[];
+    enableEx005Debug?: () => void;
+    disableEx005Debug?: () => void;
+    clearEx005Debug?: () => void;
+    dumpEx005Debug?: (limit?: number) => string;
   }
 }
 
 const MAX_NECK_REP_DEBUG_RECORDS = 3000;
+const MAX_EX005_DEBUG_RECORDS = 2000;
+const EX005_DEBUG_THROTTLE_MS = 250;
+const BASELINE_SAMPLE_COUNT = 90; // ~3 s at 30 fps
 const CAPTURE_READINESS_RESET_GRACE_MS = 300;
 
 export default function CameraClient() {
@@ -211,13 +315,20 @@ export default function CameraClient() {
   // capture dropout, same lifecycle as metricFiltersRef.
   const leftPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const rightPrimaryFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
-  // Per-side resting baseline for metrics whose raw value is a positive
-  // absolute distance (currently only scapularElevation for ex_003). Only
-  // active when the primary metric has requiresBaselineCapture set. Reset
-  // on exercise change and capture-readiness dropout.
+  // Resting baselines for metrics that need a neutral reference before their
+  // rep signal is meaningful. ex_003 uses the per-side refs; ex_005 uses the
+  // bidirectional ref for neutral hip-to-head lean. The scap refs hold the
+  // per-side resting baseline for scapularElevation when used as a
+  // compensation metric. Reset on exercise change and capture-readiness dropout.
   type BaselineState = { samples: number[]; value: number | null };
   const leftBaselineRef = useRef<BaselineState>({ samples: [], value: null });
   const rightBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  const bidirectionalBaselineRef = useRef<BaselineState>({
+    samples: [],
+    value: null,
+  });
+  const leftScapBaselineRef  = useRef<BaselineState>({ samples: [], value: null });
+  const rightScapBaselineRef = useRef<BaselineState>({ samples: [], value: null });
   const lastMetricsUpdateRef = useRef(0);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
@@ -239,6 +350,13 @@ export default function CameraClient() {
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
+  const ex005DebugRef = useRef<Ex005DebugRecord[]>([]);
+  const ex005DebugStartMsRef = useRef<number | null>(null);
+  const ex005DebugSeqRef = useRef(0);
+  const ex005DebugEnabledRef = useRef(false);
+  // TEMPORARY (2026-05-26): throttle anchor for the ex_005 head-lean console
+  // diagnostic below. Remove once ex_005 thresholds/framing are tuned.
+  const lastEx005DebugMsRef = useRef(0);
   
   // In-memory per-rep event log, keyed by side. Cleared when the exercise
   // changes. This is the buffer that will eventually feed Postgres in a later
@@ -248,6 +366,26 @@ export default function CameraClient() {
     left: [],
     right: [],
   });
+
+  // ── Isometric (ex_006 T-pose) time-in-band accumulation ──────────────────
+  // ex_006 is a held T-pose: time accrues only while BOTH arms are in the target
+  // band simultaneously (a real T-pose), so we track ONE paired accumulator
+  // rather than per-side. `left/rightInBandRef` carry the current per-arm in-band
+  // status for the live panel. Reset on set completion, exercise change, session
+  // start, and sustained capture dropout. `holdState` mirrors these for the UI
+  // at the throttled metrics cadence.
+  const pairedHoldMsRef = useRef(0);
+  const leftInBandRef = useRef(false);
+  const rightInBandRef = useRef(false);
+  // Timestamp of the previous accumulation tick, or null to (re)start the dt
+  // clock fresh (after a gate close / dropout) so an elapsed gap is not dumped
+  // into the accumulator on resume.
+  const lastIsometricTickMsRef = useRef<number | null>(null);
+  const [holdState, setHoldState] = useState<{
+    pairedSec: number;
+    leftInBand: boolean;
+    rightInBand: boolean;
+  }>({ pairedSec: 0, leftInBand: false, rightInBand: false });
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -269,6 +407,10 @@ export default function CameraClient() {
   type BaselinePhase = "not-needed" | "capturing" | "captured";
   const baselinePhaseRef = useRef<BaselinePhase>("not-needed");
   const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
+  const [baselineProgress, setBaselineProgress] = useState({
+    samples: 0,
+    required: BASELINE_SAMPLE_COUNT,
+  });
   const setBaselinePhase = useCallback((phase: BaselinePhase) => {
     baselinePhaseRef.current = phase;
     setBaselinePhaseState(phase);
@@ -362,6 +504,7 @@ export default function CameraClient() {
    */
   const sessionStartMsRef = useRef<number | null>(null);
   const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
+  const [countdownSec, setCountdownSec] = useState(3);
 
   /**
    * Completed sets count for the current session. State + ref pair so
@@ -484,6 +627,38 @@ export default function CameraClient() {
   }, [sessionState]);
 
   /**
+   * 3-2-1 start countdown. Fires when the Start button transitions the session
+   * to "countdown". Counts from 3 to 1 at 1-second intervals, then stamps the
+   * session start timestamps and transitions to "active". The guard on
+   * `sessionStateRef` ensures that if End is clicked mid-countdown the interval
+   * does not then overwrite the "ended" state with "active".
+   *
+   * Baseline capture (for exercises that need it) runs in parallel during the
+   * countdown — both are reset together in `handleSessionStart`, so they race
+   * and typically finish around the same time.
+   */
+  useEffect(() => {
+    if (sessionState !== "countdown") return;
+    setCountdownSec(3);
+    let remaining = 3;
+    const interval = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        // Guard: End button may have fired during the interval
+        if (sessionStateRef.current !== "countdown") return;
+        const now = performance.now();
+        sessionStartMsRef.current = now;
+        currentSetStartMsRef.current = now;
+        setSessionState("active");
+      } else {
+        setCountdownSec(remaining);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sessionState]);
+
+  /**
    * Asymmetry index for the future `sets` table shape. `|left − right| / max(left, right)`,
    * clamped to 0 when there are no reps. Pure number; no side effects.
    */
@@ -538,36 +713,76 @@ export default function CameraClient() {
    */
   const checkAndHandleSetCompletion = (tNow: number) => {
     const def = activeDefinitionRef.current;
-    if (!def || def.kind !== "dynamic") return;
-    const target = prescriptionRef.current.reps;
-    const left = repCountsRef.current.left;
-    const right = repCountsRef.current.right;
-    const setComplete = def.bilateral
-      ? Math.min(left, right) >= target
-      : left >= target;
-    if (!setComplete) return;
+    if (!def) return;
 
-    const setRecord: CompletedSetRecord = {
-      setIndex: completedSetsRef.current + 1,
-      targetReps: target,
-      leftReps: left,
-      rightReps: right,
-      pairedReps: Math.min(left, right),
-      durationMs:
-        currentSetStartMsRef.current !== null
-          ? tNow - currentSetStartMsRef.current
-          : 0,
-      terminatedBy: "min_reached",
-      asymmetryIndex: computeAsymmetryIndex(left, right),
-    };
+    // "Set complete?" is kind-specific: dynamic counts reps, isometric counts
+    // milliseconds held in the target band. Both use Model C for bilateral —
+    // the slower side gates completion.
+    let setComplete: boolean;
+    let setRecord: CompletedSetRecord;
+    if (def.kind === "dynamic") {
+      const target = prescriptionRef.current.reps;
+      const left = repCountsRef.current.left;
+      const right = repCountsRef.current.right;
+      setComplete = def.bilateral
+        ? Math.min(left, right) >= target
+        : left >= target;
+      if (!setComplete) return;
+      setRecord = {
+        setIndex: completedSetsRef.current + 1,
+        targetReps: target,
+        leftReps: left,
+        rightReps: right,
+        pairedReps: Math.min(left, right),
+        durationMs:
+          currentSetStartMsRef.current !== null
+            ? tNow - currentSetStartMsRef.current
+            : 0,
+        terminatedBy: "min_reached",
+        asymmetryIndex: computeAsymmetryIndex(left, right),
+      };
+    } else {
+      // Isometric: a set completes when the patient has held a valid T-pose
+      // (BOTH arms in the band simultaneously) for the prescribed duration. The
+      // paired accumulator only advanced on both-in-band frames, so this is a
+      // single threshold — no per-side min() needed.
+      const targetMs = prescriptionRef.current.holdSeconds * 1000;
+      const pairedMs = pairedHoldMsRef.current;
+      setComplete = pairedMs >= targetMs;
+      if (!setComplete) return;
+      setRecord = {
+        setIndex: completedSetsRef.current + 1,
+        targetReps: 0,
+        leftReps: 0,
+        rightReps: 0,
+        pairedReps: 0,
+        durationMs:
+          currentSetStartMsRef.current !== null
+            ? tNow - currentSetStartMsRef.current
+            : 0,
+        terminatedBy: "min_reached",
+        asymmetryIndex: 0,
+        pairedHoldMs: pairedMs,
+        targetHoldMs: targetMs,
+      };
+    }
     completedSetsLogRef.current.push(setRecord);
 
     setCompletedSets(completedSetsRef.current + 1);
-    repCountsRef.current = { left: 0, right: 0 };
-    setRepCounts({ left: 0, right: 0 });
-    leftRepCounterRef.current?.reset();
-    rightRepCounterRef.current?.reset();
-    bidirectionalRepCounterRef.current?.reset();
+    // Reset the per-set progress trackers for the next set, per kind.
+    if (def.kind === "dynamic") {
+      repCountsRef.current = { left: 0, right: 0 };
+      setRepCounts({ left: 0, right: 0 });
+      leftRepCounterRef.current?.reset();
+      rightRepCounterRef.current?.reset();
+      bidirectionalRepCounterRef.current?.reset();
+    } else {
+      pairedHoldMsRef.current = 0;
+      leftInBandRef.current = false;
+      rightInBandRef.current = false;
+      lastIsometricTickMsRef.current = null;
+      setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+    }
     currentSetStartMsRef.current = tNow;
     setConfirmingEnd(false);
 
@@ -606,10 +821,7 @@ export default function CameraClient() {
    */
   const handleSessionStart = () => {
     if (!activeDefinition) return;
-    const now = performance.now();
     const counters = createRepCountersForDefinition(activeDefinition);
-    sessionStartMsRef.current = now;
-    currentSetStartMsRef.current = now;
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
@@ -625,10 +837,28 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
+    if (
+      (activeDefinition.kind === "dynamic" &&
+        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
+      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
+    ) {
+      leftBaselineRef.current  = { samples: [], value: null };
+      rightBaselineRef.current = { samples: [], value: null };
+      bidirectionalBaselineRef.current = { samples: [], value: null };
+      leftScapBaselineRef.current  = { samples: [], value: null };
+      rightScapBaselineRef.current = { samples: [], value: null };
+      setBaselinePhase("capturing");
+      setBaselineSampleProgress(0);
+    }
+    pairedHoldMsRef.current = 0;
+    leftInBandRef.current = false;
+    rightInBandRef.current = false;
+    lastIsometricTickMsRef.current = null;
+    setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
-    setSessionState("active");
+    setSessionState("countdown");
   };
 
   /**
@@ -640,7 +870,8 @@ export default function CameraClient() {
   const handleSessionEnd = () => {
     if (
       sessionStateRef.current !== "active" &&
-      sessionStateRef.current !== "resting"
+      sessionStateRef.current !== "resting" &&
+      sessionStateRef.current !== "countdown"
     ) {
       // Idempotent: clicking End in idle/ended state has no effect.
       return;
@@ -650,23 +881,48 @@ export default function CameraClient() {
     // {0,0} during rest, so no partial set is logged below.)
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
-    const left = repCountsRef.current.left;
-    const right = repCountsRef.current.right;
-    if (left > 0 || right > 0) {
-      const setRecord: CompletedSetRecord = {
-        setIndex: completedSetsRef.current + 1,
-        targetReps: prescriptionRef.current.reps,
-        leftReps: left,
-        rightReps: right,
-        pairedReps: Math.min(left, right),
-        durationMs:
-          currentSetStartMsRef.current !== null
-            ? performance.now() - currentSetStartMsRef.current
-            : 0,
-        terminatedBy: "user",
-        asymmetryIndex: computeAsymmetryIndex(left, right),
-      };
-      completedSetsLogRef.current.push(setRecord);
+    const def = activeDefinitionRef.current;
+    if (def?.kind === "isometric") {
+      // Isometric partial: log the valid-T-pose (both-arms-in-band) hold time
+      // accumulated this set.
+      const pairedMs = pairedHoldMsRef.current;
+      if (pairedMs > 0) {
+        const setRecord: CompletedSetRecord = {
+          setIndex: completedSetsRef.current + 1,
+          targetReps: 0,
+          leftReps: 0,
+          rightReps: 0,
+          pairedReps: 0,
+          durationMs:
+            currentSetStartMsRef.current !== null
+              ? performance.now() - currentSetStartMsRef.current
+              : 0,
+          terminatedBy: "user",
+          asymmetryIndex: 0,
+          pairedHoldMs: pairedMs,
+          targetHoldMs: prescriptionRef.current.holdSeconds * 1000,
+        };
+        completedSetsLogRef.current.push(setRecord);
+      }
+    } else {
+      const left = repCountsRef.current.left;
+      const right = repCountsRef.current.right;
+      if (left > 0 || right > 0) {
+        const setRecord: CompletedSetRecord = {
+          setIndex: completedSetsRef.current + 1,
+          targetReps: prescriptionRef.current.reps,
+          leftReps: left,
+          rightReps: right,
+          pairedReps: Math.min(left, right),
+          durationMs:
+            currentSetStartMsRef.current !== null
+              ? performance.now() - currentSetStartMsRef.current
+              : 0,
+          terminatedBy: "user",
+          asymmetryIndex: computeAsymmetryIndex(left, right),
+        };
+        completedSetsLogRef.current.push(setRecord);
+      }
     }
     setSessionState("ended");
   };
@@ -687,6 +943,44 @@ export default function CameraClient() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const setEx005DebugEnabled = (enabled: boolean) => {
+      ex005DebugEnabledRef.current = enabled;
+      window.localStorage.setItem("poseDebug.ex005", enabled ? "1" : "0");
+      console.info(`[ex005-debug] ${enabled ? "enabled" : "disabled"}`);
+    };
+    const clearEx005Debug = () => {
+      ex005DebugRef.current = [];
+      ex005DebugStartMsRef.current = null;
+      ex005DebugSeqRef.current = 0;
+      window.__ex005Debug = ex005DebugRef.current;
+      console.info("[ex005-debug] cleared");
+    };
+
+    ex005DebugEnabledRef.current =
+      window.localStorage.getItem("poseDebug.ex005") === "1";
+    window.__ex005Debug = ex005DebugRef.current;
+    window.enableEx005Debug = () => {
+      setEx005DebugEnabled(true);
+      clearEx005Debug();
+      console.info(
+        "[ex005-debug] do a few ex_005 reps, then run: copy(dumpEx005Debug())",
+      );
+    };
+    window.disableEx005Debug = () => setEx005DebugEnabled(false);
+    window.clearEx005Debug = clearEx005Debug;
+    window.dumpEx005Debug = (limit = 1200) => {
+      const records = ex005DebugRef.current.slice(-limit);
+      const dump: Ex005DebugDump = {
+        generatedAt: new Date().toISOString(),
+        enabled: ex005DebugEnabledRef.current,
+        recordCount: records.length,
+        records,
+      };
+      const text = JSON.stringify(dump, null, 2);
+      console.info(text);
+      return text;
+    };
 
     window.__neckRepDebug = neckRepDebugRef.current;
     window.clearNeckRepDebug = () => {
@@ -710,13 +1004,261 @@ export default function CameraClient() {
     console.info(
       "[neck-rep-debug] available: clearNeckRepDebug(); dumpNeckRepDebug(limit)",
     );
+    console.info(
+      "[ex005-debug] available: enableEx005Debug(); clearEx005Debug(); dumpEx005Debug(limit); disableEx005Debug()",
+    );
 
     return () => {
       delete window.__neckRepDebug;
       delete window.clearNeckRepDebug;
       delete window.dumpNeckRepDebug;
+      delete window.__ex005Debug;
+      delete window.enableEx005Debug;
+      delete window.disableEx005Debug;
+      delete window.clearEx005Debug;
+      delete window.dumpEx005Debug;
     };
   }, []);
+
+  function roundDebugNumber(
+    value: number | null | undefined,
+    digits = 3,
+  ): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const scale = 10 ** digits;
+    return Math.round(value * scale) / scale;
+  }
+
+  function landmarkDebug(
+    landmark: { x: number; y: number; visibility?: number } | undefined,
+  ): Ex005DebugLandmark {
+    if (!landmark) {
+      return { x: null, y: null, visibility: null, inFrame: false };
+    }
+    return {
+      x: roundDebugNumber(landmark.x),
+      y: roundDebugNumber(landmark.y),
+      visibility: roundDebugNumber(landmark.visibility ?? null, 2),
+      inFrame:
+        landmark.x >= 0 &&
+        landmark.x <= 1 &&
+        landmark.y >= 0 &&
+        landmark.y <= 1,
+    };
+  }
+
+  function midpointDebug(
+    a: { x: number; y: number } | undefined,
+    b: { x: number; y: number } | undefined,
+  ): Ex005DebugPoint {
+    if (!a || !b) return { x: null, y: null };
+    return {
+      x: roundDebugNumber((a.x + b.x) / 2),
+      y: roundDebugNumber((a.y + b.y) / 2),
+    };
+  }
+
+  function angleDiffDebug(a: number, b: number): number {
+    let d = a - b;
+    while (d > 180) d -= 360;
+    while (d <= -180) d += 360;
+    return d;
+  }
+
+  function lineAngleDebug(
+    a: { x: number; y: number } | undefined,
+    b: { x: number; y: number } | undefined,
+  ): number | null {
+    if (!a || !b) return null;
+    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+  }
+
+  function bodyPairAngleDebug(
+    subjectLeft: { x: number; y: number } | undefined,
+    subjectRight: { x: number; y: number } | undefined,
+  ): number | null {
+    return lineAngleDebug(subjectRight, subjectLeft);
+  }
+
+  function headLeanFromVerticalDebug(
+    hipMid: Ex005DebugPoint,
+    earMid: Ex005DebugPoint,
+  ): number | null {
+    if (
+      hipMid.x === null ||
+      hipMid.y === null ||
+      earMid.x === null ||
+      earMid.y === null
+    ) {
+      return null;
+    }
+    const rawLine = lineAngleDebug(
+      { x: hipMid.x, y: hipMid.y },
+      { x: earMid.x, y: earMid.y },
+    );
+    return rawLine === null ? null : angleDiffDebug(rawLine, -90);
+  }
+
+  function medianSample(xs: number[]): number {
+    const sorted = [...xs].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[mid - 1] + sorted[mid]) / 2
+      : sorted[mid];
+  }
+
+  function setBaselineSampleProgress(samples: number) {
+    const clamped = Math.max(0, Math.min(BASELINE_SAMPLE_COUNT, samples));
+    setBaselineProgress((prev) =>
+      prev.samples === clamped && prev.required === BASELINE_SAMPLE_COUNT
+        ? prev
+        : { samples: clamped, required: BASELINE_SAMPLE_COUNT },
+    );
+  }
+
+  function ex005CounterSide(
+    signedDeg: number | null | undefined,
+  ): BidirectionalSide | "neutral" | "unknown" {
+    if (typeof signedDeg !== "number") return "unknown";
+    if (Math.abs(signedDeg) < 2) return "neutral";
+    return signedDeg > 0 ? "left" : "right";
+  }
+
+  function ex005ScreenDirection(
+    headOffsetX: number | null,
+  ): "image-left" | "image-right" | "center" | "unknown" {
+    if (headOffsetX === null) return "unknown";
+    if (Math.abs(headOffsetX) < 0.015) return "center";
+    return headOffsetX > 0 ? "image-right" : "image-left";
+  }
+
+  function pushEx005DebugRecord({
+    kind,
+    tNow,
+    landmarks,
+    framingMode,
+    captureOk,
+    captureMessage,
+    rawSignedDeg,
+    smoothedSignedDeg,
+    perFrameCorrectedSignedDeg,
+    tiltReference,
+    before,
+    after,
+    emitted,
+  }: {
+    kind: Ex005DebugRecord["kind"];
+    tNow: number;
+    landmarks: Array<{ x: number; y: number; visibility?: number }>;
+    framingMode: FramingMode;
+    captureOk: boolean;
+    captureMessage: string | null;
+    rawSignedDeg: number | null;
+    smoothedSignedDeg: number | null;
+    perFrameCorrectedSignedDeg?: number | null;
+    tiltReference?: ExerciseFrameMetrics["tiltReference"] | null;
+    before?: BidirectionalRepCounterDebugSnapshot | null;
+    after?: BidirectionalRepCounterDebugSnapshot | null;
+    emitted?: Ex005DebugRecord["emitted"];
+  }) {
+    if (
+      !ex005DebugEnabledRef.current ||
+      activeDefinitionRef.current?.id !== "ex_005"
+    ) {
+      return;
+    }
+
+    if (ex005DebugStartMsRef.current === null) {
+      ex005DebugStartMsRef.current = tNow;
+    }
+
+    const leftEar = landmarks[7];
+    const rightEar = landmarks[8];
+    const leftHip = landmarks[23];
+    const rightHip = landmarks[24];
+    const earMid = midpointDebug(leftEar, rightEar);
+    const hipMid = midpointDebug(leftHip, rightHip);
+    const headOffsetX =
+      earMid.x !== null && hipMid.x !== null
+        ? roundDebugNumber(earMid.x - hipMid.x)
+        : null;
+    const uncorrectedHeadLeanDeg = headLeanFromVerticalDebug(hipMid, earMid);
+    const hipLineDeg = bodyPairAngleDebug(leftHip, rightHip);
+    const earLineDeg = bodyPairAngleDebug(leftEar, rightEar);
+    const visibleSigned =
+      typeof smoothedSignedDeg === "number" ? smoothedSignedDeg : rawSignedDeg;
+
+    const record: Ex005DebugRecord = {
+      seq: ++ex005DebugSeqRef.current,
+      kind,
+      tMs: Math.round(tNow),
+      elapsedMs: Math.round(tNow - ex005DebugStartMsRef.current),
+      exerciseId: "ex_005",
+      sessionState: sessionStateRef.current,
+      capture: {
+        ok: captureOk,
+        message: captureMessage,
+        framingMode,
+      },
+      metric: {
+        rawSignedDeg: roundDebugNumber(rawSignedDeg, 1),
+        smoothedSignedDeg: roundDebugNumber(smoothedSignedDeg, 1),
+        uncorrectedHeadLeanDeg: roundDebugNumber(uncorrectedHeadLeanDeg, 1),
+        neutralBaselineDeg: roundDebugNumber(
+          bidirectionalBaselineRef.current.value,
+          1,
+        ),
+        perFrameCorrectedSignedDeg: roundDebugNumber(
+          perFrameCorrectedSignedDeg,
+          1,
+        ),
+        absDeg:
+          typeof visibleSigned === "number"
+            ? roundDebugNumber(Math.abs(visibleSigned), 1)
+            : null,
+        screenDirection: ex005ScreenDirection(headOffsetX),
+        counterSide: ex005CounterSide(visibleSigned),
+        signConvention: "positive signed angle -> counter left",
+      },
+      tilt: {
+        cameraTiltDeg: roundDebugNumber(tiltReference?.cameraTiltDeg, 1),
+        confidence: tiltReference?.confidence ?? null,
+        divergenceDeg: roundDebugNumber(tiltReference?.divergenceDeg, 1),
+        hipLineDeg: roundDebugNumber(hipLineDeg, 1),
+        earLineDeg: roundDebugNumber(earLineDeg, 1),
+      },
+      landmarks: {
+        leftEar: landmarkDebug(leftEar),
+        rightEar: landmarkDebug(rightEar),
+        leftHip: landmarkDebug(leftHip),
+        rightHip: landmarkDebug(rightHip),
+        earMid,
+        hipMid,
+        headOffsetX,
+      },
+      counter: {
+        before: before ?? null,
+        after: after ?? null,
+      },
+      emitted: emitted ?? null,
+      counts: {
+        left: repCountsRef.current.left,
+        right: repCountsRef.current.right,
+      },
+    };
+
+    ex005DebugRef.current.push(record);
+    if (ex005DebugRef.current.length > MAX_EX005_DEBUG_RECORDS) {
+      ex005DebugRef.current.splice(
+        0,
+        ex005DebugRef.current.length - MAX_EX005_DEBUG_RECORDS,
+      );
+    }
+    if (typeof window !== "undefined") {
+      window.__ex005Debug = ex005DebugRef.current;
+    }
+    console.log(`[ex005-debug] ${JSON.stringify(record)}`);
+  }
   
   const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
     tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
@@ -813,20 +1355,31 @@ export default function CameraClient() {
     ? Math.min(repCounts.left, repCounts.right)
     : repCounts.left;
   const targetTotalReps = Math.max(1, prescription.sets * prescription.reps);
+  const clampPct = (x: number) => Math.max(0, Math.min(100, Math.round(x)));
   const progressPct =
     activeDefinition?.kind === "dynamic"
-      ? Math.max(
-          0,
-          Math.min(
+      ? clampPct(
+          ((completedSets * prescription.reps + currentSetMinReps) /
+            targetTotalReps) *
             100,
-            Math.round(
-              ((completedSets * prescription.reps + currentSetMinReps) /
-                targetTotalReps) *
-                100,
-            ),
-          ),
         )
-      : 0;
+      : activeDefinition?.kind === "isometric"
+        ? (() => {
+            // Hold analogue of the rep formula: each completed set contributes
+            // a full hold; the current set contributes the paired (both-arms-in-
+            // band) hold seconds, capped at the per-set target.
+            const cappedSec = Math.min(holdState.pairedSec, prescription.holdSeconds);
+            const targetTotalSec = Math.max(
+              1,
+              prescription.sets * prescription.holdSeconds,
+            );
+            return clampPct(
+              ((completedSets * prescription.holdSeconds + cappedSec) /
+                targetTotalSec) *
+                100,
+            );
+          })()
+        : 0;
 
   /**
    * TIME cell value: session elapsed time, formatted MM:SS. Driven by
@@ -894,6 +1447,7 @@ export default function CameraClient() {
               sets: DEFAULT_PRESCRIPTION.sets,
               reps: DEFAULT_PRESCRIPTION.reps,
               restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
+              holdSeconds: DEFAULT_PRESCRIPTION.holdSeconds,
           }));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
@@ -924,6 +1478,10 @@ export default function CameraClient() {
               typeof e.rest_seconds === "number"
                 ? e.rest_seconds
                 : DEFAULT_PRESCRIPTION.restSeconds,
+            holdSeconds:
+              typeof e.hold_seconds === "number"
+                ? e.hold_seconds
+                : DEFAULT_PRESCRIPTION.holdSeconds,
           }));
           setAssignedExercises(assigned);
           if (assigned.length > 0) {
@@ -943,6 +1501,7 @@ export default function CameraClient() {
           sets: assignedEntry.sets,
           reps: assignedEntry.reps,
           restSeconds: assignedEntry.restSeconds,
+          holdSeconds: assignedEntry.holdSeconds,
         }
       : DEFAULT_PRESCRIPTION;
     prescriptionRef.current = nextPrescription;
@@ -983,6 +1542,11 @@ export default function CameraClient() {
     completedSetsLogRef.current = [];
     repCountsRef.current = { left: 0, right: 0 };
     currentSetStartMsRef.current = null;
+    pairedHoldMsRef.current = 0;
+    leftInBandRef.current = false;
+    rightInBandRef.current = false;
+    lastIsometricTickMsRef.current = null;
+    setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
 
     // Reset filters whenever the exercise changes — old filter history would
     // bleed across exercises and produce a misleading first-frame jump.
@@ -1019,14 +1583,18 @@ export default function CameraClient() {
     setRepCounts({ left: 0, right: 0 });
 
     // Reset baseline state on every exercise change. If the new exercise
-    // needs a baseline, enter "capturing"; otherwise "not-needed".
-    leftBaselineRef.current = { samples: [], value: null };
+    // needs a baseline (primary metric or any compensation metric), enter
+    // "capturing"; otherwise "not-needed".
+    leftBaselineRef.current  = { samples: [], value: null };
     rightBaselineRef.current = { samples: [], value: null };
-    setBaselinePhase(
-      def?.kind === "dynamic" && def.primaryMetric.requiresBaselineCapture
-        ? "capturing"
-        : "not-needed",
-    );
+    bidirectionalBaselineRef.current = { samples: [], value: null };
+    leftScapBaselineRef.current  = { samples: [], value: null };
+    rightScapBaselineRef.current = { samples: [], value: null };
+    const needsBaseline =
+      (def?.kind === "dynamic" && !!def.primaryMetric.requiresBaselineCapture) ||
+      !!def?.compensationMetrics.some((c) => c.requiresBaselineCapture);
+    setBaselinePhase(needsBaseline ? "capturing" : "not-needed");
+    setBaselineSampleProgress(0);
 
     const counters = createRepCountersForDefinition(def);
     leftRepCounterRef.current = counters.left;
@@ -1042,12 +1610,17 @@ export default function CameraClient() {
       // require re-capture when readiness returns.
       if (
         !ok &&
-        currentDefinition?.kind === "dynamic" &&
-        currentDefinition.primaryMetric.requiresBaselineCapture
+        ((currentDefinition?.kind === "dynamic" &&
+          !!currentDefinition.primaryMetric.requiresBaselineCapture) ||
+          !!currentDefinition?.compensationMetrics.some((c) => c.requiresBaselineCapture))
       ) {
-        leftBaselineRef.current = { samples: [], value: null };
+        leftBaselineRef.current  = { samples: [], value: null };
         rightBaselineRef.current = { samples: [], value: null };
+        bidirectionalBaselineRef.current = { samples: [], value: null };
+        leftScapBaselineRef.current  = { samples: [], value: null };
+        rightScapBaselineRef.current = { samples: [], value: null };
         setBaselinePhase("capturing");
+        setBaselineSampleProgress(0);
       }
       lastCaptureOkRef.current = ok;
       setCaptureOk(ok);
@@ -1108,7 +1681,11 @@ export default function CameraClient() {
           // wrists briefly leave the frame at peak. Defaults to "default"
           // when no exercise is selected.
           const framingMode: FramingMode =
-            activeDefinition?.requiresOverheadRoom ? "overhead" : "default";
+            activeDefinition?.requiresOverheadRoom
+              ? "overhead"
+              : activeDefinition?.requiresLateralRoom
+                ? "lateral"
+                : "default";
           const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height, framingMode);
 
           const now = performance.now();
@@ -1119,6 +1696,23 @@ export default function CameraClient() {
               captureDropoutStartedAtRef.current = now;
             }
             commitCaptureState(false, r.message);
+            if (
+              activeDefinition?.id === "ex_005" &&
+              now - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
+            ) {
+              lastEx005DebugMsRef.current = now;
+              pushEx005DebugRecord({
+                kind: "not-ready",
+                tNow: now,
+                landmarks,
+                framingMode,
+                captureOk: false,
+                captureMessage: r.message,
+                rawSignedDeg: null,
+                smoothedSignedDeg: null,
+                tiltReference: null,
+              });
+            }
           } else {
             captureDropoutStartedAtRef.current = null;
             captureDropoutResetDoneRef.current = false;
@@ -1143,6 +1737,25 @@ export default function CameraClient() {
             } else {
               const raw = computePoseMetricsForExercise(landmarks as any, activeDefinition);
               const tNow = performance.now();
+              const metricInputs: Partial<Record<MetricName, number | null>> = {
+                ...raw.metrics,
+              };
+              let ex005PerFrameCorrectedSignedDeg: number | null = null;
+
+              // Direction strings for compensation overlay labels.
+              // computePoseMetricsForExercise only surfaces absolute values in
+              // raw.metrics; direction-rich results require calling the
+              // underlying functions with the same tilt reference.
+              const metricDirections: Partial<Record<MetricName, string>> = {};
+              {
+                const neckDir = computeLateralNeckTilt(
+                  landmarks as any,
+                  raw.tiltReference,
+                )?.direction;
+                if (neckDir && neckDir !== "center") {
+                  metricDirections.neckTilt = neckDir;
+                }
+              }
 
               // Smooth the camera-tilt estimate (still always needed)
               const smoothedTilt = tiltFilterRef.current.filter(
@@ -1150,12 +1763,144 @@ export default function CameraClient() {
                 tNow
               );
 
+              if (
+                activeDefinition.kind === "dynamic" &&
+                activeDefinition.id === "ex_005"
+              ) {
+                const primaryName = activeDefinition.primaryMetric.name;
+                const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(
+                  landmarks as any,
+                );
+                const perFrameCorrected = raw.metrics[primaryName];
+                ex005PerFrameCorrectedSignedDeg =
+                  typeof perFrameCorrected === "number"
+                    ? perFrameCorrected
+                    : null;
+
+                if (baselinePhaseRef.current === "capturing") {
+                  if (typeof uncorrected === "number") {
+                    bidirectionalBaselineRef.current.samples.push(uncorrected);
+                  }
+                  // Progress is updated (and phase transitioned) by the scap
+                  // compensation baseline block below so both baselines complete
+                  // together. Only compute the median here once ready.
+                  if (
+                    bidirectionalBaselineRef.current.samples.length >=
+                    BASELINE_SAMPLE_COUNT
+                  ) {
+                    bidirectionalBaselineRef.current.value = medianSample(
+                      bidirectionalBaselineRef.current.samples,
+                    );
+                    metricFiltersRef.current.delete(primaryName);
+                  }
+                }
+
+                const neutralBaseline = bidirectionalBaselineRef.current.value;
+                metricInputs[primaryName] =
+                  neutralBaseline !== null
+                    ? computeTrunkLateralFlexionFromNeutralSigned(
+                        landmarks as any,
+                        neutralBaseline,
+                      )
+                    : null;
+              }
+
+              // ── Scapular elevation compensation baseline ─────────────────
+              // For any exercise whose scapularElevation compensation metric
+              // carries requiresBaselineCapture, capture 90 resting frames
+              // per side, compute per-side medians, then replace the raw
+              // absolute projection in metricInputs with (baseline − raw).
+              // At rest the delta ≈ 0; it grows positive when the patient
+              // shrugs, making the 0.04 warningThreshold meaningful.
+              // This block is also the single "captured" transition point for
+              // ex_005, where both the primary bidirectional baseline and this
+              // scap baseline must complete before the phase advances.
+              const needsScapCompBaseline = activeDefinition.compensationMetrics.some(
+                (c) => c.name === "scapularElevation" && c.requiresBaselineCapture,
+              );
+              const needsPrimaryBaseline =
+                activeDefinition.kind === "dynamic" &&
+                !!activeDefinition.primaryMetric.requiresBaselineCapture;
+
+              if (needsScapCompBaseline) {
+                const rawScapLeft  = computeScapularElevation(landmarks as any, raw.tiltReference, "left");
+                const rawScapRight = computeScapularElevation(landmarks as any, raw.tiltReference, "right");
+
+                if (baselinePhaseRef.current === "capturing") {
+                  if (typeof rawScapLeft  === "number") leftScapBaselineRef.current.samples.push(rawScapLeft);
+                  if (typeof rawScapRight === "number") rightScapBaselineRef.current.samples.push(rawScapRight);
+
+                  // Finalize medians once both sides have enough samples
+                  if (
+                    leftScapBaselineRef.current.value === null &&
+                    leftScapBaselineRef.current.samples.length  >= BASELINE_SAMPLE_COUNT &&
+                    rightScapBaselineRef.current.samples.length >= BASELINE_SAMPLE_COUNT
+                  ) {
+                    leftScapBaselineRef.current.value  = medianSample(leftScapBaselineRef.current.samples);
+                    rightScapBaselineRef.current.value = medianSample(rightScapBaselineRef.current.samples);
+                  }
+
+                  // Overall progress = min across all active baselines
+                  const scapProg = Math.min(
+                    leftScapBaselineRef.current.samples.length,
+                    rightScapBaselineRef.current.samples.length,
+                  );
+                  const primaryProg = needsPrimaryBaseline
+                    ? (activeDefinition.kind === "dynamic" &&
+                       activeDefinition.bilateralMode === "bidirectional-alternating"
+                         ? bidirectionalBaselineRef.current.samples.length
+                         : Math.min(
+                             leftBaselineRef.current.samples.length,
+                             rightBaselineRef.current.samples.length,
+                           ))
+                    : BASELINE_SAMPLE_COUNT;
+                  setBaselineSampleProgress(Math.min(scapProg, primaryProg));
+
+                  // Transition to "captured" only when ALL needed baselines
+                  // are ready (prevents early completion on ex_005 where both
+                  // primary bidirectional and scap baselines must finish).
+                  const scapDone =
+                    leftScapBaselineRef.current.value  !== null &&
+                    rightScapBaselineRef.current.value !== null;
+                  const primaryDone = !needsPrimaryBaseline || (
+                    activeDefinition.kind === "dynamic" &&
+                    activeDefinition.bilateralMode === "bidirectional-alternating"
+                      ? bidirectionalBaselineRef.current.value !== null
+                      : leftBaselineRef.current.value  !== null &&
+                        rightBaselineRef.current.value !== null
+                  );
+                  if (scapDone && primaryDone) {
+                    setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
+                    setBaselinePhase("captured");
+                  }
+                }
+
+                // Override metricInputs with baseline-adjusted delta.
+                // (baseline − raw) is positive when shrugging; worst side
+                // by |delta| (mirrors pickWorstSide "above" logic). Until the
+                // compensation baseline is ready, suppress the raw absolute
+                // value so rest posture cannot fire a false shrug warning.
+                const lb = leftScapBaselineRef.current.value;
+                const rb = rightScapBaselineRef.current.value;
+                if (lb !== null && rb !== null) {
+                  const dL = rawScapLeft  !== null ? lb - rawScapLeft  : null;
+                  const dR = rawScapRight !== null ? rb - rawScapRight : null;
+                  metricInputs["scapularElevation"] =
+                    dL === null && dR === null ? null :
+                    dL === null               ? dR   :
+                    dR === null               ? dL   :
+                    Math.abs(dL) >= Math.abs(dR) ? dL : dR;
+                } else {
+                  metricInputs["scapularElevation"] = null;
+                }
+              }
+
               // Per-metric filtering. Lazily allocate a filter the first time
               // we see each metric for the active exercise. The filter map
               // gets cleared when the exercise changes (see the
               // `selectedExercise` effect).
               const smoothedMetrics: Partial<Record<MetricName, number | null>> = {};
-              for (const [metricName, value] of Object.entries(raw.metrics) as Array<
+              for (const [metricName, value] of Object.entries(metricInputs) as Array<
                 [MetricName, number | null]
               >) {
                 if (typeof value !== "number") {
@@ -1187,6 +1932,9 @@ export default function CameraClient() {
                   Math.round(filter.filter(value, tNow) * 10) / 10;
               }
 
+              const baselineReadyForExercise =
+                baselinePhaseRef.current !== "capturing";
+
               // ── Rep counting ──────────────────────────────────────────
               // Feeds the appropriate counter(s) based on the exercise's
               // bilateralMode. Skipped for isometric exercises and for
@@ -1209,37 +1957,44 @@ export default function CameraClient() {
                   // while right elbow is visible). Each side handles its own null.
                   const perSide = raw.perSideMetrics;
                   if (perSide) {
+                    const primaryNeedsBaseline =
+                      !!activeDefinition.primaryMetric.requiresBaselineCapture;
                     // Read via ref — the rAF chain captured a stale state value.
-                    if (baselinePhaseRef.current === "capturing") {
+                    if (
+                      primaryNeedsBaseline &&
+                      baselinePhaseRef.current === "capturing"
+                    ) {
                       // Accumulate raw projections until each side has enough
                       // samples to summarize. Rep counting stays paused while
-                      // the patient is in calibration.
+                      // the primary metric is in calibration. Compensation-only
+                      // baselines must not calibrate or transform rep inputs.
                       if (typeof perSide.left === "number") {
                         leftBaselineRef.current.samples.push(perSide.left);
                       }
                       if (typeof perSide.right === "number") {
                         rightBaselineRef.current.samples.push(perSide.right);
                       }
-                      const N_REQUIRED = 90; // ~3 s at 30 fps
+                      setBaselineSampleProgress(
+                        Math.min(
+                          leftBaselineRef.current.samples.length,
+                          rightBaselineRef.current.samples.length,
+                        ),
+                      );
                       if (
-                        leftBaselineRef.current.samples.length >= N_REQUIRED &&
-                        rightBaselineRef.current.samples.length >= N_REQUIRED
+                        leftBaselineRef.current.samples.length >=
+                          BASELINE_SAMPLE_COUNT &&
+                        rightBaselineRef.current.samples.length >=
+                          BASELINE_SAMPLE_COUNT
                       ) {
                         // Median, not mean — robust to single-frame spikes
                         // if the patient briefly shifted during capture.
-                        const median = (xs: number[]) => {
-                          const sorted = [...xs].sort((a, b) => a - b);
-                          const mid = Math.floor(sorted.length / 2);
-                          return sorted.length % 2 === 0
-                            ? (sorted[mid - 1] + sorted[mid]) / 2
-                            : sorted[mid];
-                        };
-                        leftBaselineRef.current.value = median(
+                        leftBaselineRef.current.value = medianSample(
                           leftBaselineRef.current.samples,
                         );
-                        rightBaselineRef.current.value = median(
+                        rightBaselineRef.current.value = medianSample(
                           rightBaselineRef.current.samples,
                         );
+                        setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
                         setBaselinePhase("captured");
                       }
                     } else {
@@ -1253,11 +2008,15 @@ export default function CameraClient() {
                       const rb = rightBaselineRef.current.value;
                       const inputLeft =
                         typeof perSide.left === "number"
-                          ? lb !== null ? lb - perSide.left : perSide.left
+                          ? primaryNeedsBaseline && lb !== null
+                            ? lb - perSide.left
+                            : perSide.left
                           : null;
                       const inputRight =
                         typeof perSide.right === "number"
-                          ? rb !== null ? rb - perSide.right : perSide.right
+                          ? primaryNeedsBaseline && rb !== null
+                            ? rb - perSide.right
+                            : perSide.right
                           : null;
 
                       const smoothedLeft =
@@ -1273,16 +2032,12 @@ export default function CameraClient() {
                             ) / 10
                           : null;
 
-                      // Rep counting is gated on
-                      // `sessionStateRef.current === "active"`. When the
-                      // session is idle or ended, metrics still compute
-                      // (display updates) but the rep counter never sees
-                      // a frame, so its state machine stays in
-                      // WAITING_FOR_REP_START. `handleSessionStart` rebuilds
-                      // counters before transitioning to active, so the next
-                      // session begins with clean state and rep indices.
+                      // Rep counting is gated on the active session state and
+                      // completed baseline capture. During calibration, metrics
+                      // can still display, but counters do not see frames.
                       const sessionIsActive =
-                        sessionStateRef.current === "active";
+                        sessionStateRef.current === "active" &&
+                        baselineReadyForExercise;
 
                       if (
                         sessionIsActive &&
@@ -1325,6 +2080,43 @@ export default function CameraClient() {
                 } else {
                   // Bidirectional-alternating or unilateral — single smoothed value.
                   const rawValue = smoothedMetrics[primaryName];
+                  const rawMetricValue = metricInputs[primaryName];
+                  const rawSignedDeg =
+                    typeof rawMetricValue === "number" ? rawMetricValue : null;
+                  const smoothedSignedDeg =
+                    typeof rawValue === "number" ? rawValue : null;
+
+                  // ── TEMPORARY ex_005 head-lean diagnostic (2026-05-26) ──
+                  // Opt-in with `enableEx005Debug()` from the browser console.
+                  // Logs structured copy-pasteable JSON lines INCLUDING null
+                  // metric frames so off-frame ears are visible.
+                  // Remove this block once ex_005 is tuned.
+                  if (
+                    activeDefinition.id === "ex_005" &&
+                    tNow - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
+                  ) {
+                    lastEx005DebugMsRef.current = tNow;
+                    const before = bidirectionalRepCounterRef.current?.getDebugSnapshot(
+                      tNow,
+                      typeof rawValue === "number" ? rawValue : 0,
+                    );
+                    pushEx005DebugRecord({
+                      kind: "frame",
+                      tNow,
+                      landmarks,
+                      framingMode,
+                      captureOk: true,
+                      captureMessage: null,
+                      rawSignedDeg,
+                      smoothedSignedDeg,
+                      perFrameCorrectedSignedDeg:
+                        activeDefinition.id === "ex_005"
+                          ? ex005PerFrameCorrectedSignedDeg
+                          : null,
+                      tiltReference: raw.tiltReference,
+                      before: before ?? null,
+                    });
+                  }
 
                   if (typeof rawValue === "number") {
                     if (
@@ -1336,13 +2128,14 @@ export default function CameraClient() {
                       // blocks immediate opposite-side return-stroke overshoot
                       // until the signed metric has settled near neutral.
                       const counter = bidirectionalRepCounterRef.current;
-                      // Gate on active session state.
+                      // Gate on active session state and completed baseline.
                       // The debug-ring-buffer below still records before/
                       // after snapshots so the neck-rep analysis tooling
                       // remains functional during idle/ended states, but
                       // the .update() call is suppressed.
                       const sessionIsActive =
-                        sessionStateRef.current === "active";
+                        sessionStateRef.current === "active" &&
+                        baselineReadyForExercise;
                       if (counter) {
                         const before = counter.getDebugSnapshot(tNow, rawValue);
                         const rep = sessionIsActive
@@ -1362,6 +2155,33 @@ export default function CameraClient() {
                           console.log(`[rep] ${activeDefinition.id} ${side}`, event);
                         }
                         const after = counter.getDebugSnapshot(tNow, rawValue);
+
+                        if (activeDefinition.id === "ex_005" && rep) {
+                          pushEx005DebugRecord({
+                            kind: "rep",
+                            tNow,
+                            landmarks,
+                            framingMode,
+                            captureOk: true,
+                            captureMessage: null,
+                            rawSignedDeg,
+                            smoothedSignedDeg,
+                            perFrameCorrectedSignedDeg:
+                              activeDefinition.id === "ex_005"
+                                ? ex005PerFrameCorrectedSignedDeg
+                                : null,
+                            tiltReference: raw.tiltReference,
+                            before,
+                            after,
+                            emitted: {
+                              side: rep.side,
+                              index: rep.event.index,
+                              peakValue:
+                                Math.round(rep.event.peakValue * 10) / 10,
+                              classification: rep.event.classification,
+                            },
+                          });
+                        }
 
                         if (activeDefinition.id === "ex_004") {
                           if (neckRepDebugStartMsRef.current === null) {
@@ -1419,9 +2239,13 @@ export default function CameraClient() {
                         }
                       }
                     } else {
-                      // Unilateral. Gate on active session.
+                      // Unilateral. Gate on active session and completed baseline.
                       const counter = leftRepCounterRef.current;
-                      if (counter && sessionStateRef.current === "active") {
+                      if (
+                        counter &&
+                        sessionStateRef.current === "active" &&
+                        baselineReadyForExercise
+                      ) {
                         const event = counter.update(rawValue, tNow);
                         if (event) {
                           repLogRef.current.left.push(event);
@@ -1437,6 +2261,45 @@ export default function CameraClient() {
                       }
                     }
                   }
+                }
+              } else if (activeDefinition.kind === "isometric") {
+                // ── Isometric time-in-band accumulation (ex_006 T-pose) ──
+                // A valid T-pose requires BOTH arms in the target band at the
+                // same time, so the paired hold accrues only on both-in-band
+                // frames. Per-arm in-band status is computed EVERY frame (even
+                // when idle) so the panel can guide the patient into position;
+                // accrual + completion only run while the session is active
+                // and any required baseline capture has completed.
+                // Uses RAW perSideMetrics, not smoothed — the ±tolerance band
+                // plus the cumulative nature make per-frame jitter negligible.
+                // The dt clock restarts (null anchor) whenever the session is
+                // not active so a paused/idle gap is never credited; a single
+                // frame is capped at MAX_ISO_TICK_MS to absorb brief flickers.
+                const band = activeDefinition.isometric.targetBand;
+                const lo = band.center - band.tolerance;
+                const hi = band.center + band.tolerance;
+                const inBand = (v: number | null) =>
+                  typeof v === "number" && v >= lo && v <= hi;
+                const perSide = raw.perSideMetrics;
+                const lInBand = !!perSide && inBand(perSide.left);
+                const rInBand = !!perSide && inBand(perSide.right);
+                leftInBandRef.current = lInBand;
+                rightInBandRef.current = rInBand;
+
+                if (
+                  sessionStateRef.current !== "active" ||
+                  !baselineReadyForExercise
+                ) {
+                  lastIsometricTickMsRef.current = null;
+                } else {
+                  const last = lastIsometricTickMsRef.current;
+                  const dt =
+                    last === null ? 0 : Math.min(tNow - last, MAX_ISO_TICK_MS);
+                  lastIsometricTickMsRef.current = tNow;
+                  if (dt > 0 && lInBand && rInBand) {
+                    pairedHoldMsRef.current += dt;
+                  }
+                  checkAndHandleSetCompletion(tNow);
                 }
               }
 
@@ -1455,9 +2318,30 @@ export default function CameraClient() {
                     smoothedMetrics
                   ),
                 });
+                if (activeDefinition.kind === "isometric") {
+                  setHoldState({
+                    pairedSec: pairedHoldMsRef.current / 1000,
+                    leftInBand: leftInBandRef.current,
+                    rightInBand: rightInBandRef.current,
+                  });
+                }
               }
+              drawCompensationOverlay(
+                ctx,
+                landmarks,
+                canvas.width,
+                canvas.height,
+                activeDefinition.compensationMetrics,
+                smoothedMetrics,
+                metricDirections,
+              );
             }
           } else {
+            // Pause isometric dt accumulation immediately on any unverified
+            // capture gap. Keep accumulated hold time unless the gap becomes
+            // sustained below.
+            lastIsometricTickMsRef.current = null;
+
             const dropoutStartedAt = captureDropoutStartedAtRef.current ?? now;
             const dropoutElapsedMs = now - dropoutStartedAt;
             if (
@@ -1475,6 +2359,14 @@ export default function CameraClient() {
               leftRepCounterRef.current?.reset();
               rightRepCounterRef.current?.reset();
               bidirectionalRepCounterRef.current?.reset();
+              // Discard any in-progress isometric hold — a sustained dropout
+              // means we couldn't verify the band, so the partial accumulation
+              // is stale (matches the rep-counter reset philosophy).
+              pairedHoldMsRef.current = 0;
+              leftInBandRef.current = false;
+              rightInBandRef.current = false;
+              lastIsometricTickMsRef.current = null;
+              setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
               captureDropoutResetDoneRef.current = true;
             }
 
@@ -1485,6 +2377,9 @@ export default function CameraClient() {
             });
           }
         } else {
+          // No tracked person means no verified in-band interval. Do not erase
+          // accumulated hold time for a flicker; just restart the dt anchor.
+          lastIsometricTickMsRef.current = null;
           commitCaptureState(false, "No person detected. Step into the frame.");
         }
 
@@ -1630,6 +2525,18 @@ export default function CameraClient() {
         : selectedExerciseIndex >= 0
           ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length}`
           : `${assignedExercises.length} exercises`;
+  const baselineVisible = baselinePhase === "capturing";
+  const baselineSamples = Math.min(
+    baselineProgress.samples,
+    baselineProgress.required,
+  );
+  const baselineProgressPct = Math.round(
+    (baselineSamples / Math.max(1, baselineProgress.required)) * 100,
+  );
+  const baselineRemainingSec = Math.max(
+    0,
+    Math.ceil((baselineProgress.required - baselineSamples) / 30),
+  );
 
   return (
     <>
@@ -1749,12 +2656,57 @@ export default function CameraClient() {
                 </div>
               )}
 
-              {/* Baseline-capture prompt: only when capture is good but we
-                  still need to calibrate the resting reference. The yellow
-                  capture-paused banner above already covers the not-ok case. */}
-              {captureOk && baselinePhase === "capturing" && (
-                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-blue-900/80 text-white text-base font-semibold shadow-lg">
-                  Stand naturally with arms relaxed — capturing baseline…
+              {/* Baseline-capture prompt: visible whenever a baseline is needed,
+                  including after capture drops and baseline collection restarts. */}
+              {baselineVisible && (
+                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 w-[min(28rem,calc(100%-2rem))] rounded-xl bg-blue-950/85 px-5 py-4 text-white shadow-lg backdrop-blur-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">
+                        Baseline capture
+                      </div>
+                      <div className="mt-1 text-xs text-blue-100">
+                        {captureOk
+                          ? "Stand naturally with arms relaxed."
+                          : "Paused until capture is stable."}
+                      </div>
+                    </div>
+                    <div className="shrink-0 rounded-lg bg-white/15 px-3 py-2 text-right">
+                      <div className="text-2xl font-bold leading-none tabular-nums">
+                        {baselineRemainingSec}s
+                      </div>
+                      <div className="mt-0.5 text-[10px] uppercase tracking-wide text-blue-100">
+                        remaining
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
+                    <div
+                      className="h-full rounded-full bg-cyan-300 transition-[width]"
+                      style={{ width: `${baselineProgressPct}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[11px] text-blue-100">
+                    <span>{baselineProgressPct}% ready</span>
+                    {!captureOk && <span className="truncate">{captureMessage}</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* 3-2-1 start countdown overlay — centred on the video frame */}
+              {sessionState === "countdown" && (
+                <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
+                  <div className="flex flex-col items-center gap-1">
+                    <span
+                      key={countdownSec}
+                      className="text-[6rem] font-black leading-none text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.8)] select-none tabular-nums"
+                    >
+                      {countdownSec}
+                    </span>
+                    <span className="text-base font-semibold text-white/80 uppercase tracking-widest drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+                      Get ready
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -1789,7 +2741,15 @@ export default function CameraClient() {
  
               {/* ── Exercise stats — bottom right ── */}
               <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
-                {activeDefinition?.bilateral ? (
+                {activeDefinition?.kind === "isometric" ? (
+                  <IsometricStatPanel
+                    leftInBand={holdState.leftInBand}
+                    rightInBand={holdState.rightInBand}
+                    pairedSec={holdState.pairedSec}
+                    targetSec={prescription.holdSeconds}
+                    timer={timer}
+                  />
+                ) : activeDefinition?.bilateral ? (
                   <BidirectionalStatPanel
                     leftReps={repCounts.left}
                     rightReps={repCounts.right}
@@ -2027,14 +2987,18 @@ export default function CameraClient() {
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={handleSessionStart}
-                    disabled={!activeDefinition || sessionState === "active"}
+                    disabled={!activeDefinition || sessionState === "active" || sessionState === "countdown"}
                     className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {sessionState === "ended" ? "Restart" : "Start"}
+                    {sessionState === "ended"
+                      ? "Restart"
+                      : sessionState === "countdown"
+                        ? `Starting… (${countdownSec})`
+                        : "Start"}
                   </button>
                   <button
                     onClick={() => setConfirmingEnd(true)}
-                    disabled={sessionState !== "active"}
+                    disabled={sessionState !== "active" && sessionState !== "countdown"}
                     className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     End
@@ -2211,6 +3175,63 @@ function BidirectionalStatPanel({
           target={targetReps}
           done={targetReps !== undefined && rightReps >= targetReps}
         />
+        <StatCell label="TIME" value={timer} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Stats panel for isometric exercises (ex_006 T-pose). A valid T-pose requires
+ * BOTH arms in the target band at once, so this shows:
+ *   - ARMS: per-arm in-band status (L / R light green when that arm is in
+ *     position) — guides the patient into the pose and shows which arm to fix.
+ *   - HOLD: the paired hold (advances only while BOTH arms are in band) vs the
+ *     prescribed target, with a ✓ when reached.
+ *   - TIME: session timer.
+ */
+function IsometricStatPanel({
+  leftInBand,
+  rightInBand,
+  pairedSec,
+  targetSec,
+  timer,
+}: {
+  leftInBand: boolean;
+  rightInBand: boolean;
+  pairedSec: number;
+  targetSec: number;
+  timer: string;
+}) {
+  const done = pairedSec >= targetSec;
+  return (
+    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
+      <div className="flex divide-x divide-white/10">
+        {/* Per-arm in-band status — both must be green for the hold to advance */}
+        <div className="px-5 py-3 text-center">
+          <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
+            Arms
+          </div>
+          <div className="text-2xl font-bold leading-none flex items-center justify-center gap-3">
+            <span className={leftInBand ? "text-emerald-400" : "text-white/30"}>L</span>
+            <span className={rightInBand ? "text-emerald-400" : "text-white/30"}>R</span>
+          </div>
+        </div>
+        {/* Paired hold timer */}
+        <div className="px-5 py-3 text-center">
+          <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5 flex items-center justify-center gap-1">
+            <span>Hold</span>
+            {done && <span className="text-emerald-400 leading-none">✓</span>}
+          </div>
+          <div
+            className={`text-3xl font-bold leading-none tabular-nums ${
+              done ? "text-emerald-400" : "text-white"
+            }`}
+          >
+            {Math.floor(pairedSec)}
+            <span className="text-base font-medium text-white/40">{`s/${targetSec}s`}</span>
+          </div>
+        </div>
         <StatCell label="TIME" value={timer} />
       </div>
     </div>

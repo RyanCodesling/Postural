@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   DEFAULT_REST_SECONDS,
+  DEFAULT_HOLD_SECONDS,
   assignExercisesToPatient,
   deletePatientExercises,
   getPatientExercises,
@@ -14,6 +15,7 @@ type PatientExerciseAssignmentRequest = {
   reps?: unknown;
   restSeconds?: unknown;
   scheduledDate?: unknown;
+  holdSeconds?: unknown;
 };
 
 export async function GET(request: NextRequest) {
@@ -128,6 +130,12 @@ export async function POST(request: NextRequest) {
         exercise.restSeconds >= 0
           ? Math.floor(exercise.restSeconds)
           : DEFAULT_REST_SECONDS;
+      const holdSeconds =
+        typeof exercise.holdSeconds === "number" &&
+        Number.isFinite(exercise.holdSeconds) &&
+        exercise.holdSeconds >= 1
+          ? Math.floor(exercise.holdSeconds)
+          : DEFAULT_HOLD_SECONDS;
 
       const scheduledDate =
         typeof exercise.scheduledDate === "string" &&
@@ -141,6 +149,7 @@ export async function POST(request: NextRequest) {
         reps: exercise.reps,
         restSeconds,
         scheduledDate,
+        holdSeconds,
       };
     });
 
@@ -170,6 +179,7 @@ export async function POST(request: NextRequest) {
         reps:          Math.floor(exercise.reps as number),
         restSeconds:   exercise.restSeconds,
         scheduledDate: exercise.scheduledDate as string | undefined,
+        holdSeconds: exercise.holdSeconds,
       })),
     );
     return NextResponse.json({ success: true });

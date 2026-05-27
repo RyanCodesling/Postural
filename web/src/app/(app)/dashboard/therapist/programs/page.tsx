@@ -1,6 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import {
+  DEFAULT_DISPLAY_HOLD_SECONDS,
+  getDisplayHoldSeconds,
+  isIsometricExercise,
+  prescriptionTargetText,
+} from "@/lib/exercises/prescriptionDisplay";
 
 interface Exercise {
   id: string;
@@ -18,6 +24,7 @@ interface ProgramExercise {
   sets?: number | null;
   reps?: number | null;
   restSeconds?: number | null;
+  holdSeconds?: number | null;
 }
 
 interface ExerciseProgram {
@@ -27,6 +34,13 @@ interface ExerciseProgram {
   updatedAt: string;
   exercises: ProgramExercise[];
 }
+
+type ExerciseParams = {
+  sets?: number;
+  reps?: number;
+  restSeconds?: number;
+  holdSeconds?: number;
+};
 
 export default function ExerciseProgramsPage() {
   const [programs, setPrograms] = useState<ExerciseProgram[]>([]);
@@ -40,9 +54,7 @@ export default function ExerciseProgramsPage() {
   // Program form state
   const [programName, setProgramName] = useState("");
   const [selectedExercises, setSelectedExercises] = useState<Set<string>>(new Set());
-  const [exerciseParams, setExerciseParams] = useState<
-    Record<string, { sets?: number; reps?: number; restSeconds?: number }>
-  >({});
+  const [exerciseParams, setExerciseParams] = useState<Record<string, ExerciseParams>>({});
 
   // Custom exercise form state
   const [customName, setCustomName] = useState("");
@@ -160,12 +172,14 @@ export default function ExerciseProgramsPage() {
       sets?: number;
       reps?: number;
       restSeconds: number;
+      holdSeconds?: number;
     }[] = [];
 
     selectedExercises.forEach((exId) => {
       const ex = exercises.find((e) => e.id === exId);
       if (!ex) return;
       const p = exerciseParams[exId] ?? {};
+      const isIsometric = isIsometricExercise(ex.id);
       const restSeconds = p.restSeconds == null || p.restSeconds < 0 ? 60 : p.restSeconds;
       result.push({
         exerciseId: ex.id,
@@ -173,8 +187,9 @@ export default function ExerciseProgramsPage() {
         description: ex.description,
         isCustom: ex.is_custom,
         sets: p.sets,
-        reps: p.reps,
+        reps: isIsometric ? undefined : p.reps,
         restSeconds,
+        holdSeconds: isIsometric ? getDisplayHoldSeconds(p.holdSeconds) : undefined,
       });
     });
 
@@ -228,7 +243,7 @@ export default function ExerciseProgramsPage() {
     setProgramName(program.name);
 
     const selected = new Set<string>();
-    const params: Record<string, { sets?: number; reps?: number }> = {};
+    const params: Record<string, ExerciseParams> = {};
 
     program.exercises.forEach((ex) => {
       if (ex.exerciseId) {
@@ -237,6 +252,7 @@ export default function ExerciseProgramsPage() {
           sets: ex.sets ?? undefined,
           reps: ex.reps ?? undefined,
           restSeconds: ex.restSeconds ?? undefined,
+          holdSeconds: ex.holdSeconds ?? undefined,
         };
       }
     });
@@ -321,6 +337,7 @@ export default function ExerciseProgramsPage() {
                 {systemExercises.map((ex) => {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
+                  const isIsometric = isIsometricExercise(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -365,25 +382,47 @@ export default function ExerciseProgramsPage() {
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
                             />
                           </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">Reps</label>
-                            <input
-                              type="number"
-                              min={1}
-                              value={p.reps ?? ""}
-                              onChange={(e) =>
-                                setExerciseParams((prev) => ({
-                                  ...prev,
-                                  [ex.id]: {
-                                    ...prev[ex.id],
-                                    reps: e.target.value ? Number(e.target.value) : undefined,
-                                  },
-                                }))
-                              }
-                              placeholder="e.g. 12"
-                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-                            />
-                          </div>
+                          {isIsometric ? (
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Hold (sec)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={p.holdSeconds ?? ""}
+                                onChange={(e) =>
+                                  setExerciseParams((prev) => ({
+                                    ...prev,
+                                    [ex.id]: {
+                                      ...prev[ex.id],
+                                      holdSeconds: e.target.value ? Number(e.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                placeholder={`${DEFAULT_DISPLAY_HOLD_SECONDS}`}
+                                className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={p.reps ?? ""}
+                                onChange={(e) =>
+                                  setExerciseParams((prev) => ({
+                                    ...prev,
+                                    [ex.id]: {
+                                      ...prev[ex.id],
+                                      reps: e.target.value ? Number(e.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                placeholder="e.g. 12"
+                                className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                              />
+                            </div>
+                          )}
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Rest (sec)</label>
                             <input
@@ -422,6 +461,7 @@ export default function ExerciseProgramsPage() {
                 {customExercises.map((ex) => {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
+                  const isIsometric = isIsometricExercise(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -469,25 +509,47 @@ export default function ExerciseProgramsPage() {
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
                             />
                           </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">Reps</label>
-                            <input
-                              type="number"
-                              min={1}
-                              value={p.reps ?? ""}
-                              onChange={(e) =>
-                                setExerciseParams((prev) => ({
-                                  ...prev,
-                                  [ex.id]: {
-                                    ...prev[ex.id],
-                                    reps: e.target.value ? Number(e.target.value) : undefined,
-                                  },
-                                }))
-                              }
-                              placeholder="e.g. 12"
-                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-                            />
-                          </div>
+                          {isIsometric ? (
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Hold (sec)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={p.holdSeconds ?? ""}
+                                onChange={(e) =>
+                                  setExerciseParams((prev) => ({
+                                    ...prev,
+                                    [ex.id]: {
+                                      ...prev[ex.id],
+                                      holdSeconds: e.target.value ? Number(e.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                placeholder={`${DEFAULT_DISPLAY_HOLD_SECONDS}`}
+                                className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={p.reps ?? ""}
+                                onChange={(e) =>
+                                  setExerciseParams((prev) => ({
+                                    ...prev,
+                                    [ex.id]: {
+                                      ...prev[ex.id],
+                                      reps: e.target.value ? Number(e.target.value) : undefined,
+                                    },
+                                  }))
+                                }
+                                placeholder="e.g. 12"
+                                className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                              />
+                            </div>
+                          )}
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Rest (sec)</label>
                             <input
@@ -621,22 +683,31 @@ export default function ExerciseProgramsPage() {
                 </p>
 
                 <div className="space-y-1 mb-4 max-h-28 overflow-y-auto">
-                  {p.exercises.map((ex, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                      <span className="flex-1">{ex.name}</span>
-                      {(ex.sets || ex.reps) && (
-                        <span className="text-xs text-gray-400">
-                          {ex.sets ? `${ex.sets}×` : ""}{ex.reps ?? ""}
-                          {ex.restSeconds != null ? ` · ${ex.restSeconds}s` : ""}
-                        </span>
-                      )}
-                      {ex.isCustom && (
-                        <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">
-                          custom
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                  {p.exercises.map((ex, i) => {
+                    const isIsometric = isIsometricExercise(ex.exerciseId);
+                    const hasPrescription = !!(ex.sets || ex.reps || (isIsometric && ex.holdSeconds));
+                    return (
+                      <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
+                        <span className="flex-1">{ex.name}</span>
+                        {hasPrescription && (
+                          <span className="text-xs text-gray-400">
+                            {ex.sets ? `${ex.sets}×` : ""}
+                            {prescriptionTargetText({
+                              exerciseId: ex.exerciseId,
+                              reps: ex.reps,
+                              holdSeconds: ex.holdSeconds,
+                            })}
+                            {ex.restSeconds != null ? ` · ${ex.restSeconds}s` : ""}
+                          </span>
+                        )}
+                        {ex.isCustom && (
+                          <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">
+                            custom
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div className="flex gap-2">

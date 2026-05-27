@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
+import { getExerciseDefinition } from "@/lib/exercises/registry";
+import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 
 interface Exercise {
   id: string;
@@ -19,6 +21,8 @@ interface Program {
     isCustom: boolean;
     sets?: number | null;
     reps?: number | null;
+    restSeconds?: number | null;
+    holdSeconds?: number | null;
   }[];
 }
 
@@ -29,18 +33,47 @@ interface PatientExercise {
   reps: number;
   rest_seconds: number;
   assigned_date: string;
+  hold_seconds: number;
 }
+
+type AssignmentParams = {
+  sets?: number;
+  reps?: number;
+  restSeconds?: number;
+  holdSeconds?: number;
+  scheduledDate?: string;
+};
+
+type AssignmentPayload = {
+  exerciseId: string;
+  sets: number;
+  reps: number;
+  restSeconds: number;
+  holdSeconds: number;
+  scheduledDate: string;
+};
+
+type PreviewSnapshot = {
+  sets: number;
+  reps: number;
+  restSeconds: number;
+  holdSeconds: number;
+  scheduledDate: string;
+};
 
 type PreviewItem = {
   exerciseId: string;
   name: string;
   type: "new" | "updated" | "unchanged";
-  before?: { sets: number; reps: number; restSeconds: number; scheduledDate: string };
-  after: { sets: number; reps: number; restSeconds: number; scheduledDate: string };
+  before?: PreviewSnapshot;
+  after: PreviewSnapshot;
 };
 
 // Default rest between sets (seconds) when the therapist leaves the field blank.
 const DEFAULT_REST_SECONDS = 60;
+// Default per-side hold (seconds) for isometric exercises when left blank.
+// Mirrors the patient_exercises.hold_seconds DB default.
+const DEFAULT_HOLD_SECONDS = 30;
 
 interface PatientData {
   id: string;
@@ -67,6 +100,28 @@ function fmtDateFull(d: string): string {
   return `${datePart} ${dayPart}`;
 }
 
+function PrescriptionDetails({
+  exerciseId,
+  snapshot,
+}: {
+  exerciseId: string;
+  snapshot: PreviewSnapshot;
+}) {
+  const isIsometric = getExerciseDefinition(exerciseId)?.kind === "isometric";
+  return (
+    <>
+      <p>Sets: {snapshot.sets}</p>
+      {isIsometric ? (
+        <p>Hold: {snapshot.holdSeconds}s</p>
+      ) : (
+        <p>Reps: {snapshot.reps}</p>
+      )}
+      <p>Rest: {snapshot.restSeconds}s</p>
+      <p>Scheduled Date: {fmtDateFull(snapshot.scheduledDate)}</p>
+    </>
+  );
+}
+
 export default function AssignExercisePage() {
   const { user } = useAuth();
   const [patients, setPatients]   = useState<PatientData[]>([]);
@@ -77,7 +132,7 @@ export default function AssignExercisePage() {
   const [assignPatientId,   setAssignPatientId]   = useState("");
   const [assignProgramId,   setAssignProgramId]   = useState("");
   const [assignSelected,    setAssignSelected]    = useState<Set<string>>(new Set());
-  const [assignParams,      setAssignParams]      = useState<Record<string, { sets?: number; reps?: number; restSeconds?: number; scheduledDate?: string }>>({});
+  const [assignParams,      setAssignParams]      = useState<Record<string, AssignmentParams>>({});
   const [assigning,         setAssigning]         = useState(false);
   const [showAssignSuccess, setShowAssignSuccess] = useState(false);
   const [showAssignError,   setShowAssignError]   = useState(false);
@@ -95,7 +150,7 @@ export default function AssignExercisePage() {
   // Assign preview modal
   const [showAssignPreview, setShowAssignPreview] = useState(false);
   const [previewItems,      setPreviewItems]      = useState<PreviewItem[]>([]);
-  const [pendingPayload,    setPendingPayload]    = useState<{ exerciseId: string; sets: number; reps: number; restSeconds: number; scheduledDate: string }[]>([]);
+  const [pendingPayload,    setPendingPayload]    = useState<AssignmentPayload[]>([]);
 
   // Edit mode per exercise (unlocks fields for existing assignments)
   const [editingExercises, setEditingExercises] = useState<Set<string>>(new Set());
@@ -138,7 +193,7 @@ export default function AssignExercisePage() {
         setExistingAssignments(existing);
         if (existing.length === 0) return;
         const selected = new Set<string>();
-        const params: Record<string, { sets?: number; reps?: number; restSeconds?: number; scheduledDate?: string }> = {};
+        const params: Record<string, AssignmentParams> = {};
         existing.forEach((ex) => {
           selected.add(ex.exercise_id);
           params[ex.exercise_id] = {
@@ -146,6 +201,7 @@ export default function AssignExercisePage() {
             reps: ex.reps,
             restSeconds: ex.rest_seconds,
             scheduledDate: ex.assigned_date,
+            holdSeconds: ex.hold_seconds,
           };
         });
         setAssignSelected(selected);
@@ -170,7 +226,13 @@ export default function AssignExercisePage() {
       const next = { ...prev };
       tmpl.exercises.forEach((ex) => {
         if (ex.exerciseId) {
-          next[ex.exerciseId] = { ...next[ex.exerciseId], sets: ex.sets ?? undefined, reps: ex.reps ?? undefined };
+          next[ex.exerciseId] = {
+            ...next[ex.exerciseId],
+            sets: ex.sets ?? undefined,
+            reps: ex.reps ?? undefined,
+            restSeconds: ex.restSeconds ?? next[ex.exerciseId]?.restSeconds,
+            holdSeconds: ex.holdSeconds ?? next[ex.exerciseId]?.holdSeconds,
+          };
         }
       });
       return next;
@@ -200,12 +262,23 @@ export default function AssignExercisePage() {
     if (!assignPatientId) { setAssignErrorMsg("Please select a patient."); setShowAssignError(true); return; }
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
-    const payload: { exerciseId: string; sets: number; reps: number; restSeconds: number; scheduledDate: string }[] = [];
+    const payload: AssignmentPayload[] = [];
     for (const exId of assignSelected) {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
-      if (!p.sets || p.sets < 1 || !p.reps || p.reps < 1) {
+      const isIsometric = getExerciseDefinition(exId)?.kind === "isometric";
+      if (!p.sets || p.sets < 1) {
+        setAssignErrorMsg(`Please enter valid sets for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      if (!isIsometric && (!p.reps || p.reps < 1)) {
         setAssignErrorMsg(`Please enter valid sets and reps for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      if (isIsometric && p.holdSeconds !== undefined && p.holdSeconds < 1) {
+        setAssignErrorMsg(`Please enter a valid hold time (sec) for "${ex?.name ?? exId}".`);
         setShowAssignError(true);
         return;
       }
@@ -214,8 +287,27 @@ export default function AssignExercisePage() {
         setShowAssignError(true);
         return;
       }
-      const restSeconds = p.restSeconds === undefined || p.restSeconds < 0 ? DEFAULT_REST_SECONDS : p.restSeconds;
-      payload.push({ exerciseId: exId, sets: p.sets, reps: p.reps, restSeconds, scheduledDate: p.scheduledDate });
+      // Rest defaults to DEFAULT_REST_SECONDS when left blank; 0 = no rest.
+      const restSeconds =
+        p.restSeconds === undefined || p.restSeconds < 0
+          ? DEFAULT_REST_SECONDS
+          : p.restSeconds;
+      // Hold defaults when blank; only meaningful for isometric exercises.
+      const holdSeconds =
+        p.holdSeconds === undefined || p.holdSeconds < 1
+          ? DEFAULT_HOLD_SECONDS
+          : p.holdSeconds;
+      // Isometric exercises carry a placeholder rep value to satisfy the NOT
+      // NULL column; the camera page uses holdSeconds, not reps, for them.
+      const reps = isIsometric ? p.reps ?? 1 : p.reps!;
+      payload.push({
+        exerciseId: exId,
+        sets: p.sets,
+        reps,
+        restSeconds,
+        holdSeconds,
+        scheduledDate: p.scheduledDate,
+      });
     }
 
     // Build diff for preview
@@ -224,19 +316,20 @@ export default function AssignExercisePage() {
       const name = ex?.name ?? item.exerciseId;
       const existing = existingAssignments.find((e) => e.exercise_id === item.exerciseId);
       if (!existing) {
-        return { exerciseId: item.exerciseId, name, type: "new", after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, scheduledDate: item.scheduledDate } };
+        return { exerciseId: item.exerciseId, name, type: "new", after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds, scheduledDate: item.scheduledDate } };
       }
       const changed =
         item.sets !== existing.sets ||
         item.reps !== existing.reps ||
         item.restSeconds !== existing.rest_seconds ||
+        item.holdSeconds !== existing.hold_seconds ||
         item.scheduledDate !== existing.assigned_date;
       return {
         exerciseId: item.exerciseId,
         name,
         type: changed ? "updated" : "unchanged",
-        before: { sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, scheduledDate: existing.assigned_date },
-        after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, scheduledDate: item.scheduledDate },
+        before: { sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, holdSeconds: existing.hold_seconds, scheduledDate: existing.assigned_date },
+        after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds, scheduledDate: item.scheduledDate },
       };
     });
 
@@ -335,10 +428,12 @@ export default function AssignExercisePage() {
       if (!existing) return true; // brand-new exercise
       if (!editingExercises.has(exId)) continue; // locked — can't have changed
       const restSeconds = p.restSeconds === undefined || p.restSeconds < 0 ? DEFAULT_REST_SECONDS : p.restSeconds;
+      const holdSeconds = p.holdSeconds === undefined || p.holdSeconds < 1 ? DEFAULT_HOLD_SECONDS : p.holdSeconds;
       if (
         p.sets !== existing.sets ||
         p.reps !== existing.reps ||
         restSeconds !== existing.rest_seconds ||
+        holdSeconds !== existing.hold_seconds ||
         p.scheduledDate !== existing.assigned_date
       ) return true;
     }
@@ -414,7 +509,12 @@ export default function AssignExercisePage() {
                     <span className="text-sm font-medium text-gray-900">{ex.name}</span>
                   </div>
                   <div className="flex items-center gap-4 text-xs text-gray-500 shrink-0">
-                    <span>{ex.sets} sets × {ex.reps} reps</span>
+                    <span>
+                      {ex.sets} sets ×{" "}
+                      {getExerciseDefinition(ex.exercise_id)?.kind === "isometric"
+                        ? `${ex.hold_seconds}s hold`
+                        : `${ex.reps} reps`}
+                    </span>
                     <span>{ex.rest_seconds}s rest</span>
                     <span className="text-green-700 font-medium">{fmtDate(ex.assigned_date)}</span>
                   </div>
@@ -460,9 +560,14 @@ export default function AssignExercisePage() {
                       {tmpl.exercises.map((ex, i) => (
                         <li key={i} className="flex items-center justify-between text-xs text-gray-700">
                           <span>{ex.name}</span>
-                          {(ex.sets || ex.reps) && (
+                          {(ex.sets || ex.reps || ex.holdSeconds) && (
                             <span className="text-gray-400 font-mono ml-4 shrink-0">
-                              {ex.sets ?? "?"}×{ex.reps ?? "?"}
+                              {ex.sets ?? "?"}×
+                              {prescriptionTargetText({
+                                exerciseId: ex.exerciseId,
+                                reps: ex.reps,
+                                holdSeconds: ex.holdSeconds,
+                              })}
                             </span>
                           )}
                         </li>
@@ -499,7 +604,7 @@ export default function AssignExercisePage() {
                 onCancelEdit={() => {
                   setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
                   const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, scheduledDate: original.assigned_date } }));
+                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, holdSeconds: original.hold_seconds, scheduledDate: original.assigned_date } }));
                 }}
                 onParam={(f, v) =>
                   setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
@@ -531,7 +636,7 @@ export default function AssignExercisePage() {
                     onCancelEdit={() => {
                       setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
                       const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, scheduledDate: original.assigned_date } }));
+                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, holdSeconds: original.hold_seconds, scheduledDate: original.assigned_date } }));
                     }}
                     onParam={(f, v) =>
                       setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
@@ -582,13 +687,17 @@ export default function AssignExercisePage() {
                   .filter((e) => deleteSelected.has(e.exercise_id))
                   .map((ex) => (
                     <div key={ex.exercise_id} className="px-4 py-3">
-                      <p className="text-sm font-semibold text-gray-900 mb-2">{ex.name}</p>
-                      <div className="space-y-0.5 text-xs text-gray-600">
-                        <p>Sets: {ex.sets}</p>
-                        <p>Reps: {ex.reps}</p>
-                        <p>Rest: {ex.rest_seconds}s</p>
-                        <p>Scheduled Date: {fmtDateFull(ex.assigned_date)}</p>
-                      </div>
+                        <p className="text-sm font-semibold text-gray-900 mb-2">{ex.name}</p>
+                        <div className="space-y-0.5 text-xs text-gray-600">
+                          <p>Sets: {ex.sets}</p>
+                          {getExerciseDefinition(ex.exercise_id)?.kind === "isometric" ? (
+                            <p>Hold: {ex.hold_seconds}s</p>
+                          ) : (
+                            <p>Reps: {ex.reps}</p>
+                          )}
+                          <p>Rest: {ex.rest_seconds}s</p>
+                          <p>Scheduled Date: {fmtDateFull(ex.assigned_date)}</p>
+                        </div>
                     </div>
                   ))}
               </div>
@@ -717,10 +826,7 @@ export default function AssignExercisePage() {
                       <div key={item.exerciseId} className="px-4 py-3">
                         <p className="text-sm font-semibold text-gray-900 mb-2">{item.name}</p>
                         <div className="space-y-0.5 text-xs text-gray-600">
-                          <p>Sets: {item.after.sets}</p>
-                          <p>Reps: {item.after.reps}</p>
-                          <p>Rest: {item.after.restSeconds}s</p>
-                          <p>Scheduled Date: {fmtDateFull(item.after.scheduledDate)}</p>
+                          <PrescriptionDetails exerciseId={item.exerciseId} snapshot={item.after} />
                         </div>
                       </div>
                     ))}
@@ -742,19 +848,13 @@ export default function AssignExercisePage() {
                           <div className="bg-white/70 rounded-lg px-3 py-2.5 border border-red-200">
                             <p className="text-red-600 font-semibold mb-1.5">Before</p>
                             <div className="space-y-0.5 text-gray-600">
-                              <p>Sets: {item.before!.sets}</p>
-                              <p>Reps: {item.before!.reps}</p>
-                              <p>Rest: {item.before!.restSeconds}s</p>
-                              <p>Scheduled Date: {fmtDateFull(item.before!.scheduledDate)}</p>
+                              <PrescriptionDetails exerciseId={item.exerciseId} snapshot={item.before!} />
                             </div>
                           </div>
                           <div className="bg-white/70 rounded-lg px-3 py-2.5 border border-green-200">
                             <p className="text-green-600 font-semibold mb-1.5">After</p>
                             <div className="space-y-0.5 text-gray-600">
-                              <p>Sets: {item.after.sets}</p>
-                              <p>Reps: {item.after.reps}</p>
-                              <p>Rest: {item.after.restSeconds}s</p>
-                              <p>Scheduled Date: {fmtDateFull(item.after.scheduledDate)}</p>
+                              <PrescriptionDetails exerciseId={item.exerciseId} snapshot={item.after} />
                             </div>
                           </div>
                         </div>
@@ -775,10 +875,7 @@ export default function AssignExercisePage() {
                       <div key={item.exerciseId} className="px-4 py-3">
                         <p className="text-sm font-semibold text-gray-700 mb-2">{item.name}</p>
                         <div className="space-y-0.5 text-xs text-gray-500">
-                          <p>Sets: {item.after.sets}</p>
-                          <p>Reps: {item.after.reps}</p>
-                          <p>Rest: {item.after.restSeconds}s</p>
-                          <p>Scheduled Date: {fmtDateFull(item.after.scheduledDate)}</p>
+                          <PrescriptionDetails exerciseId={item.exerciseId} snapshot={item.after} />
                         </div>
                       </div>
                     ))}
@@ -816,17 +913,20 @@ function AssignRow({
 }: {
   exercise: Exercise;
   checked: boolean;
-  params: { sets?: number; reps?: number; restSeconds?: number; scheduledDate?: string };
+  params: AssignmentParams;
   minDate: string;
   isExisting: boolean;
   isEditing: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onCancelEdit: () => void;
-  onParam: (field: "sets" | "reps" | "restSeconds", val: number | undefined) => void;
+  onParam: (field: "sets" | "reps" | "restSeconds" | "holdSeconds", val: number | undefined) => void;
   onDate: (val: string) => void;
 }) {
   const locked = isExisting && !isEditing;
+  // Isometric exercises (e.g. ex_006 T-pose) are timed holds, not rep-counted —
+  // show a per-side "Hold (sec)" input instead of Reps.
+  const isIsometric = getExerciseDefinition(exercise.id)?.kind === "isometric";
   return (
     <div className={`rounded-xl border p-3 transition ${checked ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
       <label className="flex items-start gap-3 cursor-pointer">
@@ -880,16 +980,29 @@ function AssignRow({
                 className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
               />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Reps <span className="text-red-500">*</span></label>
-              <input
-                type="number" min={1} value={params.reps ?? ""}
-                onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
-                placeholder="e.g. 12"
-                disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
-              />
-            </div>
+            {isIsometric ? (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Hold (sec)</label>
+                <input
+                  type="number" min={1} value={params.holdSeconds ?? ""}
+                  onChange={(e) => onParam("holdSeconds", e.target.value ? Number(e.target.value) : undefined)}
+                  placeholder={`${DEFAULT_HOLD_SECONDS}`}
+                  disabled={locked}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Reps <span className="text-red-500">*</span></label>
+                <input
+                  type="number" min={1} value={params.reps ?? ""}
+                  onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
+                  placeholder="e.g. 12"
+                  disabled={locked}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                />
+              </div>
+            )}
             <div>
               <label className="block text-xs text-gray-500 mb-1">Rest (sec)</label>
               <input

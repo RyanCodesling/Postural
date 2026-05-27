@@ -248,6 +248,7 @@ export async function deleteExercise(id: string) {
 // ── Patient exercises ─────────────────────────────────────────────────────────
 
 export const DEFAULT_REST_SECONDS = 60;
+export const DEFAULT_HOLD_SECONDS = 30;
 
 type PatientExerciseAssignment = {
   exerciseId: string;
@@ -255,6 +256,7 @@ type PatientExerciseAssignment = {
   reps: number;
   restSeconds?: number;
   scheduledDate?: string; // YYYY-MM-DD; falls back to CURRENT_DATE if omitted
+  holdSeconds?: number;
 };
 
 function normalizeRestSeconds(restSeconds: unknown): number {
@@ -268,6 +270,19 @@ function normalizeRestSeconds(restSeconds: unknown): number {
   return Math.floor(restSeconds);
 }
 
+// Hold duration must be at least 1 second — a 0-second hold is meaningless for
+// an isometric exercise. Anything missing/invalid falls back to the default.
+function normalizeHoldSeconds(holdSeconds: unknown): number {
+  if (
+    typeof holdSeconds !== "number" ||
+    !Number.isFinite(holdSeconds) ||
+    holdSeconds < 1
+  ) {
+    return DEFAULT_HOLD_SECONDS;
+  }
+  return Math.floor(holdSeconds);
+}
+
 export async function assignExercisesToPatient(
   patientId: string,
   exercises: PatientExerciseAssignment[]
@@ -277,19 +292,21 @@ export async function assignExercisesToPatient(
     await client.query("BEGIN");
     for (const ex of exercises) {
       const restSeconds = normalizeRestSeconds(ex.restSeconds);
+      const holdSeconds = normalizeHoldSeconds(ex.holdSeconds);
       const assignedDate =
         ex.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.scheduledDate)
           ? ex.scheduledDate
           : new Date().toISOString().split("T")[0];
       await client.query(
-        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date, hold_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (exercise_id, patient_id) DO UPDATE
          SET sets          = EXCLUDED.sets,
              reps          = EXCLUDED.reps,
              rest_seconds  = EXCLUDED.rest_seconds,
-             assigned_date = EXCLUDED.assigned_date`,
-        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, assignedDate]
+             assigned_date = EXCLUDED.assigned_date,
+             hold_seconds  = EXCLUDED.hold_seconds`,
+        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, assignedDate, holdSeconds]
       );
     }
     await client.query("COMMIT");
@@ -312,7 +329,8 @@ export async function deletePatientExercises(patientId: string, exerciseIds: str
 export async function getPatientExercises(patientId: string) {
   const result = await pool.query(
     `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
-            pe.status, pe.sets, pe.reps, pe.rest_seconds, e.name, e.description
+            pe.status, pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+            e.name, e.description
      FROM patient_exercises pe
      JOIN exercises e ON e.id = pe.exercise_id
      WHERE pe.patient_id = $1
@@ -337,7 +355,8 @@ export async function getPrograms(therapistId: string) {
                   'isCustom',    te.is_custom,
                   'sets',        te.sets,
                   'reps',        te.reps,
-                  'restSeconds', te.rest_seconds
+                  'restSeconds', te.rest_seconds,
+                  'holdSeconds', te.hold_seconds
                 ) ORDER BY te.id
               ) FILTER (WHERE te.id IS NOT NULL),
               '[]'
@@ -367,6 +386,7 @@ interface ProgramExerciseRow {
   sets: number | null;
   reps: number | null;
   restSeconds: number | null;
+  holdSeconds: number | null;
 }
 
 interface ProgramExerciseInput {
@@ -377,6 +397,7 @@ interface ProgramExerciseInput {
   sets?: number;
   reps?: number;
   restSeconds?: number;
+  holdSeconds?: number;
 }
 
 async function insertProgramExercises(
@@ -385,10 +406,11 @@ async function insertProgramExercises(
   exercises: ProgramExerciseInput[]
 ) {
   for (const ex of exercises) {
+    const holdSeconds = normalizeHoldSeconds(ex.holdSeconds);
     await client.query(
       `INSERT INTO program_exercises
-         (program_id, exercise_id, name, description, is_custom, sets, reps, rest_seconds)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (program_id, exercise_id, name, description, is_custom, sets, reps, rest_seconds, hold_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         programId,
         ex.exerciseId ?? null,
@@ -398,6 +420,7 @@ async function insertProgramExercises(
         ex.sets ?? null,
         ex.reps ?? null,
         ex.restSeconds != null && ex.restSeconds >= 0 ? ex.restSeconds : 60,
+        holdSeconds,
       ]
     );
   }

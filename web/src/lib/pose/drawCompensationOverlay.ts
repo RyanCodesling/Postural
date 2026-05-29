@@ -34,7 +34,7 @@ function isWarning(spec: CompensationMetricSpec, value: number): boolean {
 
 const BOX_PAD    = 12; // px padding around the landmark bounding box
 const BOX_RADIUS = 10; // px corner radius of the outline box
-const FONT_SIZE  = 18; // px — fixed; canvas is typically ~640 px wide
+const FONT_SIZE  = 22; // px — fixed; canvas is typically ~640 px wide
 
 /** Draws a rounded rect path (stroke or fill by the caller). */
 function roundedRectPath(
@@ -109,7 +109,7 @@ export function drawCompensationOverlay(
 
     // ── Red outline box ───────────────────────────────────────────────────
     ctx.save();
-    ctx.strokeStyle = "rgba(239, 68, 68, 0.9)";
+    ctx.strokeStyle = "rgba(180, 108, 28, 0.90)";
     ctx.lineWidth = 3;
     roundedRectPath(ctx, minX, minY, maxX - minX, maxY - minY, BOX_RADIUS);
     ctx.stroke();
@@ -141,8 +141,8 @@ export function drawCompensationOverlay(
     const pillW = measured.width + 14;
     const pillH = labelH;
 
-    // Red pill background
-    ctx.fillStyle = "rgba(239, 68, 68, 0.85)";
+    // Amber pill background
+    ctx.fillStyle = "rgba(180, 108, 28, 0.90)";
     roundedRectPath(ctx, textX - pillW / 2, textY - pillH, pillW, pillH, 6);
     ctx.fill();
 

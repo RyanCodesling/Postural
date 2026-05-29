@@ -1,7 +1,17 @@
 # Sprint Updates 
 
-## 📌 New sprint update here (●'◡'●) | *author_name*
--
+## 📌 Update-5-29-26 | *RyanCodesling*
+
+- Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, center camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
+- Added responsive stacking for the refreshed camera layout so narrower viewports keep the camera, metrics, and controls readable instead of clipping fixed side rails
+- Restored the non-mirrored patient capture-readiness banner in the camera viewport; framing messages such as visibility and positioning prompts now remain readable even when selfie mirroring is enabled
+- Kept the recent tilt-confidence behavior: the patient-facing tilt banner appears only when a hip or ear reference line is missing, while visible hip/ear divergence still stays flagged as low confidence for metrics and clinician interpretation
+- Added `hasMissingTiltReferenceLine()` and `tiltReference.test.ts` to pin the distinction between missing tilt references and visible reference disagreement
+- Cleaned up the refreshed session controls: countdown now locks the previous/next exercise stepper, End can cancel countdown directly, ended sessions keep the final timer visible, and progress labels distinguish ready, starting, active, rest, ended, and complete states
+- Made the camera right rail isometric-aware so `ex_006` displays timed holds such as `30s hold` instead of rep-only prescription text
+- Updated the compensation overlay accent from red to amber and increased overlay label size for better readability at exercise distance
+- Updated the app font setup to expose Inter and JetBrains Mono through global `--sans` and `--mono` variables used by the refreshed camera interface
+- Validation completed from `web/`: `npx tsc --noEmit --pretty false` passed; `tiltReference.test.ts`, `scapularElevation.test.ts`, `trunkSideAgreement.test.ts`, and `shoulderAbduction.test.ts` passed; browser verification confirmed the `ex_006` hold display, countdown stepper lock, and countdown End cancellation; `git diff --check` passed with line-ending warnings only
 
 ---
 

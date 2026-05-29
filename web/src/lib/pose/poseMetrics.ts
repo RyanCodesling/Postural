@@ -156,6 +156,18 @@ export type TiltReference = {
 };
 
 /**
+ * True when low tilt confidence is caused by a missing reference line rather
+ * than by visible hip/ear disagreement.
+ *
+ * This distinction lets the patient UI show a framing prompt only for the
+ * actionable case while preserving "low" confidence for analytics whenever
+ * both reference lines are visible but diverge.
+ */
+export function hasMissingTiltReferenceLine(tiltReference: TiltReference): boolean {
+  return tiltReference.confidence === "low" && tiltReference.divergenceDeg === null;
+}
+
+/**
  * AGREEMENT_THRESHOLD_DEG
  *
  * Maximum angular difference between the hip line and ear line for them

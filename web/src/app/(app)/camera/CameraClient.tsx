@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
@@ -18,6 +18,7 @@ import {
   computeCompensationScore,
   computeLateralNeckTilt,
   computeScapularElevation,
+  hasMissingTiltReferenceLine,
   computeTrunkLateralFlexionFromNeutralSigned,
   computeTrunkLateralFlexionUncorrectedSigned,
   type ExerciseFrameMetrics,
@@ -291,6 +292,48 @@ const EX005_DEBUG_THROTTLE_MS = 250;
 const BASELINE_SAMPLE_COUNT = 90; // ~3 s at 30 fps
 const CAPTURE_READINESS_RESET_GRACE_MS = 300;
 
+// ── Clinical design constants ────────────────────────────────────────────────
+
+const ACCENT = {
+  hex:  "oklch(0.55 0.07 200)",
+  soft: "oklch(0.95 0.02 200)",
+  text: "oklch(0.35 0.06 200)",
+};
+
+type ScoreTier = { hex: string; soft: string; text: string; label: string };
+
+function scoreTier(score: number | null): ScoreTier {
+  if (score == null) return { hex: "oklch(0.75 0.01 240)", soft: "oklch(0.95 0.005 240)", text: "oklch(0.55 0.01 240)", label: "calibrating" };
+  if (score >= 80)   return { hex: "oklch(0.62 0.11 145)", soft: "oklch(0.96 0.04 145)", text: "oklch(0.40 0.07 145)", label: "in range" };
+  if (score >= 60)   return { hex: "oklch(0.70 0.12 80)",  soft: "oklch(0.96 0.04 80)",  text: "oklch(0.42 0.09 75)",  label: "borderline" };
+  if (score >= 40)   return { hex: "oklch(0.65 0.15 50)",  soft: "oklch(0.96 0.05 50)",  text: "oklch(0.43 0.12 45)",  label: "compensating" };
+  return             { hex: "oklch(0.58 0.17 25)",  soft: "oklch(0.96 0.04 25)",  text: "oklch(0.45 0.14 25)",  label: "poor form" };
+}
+
+function clinicalNavBtnStyle(): CSSProperties {
+  return {
+    width: 36,
+    border: "1px solid oklch(0.90 0.003 240)",
+    background: "white",
+    borderRadius: 8,
+    color: "oklch(0.35 0.01 240)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    flexShrink: 0,
+  };
+}
+
+type CardSpec = {
+  key: MetricName;
+  label: string;
+  value: number | null;
+  kind: "primary" | "compensation";
+  warningThreshold?: number;
+  compareDirection?: "above" | "below";
+};
+
 export default function CameraClient() {
   const { user } = useAuth();
   const dashboardHref =
@@ -431,7 +474,7 @@ export default function CameraClient() {
   const [mirror, setMirror] = useState(true);
 
   const [currentTime, setCurrentTime] = useState<string>("");
-  const [currentDate, setCurrentDate] = useState<string>("");
+  const [viewportWidth, setViewportWidth] = useState(1280);
 
   const searchParams = useSearchParams();
   const initialExerciseId = searchParams.get("exerciseId") ?? "";
@@ -1269,28 +1312,17 @@ export default function CameraClient() {
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
  
-  const showTiltWarning = frameMetrics.tiltReference.confidence === "low";
+  // Low tilt confidence has two meanings:
+  // 1. One reference line is missing (divergenceDeg === null): actionable
+  //    camera/framing issue, so show the patient-facing banner.
+  // 2. Hips and ears are both visible but disagree: expected during some
+  //    exercises and retained as an internal metric flag, not a persistent
+  //    patient warning.
+  const showTiltWarning = hasMissingTiltReferenceLine(frameMetrics.tiltReference);
  
-  // `metricCards` is the list of cards to render in the bottom-left overlay.
+  // `metricCards` is the list of cards to render in the left rail.
   // Built dynamically from the active exercise definition. Primary metric
-  // renders first (severity-styled), then each compensation metric (compensation-styled).
-  type CardSpec = {
-    key: MetricName;
-    label: string;
-    value: number | null;
-    kind: "primary" | "compensation";
-    warningThreshold?: number;
-    /**
-     * Direction the warningThreshold compares against. Default "above"
-     * preserves pre-2026-05-21 behavior: flag when `Math.abs(value) >=
-     * warningThreshold` (typical "higher = worse" compensation like
-     * trunkLean). "below" flags when `value < warningThreshold` ("lower
-     * = worse", used by ex_007/ex_008 for elbowFlexion + the Wall Angels
-     * foreshortening signal). See `CompensationMetricSpec` JSDoc in
-     * registry.ts.
-     */
-    compareDirection?: "above" | "below";
-  };
+  // renders first, then each compensation metric.
   
   const metricCards: CardSpec[] = (() => {
     if (!activeDefinition) return [];
@@ -1331,13 +1363,6 @@ export default function CameraClient() {
   
   // Derived stat-panel values (replacing the hardcoded
   // placeholders that lived here pre-2026-05-22).
-
-  /**
-   * SETS cell value: completed sets in this session. The StatPanel/
-   * BidirectionalStatPanel renders this as a number; the progress bar
-   * below the panel shows progress through the session.
-   */
-  const sets = completedSets;
 
   /**
    * Progress through the entire session.
@@ -2471,20 +2496,25 @@ export default function CameraClient() {
     const updateDateTime = () => {
       const now = new Date();
       setCurrentTime(now.toLocaleTimeString());
-      setCurrentDate(now.toLocaleDateString());
     };
     updateDateTime();
     const interval = setInterval(updateDateTime, 1000);
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    updateViewportWidth();
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
+
   if (!mounted) {
     return (
-      <main className="h-screen overflow-hidden bg-gray-50 p-4">
-        <div className="w-full">
-          <div className="p-4 rounded border bg-white">Loading camera…</div>
-        </div>
-      </main>
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "oklch(0.985 0.003 90)", fontFamily: "var(--sans)" }}>
+        <span style={{ fontFamily: "var(--mono)", fontSize: 13, color: "oklch(0.45 0.01 240)", letterSpacing: ".1em" }}>Loading camera…</span>
+      </div>
     );
   }
 
@@ -2494,37 +2524,11 @@ export default function CameraClient() {
   const hasNextExercise =
     selectedExerciseIndex !== -1 &&
     selectedExerciseIndex < assignedExercises.length - 1;
-
-  // Hero panel state. "Complete" = the session ended with every prescribed set
-  // finished (emerald). "Ended early" = ended before completion via the End
-  // button (slate). Otherwise idle/active shows the default indigo→blue.
-  // Note: completing a non-last exercise auto-advances to the next one (which
-  // lands idle), so the emerald "complete" hero is seen on the final exercise
-  // when the whole session finishes.
-  const isResting = sessionState === "resting";
-  // Stepper navigation is locked while a session is in progress (active OR
-  // resting) so an exercise can't be abandoned mid-session by accident.
-  const sessionBusy = sessionState === "active" || sessionState === "resting";
-  const exerciseComplete =
-    sessionState === "ended" && completedSets >= prescription.sets;
-  const endedEarly =
-    sessionState === "ended" && completedSets < prescription.sets;
-  const heroGradient = isResting
-    ? "from-sky-500 to-cyan-600"
-    : exerciseComplete
-      ? "from-emerald-500 to-green-600"
-      : endedEarly
-        ? "from-slate-400 to-slate-500"
-        : "from-indigo-500 to-blue-600";
-  const heroCaption = isResting
-    ? "Resting"
-    : exerciseComplete
-      ? "✓ Complete"
-      : endedEarly
-        ? "Ended early"
-        : selectedExerciseIndex >= 0
-          ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length}`
-          : `${assignedExercises.length} exercises`;
+  // Stepper navigation locked while a session is in progress.
+  const sessionBusy =
+    sessionState === "active" ||
+    sessionState === "resting" ||
+    sessionState === "countdown";
   const baselineVisible = baselinePhase === "capturing";
   const baselineSamples = Math.min(
     baselineProgress.samples,
@@ -2537,281 +2541,583 @@ export default function CameraClient() {
     0,
     Math.ceil((baselineProgress.required - baselineSamples) / 30),
   );
+  const score = frameMetrics.compensationScore;
+  const tier = scoreTier(score);
+  const cameraBg = "oklch(0.20 0.008 240)";
+  const currentSetIdx = Math.min(completedSets + 1, prescription.sets);
+  const showTiltBanner = captureOk && showTiltWarning;
+  const patientAlertVisible = !captureOk || showTiltBanner;
+  const compactLayout = viewportWidth < 1024;
+  const tightLayout = viewportWidth < 720;
+  const prescriptionTargetText =
+    activeDefinition?.kind === "isometric"
+      ? `${prescription.holdSeconds}s hold`
+      : activeDefinition?.bilateral
+        ? `${prescription.reps} reps/side`
+        : `${prescription.reps} reps`;
 
   return (
     <>
       {/* Sidebar overlay backdrop */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/50"
+          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, background: "rgba(0,0,0,0.4)" }}
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       {/* Slide-in navigation sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        style={{
+          position: "fixed",
+          top: 0,
+          bottom: 0,
+          left: 0,
+          zIndex: 40,
+          width: 256,
+          background: "white",
+          borderRight: "1px solid oklch(0.93 0.003 240)",
+          display: "flex",
+          flexDirection: "column",
+          padding: 24,
+          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
+          transition: "transform 0.2s",
+          boxShadow: sidebarOpen ? "4px 0 16px oklch(0 0 0 / 0.08)" : "none",
+        }}
       >
-        <div className="mb-8">
-          <div className="text-lg font-semibold text-white">{user?.name}</div>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div style={{
+              width: 20, height: 20, borderRadius: 4, background: ACCENT.hex,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "white", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+            }}>P</div>
+            <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>Postural</span>
+          </div>
+          {user?.name && (
+            <div style={{ fontSize: 12, color: "oklch(0.50 0.01 240)", marginTop: 4 }}>{user.name}</div>
+          )}
         </div>
 
         <nav>
-          <ul className="space-y-1">
-            <li>
-              <Link
-                href={dashboardHref}
-                className="flex items-center gap-2 px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
-                onClick={() => setSidebarOpen(false)}
-              >
-                <CameraHomeIcon /> Back to Dashboard
-              </Link>
-            </li>
-          </ul>
+          <Link
+            href={dashboardHref}
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 10px", borderRadius: 6,
+              fontSize: 13, color: "oklch(0.30 0.01 240)",
+              textDecoration: "none",
+            }}
+            onClick={() => setSidebarOpen(false)}
+          >
+            <CameraHomeIcon /> Back to Dashboard
+          </Link>
         </nav>
 
-        <div className="mt-auto pt-6">
+        <div style={{ marginTop: "auto", paddingTop: 24 }}>
           <button
             onClick={() => setSidebarOpen(false)}
-            className="w-full px-3 py-2 rounded bg-green-800 text-white text-sm hover:bg-green-700"
+            style={{
+              width: "100%", padding: "8px 12px", borderRadius: 6,
+              border: "1px solid oklch(0.90 0.003 240)", background: "white",
+              fontSize: 13, color: "oklch(0.35 0.01 240)", cursor: "pointer",
+            }}
           >
-            ✕ Close Menu
+            ✕ Close
           </button>
         </div>
       </aside>
 
-    <main className="h-screen overflow-hidden bg-gray-50">
-      {/* Full-width container (no max-w) */}
-      <div className="h-full w-full px-4 lg:px-6 py-4 flex flex-col gap-3">
-        {/* Header stays compact so content fits */}
-        <header className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            {/* Hamburger — always visible on all screen sizes */}
+      {/* Full page wrapper */}
+      <div style={{
+        fontFamily: "var(--sans)",
+        color: "oklch(0.18 0.01 240)",
+        background: "oklch(0.985 0.003 90)",
+        height: compactLayout ? "auto" : "100vh",
+        minHeight: "100vh",
+        width: "100vw",
+        overflow: compactLayout ? "auto" : "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}>
+        {/* HEADER */}
+        <header style={{
+          height: 56,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: compactLayout ? "wrap" : "nowrap",
+          gap: compactLayout ? 12 : 0,
+          padding: compactLayout ? "10px 12px" : "0 24px",
+          background: "white",
+          borderBottom: "1px solid oklch(0.93 0.003 240)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 20 }}>
             <button
               onClick={() => setSidebarOpen(true)}
-              className="shrink-0 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
               aria-label="Open menu"
+              style={{
+                width: 28, height: 28, border: "1px solid oklch(0.90 0.003 240)",
+                background: "white", borderRadius: 6, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: "oklch(0.35 0.01 240)",
+              }}
             >
-              ☰ Menu
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <line x1="3" y1="12" x2="21" y2="12"/>
+                <line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
             </button>
-            <div className="min-w-0">
-              <h1 className="text-xl font-bold leading-tight">Camera</h1>
-              <div className="flex flex-wrap items-center gap-2 mt-1">
-                <span className={`w-2 h-2 rounded-full ${modelLoaded ? "bg-green-500" : "bg-orange-500"}`} />
-                <span className="text-xs text-gray-600">{modelLoaded ? "AI Ready" : "Loading Model..."}</span>
-                <span
-                  className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                    captureOk ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
-                  }`}
-                  title={captureMessage}
-                >
-                  {captureOk ? "Capture OK" : "Paused"}
-                </span>
-                {!captureOk && <span className="text-xs text-gray-600 truncate">{captureMessage}</span>}
-              </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: 4, background: ACCENT.hex,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: "white", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+              }}>P</div>
+              <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em" }}>Postural</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <span style={{ color: "oklch(0.75 0.01 240)" }}>/</span>
+              <span style={{ color: "oklch(0.20 0.01 240)" }}>Camera</span>
             </div>
           </div>
 
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => startCamera(selectedDeviceId || undefined)}
-              disabled={isStarting || !modelLoaded}
-              className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
-            >
-              {isStarting ? "Starting..." : "Start"}
-            </button>
-            <button
-              onClick={stopCamera}
-              className="px-3 py-2 rounded border border-gray-300 bg-white text-sm"
-            >
-              Stop
-            </button>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: compactLayout ? "flex-start" : "flex-end",
+            flexWrap: "wrap",
+            gap: compactLayout ? 10 : 16,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <ClinicalStatusDot ok={modelLoaded} />
+              <span style={{ fontSize: 12, color: "oklch(0.30 0.01 240)" }}>
+                {modelLoaded ? "AI ready" : "Loading model"}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <ClinicalStatusDot ok={captureOk} />
+              <span
+                title={captureMessage}
+                style={{
+                  fontSize: 12,
+                  color: "oklch(0.30 0.01 240)",
+                  maxWidth: 220,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {captureOk ? "Capture OK" : captureMessage}
+              </span>
+            </div>
+            <div style={{ width: 1, height: 20, background: "oklch(0.92 0.003 240)", display: tightLayout ? "none" : "block" }} />
+            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)", display: tightLayout ? "none" : "inline" }}>
+              {currentTime}
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={stopCamera}
+                style={{
+                  padding: "6px 14px", border: "1px solid oklch(0.90 0.003 240)",
+                  background: "white", borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                }}
+              >Stop</button>
+              <button
+                onClick={() => startCamera(selectedDeviceId || undefined)}
+                disabled={isStarting || !modelLoaded}
+                style={{
+                  padding: "6px 14px",
+                  border: `1px solid ${ACCENT.hex}`,
+                  background: ACCENT.hex,
+                  borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  color: "white", cursor: "pointer",
+                  opacity: (isStarting || !modelLoaded) ? 0.5 : 1,
+                }}
+              >
+                {isStarting ? "Starting…" : "Start camera"}
+              </button>
+            </div>
           </div>
         </header>
 
-        {/* Errors (still no scrolling; keep compact) */}
+        {/* Error bar */}
         {error && (
-          <div className="px-3 py-2 rounded border border-red-200 bg-red-50 text-red-800 text-sm">
+          <div style={{
+            padding: "8px 24px",
+            background: "oklch(0.96 0.04 25)",
+            borderBottom: "1px solid oklch(0.88 0.06 25)",
+            fontSize: 12,
+            color: "oklch(0.40 0.12 25)",
+          }}>
             {error}
           </div>
         )}
 
-        {/* Main content fills remaining height */}
-        <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3">
-          {/* Camera panel */}
-          <div className="lg:col-span-9 min-h-0">
-            <div className="relative h-full rounded-2xl overflow-hidden bg-black shadow">
-              {/* Mirrored visual layer only */}
-              <div className={`absolute inset-0 ${mirror ? "-scale-x-100" : ""}`}>
-                <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
-                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover" />
+        {/* BODY: 3-column grid */}
+        <div style={{
+          flex: 1,
+          display: "grid",
+          gridTemplateColumns: compactLayout ? "1fr" : "240px minmax(0, 1fr) 300px",
+          minHeight: 0,
+        }}>
+          {/* LEFT RAIL — live metrics */}
+          <aside style={{
+            background: "white",
+            borderRight: compactLayout ? "none" : "1px solid oklch(0.93 0.003 240)",
+            borderTop: compactLayout ? "1px solid oklch(0.93 0.003 240)" : "none",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            overflow: compactLayout ? "visible" : "hidden",
+            order: compactLayout ? 2 : 0,
+          }}>
+            <div style={{
+              padding: "14px 16px",
+              borderBottom: "1px solid oklch(0.93 0.003 240)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}>
+              <span style={{
+                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
+              }}>Live Metrics</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "oklch(0.55 0.01 240)" }}>°</span>
+            </div>
+
+            <ClinicalScoreRow score={score} tier={tier} />
+
+            {metricCards.map((card) => (
+              <ClinicalMetricRow key={card.key} card={card} />
+            ))}
+
+            <div style={{ flex: 1 }} />
+
+            {/* Footer: resolution + fps */}
+            <div style={{
+              padding: "12px 16px",
+              borderTop: "1px solid oklch(0.93 0.003 240)",
+              background: "oklch(0.985 0.003 240)",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 10,
+            }}>
+              <div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Resolution</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>
+                  {videoRef.current ? `${videoRef.current.videoWidth} × ${videoRef.current.videoHeight}` : "—"}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame rate</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>30 fps</div>
+              </div>
+            </div>
+          </aside>
+
+          {/* CAMERA CENTER */}
+          <main style={{
+            minWidth: 0,
+            padding: compactLayout ? 12 : 16,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: compactLayout ? 560 : 0,
+            order: compactLayout ? 1 : 0,
+          }}>
+            <div style={{
+              flex: 1,
+              position: "relative",
+              borderRadius: 8,
+              overflow: "hidden",
+              background: cameraBg,
+              border: "1px solid oklch(0.92 0.003 240)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              minHeight: 0,
+            }}>
+              {/* Subtle radial gradient */}
+              <div style={{
+                position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+                background: `radial-gradient(ellipse at center, oklch(0.25 0.008 240) 0%, ${cameraBg} 60%)`,
+                pointerEvents: "none",
+              }} />
+
+              {/* Mirrored video + canvas layer */}
+              <div style={{
+                position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+                transform: mirror ? "scaleX(-1)" : "none",
+              }}>
+                <video ref={videoRef} playsInline muted style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
               </div>
 
-              {/* Non-mirrored message overlay */}
+              {/* Corner ticks */}
+              <ClinicalCornerTicks />
+
+              {/* Tilt confidence warning */}
               {!captureOk && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-6 py-3 rounded-xl bg-black/75 text-white text-lg font-semibold shadow-lg">
-                  {captureMessage}
+                <div style={{
+                  position: "absolute",
+                  top: 16,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  background: "oklch(0.99 0.02 80)",
+                  border: "2px solid oklch(0.70 0.16 65)",
+                  borderRadius: 8,
+                  padding: "10px 18px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
+                  maxWidth: "calc(100% - 32px)",
+                  zIndex: 5,
+                }}>
+                  <span style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: "oklch(0.70 0.16 65)",
+                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
+                    flexShrink: 0,
+                    display: "inline-block",
+                  }} />
+                  <span style={{
+                    fontFamily: "var(--mono)",
+                    fontSize: tightLayout ? 13 : 18,
+                    letterSpacing: ".12em",
+                    textTransform: "uppercase",
+                    color: "oklch(0.45 0.10 65)",
+                    fontWeight: 700,
+                    flexShrink: 0,
+                  }}>Paused</span>
+                  <span style={{
+                    fontSize: tightLayout ? 13 : 18,
+                    fontWeight: 500,
+                    color: "oklch(0.25 0.05 65)",
+                    overflowWrap: "anywhere",
+                  }}>
+                    {captureMessage}
+                  </span>
                 </div>
               )}
 
-              {/* Baseline-capture prompt: visible whenever a baseline is needed,
-                  including after capture drops and baseline collection restarts. */}
+              {showTiltBanner && (
+                <div style={{
+                  position: "absolute",
+                  top: 16, left: "50%", transform: "translateX(-50%)",
+                  background: "oklch(0.99 0.02 80)",
+                  border: "2px solid oklch(0.70 0.16 65)",
+                  borderRadius: 8,
+                  padding: "10px 18px",
+                  display: "flex", alignItems: "center", gap: 14,
+                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
+                  maxWidth: "calc(100% - 32px)",
+                  zIndex: 5,
+                }}>
+                  <span style={{
+                    width: 10, height: 10, borderRadius: 999,
+                    background: "oklch(0.70 0.16 65)",
+                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
+                    flexShrink: 0,
+                    display: "inline-block",
+                  }} />
+                  <span style={{
+                    fontFamily: "var(--mono)", fontSize: 18, letterSpacing: ".12em",
+                    textTransform: "uppercase", color: "oklch(0.45 0.10 65)", fontWeight: 700,
+                    flexShrink: 0,
+                  }}>Tilt</span>
+                  <span style={{ fontSize: 18, fontWeight: 500, color: "oklch(0.25 0.05 65)", whiteSpace: "nowrap" }}>
+                    Keep hips &amp; head visible
+                  </span>
+                </div>
+              )}
+
+              {/* Baseline-capture banner */}
               {baselineVisible && (
-                <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 w-[min(28rem,calc(100%-2rem))] rounded-xl bg-blue-950/85 px-5 py-4 text-white shadow-lg backdrop-blur-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold">
-                        Baseline capture
-                      </div>
-                      <div className="mt-1 text-xs text-blue-100">
-                        {captureOk
-                          ? "Stand naturally with arms relaxed."
-                          : "Paused until capture is stable."}
-                      </div>
-                    </div>
-                    <div className="shrink-0 rounded-lg bg-white/15 px-3 py-2 text-right">
-                      <div className="text-2xl font-bold leading-none tabular-nums">
-                        {baselineRemainingSec}s
-                      </div>
-                      <div className="mt-0.5 text-[10px] uppercase tracking-wide text-blue-100">
-                        remaining
-                      </div>
+                <div style={{
+                  position: "absolute",
+                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  background: "white",
+                  border: "1px solid oklch(0.92 0.003 240)",
+                  borderRadius: 8,
+                  padding: "10px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
+                  maxWidth: "calc(100% - 32px)",
+                  zIndex: 5,
+                }}>
+                  <div style={{
+                    width: 6, height: 6, borderRadius: 999, background: ACCENT.hex,
+                    boxShadow: `0 0 0 4px ${ACCENT.soft}`,
+                    display: "inline-block",
+                  }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 2,
+                    }}>Baseline capture</div>
+                    <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
+                      {captureOk ? "Stand naturally, arms relaxed" : "Paused — improve framing"}
                     </div>
                   </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
-                    <div
-                      className="h-full rounded-full bg-cyan-300 transition-[width]"
-                      style={{ width: `${baselineProgressPct}%` }}
-                    />
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-blue-100">
-                    <span>{baselineProgressPct}% ready</span>
-                    {!captureOk && <span className="truncate">{captureMessage}</span>}
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 500, color: "oklch(0.18 0.01 240)", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+                      {baselineRemainingSec}<span style={{ fontSize: 12, color: "oklch(0.55 0.01 240)", marginLeft: 2 }}>s</span>
+                    </div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", color: "oklch(0.55 0.01 240)", marginTop: 3 }}>
+                      {baselineProgressPct}% READY
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* 3-2-1 start countdown overlay — centred on the video frame */}
+              {/* Resting banner */}
+              {sessionState === "resting" && (
+                <div style={{
+                  position: "absolute",
+                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16, left: "50%", transform: "translateX(-50%)",
+                  background: "white",
+                  border: `1px solid ${ACCENT.soft}`,
+                  borderRadius: 8,
+                  padding: "8px 16px",
+                  display: "flex", alignItems: "center", gap: 14,
+                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
+                  zIndex: 5,
+                }}>
+                  <span style={{
+                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                    textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
+                  }}>Rest period</span>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 16, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" }}>
+                    {formatElapsedTime(restRemainingSec)}
+                  </span>
+                  <span style={{ fontSize: 11, color: "oklch(0.55 0.01 240)" }}>
+                    Set {currentSetIdx} of {prescription.sets} starts automatically
+                  </span>
+                </div>
+              )}
+
+              {/* 3-2-1 countdown overlay */}
               {sessionState === "countdown" && (
-                <div className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none">
-                  <div className="flex flex-col items-center gap-1">
+                <div style={{
+                  position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  zIndex: 30, pointerEvents: "none",
+                }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                     <span
                       key={countdownSec}
-                      className="text-[6rem] font-black leading-none text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.8)] select-none tabular-nums"
+                      style={{
+                        fontFamily: "var(--mono)",
+                        fontSize: "6rem",
+                        fontWeight: 900,
+                        lineHeight: 1,
+                        color: "white",
+                        filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.8))",
+                        userSelect: "none",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
                     >
                       {countdownSec}
                     </span>
-                    <span className="text-base font-semibold text-white/80 uppercase tracking-widest drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+                    <span style={{
+                      fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.8)",
+                      textTransform: "uppercase", letterSpacing: "0.2em",
+                      filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.9))",
+                    }}>
                       Get ready
                     </span>
                   </div>
                 </div>
               )}
 
-              {/* ── Tilt confidence warning — top center, own absolute element ── */}
-              {showTiltWarning && (
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-yellow-500/90 backdrop-blur-sm text-black text-xs font-semibold shadow-lg whitespace-nowrap">
-                  <span>⚠</span>
-                  <span>Measurement confidence reduced — ensure hips and head are visible</span>
-                </div>
-              )}
- 
-              {/* ── Posture metrics — bottom left ── */}
-              <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-2">
-                {metricCards.length === 0 ? (
-                  <div className="px-4 py-3 rounded-xl bg-black/65 backdrop-blur-sm text-white/60 text-xs w-44">
-                    Select an exercise to begin
-                  </div>
-                ) : (
-                  metricCards.map((card) => (
-                    <DynamicMetricCard
-                      key={card.key}
-                      label={card.label}
-                      value={card.value}
-                      kind={card.kind}
-                      warningThreshold={card.warningThreshold}
-                      compareDirection={card.compareDirection}
-                    />
-                  ))
-                )}
-                <ScoreCard score={frameMetrics.compensationScore} />
-              </div>
- 
-              {/* ── Exercise stats — bottom right ── */}
-              <div className="absolute bottom-3 right-3 z-20 flex flex-col gap-2 items-stretch">
-                {activeDefinition?.kind === "isometric" ? (
-                  <IsometricStatPanel
-                    leftInBand={holdState.leftInBand}
-                    rightInBand={holdState.rightInBand}
-                    pairedSec={holdState.pairedSec}
-                    targetSec={prescription.holdSeconds}
-                    timer={timer}
-                  />
-                ) : activeDefinition?.bilateral ? (
-                  <BidirectionalStatPanel
-                    leftReps={repCounts.left}
-                    rightReps={repCounts.right}
-                    timer={timer}
-                    targetReps={
-                      activeDefinition.kind === "dynamic" ? prescription.reps : undefined
-                    }
-                  />
-                ) : (
-                  <StatPanel
-                    sets={sets}
-                    reps={repCounts.left + repCounts.right}
-                    timer={timer}
-                    targetReps={
-                      activeDefinition?.kind === "dynamic" ? prescription.reps : undefined
-                    }
-                    targetSets={prescription.sets}
-                  />
-                )}
-                <ProgressCard
-                  progressPct={progressPct}
-                  completedSets={completedSets}
-                  targetSets={prescription.sets}
-                  sessionState={sessionState}
-                />
-              </div>
+              {/* Stat strip — patient-facing distance readouts */}
+              <ClinicalStatStrip
+                score={score}
+                tier={tier}
+                activeDefinition={activeDefinition}
+                repCounts={repCounts}
+                holdState={holdState}
+                timer={timer}
+                prescription={prescription}
+                sessionState={sessionState}
+                currentSetIdx={currentSetIdx}
+                compact={compactLayout}
+              />
             </div>
-          </div>
 
-          {/* Sidebar panel (must fit without scrolling) */}
-          <aside className="lg:col-span-3 min-h-0 flex flex-col gap-3">
-            <div className="p-3 rounded-2xl bg-white shadow-sm border">
-              <h2 className="font-semibold text-sm mb-2">Controls</h2>
+            {/* Set progress strip */}
+            <ClinicalProgressStrip
+              sessionState={sessionState}
+              currentSetIdx={currentSetIdx}
+              prescription={prescription}
+              completedSets={completedSets}
+              progressPct={progressPct}
+              compact={compactLayout}
+            />
+          </main>
+
+          {/* RIGHT RAIL — controls + reference */}
+          <aside style={{
+            background: "white",
+            borderLeft: "1px solid oklch(0.93 0.003 240)",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            overflow: compactLayout ? "visible" : "hidden",
+            order: compactLayout ? 3 : 0,
+          }}>
+            {/* Exercise stepper */}
+            <div style={{ padding: "16px 16px 14px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+              <div style={{
+                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
+                marginBottom: 10,
+              }}>Session</div>
 
               {assignedExercises.length === 0 ? (
-                <div className="w-full p-2 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 text-xs">
+                <div style={{
+                  padding: "8px 10px", borderRadius: 6,
+                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
+                  fontSize: 12, color: "oklch(0.40 0.08 75)",
+                }}>
                   No exercises assigned yet.
                 </div>
               ) : (
-                // Guided-flow stepper (hero). The current exercise name is the
-                // focal point — large type on a colored panel — flanked by
-                // Prev/Next. Both arrows are disabled while a session is active
-                // so an in-progress set can't be lost by accidental navigation
-                // (End first). Ends of the list disable the respective arrow
-                // (no wraparound).
-                <div className="flex items-stretch gap-2">
+                <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
                   <button
                     type="button"
                     onClick={() => goToAdjacentExercise(-1)}
                     disabled={!hasPrevExercise || sessionBusy}
                     aria-label="Previous exercise"
-                    className="shrink-0 w-9 rounded-xl border bg-white text-gray-700 flex items-center justify-center hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasPrevExercise || sessionBusy) ? 0.35 : 1 }}
                   >
-                    ◀
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M15 18l-6-6 6-6"/>
+                    </svg>
                   </button>
-                  <div
-                    className={`flex-1 min-w-0 rounded-xl bg-gradient-to-br ${heroGradient} px-3 py-3 text-center text-white shadow-sm transition-colors`}
-                  >
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
-                      {heroCaption}
+                  <div style={{
+                    flex: 1, padding: "12px 14px", borderRadius: 8,
+                    border: `1px solid ${ACCENT.soft}`, background: "white",
+                  }}>
+                    <div style={{
+                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 4,
+                    }}>
+                      {selectedExerciseIndex >= 0
+                        ? `Exercise ${selectedExerciseIndex + 1} / ${assignedExercises.length}`
+                        : `${assignedExercises.length} exercises`}
                     </div>
-                    <div className="text-lg font-bold leading-tight truncate">
+                    <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>
                       {selectedExerciseObj?.name ?? "—"}
                     </div>
                   </div>
@@ -2820,27 +3126,71 @@ export default function CameraClient() {
                     onClick={() => goToAdjacentExercise(1)}
                     disabled={!hasNextExercise || sessionBusy}
                     aria-label="Next exercise"
-                    className="shrink-0 w-9 rounded-xl border bg-white text-gray-700 flex items-center justify-center hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasNextExercise || sessionBusy) ? 0.35 : 1 }}
                   >
-                    ▶
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M9 18l6-6-6-6"/>
+                    </svg>
                   </button>
                 </div>
               )}
 
               {selectedExerciseObj && (
-                <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-200 text-xs text-gray-700">
-                  <div className="line-clamp-3">{selectedExerciseObj.description}</div>
-                  <div className="mt-2 flex gap-2 text-[11px] text-gray-600">
-                    <span>⏱ {selectedExerciseObj.duration}s</span>
+                <>
+                  <p style={{ marginTop: 12, marginBottom: 0, fontSize: 12.5, lineHeight: 1.5, color: "oklch(0.40 0.01 240)" }}>
+                    {selectedExerciseObj.description}
+                  </p>
+                  <div style={{
+                    marginTop: 10, display: "flex", alignItems: "center", gap: 14,
+                    fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)",
+                  }}>
+                    <span>{prescription.sets} sets</span>
+                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+                    <span>{prescriptionTargetText}</span>
+                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+                    <span>{prescription.restSeconds}s rest</span>
                   </div>
-                </div>
+                </>
               )}
+            </div>
 
-              <label className="block text-xs font-medium mt-3 mb-1">Camera device</label>
+            {/* Reference video */}
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+              <div style={{ marginBottom: 10 }}>
+                <span style={{
+                  fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                  textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
+                }}>Reference</span>
+              </div>
+              <div style={{ aspectRatio: "16/10", borderRadius: 6, overflow: "hidden", background: "oklch(0.93 0.003 240)", border: "1px solid oklch(0.92 0.003 240)" }}>
+                <video
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  controls
+                  controlsList="nodownload"
+                >
+                  <source src="/sample-video.mp4" type="video/mp4" />
+                </video>
+              </div>
+            </div>
+
+            {/* Capture settings */}
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+              <div style={{
+                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
+                marginBottom: 10,
+              }}>Capture</div>
+
+              <label style={{ display: "block", fontSize: 11, color: "oklch(0.45 0.01 240)", marginBottom: 4 }}>Device</label>
               <select
                 value={selectedDeviceId}
                 onChange={(e) => setSelectedDeviceId(e.target.value)}
-                className="w-full border rounded px-2 py-2 bg-white text-sm"
+                style={{
+                  width: "100%", padding: "8px 10px",
+                  border: "1px solid oklch(0.90 0.003 240)",
+                  borderRadius: 6, fontSize: 12, color: "oklch(0.25 0.01 240)",
+                  background: "white", marginBottom: 12,
+                }}
               >
                 {devices.length === 0 ? (
                   <option value="">(Allow camera access to list devices)</option>
@@ -2853,441 +3203,575 @@ export default function CameraClient() {
                 )}
               </select>
 
-              <div className="mt-3 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium">Mirror</p>
-                  <p className="text-[11px] text-gray-500">Front cam feel</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={mirror}
-                  onChange={(e) => setMirror(e.target.checked)}
-                  className="h-5 w-5"
-                />
-              </div>
-
-              <div className="mt-2 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium">Prefer front camera</p>
-                  <p className="text-[11px] text-gray-500">When no device selected</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={useFrontCameraHint}
-                  onChange={(e) => setUseFrontCameraHint(e.target.checked)}
-                  className="h-5 w-5"
-                />
-              </div>
-
-              <button
-                onClick={() => startCamera()}
-                className="mt-3 w-full px-3 py-2 rounded bg-gray-900 text-white text-sm"
-              >
-                Restart with preference
-              </button>
+              <ClinicalSettingRow
+                label="Mirror"
+                sub="Front cam feel"
+                on={mirror}
+                onChange={setMirror}
+              />
+              <ClinicalSettingRow
+                label="Prefer front camera"
+                sub="When no device selected"
+                on={useFrontCameraHint}
+                onChange={setUseFrontCameraHint}
+              />
             </div>
 
-            {/* Reference + time/date compact, still no scrolling */}
-            <div className="p-3 rounded-2xl bg-white shadow-sm border flex-1 min-h-0 flex flex-col">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="font-semibold text-sm">Reference</h2>
-                <div className="text-[11px] text-gray-600 text-right">
-                  <div>{currentTime}</div>
-                  <div>{currentDate}</div>
-                </div>
-              </div>
-
-              <div className="rounded-lg overflow-hidden bg-gray-200 flex-1 min-h-0">
-                <video className="w-full h-full object-cover bg-gray-300" controls controlsList="nodownload">
-                  <source src="/sample-video.mp4" type="video/mp4" />
-                  Your browser does not support the video tag.
-                </video>
-              </div>
-
-              {/*
-                Sidebar session controls (wired 2026-05-22).
-                Distinct from the header Start/Stop which control the camera
-                hardware. These control the EXERCISE SESSION lifecycle:
-                Start enters `active` (rep counter ticks, timer runs); End
-                enters `ended` (counter freezes, timer stops, optional
-                partial-set record logged). The Start button reads "Restart"
-                when the session is in the ended state so it's clear that
-                clicking it resets completedSets / repCounts / timer.
-              */}
+            {/* Session controls */}
+            <div style={{ padding: 16, marginTop: "auto" }}>
               {sessionState === "resting" ? (
-                // Hard-block rest between sets. Rep counting is suspended (the
-                // rep gate requires "active"); the next set resumes
-                // automatically when the countdown elapses.
-                <div className="mt-2 rounded-xl border border-sky-300 bg-sky-50 p-3 text-center">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-700">
-                    Rest
-                  </p>
-                  <p className="text-3xl font-bold text-sky-900 tabular-nums leading-tight">
-                    {formatElapsedTime(restRemainingSec)}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-sky-700">
-                    Next set starts automatically
-                  </p>
-                  <div className="mt-2 flex gap-2">
-                    {/*
-                      TEMPORARY: rest is specified as a HARD BLOCK with no skip.
-                      This Skip button is a stopgap for testing and should be
-                      removed so rest is non-skippable per the spec.
-                    */}
+                <>
+                  <div style={{
+                    padding: 12, borderRadius: 8,
+                    background: ACCENT.soft,
+                    marginBottom: 10, textAlign: "center",
+                  }}>
+                    <div style={{
+                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 4,
+                    }}>Rest</div>
+                    <div style={{
+                      fontFamily: "var(--mono)", fontSize: 32, fontWeight: 500,
+                      color: ACCENT.text, fontVariantNumeric: "tabular-nums", lineHeight: 1,
+                    }}>{formatElapsedTime(restRemainingSec)}</div>
+                    <div style={{ fontSize: 11, color: ACCENT.text, marginTop: 4, opacity: 0.8 }}>
+                      Next set starts automatically
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button
                       type="button"
                       onClick={skipRest}
-                      className="flex-1 px-3 py-2 rounded border bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      Skip rest
-                    </button>
+                      style={{
+                        flex: 1, padding: "8px 12px",
+                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
+                        borderRadius: 6, fontSize: 12, fontWeight: 500,
+                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                      }}
+                    >Skip rest</button>
                     <button
                       type="button"
                       onClick={handleSessionEnd}
-                      className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700"
-                    >
-                      End
-                    </button>
+                      style={{
+                        flex: 1, padding: "8px 12px",
+                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
+                        borderRadius: 6, fontSize: 12, fontWeight: 500,
+                        color: "white", cursor: "pointer",
+                      }}
+                    >End</button>
                   </div>
-                </div>
+                </>
               ) : sessionState === "active" && confirmingEnd ? (
-                // Inline confirm step for ending an exercise early. Ending now
-                // logs the in-progress set as a user-terminated partial (it
-                // won't count as complete). Shown in place of Start/End so the
-                // End action can't be double-triggered; Cancel resumes the
-                // running session untouched (reps kept counting underneath).
-                <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
-                  <p className="text-xs font-semibold text-amber-900">
+                <div style={{
+                  padding: 12, borderRadius: 8,
+                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
+                }}>
+                  <p style={{ fontSize: 12, fontWeight: 600, color: "oklch(0.35 0.08 75)", margin: "0 0 4px" }}>
                     End this exercise early?
                   </p>
-                  <p className="mt-0.5 text-[11px] text-amber-700">
+                  <p style={{ fontSize: 11, color: "oklch(0.42 0.07 75)", margin: "0 0 10px" }}>
                     The current set won&apos;t count as complete.
                   </p>
-                  <div className="mt-2 flex gap-2">
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => {
-                        handleSessionEnd();
-                        setConfirmingEnd(false);
+                      onClick={() => { handleSessionEnd(); setConfirmingEnd(false); }}
+                      style={{
+                        flex: 1, padding: "8px 12px",
+                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
+                        borderRadius: 6, fontSize: 12, fontWeight: 500,
+                        color: "white", cursor: "pointer",
                       }}
-                      className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700"
-                    >
-                      Yes, end
-                    </button>
+                    >Yes, end</button>
                     <button
                       type="button"
                       onClick={() => setConfirmingEnd(false)}
-                      className="flex-1 px-3 py-2 rounded border bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
+                      style={{
+                        flex: 1, padding: "8px 12px",
+                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
+                        borderRadius: 6, fontSize: 12, fontWeight: 500,
+                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                      }}
+                    >Cancel</button>
                   </div>
                 </div>
               ) : (
-                <div className="mt-2 flex gap-2">
+                <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={handleSessionStart}
                     disabled={!activeDefinition || sessionState === "active" || sessionState === "countdown"}
-                    className="flex-1 px-3 py-2 rounded bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      flex: 1, padding: "10px 12px",
+                      background: (sessionState === "active" || sessionState === "countdown") ? "white" : ACCENT.hex,
+                      color: (sessionState === "active" || sessionState === "countdown") ? "oklch(0.30 0.01 240)" : "white",
+                      border: (sessionState === "active" || sessionState === "countdown") ? "1px solid oklch(0.90 0.003 240)" : `1px solid ${ACCENT.hex}`,
+                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
+                      opacity: (!activeDefinition || sessionState === "active" || sessionState === "countdown") ? 0.5 : 1,
+                    }}
                   >
                     {sessionState === "ended"
                       ? "Restart"
                       : sessionState === "countdown"
                         ? `Starting… (${countdownSec})`
-                        : "Start"}
+                        : "Start session"}
                   </button>
                   <button
-                    onClick={() => setConfirmingEnd(true)}
+                    onClick={() => {
+                      if (sessionState === "countdown") {
+                        handleSessionEnd();
+                      } else {
+                        setConfirmingEnd(true);
+                      }
+                    }}
                     disabled={sessionState !== "active" && sessionState !== "countdown"}
-                    className="flex-1 px-3 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    End
-                  </button>
+                    style={{
+                      flex: 1, padding: "10px 12px",
+                      background: "white", color: "oklch(0.30 0.01 240)",
+                      border: "1px solid oklch(0.90 0.003 240)",
+                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
+                      opacity: (sessionState !== "active" && sessionState !== "countdown") ? 0.4 : 1,
+                    }}
+                  >End</button>
                 </div>
               )}
-              {/*
-                After a manual End on a non-last exercise, offer to move on.
-                Completing all prescribed sets auto-advances (never lands here
-                with a next exercise available), so this prompt only appears
-                when the user ended early — they can either Restart this
-                exercise above or step forward here.
-              */}
+
               {sessionState === "ended" && hasNextExercise && (
                 <button
                   type="button"
                   onClick={() => goToAdjacentExercise(1)}
-                  className="mt-2 w-full px-3 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+                  style={{
+                    marginTop: 8, width: "100%", padding: "10px 12px",
+                    background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`,
+                    borderRadius: 6, fontSize: 13, fontWeight: 500,
+                    color: "white", cursor: "pointer",
+                  }}
                 >
                   Next exercise →
                 </button>
               )}
             </div>
           </aside>
-        </section>
+        </div>
       </div>
-    </main>
     </>
   );
 }
 
-function scoreAccent(score: number | null): string {
-  if (score === null) return "bg-white/25";
-  if (score >= 80)   return "bg-emerald-400";
-  if (score >= 60)   return "bg-yellow-400";
-  if (score >= 40)   return "bg-orange-500";
-  return "bg-red-500";
-}
- 
-function scoreValueColor(score: number | null): string {
-  if (score === null) return "text-white/40";
-  if (score >= 80)   return "text-emerald-400";
-  if (score >= 60)   return "text-yellow-400";
-  if (score >= 40)   return "text-orange-400";
-  return "text-red-400";
+function metricWarnLabel(name: MetricName): string {
+  switch (name) {
+    case "neckTilt":            return "NECK TILT";
+    case "shoulderSymmetry":    return "SHOULDER";
+    case "trunkLean":           return "TRUNK";
+    case "scapularElevation":   return "SHRUG";
+    case "elbowFlexion":        return "ARMS";
+    default:                    return "COMPENSATION";
+  }
 }
 
-function ScoreCard({ score }: { score: number | null }) {
-  const pct = score ?? 0;
+function ClinicalStatusDot({ ok }: { ok: boolean }) {
   return (
-    <div className="flex overflow-hidden rounded-xl bg-black/65 backdrop-blur-sm shadow-lg w-44">
-      <div className={`w-1.5 shrink-0 ${scoreAccent(score)}`} />
-      <div className="px-4 py-3 flex-1">
-        <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
-          POSTURE SCORE
-        </div>
-        <div className="flex items-baseline gap-1.5">
-          <span className={`text-4xl font-bold leading-none tabular-nums ${scoreValueColor(score)}`}>
-            {score ?? "--"}
-          </span>
-          <span className="text-sm text-white/35 leading-none">/100</span>
-        </div>
-        {/* Mini score bar — animates smoothly between frames */}
-        <div className="mt-3 h-1.5 bg-white/15 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-300 ${scoreAccent(score)}`}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
+    <span style={{
+      display: "inline-block",
+      width: 6, height: 6, borderRadius: 999,
+      background: ok ? "oklch(0.65 0.13 145)" : "oklch(0.70 0.13 60)",
+      boxShadow: ok
+        ? "0 0 0 3px oklch(0.65 0.13 145 / 0.18)"
+        : "0 0 0 3px oklch(0.70 0.13 60 / 0.18)",
+    }} />
+  );
+}
+
+function ClinicalCornerTicks() {
+  const tick = (style: CSSProperties) => (
+    <div style={{
+      position: "absolute",
+      width: 18, height: 18,
+      borderColor: "oklch(0.95 0.005 240 / 0.5)",
+      borderStyle: "solid",
+      ...style,
+    }}/>
+  );
+  return (
+    <>
+      {tick({ top: 18, left: 18, borderWidth: "1px 0 0 1px" })}
+      {tick({ top: 18, right: 18, borderWidth: "1px 1px 0 0" })}
+      {tick({ bottom: 18, left: 18, borderWidth: "0 0 1px 1px" })}
+      {tick({ bottom: 18, right: 18, borderWidth: "0 1px 1px 0" })}
+    </>
+  );
+}
+
+function ClinicalScoreRow({ score, tier }: { score: number | null; tier: ScoreTier }) {
+  return (
+    <div style={{
+      padding: "16px 16px",
+      borderBottom: "1px solid oklch(0.93 0.003 240)",
+      background: "oklch(0.985 0.003 240)",
+      position: "relative",
+    }}>
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: tier.hex }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <span style={{
+          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
+        }}>Posture Score</span>
+        <span style={{
+          fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+          textTransform: "uppercase", color: tier.text, fontWeight: 600,
+        }}>{tier.label}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 10 }}>
+        <span style={{
+          fontFamily: "var(--mono)", fontSize: 44, fontWeight: 500,
+          letterSpacing: "-0.03em",
+          color: score === null ? "oklch(0.75 0.01 240)" : "oklch(0.18 0.01 240)",
+          fontVariantNumeric: "tabular-nums", lineHeight: 1,
+        }}>{score ?? "—"}</span>
+        <span style={{ fontSize: 16, color: "oklch(0.55 0.01 240)", fontFamily: "var(--mono)" }}>/100</span>
+      </div>
+      <div style={{ height: 4, background: "oklch(0.92 0.003 240)", borderRadius: 2, overflow: "hidden" }}>
+        <div style={{
+          height: "100%", width: `${score ?? 0}%`, background: tier.hex,
+          transition: "width .4s ease, background .4s ease",
+        }} />
       </div>
     </div>
   );
 }
 
-function StatPanel({
-  sets,
-  reps,
-  timer,
-  targetReps,
-  targetSets,
-}: {
-  sets: number;
-  reps: number;
-  timer: string;
-  /** Per-side rep target. undefined for isometric (no rep target). */
-  targetReps?: number;
-  /** Total set target. undefined hides the `/target` suffix. */
-  targetSets?: number;
-}) {
+function ClinicalMetricRow({ card }: { card: CardSpec }) {
+  const compareDirection = card.compareDirection ?? "above";
+  const isFlag =
+    card.kind === "compensation" &&
+    card.warningThreshold !== undefined &&
+    isCompensationFlagging(card.value, card.warningThreshold, compareDirection);
+
+  const displayValue = card.value === null ? "—" : Math.abs(card.value).toFixed(1);
+  const warnLabel = metricWarnLabel(card.key);
+  const warningText = compareDirection === "below" ? "Below threshold" : "Above threshold";
+
   return (
-    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
-      <div className="flex divide-x divide-white/10">
-        <StatCell
-          label="SETS"
-          value={String(sets)}
-          target={targetSets}
-          done={targetSets !== undefined && sets >= targetSets}
-        />
-        <StatCell
-          label="REPS"
-          value={String(reps)}
-          target={targetReps}
-          done={targetReps !== undefined && reps >= targetReps}
-        />
-        <StatCell label="TIME" value={timer} />
+    <div style={{
+      padding: "14px 16px",
+      paddingLeft: isFlag ? 14 : 16,
+      display: "grid",
+      gridTemplateColumns: "1fr auto",
+      alignItems: "center",
+      gap: 12,
+      borderBottom: "1px solid oklch(0.93 0.003 240)",
+      borderLeft: isFlag ? "2px solid oklch(0.70 0.16 65)" : "2px solid transparent",
+      background: isFlag ? "oklch(0.98 0.02 75)" : "transparent",
+      transition: "background .2s, border-color .2s",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6,
+          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          textTransform: "uppercase", color: "oklch(0.30 0.01 240)",
+          marginBottom: 4, fontWeight: 600,
+        }}>
+          <span>{card.label}</span>
+          {isFlag && (
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 8.5, letterSpacing: ".18em",
+              color: "oklch(0.45 0.10 65)", background: "white",
+              border: "1px solid oklch(0.70 0.16 65)",
+              padding: "1px 5px", borderRadius: 3,
+            }}>{warnLabel}</span>
+          )}
+        </div>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+          fontFamily: "var(--mono)", letterSpacing: ".04em",
+          color: isFlag ? "oklch(0.45 0.10 65)" : "oklch(0.45 0.06 145)",
+        }}>
+          <span style={{
+            display: "inline-block",
+            width: 5, height: 5, borderRadius: 999,
+            background: isFlag ? "oklch(0.70 0.16 65)" : "oklch(0.65 0.13 145)",
+          }} />
+          {card.kind === "primary" ? "Primary metric" : isFlag ? warningText : "Within range"}
+        </div>
       </div>
-    </div>
-  );
-}
- 
-function StatCell({
-  label,
-  value,
-  target,
-  done,
-}: {
-  label: string;
-  value: string;
-  /** When provided, renders a dimmed `/target` suffix after the value. */
-  target?: number;
-  /**
-   * When true, the cell turns emerald and a ✓ appears next to the label —
-   * the per-side "this side hit its target" cue (added
-   * 2026-05-22). Note this does NOT block further reps on that side
-   * (synchronization philosophy: the side keeps counting; only the
-   * progress bar is gated by the slower side via min()).
-   */
-  done?: boolean;
-}) {
-  return (
-    <div className="px-5 py-3 text-center">
-      <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5 flex items-center justify-center gap-1">
-        <span>{label}</span>
-        {done && <span className="text-emerald-400 leading-none">✓</span>}
-      </div>
-      <div
-        className={`text-3xl font-bold leading-none tabular-nums ${
-          done ? "text-emerald-400" : "text-white"
-        }`}
-      >
-        {value}
-        {target !== undefined && (
-          <span className="text-base font-medium text-white/40">{`/${target}`}</span>
+      <div style={{
+        fontVariantNumeric: "tabular-nums", fontSize: 28, fontWeight: 500,
+        letterSpacing: "-0.02em",
+        color: card.value === null
+          ? "oklch(0.75 0.01 240)"
+          : isFlag ? "oklch(0.45 0.10 65)" : "oklch(0.18 0.01 240)",
+        fontFamily: "var(--mono)",
+      }}>
+        {displayValue}
+        {displayValue !== "—" && (
+          <span style={{ fontSize: 14, color: "oklch(0.60 0.01 240)", marginLeft: 1 }}>°</span>
         )}
       </div>
     </div>
   );
 }
 
-function BidirectionalStatPanel({
-  leftReps,
-  rightReps,
-  timer,
-  targetReps,
+function ClinicalStatStrip({
+  score, tier, activeDefinition, repCounts, holdState,
+  timer, prescription, sessionState, currentSetIdx, compact,
 }: {
-  leftReps: number;
-  rightReps: number;
+  score: number | null;
+  tier: ScoreTier;
+  activeDefinition: ExerciseDefinition | null;
+  repCounts: { left: number; right: number };
+  holdState: { pairedSec: number; leftInBand: boolean; rightInBand: boolean };
   timer: string;
-  /** Per-side rep target. undefined for isometric (no rep target shown). */
-  targetReps?: number;
-}) {
-  return (
-    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
-      <div className="flex divide-x divide-white/10">
-        <StatCell
-          label="LEFT"
-          value={String(leftReps)}
-          target={targetReps}
-          done={targetReps !== undefined && leftReps >= targetReps}
-        />
-        <StatCell
-          label="RIGHT"
-          value={String(rightReps)}
-          target={targetReps}
-          done={targetReps !== undefined && rightReps >= targetReps}
-        />
-        <StatCell label="TIME" value={timer} />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Stats panel for isometric exercises (ex_006 T-pose). A valid T-pose requires
- * BOTH arms in the target band at once, so this shows:
- *   - ARMS: per-arm in-band status (L / R light green when that arm is in
- *     position) — guides the patient into the pose and shows which arm to fix.
- *   - HOLD: the paired hold (advances only while BOTH arms are in band) vs the
- *     prescribed target, with a ✓ when reached.
- *   - TIME: session timer.
- */
-function IsometricStatPanel({
-  leftInBand,
-  rightInBand,
-  pairedSec,
-  targetSec,
-  timer,
-}: {
-  leftInBand: boolean;
-  rightInBand: boolean;
-  pairedSec: number;
-  targetSec: number;
-  timer: string;
-}) {
-  const done = pairedSec >= targetSec;
-  return (
-    <div className="bg-black/65 backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
-      <div className="flex divide-x divide-white/10">
-        {/* Per-arm in-band status — both must be green for the hold to advance */}
-        <div className="px-5 py-3 text-center">
-          <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5">
-            Arms
-          </div>
-          <div className="text-2xl font-bold leading-none flex items-center justify-center gap-3">
-            <span className={leftInBand ? "text-emerald-400" : "text-white/30"}>L</span>
-            <span className={rightInBand ? "text-emerald-400" : "text-white/30"}>R</span>
-          </div>
-        </div>
-        {/* Paired hold timer */}
-        <div className="px-5 py-3 text-center">
-          <div className="text-[10px] tracking-widest text-white/50 uppercase mb-1.5 flex items-center justify-center gap-1">
-            <span>Hold</span>
-            {done && <span className="text-emerald-400 leading-none">✓</span>}
-          </div>
-          <div
-            className={`text-3xl font-bold leading-none tabular-nums ${
-              done ? "text-emerald-400" : "text-white"
-            }`}
-          >
-            {Math.floor(pairedSec)}
-            <span className="text-base font-medium text-white/40">{`s/${targetSec}s`}</span>
-          </div>
-        </div>
-        <StatCell label="TIME" value={timer} />
-      </div>
-    </div>
-  );
-}
-
-function ProgressCard({
-  progressPct,
-  completedSets,
-  targetSets,
-  sessionState,
-}: {
-  progressPct: number;
-  completedSets: number;
-  targetSets: number;
+  prescription: Prescription;
   sessionState: SessionState;
+  currentSetIdx: number;
+  compact: boolean;
 }) {
-  // The label communicates session lifecycle
-  // + set position in addition to the raw percentage. Mid-session it
-  // reads "SET X OF Y" (1-indexed, capped at Y). After session end it
-  // reads "COMPLETE" if all sets done, or "ENDED EARLY" with the set
-  // count when the user clicked End before reaching the target.
-  const setLabel =
-    sessionState === "ended"
-      ? completedSets >= targetSets
-        ? "SESSION COMPLETE"
-        : `ENDED AT SET ${completedSets} / ${targetSets}`
-      : sessionState === "resting"
-        ? `RESTING • NEXT: SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
-        : sessionState === "active"
-          ? `SET ${Math.min(completedSets + 1, targetSets)} OF ${targetSets}`
-          : `READY • ${targetSets} SETS`;
+  const labelSt: CSSProperties = {
+    fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".18em",
+    textTransform: "uppercase", color: "oklch(0.40 0.01 240)",
+    marginBottom: 6, fontWeight: 700,
+  };
+  const numSt: CSSProperties = {
+    fontFamily: "var(--mono)", fontSize: 44, fontWeight: 600,
+    letterSpacing: "-0.03em", color: "oklch(0.12 0.01 240)",
+    fontVariantNumeric: "tabular-nums", lineHeight: 1,
+  };
+  const divider = (
+    <div
+      style={compact
+        ? { height: 1, background: "oklch(0.93 0.003 240)" }
+        : { width: 1, background: "oklch(0.93 0.003 240)" }}
+    />
+  );
+
+  let repsContent: React.ReactNode;
+  if (activeDefinition?.kind === "isometric") {
+    const holdSec = Math.floor(holdState.pairedSec);
+    const done = holdSec >= prescription.holdSeconds;
+    repsContent = (
+      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
+        <div style={labelSt}>Hold</div>
+        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+          {formatElapsedTime(holdSec)}
+        </div>
+        <div style={{
+          marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
+          letterSpacing: ".14em", textTransform: "uppercase",
+          color: done ? ACCENT.text : "oklch(0.50 0.01 240)", fontWeight: 600,
+        }}>target {prescription.holdSeconds}s</div>
+      </div>
+    );
+  } else if (activeDefinition?.bilateral) {
+    const leftDone = repCounts.left >= prescription.reps;
+    const rightDone = repCounts.right >= prescription.reps;
+    repsContent = (
+      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
+        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Reps</span>
+          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
+              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
+            }}>L</span>
+            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+              {repCounts.left}
+            </span>
+          </div>
+          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
+              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
+            }}>R</span>
+            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+              {repCounts.right}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  } else {
+    const singleReps = repCounts.left + repCounts.right;
+    const done = activeDefinition?.kind === "dynamic" && singleReps >= prescription.reps;
+    repsContent = (
+      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
+        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Reps</span>
+          {activeDefinition?.kind === "dynamic" && (
+            <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
+          )}
+        </div>
+        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+          {activeDefinition ? singleReps : "—"}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-black/65 backdrop-blur-sm rounded-xl px-5 py-3 shadow-lg">
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="text-[10px] tracking-widest text-white/50 uppercase">
-          {setLabel}
-        </span>
-        <span className="text-sm font-bold text-white tabular-nums">{progressPct}%</span>
+    <div style={{ position: "absolute", left: 16, right: 16, bottom: 16, pointerEvents: "none" }}>
+      <div style={{
+        background: "oklch(1 0 0 / 0.96)",
+        backdropFilter: "blur(10px)",
+        border: "1px solid oklch(0.92 0.003 240)",
+        borderRadius: 8,
+        display: "flex",
+        flexDirection: compact ? "column" : "row",
+        pointerEvents: "auto",
+        boxShadow: "0 1px 3px oklch(0 0 0 / 0.06)",
+        overflow: "hidden",
+        width: "100%",
+      }}>
+        <div style={{
+          padding: "14px 18px", minWidth: 0,
+          borderLeft: `4px solid ${tier.hex}`,
+          background: "oklch(0.985 0.003 240)",
+          flex: "1 1 0",
+        }}>
+          <div style={labelSt}>Posture</div>
+          <div style={numSt}>{score ?? "—"}</div>
+          <div style={{
+            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
+            letterSpacing: ".14em", textTransform: "uppercase",
+            color: tier.text, fontWeight: 700,
+          }}>{tier.label}</div>
+        </div>
+        {divider}
+        {repsContent}
+        {divider}
+        <div style={{ padding: "14px 18px", flex: "0.85 1 0", minWidth: 0 }}>
+          <div style={labelSt}>Time</div>
+          <div style={{ ...numSt, whiteSpace: "nowrap" }}>
+            {(sessionState === "idle" || sessionState === "countdown") ? "00:00" : timer}
+          </div>
+          <div style={{
+            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
+            letterSpacing: ".14em", textTransform: "uppercase",
+            color: "oklch(0.50 0.01 240)", fontWeight: 600,
+          }}>Set {currentSetIdx} / {prescription.sets}</div>
+        </div>
       </div>
-      <div className="h-2 bg-white/15 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-white/75 rounded-full transition-all duration-500"
-          style={{ width: `${progressPct}%` }}
-        />
+    </div>
+  );
+}
+
+function ClinicalProgressStrip({
+  sessionState, currentSetIdx, prescription, completedSets, progressPct, compact,
+}: {
+  sessionState: SessionState;
+  currentSetIdx: number;
+  prescription: Prescription;
+  completedSets: number;
+  progressPct: number;
+  compact: boolean;
+}) {
+  const label =
+    sessionState === "ended"
+      ? completedSets >= prescription.sets
+        ? "Session complete"
+        : `Ended at set ${completedSets} / ${prescription.sets}`
+      : sessionState === "countdown"
+        ? `Starting set ${currentSetIdx} of ${prescription.sets}`
+        : sessionState === "active"
+      ? `Set ${currentSetIdx} of ${prescription.sets}`
+      : sessionState === "resting"
+        ? `Rest — next: Set ${currentSetIdx} of ${prescription.sets}`
+        : `Ready — ${prescription.sets} sets`;
+
+  return (
+    <div style={{
+      marginTop: 12,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      flexWrap: compact ? "wrap" : "nowrap",
+      gap: 16,
+      padding: "10px 14px",
+      background: "white",
+      border: "1px solid oklch(0.93 0.003 240)",
+      borderRadius: 8,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <span style={{
+          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
+        }}>{label}</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {Array.from({ length: prescription.sets }).map((_, i) => (
+            <span key={i} style={{
+              width: 28, height: 4, borderRadius: 2, display: "inline-block",
+              background: i < completedSets
+                ? ACCENT.hex
+                : (i === completedSets && sessionState !== "idle" && sessionState !== "ended")
+                  ? ACCENT.soft
+                  : "oklch(0.92 0.003 240)",
+              outline: i === completedSets && sessionState === "active"
+                ? `1px solid ${ACCENT.hex}`
+                : "none",
+              boxSizing: "border-box",
+            }}/>
+          ))}
+        </div>
       </div>
+      <div style={{
+        flex: 1, height: 4, background: "oklch(0.94 0.003 240)",
+        borderRadius: 2, overflow: "hidden", maxWidth: 360,
+      }}>
+        <div style={{ height: "100%", width: `${progressPct}%`, background: ACCENT.hex, transition: "width .4s" }} />
+      </div>
+      <span style={{
+        fontFamily: "var(--mono)", fontSize: 12, fontWeight: 500,
+        color: "oklch(0.20 0.01 240)", fontVariantNumeric: "tabular-nums",
+        minWidth: 32, textAlign: "right",
+      }}>{progressPct}%</span>
+    </div>
+  );
+}
+
+function ClinicalSettingRow({
+  label, sub, on, onChange,
+}: {
+  label: string;
+  sub: string;
+  on: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0",
+    }}>
+      <div>
+        <div style={{ fontSize: 12, color: "oklch(0.22 0.01 240)", fontWeight: 500 }}>{label}</div>
+        <div style={{ fontSize: 11, color: "oklch(0.55 0.01 240)" }}>{sub}</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange(!on)}
+        role="switch"
+        aria-checked={on}
+        style={{
+          width: 32, height: 18, borderRadius: 999,
+          background: on ? ACCENT.hex : "oklch(0.88 0.003 240)",
+          border: "none", padding: 2, cursor: "pointer",
+          position: "relative", transition: "background .15s", flexShrink: 0,
+        }}
+      >
+        <div style={{
+          width: 14, height: 14, borderRadius: 999, background: "white",
+          transform: `translateX(${on ? 14 : 0}px)`,
+          transition: "transform .15s",
+          boxShadow: "0 1px 2px rgba(0,0,0,.15)",
+        }}/>
+      </button>
     </div>
   );
 }
 
 /**
  * Format a non-negative second count as `MM:SS` with zero-padded fields.
- * Used for the session timer cell. Handles sessions longer than an hour
- * by letting the minute count grow past 59 (e.g., `01:30:00 → "90:00"`),
- * which matches the StatPanel's tight 5-char display budget better than
- * spilling into hours.
+ * Lets the minute count grow past 59 (e.g., `90:00` for 90 minutes).
  */
 function formatElapsedTime(sec: number): string {
   const safe = Math.max(0, Math.floor(sec));
@@ -3312,19 +3796,13 @@ function metricLabel(name: MetricName): string {
     case "shoulderElbowDistance":  return "ELBOW POS";
   }
 }
- 
+
 /**
  * True iff a compensation metric value crosses its `warningThreshold` in
  * the bad direction.
  *
  *   "above" (default): flag when `Math.abs(value) >= warningThreshold`.
- *     Use for "higher = worse" metrics (trunkLean, neckTilt,
- *     shoulderSymmetry, scapularElevation-as-compensation).
  *   "below":           flag when `value < warningThreshold`.
- *     Use for "lower = worse" metrics added in EX_SWAP 2026-05-21:
- *     `elbowFlexion` (180° = arm straight = good; warn if bent below
- *     threshold) and `shoulderElbowDistance` (~0.5 = on-wall = good;
- *     warn if foreshortened below threshold).
  *
  * Mirrors `CompensationMetricSpec.compareDirection` in registry.ts.
  */
@@ -3339,84 +3817,9 @@ function isCompensationFlagging(
     : Math.abs(value) >= threshold;
 }
 
-/**
- * Compensation metrics get a calm gray accent below their warning threshold,
- * red above. Primary metrics show neutral white — they're an information
- * display, not a quality flag.
- */
-function compensationAccent(
-  value: number | null,
-  threshold: number,
-  direction: "above" | "below",
-): string {
-  if (value === null) return "bg-white/25";
-  return isCompensationFlagging(value, threshold, direction) ? "bg-red-500" : "bg-white/40";
-}
-
-function DynamicMetricCard({
-  label,
-  value,
-  kind,
-  warningThreshold,
-  compareDirection,
-}: {
-  label: string;
-  value: number | null;
-  kind: "primary" | "compensation";
-  warningThreshold?: number;
-  compareDirection?: "above" | "below";
-}) {
-  const direction = compareDirection ?? "above";
-  const threshold = warningThreshold ?? Infinity;
-  const accentClass =
-    kind === "primary"
-      ? "bg-white/60"
-      : compensationAccent(value, threshold, direction);
-
-  const isFlagging =
-    kind === "compensation" &&
-    isCompensationFlagging(value, threshold, direction);
- 
-  // Display string: degrees for angles, just the rounded number for now
-  // for displacement metrics. Consumers can refine units later per metric.
-  const display = value === null ? "--" : `${value.toFixed(1)}°`;
- 
-  return (
-    <div
-      className={`flex overflow-hidden rounded-xl backdrop-blur-sm shadow-lg w-44 transition-colors ${
-        isFlagging ? "bg-red-900/70 ring-1 ring-red-400/60" : "bg-black/65"
-      }`}
-    >
-      <div className={`w-1.5 shrink-0 ${accentClass}`} />
-      <div className="px-4 py-3 flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10px] tracking-widest text-white/50 uppercase">
-            {label}
-          </span>
-          {isFlagging && (
-            <span className="text-[9px] tracking-wider text-red-300 uppercase font-semibold">
-              ⚠ Compensation
-            </span>
-          )}
-        </div>
-        <div className="text-4xl font-bold text-white leading-none tabular-nums">
-          {display}
-        </div>
-        <div className="text-xs text-white/55 mt-1.5 truncate">
-          {kind === "primary"
-            ? "Primary"
-            : isFlagging
-              ? (direction === "below" ? "Below threshold" : "Above threshold")
-              : "Within range"}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function CameraHomeIcon() {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+    <svg xmlns="http://www.w3.org/2000/svg" style={{ width: 16, height: 16, flexShrink: 0 }} viewBox="0 0 24 24" fill="currentColor">
       <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
     </svg>
   );

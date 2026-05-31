@@ -11,22 +11,123 @@
 - Added capture-quality tracking during active camera sessions so analytics can distinguish poor tracking coverage from poor exercise performance
 - Updated assignment status lifecycle: starting a patient session moves a pending assignment to in-progress, completing all prescribed sets marks it completed, and re-prescribing the same exercise resets the assignment to pending with the refreshed prescription values
 - Cleaned up the patient-detail data-loading effect so the therapist session dashboard passes the targeted hook-dependency lint check
-- Validation completed from `web/`: `npx tsc --noEmit --pretty false` passed; targeted ESLint for the therapist patient detail page and session API routes passed with `--max-warnings=0`; full pose test sweep passed 108/108; browser verification confirmed `ex_006` set details, reconstructed legacy rep details, and empty-session messaging; direct DB-path verification confirmed re-prescribing resets assignment status to pending; `git diff --check` passed with line-ending warnings only
+
+### *scripts\sessions_pg.sql*
+- New schema file for the session analytics surface
+- Added `sessions` table for one row per camera run, including patient, assigned exercise, exercise id, start/end timestamps, optional device info, capture-quality summary, and notes
+- Added `set_events` table for completed or partial set outcomes, including dynamic rep counts, isometric hold totals, duration, termination reason, asymmetry index, and optional `hold_quality`
+- Added `rep_events` table for counted dynamic reps, including session/set indexes, side, peak value, target ROM, timing fields, classification, and timestamps
+- Added indexes for session, set, and rep lookups
+- Added safe `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements for optional metadata columns so existing local databases can rerun the script
+- Added grants for the `postural` database user and the new table sequences
+
+### *web\src\app\api\sessions\route.ts*
+- New `GET /api/sessions` route for session-history summaries
+- Patients can fetch their own session history
+- Therapists can fetch a patient's session history only when that patient is assigned to them
+- New `POST /api/sessions` route for starting a patient camera session
+- Session creation verifies the `patientExerciseId` belongs to the signed-in patient and matches the requested exercise before writing a session row
+
+### *web\src\app\api\sessions\[id]\route.ts*
+- New `GET /api/sessions/[id]` route for session drill-down details
+- Returns set and rep details for patients viewing their own sessions or therapists viewing assigned patients
+- New `PATCH /api/sessions/[id]` route for ending a session
+- Ending a session stamps `ended_at`, accepts capture-quality summary data, accepts optional notes, and can mark the linked assignment completed when all prescribed sets were finished
+
+### *web\src\app\api\sessions\[id]\rep-events\route.ts*
+- New patient-only batch insert route for counted dynamic rep rows
+- Validates session ownership before accepting writes
+- Validates positive indexes, finite peak and target values, non-negative timing values, allowed side/classification values, and parseable timestamps before insertion
+
+### *web\src\app\api\sessions\[id]\set-events\route.ts*
+- New patient-only batch insert route for set-level outcomes
+- Validates session ownership before accepting writes
+- Validates set indexes, exercise kind, target/count fields, hold totals, duration, termination reason, asymmetry index, and timestamps
+- Accepts `holdQuality` only when it is a plain object so malformed optional hold-quality data does not break an otherwise valid set row
+
+### *web\src\lib\db.ts*
+- Added session persistence types for `RepEventRow` and `SetEventRow`
+- Added `createSession()` for writing session starts and moving pending assignments to in-progress
+- Added `endSession()` for ending sessions, saving capture-quality summary data, and marking fully completed assignments completed
+- Added `getSessionOwner()` for route-level ownership checks
+- Added `insertRepEvents()` and `insertSetEvents()` batch helpers
+- Added `getSessionsForPatient()` for therapist/patient session summary cards
+- Added `getSessionDetail()` for drill-down set and rep details
+- Updated reassignment behavior so re-prescribing the same exercise refreshes prescription fields and resets the assignment status to pending
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added client-side session lifecycle persistence for patient camera sessions
+- Sends session-start data with the current `patientExerciseId` and exercise id
+- Persists dynamic counted reps to `rep_events`
+- Persists set-level outcomes to `set_events`, including isometric `ex_006` hold results
+- Sends `hold_quality` summaries for completed timed holds
+- Sends session-end data with capture-quality totals and completion status
+- Tracks total and acceptable capture frames during active sessions, including no-landmarks frames in the total denominator
+- Uses session-token guarding so stale async session-start responses are not adopted by a newer run
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added session summary and session detail types for the therapist patient detail dashboard
+- Fetches patient session history from `/api/sessions?patientId=...`
+- Added the Sessions Record section with duration, set count, left/right completion counts, average peak value, and isometric hold totals
+- Added expandable session rows that lazily fetch `/api/sessions/[id]`
+- Shows per-set timed-hold details for `ex_006`
+- Reconstructs legacy dynamic session details from `rep_events` when set rows are not available
+- Shows a distinct empty state when a legacy session has neither set records nor rep records
+- Moved the initial data loader inside its `useEffect` so the page passes the hook-dependency lint check
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- Targeted ESLint for the therapist patient detail page and session API routes passed with `--max-warnings=0`
+- Full pose test sweep passed 108/108
+- Browser verification confirmed `ex_006` set details, reconstructed legacy rep details, and empty-session messaging
+- Direct DB-path verification confirmed re-prescribing resets assignment status to pending
+- `git diff --check` passed with line-ending warnings only
 
 ---
 
 ## 📌 Update-5-29-26 | *RyanCodesling*
 
-- Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, center camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
-- Added responsive stacking for the refreshed camera layout so narrower viewports keep the camera, metrics, and controls readable instead of clipping fixed side rails
-- Restored the non-mirrored patient capture-readiness banner in the camera viewport; framing messages such as visibility and positioning prompts now remain readable even when selfie mirroring is enabled
-- Kept the recent tilt-confidence behavior: the patient-facing tilt banner appears only when a hip or ear reference line is missing, while visible hip/ear divergence still stays flagged as low confidence for metrics and clinician interpretation
-- Added `hasMissingTiltReferenceLine()` and `tiltReference.test.ts` to pin the distinction between missing tilt references and visible reference disagreement
-- Cleaned up the refreshed session controls: countdown now locks the previous/next exercise stepper, End can cancel countdown directly, ended sessions keep the final timer visible, and progress labels distinguish ready, starting, active, rest, ended, and complete states
-- Made the camera right rail isometric-aware so `ex_006` displays timed holds such as `30s hold` instead of rep-only prescription text
-- Updated the compensation overlay accent from red to amber and increased overlay label size for better readability at exercise distance
-- Updated the app font setup to expose Inter and JetBrains Mono through global `--sans` and `--mono` variables used by the refreshed camera interface
-- Validation completed from `web/`: `npx tsc --noEmit --pretty false` passed; `tiltReference.test.ts`, `scapularElevation.test.ts`, `trunkSideAgreement.test.ts`, and `shoulderAbduction.test.ts` passed; browser verification confirmed the `ex_006` hold display, countdown stepper lock, and countdown End cancellation; `git diff --check` passed with line-ending warnings only
+- Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
+- Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
+- Cleaned up countdown/session controls so the guided exercise flow stays locked and consistent during starting, active, rest, ended, and completed states
+- Kept `ex_006` isometric display consistent in the refreshed camera surface by showing timed holds instead of rep-only prescription text
+- Added tilt-reference regression coverage and updated validation notes for the camera UI refresh branch
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Reworked the camera page into a patient-facing clinical layout with a top status bar, left live-metrics rail, centered video/canvas surface, bottom posture/hold/time strip, progress strip, and right-side session/capture controls
+- Added responsive stacking so narrow viewports keep the camera, metrics, and controls readable instead of clipping the side rails
+- Restored the non-mirrored capture-readiness banner above the camera viewport so framing prompts remain readable when selfie mirroring is enabled
+- Moved patient-facing tilt warning logic to the missing-reference helper; visible hip/ear divergence remains low confidence internally without creating a persistent patient warning
+- Locked previous/next exercise navigation during countdown, active, and rest states
+- Made End cancel countdown directly while keeping active-session End behind the existing confirmation step
+- Preserved the final elapsed timer after ended sessions and added progress labels for ready, starting, active, rest, ended, and complete states
+- Made the right-rail prescription summary use timed-hold wording for isometric exercises such as `ex_006`
+- Fixed compensation row helper text so below-threshold compensation metrics say "Below threshold" instead of always saying "Above threshold"
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added `hasMissingTiltReferenceLine()` to centralize the patient-facing tilt-warning gate
+- The helper returns true only when tilt confidence is low because one reference line is missing (`divergenceDeg === null`), not when hips and ears are both visible but diverge
+
+### *web\src\lib\pose\tiltReference.test.ts*
+- Added regression coverage for the four tilt-reference display cases: single visible reference, visible hip/ear divergence, matching high-confidence references, and missing both references
+- Pins the intended behavior that visible divergence stays available as a low-confidence metric flag without showing the patient framing banner
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- Changed compensation overlay boxes and labels from red to amber
+- Increased overlay label font size for readability while exercising away from the screen
+
+### *web\src\app\layout.tsx* and *web\src\app\globals.css*
+- Added Inter and JetBrains Mono font variables
+- Exposed global `--sans` and `--mono` variables used by the refreshed camera UI while leaving the existing app font variables available
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- `npx tsx src/lib/pose/tiltReference.test.ts` passed (4 tests)
+- `npx tsx src/lib/pose/scapularElevation.test.ts` passed (9 tests)
+- `npx tsx src/lib/pose/trunkSideAgreement.test.ts` passed (5 tests)
+- `npx tsx src/lib/pose/shoulderAbduction.test.ts` passed (15 tests)
+- Browser verification on `/camera?exerciseId=ex_006` confirmed the refreshed layout renders, `ex_006` shows `30s hold`, countdown disables previous/next, and End cancels countdown back to ended state
+- `git diff --check` passed with line-ending warnings only
 
 ---
 

@@ -1,5 +1,20 @@
 # Sprint Updates 
 
+## 📌 Update-5-31-26 | *RyanCodesling*
+
+- Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
+- Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
+- Added `scripts\sessions_pg.sql` for the session persistence schema, including `sessions`, `rep_events`, `set_events`, indexes, permissions, and safe re-run column additions for existing local databases
+- Added clinician-facing session history on the therapist patient detail page, showing recent sessions with duration, set count, left/right completion counts, average peak value, and total hold time
+- Added expandable session drill-down rows so therapists can inspect per-set hold outcomes for `ex_006` and reconstructed per-set rep summaries for older dynamic sessions that have reps but no set records
+- Updated `ex_006` persistence so completed timed holds save set-level results and hold-quality summaries instead of synthetic rep rows
+- Added capture-quality tracking during active camera sessions so analytics can distinguish poor tracking coverage from poor exercise performance
+- Updated assignment status lifecycle: starting a patient session moves a pending assignment to in-progress, completing all prescribed sets marks it completed, and re-prescribing the same exercise resets the assignment to pending with the refreshed prescription values
+- Cleaned up the patient-detail data-loading effect so the therapist session dashboard passes the targeted hook-dependency lint check
+- Validation completed from `web/`: `npx tsc --noEmit --pretty false` passed; targeted ESLint for the therapist patient detail page and session API routes passed with `--max-warnings=0`; full pose test sweep passed 108/108; browser verification confirmed `ex_006` set details, reconstructed legacy rep details, and empty-session messaging; direct DB-path verification confirmed re-prescribing resets assignment status to pending; `git diff --check` passed with line-ending warnings only
+
+---
+
 ## 📌 Update-5-29-26 | *RyanCodesling*
 
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, center camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen

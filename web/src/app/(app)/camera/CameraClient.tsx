@@ -66,6 +66,13 @@ interface Exercise {
    * default for the staff debug catalog. Dynamic exercises ignore it.
    */
   holdSeconds: number;
+  /**
+   * The `patient_exercises.id` this assignment came from. Present only for
+   * patient assignments (from `/api/patient-exercises`); undefined for the
+   * staff debug catalog. Used as the FK target when persisting a session — the
+   * staff debug path has no row, so it skips session persistence entirely.
+   */
+  patientExerciseId?: number;
 }
 
 /**
@@ -87,12 +94,10 @@ interface Exercise {
 type SessionState = "idle" | "countdown" | "active" | "resting" | "ended";
 
 /**
- * P4-friendly in-memory record of a completed set, shape-aligned with the
- * future Postgres `sets` table. This implementation keeps these in
- * memory only; a future P4 swap writes them to the DB without changing
-   * this shape while the current implementation remains in-session UI only.
-   * `pairedReps` / `asymmetryIndex` are tracked as
- * placeholders for now (paired-rep matching is not implemented yet).
+ * Session set summary. The live UI keeps a local log, and patient sessions also
+ * persist this shape to `set_events` so timed isometric holds have a durable
+ * clinical outcome. `pairedReps` / `asymmetryIndex` are tracked as placeholders
+ * for now (paired-rep matching is not implemented yet).
  */
 type CompletedSetRecord = {
   setIndex: number;
@@ -113,9 +118,91 @@ type CompletedSetRecord = {
   targetHoldMs?: number;
 };
 
-type Prescription = { sets: number; reps: number; restSeconds: number; holdSeconds: number };
+type Prescription = {
+  sets: number;
+  reps: number;
+  restSeconds: number;
+  holdSeconds: number;
+  // patient_exercises.id for the current assignment; undefined for staff debug.
+  patientExerciseId?: number;
+};
 
 const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60, holdSeconds: 30 };
+
+/**
+ * A counted rep shaped for the `rep_events` write API. Kept local (not imported
+ * from the server-only db module) so this client bundle never pulls in `pg`.
+ */
+type RepEventPayload = {
+  repIndex: number;
+  setIndex: number;
+  side: "left" | "right" | "both" | "bidirectional";
+  peakValue: number;
+  targetRom: number;
+  timeToPeakMs: number;
+  holdMs: number;
+  descentMs: number;
+  totalMs: number;
+  classification: RepEvent["classification"];
+  startTs: string;
+  endTs: string;
+};
+
+/**
+ * Per-arm hold-quality stats for one isometric set, all derived from the RAW
+ * per-side angle sampled each frame (time-weighted by frame dt):
+ *  - `meanDeg`             — average held angle
+ *  - `sdDeg`               — steadiness (higher = shakier); RELATIVE — includes
+ *                            MediaPipe's ~3° landmark noise floor, not pure tremor
+ *  - `meanErrorDeg`        — mean − target band center (negative = below target / sag)
+ *  - `droopSlopeDegPerSec` — slope of angle vs time (negative = progressive sag / fatigue)
+ */
+type HoldSideQuality = {
+  meanDeg: number;
+  sdDeg: number;
+  meanErrorDeg: number;
+  droopSlopeDegPerSec: number;
+};
+
+/**
+ * Set-level hold-quality summary for an isometric hold. Aggregates per-frame raw
+ * signals the camera loop already computes; persisted to `set_events.hold_quality`.
+ */
+type HoldQuality = {
+  sampleCount: number;
+  leftInBandMs: number;
+  rightInBandMs: number;
+  outOfPositionMs: number;          // active time NOT both-in-band
+  dropCount: number;                // both-in-band → not transitions
+  longestPairedStreakMs: number;    // longest continuous both-in-band run
+  settleMs: number | null;          // set start → first both-in-band (null if never)
+  left: HoldSideQuality | null;
+  right: HoldSideQuality | null;
+  meanCompensationScore: number | null;
+  minCompensationScore: number | null;
+};
+
+/**
+ * A set-level outcome shaped for the `set_events` write API. This is what makes
+ * ex_006 hold completions queryable even though no counted reps are emitted.
+ */
+type SetEventPayload = {
+  setIndex: number;
+  exerciseKind: ExerciseDefinition["kind"];
+  targetReps: number;
+  leftReps: number;
+  rightReps: number;
+  pairedReps: number;
+  targetHoldMs: number;
+  pairedHoldMs: number;
+  durationMs: number;
+  terminatedBy: CompletedSetRecord["terminatedBy"];
+  asymmetryIndex: number;
+  // Isometric only; absent for dynamic sets.
+  holdQuality?: HoldQuality;
+  startTs: string;
+  endTs: string;
+};
 
 // Max dt (ms) credited to an isometric hold in a single accumulation frame.
 // Caps the time added after a brief not-ready flicker so a gap can't dump a
@@ -430,6 +517,59 @@ export default function CameraClient() {
     rightInBand: boolean;
   }>({ pairedSec: 0, leftInBand: false, rightInBand: false });
 
+  // ── Isometric hold-quality accumulators (ex_006) ─────────────────────────────
+  // Running, time-weighted (by frame dt) sums per arm over the CURRENT set, plus
+  // paired in-band bookkeeping and a compensation-score aggregate. Folded into a
+  // HoldQuality summary at set boundary (finalizeHoldQuality) and reset alongside
+  // pairedHoldMsRef. All inputs are RAW per-side angles (smoothing would erase
+  // the steadiness signal). `t` is ms since the set started.
+  type HoldSideAccum = {
+    w: number;   // Σ dt
+    wa: number;  // Σ dt·a
+    wa2: number; // Σ dt·a²
+    wt: number;  // Σ dt·t
+    wt2: number; // Σ dt·t²
+    wta: number; // Σ dt·t·a
+    inBandMs: number;
+  };
+  const newHoldSideAccum = (): HoldSideAccum => ({
+    w: 0, wa: 0, wa2: 0, wt: 0, wt2: 0, wta: 0, inBandMs: 0,
+  });
+  type HoldQualityAccum = {
+    setStartMs: number | null;     // perf clock anchor for `t`
+    left: HoldSideAccum;
+    right: HoldSideAccum;
+    outOfPositionMs: number;
+    dropCount: number;
+    prevPairedInBand: boolean;
+    curStreakMs: number;
+    longestStreakMs: number;
+    settleMs: number | null;
+    scoreWSum: number;   // Σ compensationScore·dt (time-weighted)
+    scoreWeight: number; // Σ dt over frames with a numeric score
+    scoreMin: number | null;
+    sampleCount: number;
+  };
+  const newHoldQualityAccum = (): HoldQualityAccum => ({
+    setStartMs: null,
+    left: newHoldSideAccum(),
+    right: newHoldSideAccum(),
+    outOfPositionMs: 0,
+    dropCount: 0,
+    prevPairedInBand: false,
+    curStreakMs: 0,
+    longestStreakMs: 0,
+    settleMs: null,
+    scoreWSum: 0,
+    scoreWeight: 0,
+    scoreMin: null,
+    sampleCount: 0,
+  });
+  const holdQualityAccumRef = useRef<HoldQualityAccum>(newHoldQualityAccum());
+  const resetHoldQualityAccum = () => {
+    holdQualityAccumRef.current = newHoldQualityAccum();
+  };
+
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -601,6 +741,272 @@ export default function CameraClient() {
    * on session start (Start button) and on exercise change.
    */
   const completedSetsLogRef = useRef<CompletedSetRecord[]>([]);
+
+  /**
+   * Session persistence (`set_events` + `rep_events`). A "session" here is one exercise run:
+   * Start → all-sets-complete (or manual End). When the guided flow advances to
+   * the next exercise the patient presses Start again, opening a new session.
+   *
+   *  - `sessionIdRef` — the DB id returned by POST /api/sessions, or null when
+   *    no session is being persisted (staff debug, create pending/failed).
+   *  - `sessionWallStartMsRef` / `sessionPerfStartMsRef` — Date.now() and
+   *    performance.now() captured at create, used to convert the rep counter's
+   *    monotonic timestamps into wall-clock start_ts/end_ts.
+   *  - `globalRepIndexRef` — session-wide 1..N rep index across sides and sets.
+   *  - `pendingSetEventsRef` / `pendingRepEventsRef` — outcomes buffered since
+   *    the last flush. Flushed at each set completion and at session end.
+   *    Persistence is best-effort: all writes are fire-and-forget and never
+   *    block rep counting, hold accumulation, or the UI.
+   */
+  const sessionIdRef = useRef<number | null>(null);
+  const sessionWallStartMsRef = useRef<number>(0);
+  const sessionPerfStartMsRef = useRef<number>(0);
+  const globalRepIndexRef = useRef<number>(0);
+  const pendingSetEventsRef = useRef<SetEventPayload[]>([]);
+  const pendingRepEventsRef = useRef<RepEventPayload[]>([]);
+  /**
+   * Monotonic token identifying the currently-intended session run. Bumped on
+   * every start and every end. Because session create is async, the create's
+   * response handler compares the token it captured at request time against the
+   * current one: if they differ, the run that asked for this session already
+   * ended (cancel during countdown, exercise change, restart, ultra-short
+   * session), so the just-created row is immediately closed instead of being
+   * adopted — preventing orphan open rows and stale-id overwrites.
+   */
+  const sessionTokenRef = useRef<number>(0);
+
+  // Capture-quality tally for the current session (→ sessions.capture_quality_summary).
+  // Counts frames processed while the session is active and how many had OK
+  // capture readiness, so the dashboard can distinguish a genuinely low-ROM
+  // session from one degraded by poor tracking/framing. Reset on session start.
+  const captureFramesTotalRef = useRef<number>(0);
+  const captureFramesOkRef = useRef<number>(0);
+
+  /** Reset all in-memory session-persistence state (no DB call). */
+  const resetSessionPersistence = () => {
+    sessionIdRef.current = null;
+    globalRepIndexRef.current = 0;
+    pendingSetEventsRef.current = [];
+    pendingRepEventsRef.current = [];
+  };
+
+  /**
+   * Open a persisted session for the active exercise, if it is a patient
+   * assignment (has a patient_exercise_id). Staff debug has none → no-op.
+   * Fire-and-forget: reps emitted before the id resolves stay buffered and
+   * flush once `sessionIdRef` is set.
+   */
+  const startSessionPersistence = () => {
+    resetSessionPersistence();
+    const patientExerciseId = prescriptionRef.current.patientExerciseId;
+    const exerciseId = activeDefinitionRef.current?.id;
+    if (typeof patientExerciseId !== "number" || !exerciseId) return;
+    // Token for THIS run; if it changes before the create resolves, the run is
+    // already over and the created row must be closed rather than adopted.
+    const token = ++sessionTokenRef.current;
+    sessionWallStartMsRef.current = Date.now();
+    sessionPerfStartMsRef.current = performance.now();
+    fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientExerciseId,
+        exerciseId,
+        deviceInfo:
+          typeof navigator !== "undefined"
+            ? { userAgent: navigator.userAgent }
+            : undefined,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || typeof data.sessionId !== "number") return;
+        if (sessionTokenRef.current === token) {
+          // Still the active run — adopt the session and flush buffered outcomes.
+          sessionIdRef.current = data.sessionId;
+          flushSetEvents();
+          flushRepEvents();
+        } else {
+          // Stale: the run ended/changed before create resolved. Close the
+          // freshly-created row so it isn't left open, and do NOT adopt its id.
+          fetch(`/api/sessions/${data.sessionId}`, { method: "PATCH" }).catch(
+            (err) => console.warn("stale session close failed:", err),
+          );
+        }
+      })
+      .catch((err) => console.warn("session create failed (not persisted):", err));
+  };
+
+  /** Convert a monotonic performance.now() timestamp to an ISO wall-clock string. */
+  const perfToIso = (perfMs: number): string =>
+    new Date(
+      sessionWallStartMsRef.current + (perfMs - sessionPerfStartMsRef.current),
+    ).toISOString();
+
+  /** Buffer a counted rep for persistence. Pure aside from the ref push. */
+  const bufferRepEvent = (event: RepEvent, side: RepEventPayload["side"]) => {
+    if (prescriptionRef.current.patientExerciseId === undefined) return;
+    const targetRom =
+      activeDefinitionRef.current?.kind === "dynamic"
+        ? activeDefinitionRef.current.primaryMetric.thresholds.targetROM
+        : 0;
+    pendingRepEventsRef.current.push({
+      repIndex: ++globalRepIndexRef.current,
+      setIndex: completedSetsRef.current + 1,
+      side,
+      peakValue: event.peakValue,
+      targetRom,
+      timeToPeakMs: event.ascentDurationMs,
+      holdMs: event.holdDurationMs,
+      descentMs: event.descentDurationMs,
+      totalMs: event.totalDurationMs,
+      classification: event.classification,
+      startTs: perfToIso(event.startTimeMs),
+      endTs: perfToIso(event.endTimeMs),
+    });
+  };
+
+  /**
+   * Close out the per-frame isometric accumulators into a HoldQuality summary.
+   * Returns undefined when no hold samples were collected (e.g. dynamic set, or
+   * a hold that never produced a usable frame). Pure read of the accumulator
+   * ref — call BEFORE the per-set reset runs.
+   */
+  const finalizeHoldQuality = (centerDeg: number): HoldQuality | undefined => {
+    const a = holdQualityAccumRef.current;
+    if (a.sampleCount === 0) return undefined;
+    const side = (s: HoldSideAccum): HoldSideQuality | null => {
+      if (s.w <= 0) return null;
+      const mean = s.wa / s.w;
+      const variance = Math.max(0, s.wa2 / s.w - mean * mean);
+      // Weighted least-squares slope of angle (a) vs time (t), weight = dt.
+      const denom = s.w * s.wt2 - s.wt * s.wt;
+      const slopeMsPerDeg =
+        denom > 0 ? (s.w * s.wta - s.wt * s.wa) / denom : 0; // deg per ms
+      const round1 = (n: number) => Math.round(n * 10) / 10;
+      return {
+        meanDeg: round1(mean),
+        sdDeg: round1(Math.sqrt(variance)),
+        meanErrorDeg: round1(mean - centerDeg),
+        droopSlopeDegPerSec: Math.round(slopeMsPerDeg * 1000 * 100) / 100,
+      };
+    };
+    return {
+      sampleCount: a.sampleCount,
+      leftInBandMs: Math.round(a.left.inBandMs),
+      rightInBandMs: Math.round(a.right.inBandMs),
+      outOfPositionMs: Math.round(a.outOfPositionMs),
+      dropCount: a.dropCount,
+      longestPairedStreakMs: Math.round(a.longestStreakMs),
+      settleMs: a.settleMs === null ? null : Math.round(a.settleMs),
+      left: side(a.left),
+      right: side(a.right),
+      meanCompensationScore:
+        a.scoreWeight > 0 ? Math.round(a.scoreWSum / a.scoreWeight) : null,
+      minCompensationScore: a.scoreMin,
+    };
+  };
+
+  /** Buffer a set-level outcome for persistence. */
+  const bufferSetEvent = (
+    record: CompletedSetRecord,
+    exerciseKind: SetEventPayload["exerciseKind"],
+    endPerfMs: number,
+  ) => {
+    if (prescriptionRef.current.patientExerciseId === undefined) return;
+    const durationMs = Math.max(0, record.durationMs);
+    const startPerfMs = currentSetStartMsRef.current ?? endPerfMs - durationMs;
+    // Read the hold-quality accumulators for isometric sets BEFORE any per-set
+    // reset clears them. Uses the active exercise's target-band center.
+    const def = activeDefinitionRef.current;
+    const holdQuality =
+      exerciseKind === "isometric" && def?.kind === "isometric"
+        ? finalizeHoldQuality(def.isometric.targetBand.center)
+        : undefined;
+    pendingSetEventsRef.current.push({
+      setIndex: record.setIndex,
+      exerciseKind,
+      targetReps: record.targetReps,
+      leftReps: record.leftReps,
+      rightReps: record.rightReps,
+      pairedReps: record.pairedReps,
+      targetHoldMs: record.targetHoldMs ?? 0,
+      pairedHoldMs: record.pairedHoldMs ?? 0,
+      durationMs,
+      terminatedBy: record.terminatedBy,
+      asymmetryIndex: record.asymmetryIndex,
+      holdQuality,
+      startTs: perfToIso(startPerfMs),
+      endTs: perfToIso(endPerfMs),
+    });
+  };
+
+  /**
+   * Flush buffered set outcomes to the DB. Kept separate from rep flushing so
+   * ex_006 can persist a set even when no rep_events exist.
+   */
+  const flushSetEvents = () => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId === null || pendingSetEventsRef.current.length === 0) return;
+    const sets = pendingSetEventsRef.current;
+    pendingSetEventsRef.current = [];
+    fetch(`/api/sessions/${sessionId}/set-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sets }),
+    }).catch((err) => console.warn("set-events flush failed:", err));
+  };
+
+  /**
+   * Flush buffered reps to the DB. No-op while `sessionIdRef` is null (keeps
+   * them buffered until the session id resolves). Fire-and-forget; on failure
+   * the reps are dropped (best-effort persistence for a proof-of-concept).
+   */
+  const flushRepEvents = () => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId === null || pendingRepEventsRef.current.length === 0) return;
+    const reps = pendingRepEventsRef.current;
+    pendingRepEventsRef.current = [];
+    fetch(`/api/sessions/${sessionId}/rep-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reps }),
+    }).catch((err) => console.warn("rep-events flush failed:", err));
+  };
+
+  /**
+   * Close the persisted session: flush remaining reps, then stamp ended_at.
+   * Idempotent — no-op when no session is open. Clears persistence state so a
+   * subsequent stray rep can't write to the just-ended session.
+   */
+  const endSessionPersistence = (completed = false) => {
+    const sessionId = sessionIdRef.current;
+    // Invalidate any in-flight create for this run. If the create has not
+    // resolved yet (sessionId still null), its handler will see the bumped
+    // token and self-close the row it creates, so nothing is left open.
+    sessionTokenRef.current++;
+    if (sessionId === null) {
+      resetSessionPersistence();
+      return;
+    }
+    flushSetEvents();
+    flushRepEvents();
+    // Session-level capture-quality summary (% of active frames with OK capture).
+    const framesTotal = captureFramesTotalRef.current;
+    const framesOk = captureFramesOkRef.current;
+    const captureQualitySummary =
+      framesTotal > 0
+        ? { framesTotal, framesOk, pctOk: Math.round((framesOk / framesTotal) * 100) }
+        : undefined;
+    // `completed` is true only when all prescribed sets were finished (not on a
+    // manual early End) — it flips the patient_exercise to "completed" server-side.
+    fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ completed, captureQualitySummary }),
+    }).catch((err) => console.warn("session end failed:", err));
+    resetSessionPersistence();
+  };
 
   /**
    * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
@@ -810,6 +1216,10 @@ export default function CameraClient() {
       };
     }
     completedSetsLogRef.current.push(setRecord);
+    bufferSetEvent(setRecord, def.kind, tNow);
+    // Persist this set's boundary and reps now that the set boundary is known.
+    flushSetEvents();
+    flushRepEvents();
 
     setCompletedSets(completedSetsRef.current + 1);
     // Reset the per-set progress trackers for the next set, per kind.
@@ -824,6 +1234,7 @@ export default function CameraClient() {
       leftInBandRef.current = false;
       rightInBandRef.current = false;
       lastIsometricTickMsRef.current = null;
+      resetHoldQualityAccum();
       setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
     }
     currentSetStartMsRef.current = tNow;
@@ -839,6 +1250,10 @@ export default function CameraClient() {
       // rep could still register against the just-finished exercise.
       // `goToAdjacentExercise(1)` returns false when already at the last
       // exercise, in which case the session ends instead.
+      // This exercise's session is finished either way — close it (completed:
+      // all prescribed sets were reached). Advancing re-selects the next
+      // exercise; the patient presses Start to open a new session for it.
+      endSessionPersistence(true);
       setSessionState("idle");
       if (!goToAdjacentExercise(1)) {
         setSessionState("ended");
@@ -865,6 +1280,8 @@ export default function CameraClient() {
   const handleSessionStart = () => {
     if (!activeDefinition) return;
     const counters = createRepCountersForDefinition(activeDefinition);
+    captureFramesTotalRef.current = 0;
+    captureFramesOkRef.current = 0;
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
@@ -897,10 +1314,14 @@ export default function CameraClient() {
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
+    resetHoldQualityAccum();
     setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
+    // Open a persisted session for this run (patient assignments only; staff
+    // debug has no patient_exercise_id and is skipped inside the helper).
+    startSessionPersistence();
     setSessionState("countdown");
   };
 
@@ -925,6 +1346,7 @@ export default function CameraClient() {
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     const def = activeDefinitionRef.current;
+    const endedAtMs = performance.now();
     if (def?.kind === "isometric") {
       // Isometric partial: log the valid-T-pose (both-arms-in-band) hold time
       // accumulated this set.
@@ -938,7 +1360,7 @@ export default function CameraClient() {
           pairedReps: 0,
           durationMs:
             currentSetStartMsRef.current !== null
-              ? performance.now() - currentSetStartMsRef.current
+              ? endedAtMs - currentSetStartMsRef.current
               : 0,
           terminatedBy: "user",
           asymmetryIndex: 0,
@@ -946,6 +1368,7 @@ export default function CameraClient() {
           targetHoldMs: prescriptionRef.current.holdSeconds * 1000,
         };
         completedSetsLogRef.current.push(setRecord);
+        bufferSetEvent(setRecord, def.kind, endedAtMs);
       }
     } else {
       const left = repCountsRef.current.left;
@@ -959,14 +1382,17 @@ export default function CameraClient() {
           pairedReps: Math.min(left, right),
           durationMs:
             currentSetStartMsRef.current !== null
-              ? performance.now() - currentSetStartMsRef.current
+              ? endedAtMs - currentSetStartMsRef.current
               : 0,
           terminatedBy: "user",
           asymmetryIndex: computeAsymmetryIndex(left, right),
         };
         completedSetsLogRef.current.push(setRecord);
+        if (def) bufferSetEvent(setRecord, def.kind, endedAtMs);
       }
     }
+    // Flush any reps from the in-progress (partial) set and stamp ended_at.
+    endSessionPersistence();
     setSessionState("ended");
   };
 
@@ -1507,6 +1933,10 @@ export default function CameraClient() {
               typeof e.hold_seconds === "number"
                 ? e.hold_seconds
                 : DEFAULT_PRESCRIPTION.holdSeconds,
+            // patient_exercises.id — returned by the API, carried through so a
+            // session can be persisted against it. Absent → session
+            // persistence is skipped (staff debug has no such row).
+            patientExerciseId: typeof e.id === "number" ? e.id : undefined,
           }));
           setAssignedExercises(assigned);
           if (assigned.length > 0) {
@@ -1527,6 +1957,7 @@ export default function CameraClient() {
           reps: assignedEntry.reps,
           restSeconds: assignedEntry.restSeconds,
           holdSeconds: assignedEntry.holdSeconds,
+          patientExerciseId: assignedEntry.patientExerciseId,
         }
       : DEFAULT_PRESCRIPTION;
     prescriptionRef.current = nextPrescription;
@@ -1536,6 +1967,8 @@ export default function CameraClient() {
   useEffect(() => {
     if (!selectedExercise) {
       setActiveDefinition(null);
+      // Close any open persisted session (idempotent; no-op if none).
+      endSessionPersistence();
       leftRepCounterRef.current = null;
       rightRepCounterRef.current = null;
       bidirectionalRepCounterRef.current = null;
@@ -1557,6 +1990,10 @@ export default function CameraClient() {
     // The user has to click sidebar Start on the new exercise to begin a
     // fresh session; rep counting stays gated until they do. completedSets,
     // currentSetReps (repCounts), and the completed-sets log all clear.
+    // Close any session left open on the previous exercise (idempotent: the
+    // guided-flow auto-advance already ended it, so this is a safety net for
+    // manual stepper navigation).
+    endSessionPersistence();
     setSessionState("idle");
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
@@ -1571,6 +2008,7 @@ export default function CameraClient() {
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
+    resetHoldQualityAccum();
     setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
 
     // Reset filters whenever the exercise changes — old filter history would
@@ -1712,6 +2150,12 @@ export default function CameraClient() {
                 ? "lateral"
                 : "default";
           const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height, framingMode);
+
+          // Tally capture quality for the active session (→ capture_quality_summary).
+          if (sessionStateRef.current === "active") {
+            captureFramesTotalRef.current += 1;
+            if (r.ok) captureFramesOkRef.current += 1;
+          }
 
           const now = performance.now();
           if (!r.ok) {
@@ -2072,6 +2516,7 @@ export default function CameraClient() {
                         const event = leftRepCounterRef.current.update(smoothedLeft, tNow);
                         if (event) {
                           repLogRef.current.left.push(event);
+                          bufferRepEvent(event, "left");
                           const newReps = {
                             ...repCountsRef.current,
                             left: repCountsRef.current.left + 1,
@@ -2090,6 +2535,7 @@ export default function CameraClient() {
                         const event = rightRepCounterRef.current.update(smoothedRight, tNow);
                         if (event) {
                           repLogRef.current.right.push(event);
+                          bufferRepEvent(event, "right");
                           const newReps = {
                             ...repCountsRef.current,
                             right: repCountsRef.current.right + 1,
@@ -2169,6 +2615,7 @@ export default function CameraClient() {
                         if (rep) {
                           const { side, event } = rep;
                           repLogRef.current[side].push(event);
+                          bufferRepEvent(event, side);
                           const newReps = {
                             ...repCountsRef.current,
                             [side]: repCountsRef.current[side] + 1,
@@ -2274,6 +2721,7 @@ export default function CameraClient() {
                         const event = counter.update(rawValue, tNow);
                         if (event) {
                           repLogRef.current.left.push(event);
+                          bufferRepEvent(event, "both");
                           const newReps = {
                             ...repCountsRef.current,
                             left: repCountsRef.current.left + 1,
@@ -2321,8 +2769,68 @@ export default function CameraClient() {
                   const dt =
                     last === null ? 0 : Math.min(tNow - last, MAX_ISO_TICK_MS);
                   lastIsometricTickMsRef.current = tNow;
-                  if (dt > 0 && lInBand && rInBand) {
-                    pairedHoldMsRef.current += dt;
+                  if (dt > 0) {
+                    // ── Hold-quality accumulation (set-level, time-weighted) ──
+                    const acc = holdQualityAccumRef.current;
+                    if (acc.setStartMs === null) acc.setStartMs = tNow;
+                    const t = tNow - acc.setStartMs; // ms since hold started
+                    acc.sampleCount += 1;
+
+                    // Per-arm RAW-angle stats. Accumulated even when out of band
+                    // so a sagging arm's angle/error is still captured.
+                    const accumSide = (
+                      s: HoldSideAccum,
+                      v: number | null,
+                      isIn: boolean,
+                    ) => {
+                      if (typeof v === "number") {
+                        s.w += dt;
+                        s.wa += dt * v;
+                        s.wa2 += dt * v * v;
+                        s.wt += dt * t;
+                        s.wt2 += dt * t * t;
+                        s.wta += dt * t * v;
+                      }
+                      if (isIn) s.inBandMs += dt;
+                    };
+                    accumSide(acc.left, perSide?.left ?? null, lInBand);
+                    accumSide(acc.right, perSide?.right ?? null, rInBand);
+
+                    // Paired (true T-pose) bookkeeping: hold accrual, streak,
+                    // drops, settle time, out-of-position time.
+                    const pairedIn = lInBand && rInBand;
+                    if (pairedIn) {
+                      pairedHoldMsRef.current += dt;
+                      acc.curStreakMs += dt;
+                      if (acc.curStreakMs > acc.longestStreakMs) {
+                        acc.longestStreakMs = acc.curStreakMs;
+                      }
+                      if (acc.settleMs === null) acc.settleMs = t;
+                    } else {
+                      acc.outOfPositionMs += dt;
+                      if (acc.prevPairedInBand) acc.dropCount += 1;
+                      acc.curStreakMs = 0;
+                    }
+                    acc.prevPairedInBand = pairedIn;
+
+                    // Compensation aggregate. Uses the SAME smoothed metrics the
+                    // UI scores (per the score-from-smoothed decision), which
+                    // also sidesteps the scapularElevation baseline wrinkle.
+                    const score = computeCompensationScore(
+                      activeDefinition,
+                      smoothedMetrics,
+                    );
+                    if (typeof score === "number") {
+                      // Time-weighted (by dt), consistent with the per-arm
+                      // angle stats — answers "what fraction of HOLD TIME was
+                      // the patient compensating," not "mean over samples."
+                      acc.scoreWSum += score * dt;
+                      acc.scoreWeight += dt;
+                      acc.scoreMin =
+                        acc.scoreMin === null
+                          ? score
+                          : Math.min(acc.scoreMin, score);
+                    }
                   }
                   checkAndHandleSetCompletion(tNow);
                 }
@@ -2391,6 +2899,7 @@ export default function CameraClient() {
               leftInBandRef.current = false;
               rightInBandRef.current = false;
               lastIsometricTickMsRef.current = null;
+              resetHoldQualityAccum();
               setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
               captureDropoutResetDoneRef.current = true;
             }
@@ -2406,6 +2915,11 @@ export default function CameraClient() {
           // accumulated hold time for a flicker; just restart the dt anchor.
           lastIsometricTickMsRef.current = null;
           commitCaptureState(false, "No person detected. Step into the frame.");
+          // Count as a not-OK frame so a patient who steps out of frame lowers
+          // pctOk rather than being invisible to the capture-quality summary.
+          if (sessionStateRef.current === "active") {
+            captureFramesTotalRef.current += 1;
+          }
         }
 
         ctx.restore();

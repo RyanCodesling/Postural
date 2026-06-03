@@ -1,5 +1,10 @@
 # Sprint Updates 
 
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
+
+---
+
 ## 📌 Update-5-4-26 | *RyanCodesling*
 
 ### *web\src\lib\exercises\registry.ts*
@@ -66,6 +71,7 @@
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added a trunk MetricCard
+
 ---
 
 ## 📌 Update-4-25-26 | *Enah*

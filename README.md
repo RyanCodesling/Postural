@@ -1,5 +1,10 @@
 # Sprint Updates 
 
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
+
+---
+
 ## 📌 Update-5-31-26 | *RyanCodesling*
 
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data

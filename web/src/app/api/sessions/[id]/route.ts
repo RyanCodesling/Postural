@@ -89,6 +89,7 @@ export async function PATCH(
       captureQualitySummary: body?.captureQualitySummary,
       notes: typeof body?.notes === "string" ? body.notes : undefined,
       completed: body?.completed === true,
+      endReason: typeof body?.endReason === "string" ? body.endReason : undefined,
     });
     return NextResponse.json({ success: true });
   } catch (error) {

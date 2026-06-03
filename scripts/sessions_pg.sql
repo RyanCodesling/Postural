@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at                 TIMESTAMPTZ,
   device_info              JSONB,
   capture_quality_summary  JSONB,
-  notes                    TEXT
+  notes                    TEXT,
+  -- How the session ended; see the idempotent ALTER below for the values.
+  end_reason               TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_patient ON sessions (patient_id, started_at DESC);
@@ -31,6 +33,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_patient ON sessions (patient_id, started
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_info             JSONB;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS capture_quality_summary JSONB;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS notes                   TEXT;
+-- How the session ended: 'user' = End button pressed, 'completed' = all sets
+-- finished, 'superseded' = auto-closed when a newer session for the same
+-- assignment started, NULL = still open (tab close / navigation / exit).
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason              TEXT;
 
 CREATE TABLE IF NOT EXISTS set_events (
   id              SERIAL            PRIMARY KEY,

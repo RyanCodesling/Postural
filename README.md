@@ -1,5 +1,55 @@
 # Sprint Updates 
 
+## 📌 Update-6-4-26 | *RyanCodesling*
+
+- Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
+- Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
+- Added session end-reason tracking so the dashboard can distinguish completed sessions, deliberate early endings, superseded open rows, and still-open in-progress attempts
+- Added open-session cleanup when a newer session starts for the same assigned exercise, preventing older abandoned rows from pinning dashboard status labels
+- Preserved the existing date-gated Session tab as the actionable start surface while using the Dashboard tab as a read-only progress summary
+- Added a migration-safe `sessions.end_reason` column; existing local databases must rerun `scripts\sessions_pg.sql` or apply the `end_reason` ALTER before using this branch
+
+### *scripts\sessions_pg.sql*
+- Added `end_reason` to the `sessions` table definition
+- Added a safe `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason TEXT`
+- Documented the supported end reasons: `user`, `completed`, `superseded`, and `NULL` for still-open sessions
+
+### *web\src\lib\db.ts*
+- Updated `createSession()` to close older open sessions for the same assigned exercise as `superseded` when a new session starts
+- Updated `endSession()` to persist `end_reason`, with completed sessions recorded as `completed`
+- Updated `getSessionsForPatient()` to return `endReason`, `setCount`, and `totalReps` for dashboard summaries
+
+### *web\src\app\api\sessions\[id]\route.ts*
+- PATCH now accepts `endReason` and forwards it to the session persistence helper
+- Empty PATCH bodies remain supported for stale-session cleanup paths
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Manual End now sends `endReason: "user"` so deliberate early endings can be labeled accurately
+- Stashes the End-button reason while session creation is still in flight so fast early endings on slow networks still persist as user-ended
+- Completed all-sets sessions continue to close through the completed path
+- Non-user exercise switches and stale session cleanup close sessions without marking them as user-ended
+
+### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+- New patient consistency calendar component
+- Marks active days only from sessions with at least one set or rep outcome
+- Shows current streak, active days this month, total outcome-bearing sessions, month navigation, today highlighting, and per-day session counts
+- Uses the same Asia/Manila day-key convention as the patient session schedule
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Fetches `/api/sessions` alongside patient profile and assigned exercises
+- Adds the consistency calendar to the Dashboard tab
+- Adds a read-only assigned-exercises summary with isometric-aware prescription text
+- Uses the latest session per exercise to map `in_progress` assignments to either `In Progress` or `Ended Early`
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- Focused ESLint for the patient dashboard files and session id route passed with the existing `loadData` hook-dependency warning only
+- Full scoped ESLint still reports pre-existing `no-explicit-any` and hook-dependency debt in `CameraClient.tsx` and `db.ts` outside these edited paths
+- `git diff --check` passed on the scoped changed files, with line-ending warnings only
+- Live seeded-patient verification and the `end_reason` database migration are still required before deployment
+
+---
+
 ## 📌 Update-5-31-26 | *RyanCodesling*
 
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data

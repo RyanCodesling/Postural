@@ -774,6 +774,14 @@ export default function CameraClient() {
    * adopted — preventing orphan open rows and stale-id overwrites.
    */
   const sessionTokenRef = useRef<number>(0);
+  /**
+   * If an end (notably the End button) fires before the session create resolves,
+   * there's no row yet to PATCH — stash the intended end reason here so the
+   * create's stale-close path can record it. Without this, a fast End on a slow
+   * create leaves `end_reason` NULL and the dashboard mislabels the attempt as
+   * "In Progress" instead of "Ended Early". Reset on each start and after use.
+   */
+  const pendingStaleEndReasonRef = useRef<"user" | undefined>(undefined);
 
   // Capture-quality tally for the current session (→ sessions.capture_quality_summary).
   // Counts frames processed while the session is active and how many had OK
@@ -798,6 +806,7 @@ export default function CameraClient() {
    */
   const startSessionPersistence = () => {
     resetSessionPersistence();
+    pendingStaleEndReasonRef.current = undefined;
     const patientExerciseId = prescriptionRef.current.patientExerciseId;
     const exerciseId = activeDefinitionRef.current?.id;
     if (typeof patientExerciseId !== "number" || !exerciseId) return;
@@ -829,9 +838,14 @@ export default function CameraClient() {
         } else {
           // Stale: the run ended/changed before create resolved. Close the
           // freshly-created row so it isn't left open, and do NOT adopt its id.
-          fetch(`/api/sessions/${data.sessionId}`, { method: "PATCH" }).catch(
-            (err) => console.warn("stale session close failed:", err),
-          );
+          // Carry any end reason captured while the create was in flight (e.g. a
+          // fast End-button press) so the row isn't mislabeled "In Progress".
+          fetch(`/api/sessions/${data.sessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endReason: pendingStaleEndReasonRef.current }),
+          }).catch((err) => console.warn("stale session close failed:", err));
+          pendingStaleEndReasonRef.current = undefined;
         }
       })
       .catch((err) => console.warn("session create failed (not persisted):", err));
@@ -979,13 +993,16 @@ export default function CameraClient() {
    * Idempotent — no-op when no session is open. Clears persistence state so a
    * subsequent stray rep can't write to the just-ended session.
    */
-  const endSessionPersistence = (completed = false) => {
+  const endSessionPersistence = (completed = false, endReason?: "user") => {
     const sessionId = sessionIdRef.current;
     // Invalidate any in-flight create for this run. If the create has not
     // resolved yet (sessionId still null), its handler will see the bumped
     // token and self-close the row it creates, so nothing is left open.
     sessionTokenRef.current++;
     if (sessionId === null) {
+      // Create hasn't resolved yet — stash the reason so the create's stale-close
+      // can record it on the row it self-closes (e.g. a fast End press).
+      pendingStaleEndReasonRef.current = endReason;
       resetSessionPersistence();
       return;
     }
@@ -1003,7 +1020,7 @@ export default function CameraClient() {
     fetch(`/api/sessions/${sessionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ completed, captureQualitySummary }),
+      body: JSON.stringify({ completed, captureQualitySummary, endReason }),
     }).catch((err) => console.warn("session end failed:", err));
     resetSessionPersistence();
   };
@@ -1392,7 +1409,9 @@ export default function CameraClient() {
       }
     }
     // Flush any reps from the in-progress (partial) set and stamp ended_at.
-    endSessionPersistence();
+    // endReason "user" = the End button was pressed — distinguishes a deliberate
+    // early end from a tab-close/exit (which leaves the session open).
+    endSessionPersistence(false, "user");
     setSessionState("ended");
   };
 

@@ -555,6 +555,16 @@ export async function createSession(data: {
     ]
   );
   const row = result.rows[0];
+  // Close any orphan open sessions for this assignment — a prior Start that was
+  // never ended (e.g. the patient closed the tab / navigated away). Only the
+  // just-created session should stay open. Marked 'superseded' so it is never
+  // read as an End-button "Ended Early".
+  await pool.query(
+    `UPDATE sessions
+        SET ended_at = NOW(), end_reason = 'superseded'
+      WHERE patient_exercise_id = $1 AND ended_at IS NULL AND id <> $2`,
+    [data.patientExerciseId, row.id]
+  );
   // Flip the assignment to in_progress on its first session. Guarded on
   // status='pending' so a re-run of an already-completed exercise is not
   // downgraded.
@@ -576,13 +586,23 @@ export async function getSessionOwner(sessionId: number): Promise<string | null>
 
 export async function endSession(
   sessionId: number,
-  data: { captureQualitySummary?: unknown; notes?: string; completed?: boolean } = {}
+  data: {
+    captureQualitySummary?: unknown;
+    notes?: string;
+    completed?: boolean;
+    endReason?: string;
+  } = {}
 ): Promise<void> {
+  // 'completed' wins when all sets were finished; otherwise the caller's reason
+  // ('user' = End button pressed) or null. COALESCE keeps any reason already
+  // recorded (e.g. a 'superseded' row that a later stale PATCH must not blank).
+  const endReasonValue = data.completed ? "completed" : data.endReason ?? null;
   await pool.query(
     `UPDATE sessions
         SET ended_at = NOW(),
             capture_quality_summary = COALESCE($2, capture_quality_summary),
-            notes = COALESCE($3, notes)
+            notes = COALESCE($3, notes),
+            end_reason = COALESCE($4, end_reason)
       WHERE id = $1`,
     [
       sessionId,
@@ -590,6 +610,7 @@ export async function endSession(
         ? JSON.stringify(data.captureQualitySummary)
         : null,
       data.notes ?? null,
+      endReasonValue,
     ]
   );
   // When the patient finished all prescribed sets, mark the linked assignment
@@ -703,6 +724,7 @@ export async function getSessionsForPatient(patientId: string) {
         e.name AS exercise_name,
         s.started_at,
         s.ended_at,
+        s.end_reason,
         r.total_reps,
         r.complete_reps,
         r.left_reps,
@@ -758,6 +780,7 @@ export async function getSessionsForPatient(patientId: string) {
       exerciseKind:      row.exercise_kind ?? null,   // 'dynamic' | 'isometric' | null
       startedAt:         row.started_at,
       endedAt:           row.ended_at ?? null,
+      endReason:         row.end_reason ?? null,
       durationMs,
       setCount:          row.set_count != null ? Number(row.set_count) : 0,
       totalReps:         row.total_reps != null ? Number(row.total_reps) : 0,

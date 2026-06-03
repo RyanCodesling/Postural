@@ -9,6 +9,7 @@ import {
   prescriptionMetricValue,
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
+import ConsistencyCalendar from "./ConsistencyCalendar";
 
 interface PatientProfile {
   id: string;
@@ -40,6 +41,20 @@ interface AssignedExercise {
   assigned_date: string;
 }
 
+// Trimmed per-session summary — only the fields the dashboard needs. The
+// /api/sessions response carries more; the consistency calendar uses startedAt
+// plus setCount/totalReps to ignore zero-outcome starts.
+interface SessionLite {
+  id: number;
+  exerciseId: string;
+  startedAt: string;
+  endedAt: string | null;
+  endReason: string | null;
+  exerciseName: string;
+  setCount: number;
+  totalReps: number;
+}
+
 type ActiveTab = "dashboard" | "view-profile" | "session";
 
 export default function PatientDashboardPage() {
@@ -50,6 +65,7 @@ export default function PatientDashboardPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [patientProfile, setPatientProfile] = useState<PatientProfile | null>(null);
   const [exercises, setExercises] = useState<AssignedExercise[]>([]);
+  const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -61,9 +77,10 @@ export default function PatientDashboardPage() {
   const loadData = async () => {
     if (!user?.id) return;
     try {
-      const [profileRes, exercisesRes] = await Promise.all([
+      const [profileRes, exercisesRes, sessionsRes] = await Promise.all([
         fetch(`/api/users/${user.id}`),
         fetch("/api/patient-exercises"),
+        fetch("/api/sessions"),
       ]);
 
       if (profileRes.ok) {
@@ -74,6 +91,11 @@ export default function PatientDashboardPage() {
       if (exercisesRes.ok) {
         const d = await exercisesRes.json();
         setExercises(d.exercises ?? []);
+      }
+
+      if (sessionsRes.ok) {
+        const d = await sessionsRes.json();
+        setSessions(d.sessions ?? []);
       }
     } catch (err) {
       console.error("Error loading patient data:", err);
@@ -97,6 +119,18 @@ export default function PatientDashboardPage() {
         <div className="text-gray-500">Loading dashboard...</div>
       </div>
     );
+  }
+
+  // Most-recent session per exercise — used to decide the in_progress sub-label
+  // (In Progress vs Ended Early) from the latest attempt only (see
+  // exerciseStatusTag). Sessions arrive newest-first, but pick by startedAt
+  // defensively in case ordering ever changes.
+  const latestSessionByExercise = new Map<string, SessionLite>();
+  for (const s of sessions) {
+    const cur = latestSessionByExercise.get(s.exerciseId);
+    if (!cur || s.startedAt > cur.startedAt) {
+      latestSessionByExercise.set(s.exerciseId, s);
+    }
   }
 
   return (
@@ -183,17 +217,66 @@ export default function PatientDashboardPage() {
 
         {/* ── Dashboard ── */}
         {activeTab === "dashboard" && (
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-500 mt-1">Welcome to your postural monitoring dashboard, {user?.name}.</p>
+          <div className="max-w-4xl">
+            <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
+            <p className="text-gray-500 mt-1 mb-6">
+              Welcome to your postural monitoring dashboard, {user?.name}.
+            </p>
 
-            <div className="mt-6">
+            <div className="mb-6">
               <Link
                 href="/camera"
-                className="inline-block px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
+                className="inline-block px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
               >
                 Start Session
               </Link>
+            </div>
+
+            {/* Consistency calendar */}
+            <div className="mb-6">
+              <ConsistencyCalendar sessions={sessions} />
+            </div>
+
+            {/* Your Exercises — status-at-a-glance list (the Session tab is the
+                date-scheduled, actionable view). */}
+            <div className="bg-white border border-green-200 rounded-2xl p-6">
+              <h2 className="text-base font-semibold text-green-700 mb-4">Your Exercises</h2>
+              {exercises.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-6">
+                  No exercises assigned yet. Your therapist will assign exercises to you.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {exercises.map((ex) => {
+                    const latest = latestSessionByExercise.get(ex.exercise_id);
+                    const tag = exerciseStatusTag(
+                      ex.status,
+                      latest?.endReason === "user"
+                    );
+                    return (
+                      <div
+                        key={ex.exercise_id}
+                        className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-green-700">{ex.name}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {ex.sets} sets ×{" "}
+                            {prescriptionTargetText({
+                              exerciseId: ex.exercise_id,
+                              reps: ex.reps,
+                              holdSeconds: ex.hold_seconds,
+                            })}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${tag.classes}`}>
+                          {tag.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -484,6 +567,28 @@ export default function PatientDashboardPage() {
 
 function sessionTodayPH(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
+}
+
+// Maps a patient-exercise status to a dashboard tag. For in_progress we look at
+// the patient's MOST RECENT session and its end_reason: 'user' means the camera
+// End button was pressed → "Ended Early"; anything else (still open = a tab
+// close / navigation / exit, or ended by an exercise-switch / supersession) →
+// "In Progress". Keying on the latest session keeps an old superseded or open
+// row from mislabeling a later End.
+function exerciseStatusTag(
+  status: string,
+  latestEndedByUser: boolean
+): { label: string; classes: string } {
+  switch (status) {
+    case "completed":
+      return { label: "Completed", classes: "bg-green-100 text-green-700" };
+    case "in_progress":
+      return latestEndedByUser
+        ? { label: "Ended Early", classes: "bg-amber-100 text-amber-700" }
+        : { label: "In Progress", classes: "bg-blue-100 text-blue-700" };
+    default:
+      return { label: "Not Started", classes: "bg-gray-100 text-gray-600" };
+  }
 }
 
 // ── Profile helpers ────────────────────────────────────────────────────────

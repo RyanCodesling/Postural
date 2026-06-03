@@ -610,6 +610,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added a trunk MetricCard
+
 ---
 
 ## 📌 Update-4-25-26 | *Enah*

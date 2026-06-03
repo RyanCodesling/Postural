@@ -1,5 +1,10 @@
 # Sprint Updates 
 
+## 📌 New sprint update here (●'◡'●) | *author_name*
+-
+
+---
+
 ## 📌 Update-5-29-26 | *RyanCodesling*
 
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, center camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen

@@ -489,6 +489,7 @@
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added a trunk MetricCard
+
 ---
 
 ## 📌 Update-4-25-26 | *Enah*

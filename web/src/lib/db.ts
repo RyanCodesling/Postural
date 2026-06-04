@@ -798,6 +798,55 @@ export async function getSessionsForPatient(patientId: string) {
 }
 
 /**
+ * Therapist home rollup: one row per assigned patient with session activity and
+ * exercise progress, computed on demand (POC volume is small). "Sessions" counts
+ * only outcome-bearing rows (≥1 set or rep) so abandoned Start-presses don't
+ * inflate activity — consistent with the patient consistency calendar.
+ */
+export async function getTherapistRoster(therapistId: string) {
+  const result = await pool.query(
+    `SELECT
+        u.id,
+        u.name,
+        COALESCE(sess.total_sessions, 0)     AS total_sessions,
+        COALESCE(sess.sessions_this_week, 0) AS sessions_this_week,
+        sess.last_session_at,
+        COALESCE(ex.assigned_count, 0)       AS assigned_count,
+        COALESCE(ex.completed_count, 0)      AS completed_count
+     FROM users u
+     LEFT JOIN (
+        SELECT s.patient_id,
+               COUNT(*)                                                         AS total_sessions,
+               COUNT(*) FILTER (WHERE s.started_at >= NOW() - INTERVAL '7 days') AS sessions_this_week,
+               MAX(s.started_at)                                                 AS last_session_at
+        FROM sessions s
+        WHERE EXISTS (SELECT 1 FROM set_events se WHERE se.session_id = s.id)
+           OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
+        GROUP BY s.patient_id
+     ) sess ON sess.patient_id = u.id
+     LEFT JOIN (
+        SELECT patient_id,
+               COUNT(*)                                     AS assigned_count,
+               COUNT(*) FILTER (WHERE status = 'completed') AS completed_count
+        FROM patient_exercises
+        GROUP BY patient_id
+     ) ex ON ex.patient_id = u.id
+     WHERE u.role = 'patient' AND u.therapist_id = $1
+     ORDER BY u.name`,
+    [therapistId],
+  );
+  return result.rows.map((row) => ({
+    id:               row.id as string,
+    name:             row.name as string,
+    totalSessions:    Number(row.total_sessions),
+    sessionsThisWeek: Number(row.sessions_this_week),
+    lastSessionAt:    (row.last_session_at as string | null) ?? null,
+    assignedCount:    Number(row.assigned_count),
+    completedCount:   Number(row.completed_count),
+  }));
+}
+
+/**
  * Full drill-down for one session: the session row plus its set_events (with
  * hold_quality) and rep_events, ordered. Returns null if the session is absent.
  */

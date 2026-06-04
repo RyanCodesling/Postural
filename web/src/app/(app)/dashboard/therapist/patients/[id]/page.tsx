@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import TrendChart from "./TrendChart";
 
 interface Patient {
   id: string;
@@ -191,6 +192,14 @@ export default function PatientDetailPage() {
   );
 const completedExercises = exercises.filter((e) => e.status === "completed");
 
+  // Per-exercise session groups (oldest→newest) backing the Progress Trends
+  // charts. Outcome-bearing sessions only — a started-then-abandoned session has
+  // no reps/sets and would add spurious zero points (mirrors the patient
+  // consistency calendar).
+  const trendGroups = groupSessionsByExercise(
+    sessions.filter((s) => s.setCount > 0 || s.totalReps > 0),
+  );
+
   const progressStatus = () => {
     if (exercises.length === 0) return "not started";
     if (completedExercises.length === exercises.length) return "completed";
@@ -376,6 +385,28 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
         )}
       </div>
 
+      {/* Progress Trends */}
+      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+        <h2 className="text-green-700 font-semibold text-lg">Progress Trends</h2>
+        <p className="text-xs text-gray-400 mt-1 mb-6">
+          Session-over-session trends per exercise. Descriptive statistics — not a diagnosis.
+        </p>
+
+        {sessionsError ? (
+          <p className="text-red-600 text-sm text-center py-6">
+            Couldn&apos;t load session history.
+          </p>
+        ) : trendGroups.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-6">No sessions recorded yet.</p>
+        ) : (
+          <div className="space-y-5">
+            {trendGroups.map((g) => (
+              <ExerciseTrendCard key={g.exerciseId} group={g} />
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Sessions Record */}
       <div ref={sessionsCardRef} className="bg-white rounded-2xl border border-green-100 p-6 scroll-mt-6">
         <h2 className="text-green-700 font-semibold text-lg mb-6">Sessions Record</h2>
@@ -434,6 +465,173 @@ function isAngleUnit(exerciseId: string): boolean {
     return def.primaryMetric.name !== "wristShoulderVertical";
   }
   return true; // isometric / unknown → degrees
+}
+
+// ── Progress Trends ──────────────────────────────────────────────────────────
+
+type TrendStatus = "improving" | "plateau" | "regressing";
+
+interface TrendGroup {
+  exerciseId: string;
+  exerciseName: string;
+  exerciseKind: SessionSummary["exerciseKind"];
+  sessions: SessionSummary[]; // oldest → newest
+}
+
+const STATUS_STYLE: Record<TrendStatus, { label: string; classes: string }> = {
+  improving:  { label: "Improving",  classes: "bg-green-100 text-green-700" },
+  plateau:    { label: "Plateau",    classes: "bg-gray-100 text-gray-600" },
+  regressing: { label: "Regressing", classes: "bg-amber-100 text-amber-700" },
+};
+
+// Group sessions by exercise. Input is newest-first (the API orders started_at
+// DESC), so each group is reversed to oldest→newest for the time axis; groups
+// are ordered by most-recent activity.
+function groupSessionsByExercise(sessions: SessionSummary[]): TrendGroup[] {
+  const map = new Map<string, SessionSummary[]>();
+  for (const s of sessions) {
+    const arr = map.get(s.exerciseId) ?? [];
+    arr.push(s);
+    map.set(s.exerciseId, arr);
+  }
+  return Array.from(map.values())
+    .map((list) => ({
+      exerciseId:   list[0].exerciseId,
+      exerciseName: list[0].exerciseName,
+      // Authoritative from the registry — NOT list[0].exerciseKind, which is
+      // derived from set_events and is null for an abandoned/legacy newest
+      // session (would mislabel e.g. an isometric card as dynamic). Fall back to
+      // the first session that does carry a kind, then null.
+      exerciseKind:
+        getExerciseDefinition(list[0].exerciseId)?.kind ??
+        list.find((s) => s.exerciseKind != null)?.exerciseKind ??
+        null,
+      sessions:     [...list].reverse(),
+    }))
+    .sort((a, b) =>
+      b.sessions[b.sessions.length - 1].startedAt.localeCompare(
+        a.sessions[a.sessions.length - 1].startedAt,
+      ),
+    );
+}
+
+// The session's primary trend value: ROM (avgPeakValue) for dynamic exercises,
+// hold seconds for isometric. Null when the session didn't record it.
+function sessionPrimaryValue(s: SessionSummary): number | null {
+  if (s.exerciseKind === "isometric") {
+    return s.totalPairedHoldMs != null ? s.totalPairedHoldMs / 1000 : null;
+  }
+  return s.avgPeakValue;
+}
+
+// Label / unit / whether the metric is an angle (the latter drives the badge
+// deadband — hold seconds and ex_007's normalized units are not angles).
+function primaryMetricMeta(
+  exerciseId: string,
+  kind: SessionSummary["exerciseKind"],
+): { label: string; unit: string; isAngle: boolean } {
+  if (kind === "isometric") return { label: "Hold time", unit: "s", isAngle: false };
+  const angle = isAngleUnit(exerciseId);
+  return { label: angle ? "Peak ROM" : "Peak", unit: angle ? "°" : "", isAngle: angle };
+}
+
+// Trend direction from a least-squares slope over the session values (oldest→
+// newest). Needs ≥3 points (per the set/session-level-only rule). A deadband
+// rejects inter-session noise: the projected change across the window must clear
+// max(3° noise floor for angle metrics, 5% of the mean). Higher = better for both
+// ROM and hold time. DESCRIPTIVE STATISTICS — not the ML model, not a diagnosis.
+// The deadband is a tunable heuristic.
+function trendStatus(values: number[], isAngle: boolean): TrendStatus | null {
+  const n = values.length;
+  if (n < 3) return null;
+  const meanX = (n - 1) / 2;
+  const meanY = values.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (i - meanX) * (values[i] - meanY);
+    den += (i - meanX) ** 2;
+  }
+  if (den === 0) return "plateau";
+  const projected = (num / den) * (n - 1); // change across the whole window
+  const deadband = Math.max(isAngle ? 3 : 0, 0.05 * Math.abs(meanY));
+  if (projected > deadband) return "improving";
+  if (projected < -deadband) return "regressing";
+  return "plateau";
+}
+
+function ExerciseTrendCard({ group }: { group: TrendGroup }) {
+  const { exerciseId, exerciseName, exerciseKind, sessions } = group;
+  const meta = primaryMetricMeta(exerciseId, exerciseKind);
+  const isIso = exerciseKind === "isometric";
+
+  const primaryValues = sessions
+    .map(sessionPrimaryValue)
+    .filter((v): v is number => v != null);
+  const status = trendStatus(primaryValues, meta.isAngle);
+
+  const first = sessions[0];
+  const last = sessions[sessions.length - 1];
+
+  return (
+    <div className="rounded-xl border border-gray-100 p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-green-700">{exerciseName}</h3>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {sessions.length} session{sessions.length === 1 ? "" : "s"}
+            {sessions.length > 1 && (
+              <>
+                {" · "}
+                {fmtDateTime(first.startedAt)} → {fmtDateTime(last.startedAt)}
+              </>
+            )}
+          </p>
+        </div>
+        {status ? (
+          <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${STATUS_STYLE[status].classes}`}>
+            {STATUS_STYLE[status].label}
+          </span>
+        ) : (
+          <span className="shrink-0 text-xs px-3 py-1 rounded-full font-medium bg-gray-50 text-gray-400">
+            Collecting data
+          </span>
+        )}
+      </div>
+
+      {sessions.length < 2 ? (
+        <p className="text-xs text-gray-400 py-4 text-center">Needs ≥2 sessions to chart.</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <p className="text-xs font-medium text-gray-500 mb-1">{meta.label} over time</p>
+            {primaryValues.length >= 2 ? (
+              <TrendChart
+                series={[{ label: meta.label, color: "#15803d", values: primaryValues }]}
+                unitSuffix={meta.unit}
+              />
+            ) : (
+              <p className="text-xs text-gray-400 py-4 text-center">
+                No {meta.label.toLowerCase()} recorded.
+              </p>
+            )}
+          </div>
+
+          {!isIso && (
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-1">Completed reps — left vs right</p>
+              <TrendChart
+                series={[
+                  { label: "Left",  color: "#2563eb", values: sessions.map((s) => s.completeLeftReps) },
+                  { label: "Right", color: "#ea580c", values: sessions.map((s) => s.completeRightReps) },
+                ]}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SessionCard({

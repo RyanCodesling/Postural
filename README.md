@@ -6,7 +6,12 @@
 - Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
 - Added session end-reason tracking so the dashboard can distinguish completed sessions, deliberate early endings, superseded open rows, and still-open in-progress attempts
 - Added open-session cleanup when a newer session starts for the same assigned exercise, preventing older abandoned rows from pinning dashboard status labels
-- Preserved the existing date-gated Session tab as the actionable start surface while using the Dashboard tab as a read-only progress summary
+- Added a post-session camera recap so patients can review the exercise they just finished before redoing it, moving to the next exercise, or returning to their schedule
+- Added cross-session progress trend charts to the therapist patient-detail page, including exercise-specific primary metrics, separate left/right completion series, and descriptive trend badges
+- Rebuilt the therapist home page into a dashboard with patient activity KPIs, setup/inactivity counts, and a linked patient roster
+- Refined the patient Dashboard tab so consistency and assigned-exercise summaries sit side by side on wide screens and stack cleanly on smaller screens
+- Added a deterministic demo-data command for populating dashboard KPIs, patient statuses, session history, and trend-chart states
+- Preserved the existing date-gated Session tab as the actionable scheduled-exercise surface while using the Dashboard tab as a read-only progress summary
 - Added a migration-safe `sessions.end_reason` column; existing local databases must rerun `scripts\sessions_pg.sql` or apply the `end_reason` ALTER before using this branch
 
 ### *scripts\sessions_pg.sql*
@@ -14,20 +19,39 @@
 - Added a safe `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason TEXT`
 - Documented the supported end reasons: `user`, `completed`, `superseded`, and `NULL` for still-open sessions
 
+### *web\package.json*
+- Added `npm run seed:demo` as the dashboard demo-data command
+
+### *web\scripts\seedDemo.ts*
+- Added a deterministic, transaction-based demo-data generator for the existing therapist and patient demo accounts plus additional `demo_*` patients
+- Resets only the known demo account content and `demo_*` rows before reseeding so repeated runs produce the same populated dashboard state
+- Populates patient assignments, therapist programs, sessions, set outcomes, rep outcomes, hold-quality summaries, activity states, and trend-chart examples
+- Reads `DATABASE_URL` from the environment or `web\.env.local`
+
 ### *web\src\lib\db.ts*
 - Updated `createSession()` to close older open sessions for the same assigned exercise as `superseded` when a new session starts
 - Updated `endSession()` to persist `end_reason`, with completed sessions recorded as `completed`
 - Updated `getSessionsForPatient()` to return `endReason`, `setCount`, and `totalReps` for dashboard summaries
+- Added `getTherapistRoster()` to return each assigned patient's outcome-bearing session activity, last active date, assigned-exercise count, and completion count
+- Counts therapist activity from sessions with at least one set or rep outcome so abandoned starts do not inflate the home dashboard
 
 ### *web\src\app\api\sessions\[id]\route.ts*
 - PATCH now accepts `endReason` and forwards it to the session persistence helper
 - Empty PATCH bodies remain supported for stale-session cleanup paths
+
+### *web\src\app\api\therapist\overview\route.ts*
+- Added a therapist-only overview endpoint for the home dashboard
+- Returns the signed-in therapist's patient roster rollups and exercise-program count
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Manual End now sends `endReason: "user"` so deliberate early endings can be labeled accurately
 - Stashes the End-button reason while session creation is still in flight so fast early endings on slow networks still persist as user-ended
 - Completed all-sets sessions continue to close through the completed path
 - Non-user exercise switches and stale session cleanup close sessions without marking them as user-ended
+- Added a post-session summary overlay for the camera's ended state
+- Dynamic exercise recaps show separate left/right completion totals, average peak versus target, an asymmetry label, and completed sets
+- Isometric exercise recaps show hold time versus target and completed sets without presenting rep counts
+- Added Redo, Next exercise, and patient schedule navigation actions using the existing camera flow handlers
 
 ### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
 - New patient consistency calendar component
@@ -40,13 +64,38 @@
 - Adds the consistency calendar to the Dashboard tab
 - Adds a read-only assigned-exercises summary with isometric-aware prescription text
 - Uses the latest session per exercise to map `in_progress` assignments to either `In Progress` or `Ended Early`
+- Places the consistency calendar and assigned-exercises summary side by side on large screens while preserving a stacked mobile layout
+- Moves the general Start Session action into the assigned-exercises summary header
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced the one-line therapist welcome screen with a dashboard home view
+- Added KPI cards for Patients, Sessions this week, Programs, No exercises yet, and Needs attention
+- Added a patient roster with Last active, This week, Progress, and Status columns
+- Links patient names to their therapist patient-detail pages
+- Added loading, empty, and error states plus horizontal table scrolling for narrow screens
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\TrendChart.tsx*
+- New reusable SVG line-chart component for one or two numeric series
+- Shows plotted points, connected lines, latest values, and min/max scale context without adding a charting dependency
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added a Progress Trends section above the existing Sessions Record
+- Groups outcome-bearing sessions by exercise and orders each group from oldest to newest
+- Uses average peak value for dynamic exercises and paired hold time for isometric exercises
+- Keeps completed left and right reps as separate chart series so the asymmetry signal is not hidden
+- Adds Improving, Plateau, Regressing, and low-data states using descriptive session-level statistics
+- Derives exercise kind from the registry first so legacy or abandoned sessions with no set row cannot mislabel isometric trend cards
 
 ### *Validation*
 - `npx tsc --noEmit --pretty false` passed from `web/`
+- Focused ESLint passed for the therapist dashboard page, therapist overview route, trend chart component, and demo-data script
 - Focused ESLint for the patient dashboard files and session id route passed with the existing `loadData` hook-dependency warning only
 - Full scoped ESLint still reports pre-existing `no-explicit-any` and hook-dependency debt in `CameraClient.tsx` and `db.ts` outside these edited paths
-- `git diff --check` passed on the scoped changed files, with line-ending warnings only
-- Live seeded-patient verification and the `end_reason` database migration are still required before deployment
+- The demo-data command completed successfully and produced the same counts on a repeated run
+- Browser verification confirmed the patient dashboard, therapist home dashboard, and therapist patient-detail trend charts render with populated demo data
+- Responsive checks at desktop and narrow mobile widths showed no page-level horizontal overflow; the therapist roster table remains contained by its horizontal-scroll wrapper
+- `git diff --check` passed on the scoped tracked files, with line-ending warnings only
+- Live webcam validation is still required for the camera post-session recap, and the `end_reason` database migration is still required before deployment
 
 ---
 

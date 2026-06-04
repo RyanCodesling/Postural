@@ -3573,6 +3573,110 @@ export default function CameraClient() {
                 </div>
               )}
 
+              {/* Post-session summary — recap of the just-finished session. Shown
+                  in the "ended" state (last exercise complete, or a manual End;
+                  the guided flow auto-advances between exercises otherwise). */}
+              {sessionState === "ended" && (() => {
+                const def = activeDefinition;
+                const isIso = def?.kind === "isometric";
+                const setsLog = completedSetsLogRef.current;
+                const setsDone = setsLog.length;
+
+                // Per-side tallies — NEVER summed (preserves the asymmetry signal).
+                const L = repLogRef.current.left;
+                const R = repLogRef.current.right;
+                const lComplete = L.filter((e) => e.classification === "complete").length;
+                const rComplete = R.filter((e) => e.classification === "complete").length;
+                const peaks = [...L, ...R].map((e) => e.peakValue);
+                const avgPeak = peaks.length ? peaks.reduce((a, b) => a + b, 0) / peaks.length : null;
+                const isAngle = def && def.kind === "dynamic" ? def.primaryMetric.name !== "wristShoulderVertical" : true;
+                const target = def && def.kind === "dynamic" ? def.primaryMetric.thresholds.targetROM : 0;
+                const unit = isAngle ? "°" : "";
+                const fmtVal = (v: number) => (isAngle ? `${Math.round(v)}` : v.toFixed(2));
+                const avgAsym = setsDone ? setsLog.reduce((s, r) => s + r.asymmetryIndex, 0) / setsDone : 0;
+                const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
+                const heldMs = setsLog.reduce((s, r) => s + (r.pairedHoldMs ?? 0), 0);
+                const targetMs = setsLog.reduce((s, r) => s + (r.targetHoldMs ?? 0), 0);
+                const isPatient = prescription.patientExerciseId !== undefined;
+
+                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
+                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
+                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
+
+                return (
+                  <div style={{
+                    position: "absolute", inset: 0, zIndex: 35,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
+                  }}>
+                    <div style={{
+                      background: "white", borderRadius: 14, padding: "22px 24px",
+                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
+                    }}>
+                      <div style={{
+                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 700, marginBottom: 4,
+                      }}>Session complete</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16 }}>
+                        {def?.name ?? "Exercise"}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+                        {isIso ? (
+                          <>
+                            <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{Math.round(heldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{lComplete}/{L.length} complete</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{rComplete}/{R.length} complete</span></div>
+                            {avgPeak !== null && (
+                              <div style={rowStyle}><span style={labelStyle}>Avg peak</span><span style={valStyle}>{fmtVal(avgPeak)}{unit}{target ? ` · target ${fmtVal(target)}${unit}` : ""}</span></div>
+                            )}
+                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
+                          </>
+                        )}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={handleSessionStart}
+                          style={{
+                            width: "100%", padding: "10px 12px",
+                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
+                          }}
+                        >Redo</button>
+                        {hasNextExercise && (
+                          <button
+                            type="button"
+                            onClick={() => goToAdjacentExercise(1)}
+                            style={{
+                              width: "100%", padding: "10px 12px",
+                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
+                            }}
+                          >Next exercise →</button>
+                        )}
+                        {isPatient && (
+                          <Link
+                            href="/dashboard/patient"
+                            style={{
+                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
+                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
+                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
+                            }}
+                          >Back to schedule</Link>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Stat strip — patient-facing distance readouts */}
               <ClinicalStatStrip
                 score={score}

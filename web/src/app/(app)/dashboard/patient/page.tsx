@@ -217,66 +217,66 @@ export default function PatientDashboardPage() {
 
         {/* ── Dashboard ── */}
         {activeTab === "dashboard" && (
-          <div className="max-w-4xl">
+          <div className="max-w-5xl">
             <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
             <p className="text-gray-500 mt-1 mb-6">
               Welcome to your postural monitoring dashboard, {user?.name}.
             </p>
 
-            <div className="mb-6">
-              <Link
-                href="/camera"
-                className="inline-block px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
-              >
-                Start Session
-              </Link>
-            </div>
-
-            {/* Consistency calendar */}
-            <div className="mb-6">
+            {/* Consistency + Your Exercises, side by side on wide screens. */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+              {/* Consistency calendar */}
               <ConsistencyCalendar sessions={sessions} />
-            </div>
 
-            {/* Your Exercises — status-at-a-glance list (the Session tab is the
-                date-scheduled, actionable view). */}
-            <div className="bg-white border border-green-200 rounded-2xl p-6">
-              <h2 className="text-base font-semibold text-green-700 mb-4">Your Exercises</h2>
-              {exercises.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-6">
-                  No exercises assigned yet. Your therapist will assign exercises to you.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {exercises.map((ex) => {
-                    const latest = latestSessionByExercise.get(ex.exercise_id);
-                    const tag = exerciseStatusTag(
-                      ex.status,
-                      latest?.endReason === "user"
-                    );
-                    return (
-                      <div
-                        key={ex.exercise_id}
-                        className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-green-700">{ex.name}</p>
-                          <p className="text-xs text-gray-500 mt-0.5">
-                            {ex.sets} sets ×{" "}
-                            {prescriptionTargetText({
-                              exerciseId: ex.exercise_id,
-                              reps: ex.reps,
-                              holdSeconds: ex.hold_seconds,
-                            })}
-                          </p>
-                        </div>
-                        <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${tag.classes}`}>
-                          {tag.label}
-                        </span>
-                      </div>
-                    );
-                  })}
+              {/* Your Exercises — status-at-a-glance list (the Session tab is the
+                  date-scheduled, actionable view). Start Session lives here. */}
+              <div className="bg-white border border-green-200 rounded-2xl p-6">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <h2 className="text-base font-semibold text-green-700">Your Exercises</h2>
+                  <Link
+                    href="/camera"
+                    className="shrink-0 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
+                  >
+                    Start Session
+                  </Link>
                 </div>
-              )}
+                {exercises.length === 0 ? (
+                  <p className="text-gray-400 text-sm text-center py-6">
+                    No exercises assigned yet. Your therapist will assign exercises to you.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {exercises.map((ex) => {
+                      const latest = latestSessionByExercise.get(ex.exercise_id);
+                      const tag = exerciseStatusTag(
+                        ex.status,
+                        latest?.endReason === "user"
+                      );
+                      return (
+                        <div
+                          key={ex.exercise_id}
+                          className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-green-700">{ex.name}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              {ex.sets} sets ×{" "}
+                              {prescriptionTargetText({
+                                exerciseId: ex.exercise_id,
+                                reps: ex.reps,
+                                holdSeconds: ex.hold_seconds,
+                              })}
+                            </p>
+                          </div>
+                          <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${tag.classes}`}>
+                            {tag.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

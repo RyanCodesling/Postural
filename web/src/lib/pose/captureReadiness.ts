@@ -244,11 +244,16 @@ export function evaluateCaptureReadiness(
   }
 
   if (nose.y > HEAD_Y_MAX) {
-    // Head too low in frame — patient is too far or camera angled down
+    // Head too low in frame — patient is too far or camera angled down.
+    // In overhead mode the head is meant to sit in the upper-middle (not the
+    // top quarter), so "near the top" would contradict the framing the patient
+    // was told to adopt — phrase it as full-body framing instead.
     return {
       ok: false,
       status: "MOVE_CLOSER",
-      message: "Step closer or raise the camera so your head is near the top.",
+      message: isOverhead
+        ? "Step closer or raise the camera so your whole body is in frame."
+        : "Step closer or raise the camera so your head is near the top.",
       target,
       person,
       score01: vis(nose),

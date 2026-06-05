@@ -8,6 +8,7 @@ import {
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
+  type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
@@ -16,11 +17,19 @@ import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
+  isNearPeak,
+  computeElbowFlexion,
   computeLateralNeckTilt,
   computeScapularElevation,
+  computeShoulderAbduction,
+  computeShoulderElbowDistance,
+  computeShoulderSymmetry,
+  computeTrunkLateralLean,
   hasMissingTiltReferenceLine,
   computeTrunkLateralFlexionFromNeutralSigned,
   computeTrunkLateralFlexionUncorrectedSigned,
+  computeWristShoulderLateral,
+  computeWristShoulderVertical,
   type ExerciseFrameMetrics,
 } from "@/lib/pose/poseMetrics";
 import {
@@ -38,11 +47,12 @@ import {
 
 type CamDevice = MediaDeviceInfo;
 
+type AssignmentStatus = "pending" | "in_progress" | "completed";
+
 interface Exercise {
   id: string;
   name: string;
   description: string;
-  duration: number;
   /**
    * Per-side rep target. Added 2026-05-22. For patient
    * assignments this comes from `patient_exercises.reps` via
@@ -73,6 +83,140 @@ interface Exercise {
    * staff debug path has no row, so it skips session persistence entirely.
    */
   patientExerciseId?: number;
+  /**
+   * Assignment status from `patient_exercises.status` via
+   * `/api/patient-exercises` (patient assignments only). Drives the
+   * "already completed" recap overlay + stepper pill when the patient returns
+   * to a finished exercise. Undefined for the staff debug catalog.
+   */
+  status?: AssignmentStatus;
+}
+
+/**
+ * The latest FINISHED session for an exercise, sourced from `/api/sessions`
+ * (`getSessionsForPatient`). Used to populate the "already completed" recap
+ * overlay when a patient returns to a finished exercise — the live in-memory
+ * session summary is gone after the camera route unmounts, but this persisted
+ * outcome survives. Per-side rep counts are kept separate (never summed —
+ * preserves the asymmetry signal).
+ */
+type ExerciseSessionRecap = {
+  exerciseKind: "dynamic" | "isometric" | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  setCount: number;
+  leftReps: number;
+  rightReps: number;
+  completeLeftReps: number;
+  completeRightReps: number;
+  avgPeakValue: number | null;
+  totalPairedHoldMs: number | null;
+  totalTargetHoldMs: number | null;
+};
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null;
+}
+
+function recordsField(data: unknown, field: string): JsonRecord[] {
+  if (!isRecord(data) || !Array.isArray(data[field])) return [];
+  return data[field].filter(isRecord);
+}
+
+function stringField(record: JsonRecord, field: string): string | undefined {
+  const value = record[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberField(record: JsonRecord, field: string): number | undefined {
+  const value = record[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function integerField(record: JsonRecord, field: string): number | undefined {
+  const value = numberField(record, field);
+  return value !== undefined && Number.isInteger(value) ? value : undefined;
+}
+
+function assignmentStatus(value: unknown): AssignmentStatus | undefined {
+  return value === "pending" || value === "in_progress" || value === "completed"
+    ? value
+    : undefined;
+}
+
+function exerciseKind(value: unknown): ExerciseSessionRecap["exerciseKind"] {
+  return value === "dynamic" || value === "isometric" ? value : null;
+}
+
+function getErrorName(error: unknown): string {
+  if (error instanceof Error && error.name) return error.name;
+  if (isRecord(error) && typeof error.name === "string") return error.name;
+  return "Error";
+}
+
+/**
+ * Device-local snapshot of a live session's resumable state, written to
+ * localStorage while a patient session runs. A disruption (tab close,
+ * navigation, refresh, crash) never reaches the End button, so the current
+ * partial set's reps and the live timer are otherwise lost — the DB keeps only
+ * the open session row + completed-set rows. On return this snapshot restores
+ * the counter, completed sets, and elapsed time so the SAME session can be
+ * resumed. Counts/timings only — no video. Cleared on a deliberate End/finish.
+ */
+type ResumeSnapshot = {
+  v: 1;
+  sessionId: number;
+  exerciseId: string;
+  patientExerciseId: number;
+  kind: "dynamic" | "isometric";
+  completedSets: number;
+  currentSetReps: { left: number; right: number };
+  pairedHoldMs: number;
+  // Session elapsed (ms) at write time — excludes any away-time, so the timer
+  // resumes from where it stopped rather than from wall-clock-since-start.
+  elapsedMs: number;
+  // Session-wide rep index so reused sessions keep rep_events numbering contiguous.
+  globalRepIndex: number;
+  // Last raw-frame index (ex_007 traces) so a reused session does not restart
+  // frame_index at 1 and collide with raw_frames' UNIQUE(session_id, frame_index).
+  rawFrameIndex: number;
+  updatedAtWallMs: number;
+};
+
+// A resumable session older than this (by last snapshot write) is not offered —
+// avoids resuming a days-old still-open session.
+const RESUME_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+const resumeKey = (patientExerciseId: number) =>
+  `postural.resume.v1.${patientExerciseId}`;
+
+/** Read + validate the resume snapshot for an assignment. Null if absent/invalid. */
+function readResumeSnapshot(
+  patientExerciseId: number | undefined,
+): ResumeSnapshot | null {
+  if (typeof patientExerciseId !== "number") return null;
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(resumeKey(patientExerciseId));
+    if (!raw) return null;
+    const snap = JSON.parse(raw) as ResumeSnapshot;
+    if (snap?.v !== 1 || typeof snap.sessionId !== "number") return null;
+    return snap;
+  } catch {
+    return null;
+  }
+}
+
+function clearResumeSnapshot(patientExerciseId: number | undefined): void {
+  if (typeof patientExerciseId !== "number") return;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(resumeKey(patientExerciseId));
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -146,6 +290,46 @@ type RepEventPayload = {
   classification: RepEvent["classification"];
   startTs: string;
   endTs: string;
+};
+
+type RawTraceLandmark = {
+  x: number;
+  y: number;
+  z: number | null;
+  visibility: number | null;
+};
+
+type Ex007UpperBodyTraceMetrics = {
+  wristShoulderVertical: { left: number | null; right: number | null };
+  wristShoulderLateral: { left: number | null; right: number | null };
+  shoulderAbductionDeg: { left: number | null; right: number | null };
+  elbowFlexionDeg: { left: number | null; right: number | null };
+  scapularElevationRaw: { left: number | null; right: number | null };
+  shoulderElbowDistance: { left: number | null; right: number | null };
+  trunkLeanDeg: number | null;
+  trunkLeanDirection: "left" | "right" | "center" | null;
+  shoulderSymmetryDeg: number | null;
+  elevatedShoulder: "left" | "right" | "level" | null;
+  tiltReference: {
+    cameraTiltDeg: number;
+    confidence: ExerciseFrameMetrics["tiltReference"]["confidence"];
+    divergenceDeg: number | null;
+  };
+};
+
+/**
+ * One raw metric-only frame shaped for the `/raw-frames` write API. The
+ * landmark payload is deliberately limited to upper-body analysis points plus
+ * hips (needed for the trunk-relative coordinate frame); no image/video data.
+ */
+type RawFramePayload = {
+  frameIndex: number;
+  setIndex: number;
+  elapsedMs: number;
+  capturedAt: string;
+  traceKind: "ex_007_upper_body_v1";
+  metrics: Ex007UpperBodyTraceMetrics;
+  landmarks: Record<string, RawTraceLandmark | null>;
 };
 
 /**
@@ -253,13 +437,6 @@ function createRepCountersForDefinition(
     right: null,
     bidirectional: null,
   };
-}
-
-interface PatientExercise {
-  exerciseId: string;
-  patientId: string;
-  assignedDate: string;
-  status: "pending" | "in-progress" | "completed";
 }
 
 type NeckRepDebugRecord = {
@@ -376,8 +553,112 @@ declare global {
 const MAX_NECK_REP_DEBUG_RECORDS = 3000;
 const MAX_EX005_DEBUG_RECORDS = 2000;
 const EX005_DEBUG_THROTTLE_MS = 250;
+const RAW_FRAME_UPLOAD_BATCH_SIZE = 120;
 const BASELINE_SAMPLE_COUNT = 90; // ~3 s at 30 fps
 const CAPTURE_READINESS_RESET_GRACE_MS = 300;
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function traceLandmark(
+  landmark: NormalizedLandmark | undefined,
+): RawTraceLandmark | null {
+  const x = finiteNumberOrNull(landmark?.x);
+  const y = finiteNumberOrNull(landmark?.y);
+  if (x === null || y === null) return null;
+  return {
+    x,
+    y,
+    z: finiteNumberOrNull(landmark?.z),
+    visibility: finiteNumberOrNull(landmark?.visibility),
+  };
+}
+
+function ex007TraceLandmarks(landmarks: NormalizedLandmark[]) {
+  return {
+    leftEar:       traceLandmark(landmarks[7]),
+    rightEar:      traceLandmark(landmarks[8]),
+    leftShoulder:  traceLandmark(landmarks[11]),
+    rightShoulder: traceLandmark(landmarks[12]),
+    leftElbow:     traceLandmark(landmarks[13]),
+    rightElbow:    traceLandmark(landmarks[14]),
+    leftWrist:     traceLandmark(landmarks[15]),
+    rightWrist:    traceLandmark(landmarks[16]),
+    leftHip:       traceLandmark(landmarks[23]),
+    rightHip:      traceLandmark(landmarks[24]),
+  };
+}
+
+function ex007TraceMetrics(
+  landmarks: NormalizedLandmark[],
+  raw: ExerciseFrameMetrics,
+): Ex007UpperBodyTraceMetrics {
+  const tilt = raw.tiltReference;
+  const trunkLean = computeTrunkLateralLean(landmarks, tilt);
+  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt);
+  return {
+    wristShoulderVertical: {
+      left: finiteNumberOrNull(
+        raw.perSideMetrics?.left ??
+          computeWristShoulderVertical(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        raw.perSideMetrics?.right ??
+          computeWristShoulderVertical(landmarks, tilt, "right"),
+      ),
+    },
+    wristShoulderLateral: {
+      left: finiteNumberOrNull(
+        computeWristShoulderLateral(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeWristShoulderLateral(landmarks, tilt, "right"),
+      ),
+    },
+    shoulderAbductionDeg: {
+      left: finiteNumberOrNull(
+        computeShoulderAbduction(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeShoulderAbduction(landmarks, tilt, "right"),
+      ),
+    },
+    elbowFlexionDeg: {
+      left: finiteNumberOrNull(
+        computeElbowFlexion(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeElbowFlexion(landmarks, tilt, "right"),
+      ),
+    },
+    scapularElevationRaw: {
+      left: finiteNumberOrNull(
+        computeScapularElevation(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeScapularElevation(landmarks, tilt, "right"),
+      ),
+    },
+    shoulderElbowDistance: {
+      left: finiteNumberOrNull(
+        computeShoulderElbowDistance(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeShoulderElbowDistance(landmarks, tilt, "right"),
+      ),
+    },
+    trunkLeanDeg: finiteNumberOrNull(trunkLean?.angleDeg),
+    trunkLeanDirection: trunkLean?.direction ?? null,
+    shoulderSymmetryDeg: finiteNumberOrNull(shoulderSymmetry?.angleDeg),
+    elevatedShoulder: shoulderSymmetry?.elevatedSide ?? null,
+    tiltReference: {
+      cameraTiltDeg: tilt.cameraTiltDeg,
+      confidence: tilt.confidence,
+      divergenceDeg: finiteNumberOrNull(tilt.divergenceDeg),
+    },
+  };
+}
 
 // ── Clinical design constants ────────────────────────────────────────────────
 
@@ -385,6 +666,15 @@ const ACCENT = {
   hex:  "oklch(0.55 0.07 200)",
   soft: "oklch(0.95 0.02 200)",
   text: "oklch(0.35 0.06 200)",
+};
+
+// Bright "glowing neon" palette, used only by the session progress strip
+// (set pips + overall progress bar) to make completion state pop. Kept
+// separate from ACCENT so the rest of the clinical UI stays restrained.
+const NEON = {
+  hex:  "oklch(0.82 0.20 195)",        // bright neon cyan fill
+  glow: "oklch(0.82 0.20 195 / 0.7)",  // box-shadow glow color
+  dim:  "oklch(0.90 0.08 195)",        // current/upcoming set tint
 };
 
 type ScoreTier = { hex: string; soft: string; text: string; label: string };
@@ -419,6 +709,12 @@ type CardSpec = {
   kind: "primary" | "compensation";
   warningThreshold?: number;
   compareDirection?: "above" | "below";
+  /**
+   * True when this is a `peakRelevant` compensation whose warning is gated
+   * off this frame because the movement isn't near peak ROM (see isNearPeak).
+   * The card still shows its value; only the warning highlight is suppressed.
+   */
+  suppressWarning?: boolean;
 };
 
 export default function CameraClient() {
@@ -566,9 +862,11 @@ export default function CameraClient() {
     sampleCount: 0,
   });
   const holdQualityAccumRef = useRef<HoldQualityAccum>(newHoldQualityAccum());
+  const resetHoldQualityAccumRef = useRef<() => void>(() => undefined);
   const resetHoldQualityAccum = () => {
     holdQualityAccumRef.current = newHoldQualityAccum();
   };
+  resetHoldQualityAccumRef.current = resetHoldQualityAccum;
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -621,6 +919,34 @@ export default function CameraClient() {
 
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>(initialExerciseId);
+
+  // Latest finished session per exercise id (patient only), for the
+  // "already completed" recap overlay. Populated once on mount from
+  // `/api/sessions`. Empty for staff debug (no persisted sessions).
+  const [sessionRecaps, setSessionRecaps] = useState<Map<string, ExerciseSessionRecap>>(
+    new Map(),
+  );
+  // When true, the recap overlay for the current exercise is hidden (the
+  // patient dismissed it). Reset on every exercise change so stepping to
+  // another completed exercise re-shows its recap.
+  const [recapDismissed, setRecapDismissed] = useState(false);
+
+  // Open (un-ended) session per exercise id (patient only), from the same
+  // on-mount `/api/sessions` fetch. The authoritative gate for offering a
+  // resume: a disrupted session leaves its row open, whereas End / finish /
+  // exercise-switch all stamp ended_at.
+  const [openSessions, setOpenSessions] = useState<
+    Map<string, { sessionId: number; startedAt: string }>
+  >(new Map());
+  // When true, the resume overlay for the current exercise is hidden.
+  const [resumeDismissed, setResumeDismissed] = useState(false);
+
+  // Reset both dismiss flags on every exercise change so stepping to another
+  // exercise re-shows its recap / resume prompt.
+  useEffect(() => {
+    setRecapDismissed(false);
+    setResumeDismissed(false);
+  }, [selectedExercise]);
 
   const [activeDefinition, setActiveDefinition] =
     useState<ExerciseDefinition | null>(null);
@@ -764,6 +1090,12 @@ export default function CameraClient() {
   const globalRepIndexRef = useRef<number>(0);
   const pendingSetEventsRef = useRef<SetEventPayload[]>([]);
   const pendingRepEventsRef = useRef<RepEventPayload[]>([]);
+  const rawFrameIndexRef = useRef<number>(0);
+  const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
+  // Serial upload chain for raw-frame batches. Each queued request captures its
+  // session id + rows, so an end/auto-advance reset cannot redirect an in-flight
+  // batch into the next session.
+  const rawFrameUploadChainRef = useRef<Promise<void>>(Promise.resolve());
   /**
    * Monotonic token identifying the currently-intended session run. Bumped on
    * every start and every end. Because session create is async, the create's
@@ -774,6 +1106,9 @@ export default function CameraClient() {
    * adopted — preventing orphan open rows and stale-id overwrites.
    */
   const sessionTokenRef = useRef<number>(0);
+  const endSessionPersistenceRef = useRef<
+    (completed?: boolean, endReason?: "user") => void
+  >(() => undefined);
   /**
    * If an end (notably the End button) fires before the session create resolves,
    * there's no row yet to PATCH — stash the intended end reason here so the
@@ -796,6 +1131,8 @@ export default function CameraClient() {
     globalRepIndexRef.current = 0;
     pendingSetEventsRef.current = [];
     pendingRepEventsRef.current = [];
+    rawFrameIndexRef.current = 0;
+    pendingRawFramesRef.current = [];
   };
 
   /**
@@ -835,6 +1172,14 @@ export default function CameraClient() {
           sessionIdRef.current = data.sessionId;
           flushSetEvents();
           flushRepEvents();
+          flushRawFrames();
+          // Write a resume snapshot as soon as the id exists. The snapshot
+          // requires a sessionId, so without this a disruption between Start
+          // and this (slow) create resolving would leave an open row with no
+          // matching snapshot → resume could not be offered on return. This
+          // runs even if the run already unmounted (the refs still read
+          // active/resting); writeResumeSnapshot self-guards otherwise.
+          writeResumeSnapshot();
         } else {
           // Stale: the run ended/changed before create resolved. Close the
           // freshly-created row so it isn't left open, and do NOT adopt its id.
@@ -856,6 +1201,64 @@ export default function CameraClient() {
     new Date(
       sessionWallStartMsRef.current + (perfMs - sessionPerfStartMsRef.current),
     ).toISOString();
+
+  /**
+   * Buffer one valid active ex_007 frame for patient-session tuning. Inputs are
+   * raw/unsmoothed metric values and selected normalized landmarks only.
+   */
+  const bufferEx007RawFrame = (
+    landmarks: NormalizedLandmark[],
+    raw: ExerciseFrameMetrics,
+    tNow: number,
+  ) => {
+    if (prescriptionRef.current.patientExerciseId === undefined) return;
+    if (activeDefinitionRef.current?.id !== "ex_007") return;
+    if (sessionStateRef.current !== "active") return;
+
+    pendingRawFramesRef.current.push({
+      frameIndex: ++rawFrameIndexRef.current,
+      setIndex: completedSetsRef.current + 1,
+      elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
+      capturedAt: perfToIso(tNow),
+      traceKind: "ex_007_upper_body_v1",
+      metrics: ex007TraceMetrics(landmarks, raw),
+      landmarks: ex007TraceLandmarks(landmarks),
+    });
+
+    if (pendingRawFramesRef.current.length >= RAW_FRAME_UPLOAD_BATCH_SIZE) {
+      flushRawFrames();
+    }
+  };
+
+  /**
+   * Queue pending raw-frame batches for durable upload. The queue is
+   * fire-and-forget like rep/set persistence, but serializing batches avoids a
+   * burst of concurrent large JSON requests during a long set.
+   */
+  const flushRawFrames = () => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId === null || pendingRawFramesRef.current.length === 0) return;
+
+    while (pendingRawFramesRef.current.length > 0) {
+      const frames = pendingRawFramesRef.current.splice(
+        0,
+        RAW_FRAME_UPLOAD_BATCH_SIZE,
+      );
+      rawFrameUploadChainRef.current = rawFrameUploadChainRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const response = await fetch(`/api/sessions/${sessionId}/raw-frames`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ frames }),
+          });
+          if (!response.ok) {
+            throw new Error(`raw-frames upload returned ${response.status}`);
+          }
+        })
+        .catch((err) => console.warn("raw-frames flush failed:", err));
+    }
+  };
 
   /** Buffer a counted rep for persistence. Pure aside from the ref push. */
   const bufferRepEvent = (event: RepEvent, side: RepEventPayload["side"]) => {
@@ -1008,6 +1411,7 @@ export default function CameraClient() {
     }
     flushSetEvents();
     flushRepEvents();
+    flushRawFrames();
     // Session-level capture-quality summary (% of active frames with OK capture).
     const framesTotal = captureFramesTotalRef.current;
     const framesOk = captureFramesOkRef.current;
@@ -1024,12 +1428,61 @@ export default function CameraClient() {
     }).catch((err) => console.warn("session end failed:", err));
     resetSessionPersistence();
   };
+  endSessionPersistenceRef.current = endSessionPersistence;
 
   /**
    * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
    * Reset on session start and on each set completion.
    */
   const currentSetStartMsRef = useRef<number | null>(null);
+
+  /**
+   * Persist a resume snapshot of the live session to localStorage so a
+   * disruption (tab close / navigation / refresh, anything but the End button)
+   * can be resumed on return. Reads everything from refs; no-op unless a real
+   * patient session is currently running. Cheap synchronous write — safe to
+   * call from the per-second tick, each rep/set boundary, and `pagehide`.
+   */
+  const writeResumeSnapshot = useCallback(() => {
+    const patientExerciseId = prescriptionRef.current.patientExerciseId;
+    const sessionId = sessionIdRef.current;
+    const def = activeDefinitionRef.current;
+    const state = sessionStateRef.current;
+    if (
+      typeof patientExerciseId !== "number" ||
+      sessionId === null ||
+      def === null ||
+      sessionStartMsRef.current === null ||
+      (state !== "active" && state !== "resting")
+    ) {
+      return;
+    }
+    const snapshot: ResumeSnapshot = {
+      v: 1,
+      sessionId,
+      exerciseId: def.id,
+      patientExerciseId,
+      kind: def.kind,
+      completedSets: completedSetsRef.current,
+      currentSetReps: {
+        left: repCountsRef.current.left,
+        right: repCountsRef.current.right,
+      },
+      pairedHoldMs: pairedHoldMsRef.current,
+      elapsedMs: Math.max(0, performance.now() - sessionStartMsRef.current),
+      globalRepIndex: globalRepIndexRef.current,
+      rawFrameIndex: rawFrameIndexRef.current,
+      updatedAtWallMs: Date.now(),
+    };
+    try {
+      window.localStorage.setItem(
+        resumeKey(patientExerciseId),
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      /* localStorage unavailable / quota — resume just won't be offered */
+    }
+  }, []);
 
   /**
    * Rest-between-sets countdown. `restEndsAtMsRef` is the performance.now()
@@ -1059,11 +1512,35 @@ export default function CameraClient() {
         (performance.now() - sessionStartMsRef.current) / 1000,
       );
       setSessionElapsedSec(elapsed);
+      // Keep the resume snapshot fresh (elapsed + current counter/sets) so a
+      // disruption loses at most ~1s of progress.
+      writeResumeSnapshot();
     };
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [sessionState]);
+  }, [sessionState, writeResumeSnapshot]);
+
+  /**
+   * Capture the resume snapshot on disruption paths the timer tick can miss:
+   * `pagehide` (tab close / refresh / bfcache), `visibilitychange` → hidden
+   * (tab switch / mobile background), and component unmount (SPA navigation
+   * away from the camera route). `writeResumeSnapshot` self-guards, so these
+   * are no-ops unless a patient session is actively running.
+   */
+  useEffect(() => {
+    const flush = () => writeResumeSnapshot();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flush();
+    };
+  }, [writeResumeSnapshot]);
 
   /**
    * Rest countdown. While `sessionState === "resting"`, tick down the seconds
@@ -1237,6 +1714,7 @@ export default function CameraClient() {
     // Persist this set's boundary and reps now that the set boundary is known.
     flushSetEvents();
     flushRepEvents();
+    flushRawFrames();
 
     setCompletedSets(completedSetsRef.current + 1);
     // Reset the per-set progress trackers for the next set, per kind.
@@ -1271,6 +1749,9 @@ export default function CameraClient() {
       // all prescribed sets were reached). Advancing re-selects the next
       // exercise; the patient presses Start to open a new session for it.
       endSessionPersistence(true);
+      // This exercise is finished — drop its resume snapshot so a later visit
+      // shows the "already completed" recap, not a resume prompt.
+      clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
       setSessionState("idle");
       if (!goToAdjacentExercise(1)) {
         setSessionState("ended");
@@ -1285,6 +1766,12 @@ export default function CameraClient() {
         performance.now() + prescriptionRef.current.restSeconds * 1000;
       setRestRemainingSec(prescriptionRef.current.restSeconds);
       setSessionState("resting");
+    }
+
+    if (completedSetsRef.current < prescriptionRef.current.sets) {
+      // Non-final set boundary → refresh the resume snapshot with the bumped
+      // completed-set count (current-set reps just reset to 0).
+      writeResumeSnapshot();
     }
   };
 
@@ -1340,6 +1827,112 @@ export default function CameraClient() {
     // debug has no patient_exercise_id and is skipped inside the helper).
     startSessionPersistence();
     setSessionState("countdown");
+  };
+
+  /**
+   * Resume a disrupted session from its localStorage snapshot: restore the
+   * completed-set count, the current set's counter, and the elapsed timer, and
+   * continue writing to the SAME open DB session (no new row). Mirrors
+   * `handleSessionStart`, but restores state instead of zeroing it and goes
+   * straight to `active` — routing through `countdown` would overwrite the
+   * restored timer anchor (see the countdown effect).
+   */
+  const resumeSession = () => {
+    if (!activeDefinition) return;
+    const snap = readResumeSnapshot(prescriptionRef.current.patientExerciseId);
+    if (!snap || snap.exerciseId !== activeDefinition.id) return;
+
+    const counters = createRepCountersForDefinition(activeDefinition);
+    // Capture-quality tally restarts for the resumed portion.
+    captureFramesTotalRef.current = 0;
+    captureFramesOkRef.current = 0;
+
+    // Completed-set count comes back; the live per-set log starts empty (the
+    // pre-disruption sets already live in the DB / the "already completed"
+    // analytics — the headline "Sets X/N" tracks the restored completedSets).
+    setCompletedSets(snap.completedSets);
+    completedSetsLogRef.current = [];
+    repLogRef.current = { left: [], right: [] };
+    neckRepDebugRef.current = [];
+    neckRepDebugStartMsRef.current = null;
+    neckRepDebugSeqRef.current = 0;
+    if (typeof window !== "undefined") {
+      window.__neckRepDebug = neckRepDebugRef.current;
+    }
+
+    leftRepCounterRef.current = counters.left;
+    rightRepCounterRef.current = counters.right;
+    bidirectionalRepCounterRef.current = counters.bidirectional;
+
+    // Restore the current set's progress (fresh state machines; the counts live
+    // in repCountsRef / pairedHoldMsRef, so detection continues from there).
+    pairedHoldMsRef.current = 0;
+    leftInBandRef.current = false;
+    rightInBandRef.current = false;
+    lastIsometricTickMsRef.current = null;
+    resetHoldQualityAccum();
+    if (activeDefinition.kind === "dynamic") {
+      repCountsRef.current = {
+        left: snap.currentSetReps.left,
+        right: snap.currentSetReps.right,
+      };
+      setRepCounts({ ...repCountsRef.current });
+      setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+    } else {
+      repCountsRef.current = { left: 0, right: 0 };
+      setRepCounts({ left: 0, right: 0 });
+      pairedHoldMsRef.current = snap.pairedHoldMs;
+      setHoldState({
+        pairedSec: snap.pairedHoldMs / 1000,
+        leftInBand: false,
+        rightInBand: false,
+      });
+    }
+
+    // Re-capture the resting baseline if the exercise needs one (same as start).
+    if (
+      (activeDefinition.kind === "dynamic" &&
+        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
+      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
+    ) {
+      leftBaselineRef.current  = { samples: [], value: null };
+      rightBaselineRef.current = { samples: [], value: null };
+      bidirectionalBaselineRef.current = { samples: [], value: null };
+      leftScapBaselineRef.current  = { samples: [], value: null };
+      rightScapBaselineRef.current = { samples: [], value: null };
+      setBaselinePhase("capturing");
+      setBaselineSampleProgress(0);
+    }
+
+    setConfirmingEnd(false);
+    restEndsAtMsRef.current = null;
+    setRestRemainingSec(0);
+
+    // Reuse the OPEN persisted session — do NOT POST a new one. Restore the
+    // session-wide rep/raw-frame indices so writes stay contiguous and don't
+    // collide with rows already persisted under this session id.
+    resetSessionPersistence();
+    sessionIdRef.current = snap.sessionId;
+    globalRepIndexRef.current = snap.globalRepIndex;
+    rawFrameIndexRef.current = snap.rawFrameIndex;
+    sessionWallStartMsRef.current = Date.now();
+    sessionPerfStartMsRef.current = performance.now();
+    sessionTokenRef.current++;
+    pendingStaleEndReasonRef.current = undefined;
+
+    // Continue the timer from where it stopped (away-time excluded); start the
+    // partial set's duration clock fresh.
+    const now = performance.now();
+    sessionStartMsRef.current = now - snap.elapsedMs;
+    currentSetStartMsRef.current = now;
+    setSessionElapsedSec(Math.floor(snap.elapsedMs / 1000));
+
+    // Manual-start page: ensure the camera is running so reps can count.
+    if (!streamRef.current) {
+      void startCamera(selectedDeviceId || undefined);
+    }
+
+    setSessionState("active");
   };
 
   /**
@@ -1412,6 +2005,9 @@ export default function CameraClient() {
     // endReason "user" = the End button was pressed — distinguishes a deliberate
     // early end from a tab-close/exit (which leaves the session open).
     endSessionPersistence(false, "user");
+    // Deliberate end → drop the resume snapshot so this attempt is not offered
+    // for resume on return (the row is also closed, the authoritative guard).
+    clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
     setSessionState("ended");
   };
 
@@ -1753,6 +2349,11 @@ export default function CameraClient() {
     metrics: {},
     compensationScore: null,
   });
+  // Whether the primary movement is near peak ROM this frame. Gates the
+  // `peakRelevant` compensation warnings (e.g. elbowFlexion "Straighten arms"
+  // on ex_007 / ex_008) so they only surface near full extension. Updated on
+  // the same throttled cadence as `frameMetrics`.
+  const [nearPeak, setNearPeak] = useState(false);
  
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
@@ -1799,6 +2400,9 @@ export default function CameraClient() {
         kind: "compensation",
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
+        // peakRelevant comps (elbowFlexion on ex_007/ex_008) only warn near
+        // peak ROM — bent elbows are correct form lower in the movement.
+        suppressWarning: comp.peakRelevant === true && !nearPeak,
       });
     }
     return cards;
@@ -1896,29 +2500,32 @@ export default function CameraClient() {
     if (isStaff) {
       fetch("/api/exercises")
         .then((r) => r.json())
-        .then((data) => {
+        .then((data: unknown) => {
           // Staff debug catalog: the active ex_NNN list after EX_SWAP (2026-05-21).
           // ex_002 (Overhead Arm Raises) and ex_003 (Shoulder Shrugs) are
           // deprecated — see the @deprecated JSDocs on those entries in
           // `registry.ts`. They remain in the DB and registry for audit,
           // but should not surface in the staff dropdown.
           const DEBUG_IDS = ["ex_001", "ex_004", "ex_005", "ex_006", "ex_007", "ex_008"];
-          const exercises: Exercise[] = (data.exercises ?? [])
-            .filter((e: any) => DEBUG_IDS.includes(e.id))
-            .sort((a: any, b: any) => a.id.localeCompare(b.id))
-            .map((e: any) => ({
-              id: e.id,
-              name: e.name,
-              description: e.description,
+          const exercises: Exercise[] = recordsField(data, "exercises")
+            .flatMap((row): Exercise[] => {
+              const id = stringField(row, "id");
+              if (!id || !DEBUG_IDS.includes(id)) return [];
+              return [{
+                id,
+                name: stringField(row, "name") ?? id,
+                description: stringField(row, "description") ?? "",
               // Staff debug catalog has no per-patient prescription —
               // fall back to the patient_exercises DB defaults (3 × 12)
               // so the session lifecycle still has a target to gate
               // set completion.
-              sets: DEFAULT_PRESCRIPTION.sets,
-              reps: DEFAULT_PRESCRIPTION.reps,
-              restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
-              holdSeconds: DEFAULT_PRESCRIPTION.holdSeconds,
-          }));
+                sets: DEFAULT_PRESCRIPTION.sets,
+                reps: DEFAULT_PRESCRIPTION.reps,
+                restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
+                holdSeconds: DEFAULT_PRESCRIPTION.holdSeconds,
+              }];
+            })
+            .sort((a, b) => a.id.localeCompare(b.id));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
             setSelectedExercise((prev) => {
@@ -1932,39 +2539,96 @@ export default function CameraClient() {
     } else {
       fetch("/api/patient-exercises")
         .then((r) => r.json())
-        .then((data) => {
-          const assigned: Exercise[] = (data.exercises ?? []).map((e: any) => ({
-            id: e.exercise_id,
-            name: e.name,
-            description: e.description,
+        .then((data: unknown) => {
+          const assigned: Exercise[] = recordsField(data, "exercises").flatMap((row): Exercise[] => {
+            const id = stringField(row, "exercise_id");
+            if (!id) return [];
+            return [{
+              id,
+              name: stringField(row, "name") ?? id,
+              description: stringField(row, "description") ?? "",
             // `patient_exercises.reps` is the per-side target: prescription
             // reps = 10 means 10 reps per side. `patient_exercises.sets`
             // is total set count.
             // Both default in the DB schema to 12 / 3 respectively;
             // mirror those if the API response omits them.
-            reps: typeof e.reps === "number" ? e.reps : DEFAULT_PRESCRIPTION.reps,
-            sets: typeof e.sets === "number" ? e.sets : DEFAULT_PRESCRIPTION.sets,
-            restSeconds:
-              typeof e.rest_seconds === "number"
-                ? e.rest_seconds
-                : DEFAULT_PRESCRIPTION.restSeconds,
-            holdSeconds:
-              typeof e.hold_seconds === "number"
-                ? e.hold_seconds
-                : DEFAULT_PRESCRIPTION.holdSeconds,
+              reps: numberField(row, "reps") ?? DEFAULT_PRESCRIPTION.reps,
+              sets: numberField(row, "sets") ?? DEFAULT_PRESCRIPTION.sets,
+              restSeconds:
+                numberField(row, "rest_seconds") ??
+                DEFAULT_PRESCRIPTION.restSeconds,
+              holdSeconds:
+                numberField(row, "hold_seconds") ??
+                DEFAULT_PRESCRIPTION.holdSeconds,
             // patient_exercises.id — returned by the API, carried through so a
             // session can be persisted against it. Absent → session
             // persistence is skipped (staff debug has no such row).
-            patientExerciseId: typeof e.id === "number" ? e.id : undefined,
-          }));
+              patientExerciseId: integerField(row, "id"),
+            // Assignment status — drives the "already completed" recap.
+              status: assignmentStatus(row.status),
+            }];
+          });
           setAssignedExercises(assigned);
           if (assigned.length > 0) {
             setSelectedExercise((prev) => prev || assigned[0].id);
           }
         })
         .catch((err) => console.error("Error loading exercises:", err));
+
+      // Persisted session history → latest FINISHED session per exercise, for
+      // the "already completed" recap overlay. Sessions arrive newest-first, so
+      // the first one seen per exercise id with an ended_at is the latest
+      // finished attempt. Fire-and-forget; failure just leaves the map empty.
+      fetch("/api/sessions")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: unknown) => {
+          const sessions = recordsField(data, "sessions");
+          if (sessions.length === 0) return;
+          const recaps = new Map<string, ExerciseSessionRecap>();
+          // Latest OPEN session per exercise (endedAt === null) — a disrupted
+          // attempt whose row was never closed. Used to gate the resume prompt.
+          const opens = new Map<string, { sessionId: number; startedAt: string }>();
+          for (const s of sessions) {
+            const exerciseId = stringField(s, "exerciseId");
+            if (!exerciseId) continue;
+            const endedAt = stringField(s, "endedAt");
+            if (!endedAt) {
+              const sessionId = integerField(s, "id");
+              if (sessionId !== undefined && !opens.has(exerciseId)) {
+                opens.set(exerciseId, {
+                  sessionId,
+                  startedAt: stringField(s, "startedAt") ?? "",
+                });
+              }
+              continue;
+            }
+            // Recap = the latest TRULY completed attempt only. A completed
+            // assignment keeps status "completed" across redos, so a later
+            // ended-early ('user') or auto-superseded redo must NOT become the
+            // recap source (it would show partial / 0-set numbers). Only
+            // end_reason 'completed' rows qualify; newest-first → first wins.
+            if (stringField(s, "endReason") !== "completed") continue;
+            if (recaps.has(exerciseId)) continue;
+            recaps.set(exerciseId, {
+              exerciseKind: exerciseKind(s.exerciseKind),
+              endedAt,
+              durationMs: numberField(s, "durationMs") ?? null,
+              setCount: numberField(s, "setCount") ?? 0,
+              leftReps: numberField(s, "leftReps") ?? 0,
+              rightReps: numberField(s, "rightReps") ?? 0,
+              completeLeftReps: numberField(s, "completeLeftReps") ?? 0,
+              completeRightReps: numberField(s, "completeRightReps") ?? 0,
+              avgPeakValue: numberField(s, "avgPeakValue") ?? null,
+              totalPairedHoldMs: numberField(s, "totalPairedHoldMs") ?? null,
+              totalTargetHoldMs: numberField(s, "totalTargetHoldMs") ?? null,
+            });
+          }
+          setSessionRecaps(recaps);
+          setOpenSessions(opens);
+        })
+        .catch((err) => console.warn("Error loading session recaps:", err));
     }
-  }, [user?.id, user?.role]);
+  }, [initialExerciseId, user?.id, user?.role]);
 
   useEffect(() => {
     const assignedEntry = selectedExercise
@@ -1987,7 +2651,7 @@ export default function CameraClient() {
     if (!selectedExercise) {
       setActiveDefinition(null);
       // Close any open persisted session (idempotent; no-op if none).
-      endSessionPersistence();
+      endSessionPersistenceRef.current();
       leftRepCounterRef.current = null;
       rightRepCounterRef.current = null;
       bidirectionalRepCounterRef.current = null;
@@ -2012,7 +2676,7 @@ export default function CameraClient() {
     // Close any session left open on the previous exercise (idempotent: the
     // guided-flow auto-advance already ended it, so this is a safety net for
     // manual stepper navigation).
-    endSessionPersistence();
+    endSessionPersistenceRef.current();
     setSessionState("idle");
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
@@ -2027,7 +2691,7 @@ export default function CameraClient() {
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
-    resetHoldQualityAccum();
+    resetHoldQualityAccumRef.current();
     setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
 
     // Reset filters whenever the exercise changes — old filter history would
@@ -2168,7 +2832,7 @@ export default function CameraClient() {
               : activeDefinition?.requiresLateralRoom
                 ? "lateral"
                 : "default";
-          const r = evaluateCaptureReadiness(landmarks as any, canvas.width, canvas.height, framingMode);
+          const r = evaluateCaptureReadiness(landmarks, canvas.width, canvas.height, framingMode);
 
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
@@ -2223,12 +2887,18 @@ export default function CameraClient() {
                 compensationScore: null,
               });
             } else {
-              const raw = computePoseMetricsForExercise(landmarks as any, activeDefinition);
+              const raw = computePoseMetricsForExercise(landmarks, activeDefinition);
               const tNow = performance.now();
               const metricInputs: Partial<Record<MetricName, number | null>> = {
                 ...raw.metrics,
               };
               let ex005PerFrameCorrectedSignedDeg: number | null = null;
+
+              // Durable ex_007 tuning trace: record RAW/unsmoothed values before
+              // any One Euro filtering or rep-state-machine processing. This
+              // block is already inside capture-readiness `r.ok`, so unreliable
+              // frames remain excluded per the logging discipline.
+              bufferEx007RawFrame(landmarks, raw, tNow);
 
               // Direction strings for compensation overlay labels.
               // computePoseMetricsForExercise only surfaces absolute values in
@@ -2237,11 +2907,21 @@ export default function CameraClient() {
               const metricDirections: Partial<Record<MetricName, string>> = {};
               {
                 const neckDir = computeLateralNeckTilt(
-                  landmarks as any,
+                  landmarks,
                   raw.tiltReference,
                 )?.direction;
                 if (neckDir && neckDir !== "center") {
                   metricDirections.neckTilt = neckDir;
+                }
+                // (Shoulder asymmetry places its boxes/arrow by raw landmark y
+                // inside the overlay, so it needs no direction string here.)
+                // Lean side (image-space) drives the trunk "STRAIGHTEN" arrow.
+                const leanDir = computeTrunkLateralLean(
+                  landmarks,
+                  raw.tiltReference,
+                )?.direction;
+                if (leanDir && leanDir !== "center") {
+                  metricDirections.trunkLean = leanDir;
                 }
               }
 
@@ -2257,7 +2937,7 @@ export default function CameraClient() {
               ) {
                 const primaryName = activeDefinition.primaryMetric.name;
                 const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(
-                  landmarks as any,
+                  landmarks,
                 );
                 const perFrameCorrected = raw.metrics[primaryName];
                 ex005PerFrameCorrectedSignedDeg =
@@ -2287,7 +2967,7 @@ export default function CameraClient() {
                 metricInputs[primaryName] =
                   neutralBaseline !== null
                     ? computeTrunkLateralFlexionFromNeutralSigned(
-                        landmarks as any,
+                        landmarks,
                         neutralBaseline,
                       )
                     : null;
@@ -2311,8 +2991,8 @@ export default function CameraClient() {
                 !!activeDefinition.primaryMetric.requiresBaselineCapture;
 
               if (needsScapCompBaseline) {
-                const rawScapLeft  = computeScapularElevation(landmarks as any, raw.tiltReference, "left");
-                const rawScapRight = computeScapularElevation(landmarks as any, raw.tiltReference, "right");
+                const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left");
+                const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right");
 
                 if (baselinePhaseRef.current === "capturing") {
                   if (typeof rawScapLeft  === "number") leftScapBaselineRef.current.samples.push(rawScapLeft);
@@ -2420,6 +3100,20 @@ export default function CameraClient() {
                   Math.round(filter.filter(value, tNow) * 10) / 10;
               }
 
+              // Near-peak gate for `peakRelevant` compensation warnings
+              // (elbowFlexion "Straighten arms" on ex_007/ex_008). Driven by
+              // the per-side primary (raw.perSideMetrics) for per-limb
+              // exercises, else the single smoothed primary value. When the
+              // arms aren't near the top of the movement we suppress the
+              // warning, because bent elbows are correct form there.
+              const nearPeakNow = isNearPeak(
+                activeDefinition,
+                raw.perSideMetrics,
+                activeDefinition.kind === "dynamic"
+                  ? smoothedMetrics[activeDefinition.primaryMetric.name] ?? null
+                  : null,
+              );
+
               const baselineReadyForExercise =
                 baselinePhaseRef.current !== "capturing";
 
@@ -2507,17 +3201,27 @@ export default function CameraClient() {
                             : perSide.right
                           : null;
 
+                      // ex_007's normalized wrist-height calibration groups
+                      // are separated by hundredths (low <= 0.18, intended
+                      // partial >= 0.24). One-decimal rounding collapses both
+                      // into 0.2 before the RepCounter sees them, so preserve
+                      // three decimals for that metric. Degree-scale metrics
+                      // keep their existing one-decimal behavior.
+                      const primaryInputScale =
+                        primaryName === "wristShoulderVertical" ? 1000 : 10;
                       const smoothedLeft =
                         inputLeft !== null
                           ? Math.round(
-                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) * 10,
-                            ) / 10
+                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) *
+                                primaryInputScale,
+                            ) / primaryInputScale
                           : null;
                       const smoothedRight =
                         inputRight !== null
                           ? Math.round(
-                              rightPrimaryFilterRef.current.filter(inputRight, tNow) * 10,
-                            ) / 10
+                              rightPrimaryFilterRef.current.filter(inputRight, tNow) *
+                                primaryInputScale,
+                            ) / primaryInputScale
                           : null;
 
                       // Rep counting is gated on the active session state and
@@ -2870,6 +3574,7 @@ export default function CameraClient() {
                     smoothedMetrics
                   ),
                 });
+                setNearPeak(nearPeakNow);
                 if (activeDefinition.kind === "isometric") {
                   setHoldState({
                     pairedSec: pairedHoldMsRef.current / 1000,
@@ -2878,12 +3583,18 @@ export default function CameraClient() {
                   });
                 }
               }
+              // Suppress `peakRelevant` compensation warnings (elbowFlexion
+              // "Straighten arms" on ex_007/ex_008) unless the movement is near
+              // peak ROM — drawn every frame, so gate with the per-frame value.
+              const overlayComps = nearPeakNow
+                ? activeDefinition.compensationMetrics
+                : activeDefinition.compensationMetrics.filter((c) => !c.peakRelevant);
               drawCompensationOverlay(
                 ctx,
                 landmarks,
                 canvas.width,
                 canvas.height,
-                activeDefinition.compensationMetrics,
+                overlayComps,
                 smoothedMetrics,
                 metricDirections,
               );
@@ -3007,8 +3718,8 @@ export default function CameraClient() {
       }
 
       await listCameras();
-    } catch (e: any) {
-      const name = e?.name || "Error";
+    } catch (e) {
+      const name = getErrorName(e);
       if (name === "NotAllowedError") setError("Permission denied. Please allow camera access.");
       else if (name === "NotFoundError") setError("No camera found on this device.");
       else if (name === "NotReadableError") setError("Camera is already in use by another app.");
@@ -3052,6 +3763,37 @@ export default function CameraClient() {
   }
 
   const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+  // "Already completed" recap: the selected exercise finished in a prior visit.
+  // Status stays "completed" across redos (a restart only moves pending →
+  // in_progress server-side), so this keeps showing. Gated on idle so it never
+  // overlays a live session, and on a dismiss flag so the patient can close it.
+  const selectedRecap = sessionRecaps.get(selectedExercise) ?? null;
+  const selectedExerciseCompleted = selectedExerciseObj?.status === "completed";
+  const showCompletedRecap =
+    sessionState === "idle" &&
+    selectedExerciseCompleted &&
+    !!selectedRecap &&
+    !recapDismissed;
+  // Resume prompt: a disrupted (not End-button) in-progress session. The
+  // authoritative gate is an OPEN DB session whose id matches the local
+  // snapshot — this excludes "Ended Early" (row closed + snapshot cleared) and
+  // exercise-switch (row closed) even though both also read "in_progress".
+  const openSession = openSessions.get(selectedExercise) ?? null;
+  // Only read localStorage when idle — avoids parsing it on every frame of an
+  // active session (the prompt/pill only matter at idle anyway).
+  const resumeSnap =
+    sessionState === "idle"
+      ? readResumeSnapshot(selectedExerciseObj?.patientExerciseId)
+      : null;
+  const resumeEligible =
+    selectedExerciseObj?.status === "in_progress" &&
+    !!openSession &&
+    !!resumeSnap &&
+    resumeSnap.sessionId === openSession.sessionId &&
+    resumeSnap.exerciseId === selectedExercise &&
+    Date.now() - resumeSnap.updatedAtWallMs < RESUME_MAX_AGE_MS;
+  const showResumePrompt =
+    sessionState === "idle" && resumeEligible && !resumeDismissed;
   const selectedExerciseIndex = assignedExercises.findIndex((e) => e.id === selectedExercise);
   const hasPrevExercise = selectedExerciseIndex > 0;
   const hasNextExercise =
@@ -3677,6 +4419,207 @@ export default function CameraClient() {
                 );
               })()}
 
+              {/* "Already completed" recap — shown on return to the camera page
+                  when the selected exercise was finished in a prior visit. Built
+                  from the persisted latest-finished session (the live in-memory
+                  summary above is gone after the route unmounts). Dismissable. */}
+              {showCompletedRecap && selectedRecap && (() => {
+                const recap = selectedRecap;
+                const isIso = recap.exerciseKind === "isometric";
+                const isPatient = prescription.patientExerciseId !== undefined;
+                const duration =
+                  recap.durationMs != null
+                    ? formatElapsedTime(Math.round(recap.durationMs / 1000))
+                    : "—";
+                const finishedAt = recap.endedAt
+                  ? new Date(recap.endedAt).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })
+                  : "—";
+                const heldSec =
+                  recap.totalPairedHoldMs != null
+                    ? Math.round(recap.totalPairedHoldMs / 1000)
+                    : 0;
+                const targetSec =
+                  recap.totalTargetHoldMs != null
+                    ? Math.round(recap.totalTargetHoldMs / 1000)
+                    : 0;
+
+                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
+                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
+                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
+
+                return (
+                  <div style={{
+                    position: "absolute", inset: 0, zIndex: 35,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
+                  }}>
+                    <div style={{
+                      position: "relative",
+                      background: "white", borderRadius: 14, padding: "22px 24px",
+                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => setRecapDismissed(true)}
+                        aria-label="Dismiss"
+                        style={{
+                          position: "absolute", top: 12, right: 12,
+                          width: 28, height: 28, display: "flex",
+                          alignItems: "center", justifyContent: "center",
+                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
+                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
+                          fontSize: 15, lineHeight: 1,
+                        }}
+                      >✕</button>
+
+                      <div style={{
+                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                        textTransform: "uppercase", color: "oklch(0.40 0.07 145)", fontWeight: 700, marginBottom: 4,
+                      }}>Already completed</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                        {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+                        {isIso ? (
+                          <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{heldSec}s{targetSec ? ` / ${targetSec}s` : ""}</span></div>
+                        ) : (
+                          <>
+                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{recap.completeLeftReps}/{recap.leftReps} complete</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{recap.completeRightReps}/{recap.rightReps} complete</span></div>
+                          </>
+                        )}
+                        <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{recap.setCount} / {prescription.sets}</span></div>
+                        <div style={rowStyle}><span style={labelStyle}>Duration</span><span style={valStyle}>{duration}</span></div>
+                        <div style={rowStyle}><span style={labelStyle}>Finished</span><span style={valStyle}>{finishedAt}</span></div>
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={handleSessionStart}
+                          style={{
+                            width: "100%", padding: "10px 12px",
+                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
+                          }}
+                        >Redo</button>
+                        {hasNextExercise && (
+                          <button
+                            type="button"
+                            onClick={() => goToAdjacentExercise(1)}
+                            style={{
+                              width: "100%", padding: "10px 12px",
+                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
+                            }}
+                          >Next exercise →</button>
+                        )}
+                        {isPatient && (
+                          <Link
+                            href="/dashboard/patient"
+                            style={{
+                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
+                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
+                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
+                            }}
+                          >Back to schedule</Link>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* "Session in progress" resume prompt — shown on return to a
+                  session that was disrupted (not ended via the End button). The
+                  counter/sets/timer come from the device-local resume snapshot;
+                  Resume continues the SAME open session. */}
+              {showResumePrompt && resumeSnap && (() => {
+                const snap = resumeSnap;
+                if (!snap) return null;
+                const isIso = snap.kind === "isometric";
+                const heldSec = Math.round(snap.pairedHoldMs / 1000);
+                const elapsed = formatElapsedTime(Math.round(snap.elapsedMs / 1000));
+
+                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
+                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
+                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
+
+                return (
+                  <div style={{
+                    position: "absolute", inset: 0, zIndex: 35,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
+                  }}>
+                    <div style={{
+                      position: "relative",
+                      background: "white", borderRadius: 14, padding: "22px 24px",
+                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => setResumeDismissed(true)}
+                        aria-label="Dismiss"
+                        style={{
+                          position: "absolute", top: 12, right: 12,
+                          width: 28, height: 28, display: "flex",
+                          alignItems: "center", justifyContent: "center",
+                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
+                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
+                          fontSize: 15, lineHeight: 1,
+                        }}
+                      >✕</button>
+
+                      <div style={{
+                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                        textTransform: "uppercase", color: "oklch(0.48 0.13 75)", fontWeight: 700, marginBottom: 4,
+                      }}>Session in progress</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                        {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+                        <div style={rowStyle}><span style={labelStyle}>Set</span><span style={valStyle}>{snap.completedSets + 1} of {prescription.sets}</span></div>
+                        {isIso ? (
+                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>{heldSec}s</span></div>
+                        ) : (
+                          <div style={rowStyle}><span style={labelStyle}>Reps</span><span style={valStyle}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
+                        )}
+                        <div style={rowStyle}><span style={labelStyle}>Elapsed</span><span style={valStyle}>{elapsed}</span></div>
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={resumeSession}
+                          style={{
+                            width: "100%", padding: "10px 12px",
+                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
+                          }}
+                        >Resume</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            clearResumeSnapshot(snap.patientExerciseId);
+                            handleSessionStart();
+                          }}
+                          style={{
+                            width: "100%", padding: "10px 12px",
+                            background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
+                            fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                          }}
+                        >Start over</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Stat strip — patient-facing distance readouts */}
               <ClinicalStatStrip
                 score={score}
@@ -3747,12 +4690,34 @@ export default function CameraClient() {
                     border: `1px solid ${ACCENT.soft}`, background: "white",
                   }}>
                     <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 4,
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      gap: 8, marginBottom: 4,
                     }}>
-                      {selectedExerciseIndex >= 0
-                        ? `Exercise ${selectedExerciseIndex + 1} / ${assignedExercises.length}`
-                        : `${assignedExercises.length} exercises`}
+                      <span style={{
+                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
+                      }}>
+                        {selectedExerciseIndex >= 0
+                          ? `Exercise ${selectedExerciseIndex + 1} / ${assignedExercises.length}`
+                          : `${assignedExercises.length} exercises`}
+                      </span>
+                      {selectedExerciseCompleted ? (
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 3,
+                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
+                          padding: "2px 7px", borderRadius: 999,
+                          background: "oklch(0.96 0.04 145)", color: "oklch(0.40 0.07 145)",
+                          border: "1px solid oklch(0.88 0.06 145)",
+                        }}>✓ Completed</span>
+                      ) : resumeEligible ? (
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
+                          padding: "2px 7px", borderRadius: 999,
+                          background: "oklch(0.96 0.05 75)", color: "oklch(0.45 0.13 70)",
+                          border: "1px solid oklch(0.88 0.08 75)",
+                        }}>● In progress</span>
+                      ) : null}
                     </div>
                     <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>
                       {selectedExerciseObj?.name ?? "—"}
@@ -3787,6 +4752,21 @@ export default function CameraClient() {
                     <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
                     <span>{prescription.restSeconds}s rest</span>
                   </div>
+                  {activeDefinition?.id === "ex_007" &&
+                    prescription.patientExerciseId !== undefined && (
+                      <div style={{
+                        marginTop: 10,
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        background: ACCENT.soft,
+                        color: ACCENT.text,
+                        fontSize: 11,
+                        lineHeight: 1.45,
+                      }}>
+                        <strong>Motion trace recording:</strong> raw upper-body
+                        metrics and pose landmarks only. No video is stored.
+                      </div>
+                    )}
                 </>
               )}
             </div>
@@ -4081,6 +5061,7 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
   const isFlag =
     card.kind === "compensation" &&
     card.warningThreshold !== undefined &&
+    !card.suppressWarning &&
     isCompensationFlagging(card.value, card.warningThreshold, compareDirection);
 
   const displayValue = card.value === null ? "—" : Math.abs(card.value).toFixed(1);
@@ -4335,28 +5316,35 @@ function ClinicalProgressStrip({
           fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
           textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
         }}>{label}</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          {Array.from({ length: prescription.sets }).map((_, i) => (
-            <span key={i} style={{
-              width: 28, height: 4, borderRadius: 2, display: "inline-block",
-              background: i < completedSets
-                ? ACCENT.hex
-                : (i === completedSets && sessionState !== "idle" && sessionState !== "ended")
-                  ? ACCENT.soft
-                  : "oklch(0.92 0.003 240)",
-              outline: i === completedSets && sessionState === "active"
-                ? `1px solid ${ACCENT.hex}`
-                : "none",
-              boxSizing: "border-box",
-            }}/>
-          ))}
+        <div style={{ display: "flex", gap: 5 }}>
+          {Array.from({ length: prescription.sets }).map((_, i) => {
+            const done = i < completedSets;
+            const current =
+              i === completedSets && sessionState !== "idle" && sessionState !== "ended";
+            const lit = done || (current && sessionState === "active");
+            return (
+              <span key={i} style={{
+                width: 32, height: 10, borderRadius: 5, display: "inline-block",
+                background: done ? NEON.hex : current ? NEON.dim : "oklch(0.92 0.003 240)",
+                boxShadow: lit ? `0 0 8px ${NEON.glow}, 0 0 3px ${NEON.glow}` : "none",
+                outline: current && sessionState === "active" ? `1px solid ${NEON.hex}` : "none",
+                boxSizing: "border-box",
+                transition: "background .3s, box-shadow .3s",
+              }}/>
+            );
+          })}
         </div>
       </div>
       <div style={{
-        flex: 1, height: 4, background: "oklch(0.94 0.003 240)",
-        borderRadius: 2, overflow: "hidden", maxWidth: 360,
+        flex: 1, height: 10, background: "oklch(0.94 0.003 240)",
+        borderRadius: 5, maxWidth: 360,
       }}>
-        <div style={{ height: "100%", width: `${progressPct}%`, background: ACCENT.hex, transition: "width .4s" }} />
+        <div style={{
+          height: "100%", width: `${progressPct}%`,
+          background: NEON.hex, borderRadius: 5,
+          boxShadow: progressPct > 0 ? `0 0 10px ${NEON.glow}, 0 0 4px ${NEON.glow}` : "none",
+          transition: "width .4s, box-shadow .3s",
+        }} />
       </div>
       <span style={{
         fontFamily: "var(--mono)", fontSize: 12, fontWeight: 500,

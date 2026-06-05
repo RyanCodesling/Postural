@@ -28,6 +28,8 @@
 
 import { computeWristShoulderVertical } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
+import { RepCounter, type RepEvent } from "./repCounter";
+import { EXERCISE_REGISTRY } from "../exercises/registry";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MICRO ASSERTION HELPER
@@ -69,6 +71,12 @@ function assertNegative(actual: number | null, label: string): void {
   }
   if (actual >= 0) {
     throw new Error(`${label}: expected negative, got ${actual}`);
+  }
+}
+
+function assertEqual<T>(actual: T, expected: T, label: string): void {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
   }
 }
 
@@ -281,6 +289,43 @@ test("Missing one hip → null on BOTH sides (shared trunk reference)", () => {
   });
   assertNull(computeWristShoulderVertical(lms, TILT_REF, "left"),  "LEFT lost trunk");
   assertNull(computeWristShoulderVertical(lms, TILT_REF, "right"), "RIGHT lost trunk");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EX_007 LIVE-TUNED REP BOUNDARIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ex007EventForPeak(peak: number): RepEvent | null {
+  const definition = EXERCISE_REGISTRY.ex_007;
+  if (definition.kind !== "dynamic") {
+    throw new Error("ex_007 must remain a dynamic exercise");
+  }
+  const primary = definition.primaryMetric;
+  const counter = new RepCounter(primary.thresholds, {
+    descentEpsilon: primary.descentEpsilon,
+  });
+  const values = [-0.05, 0.11, peak, peak, peak - 0.04, 0.05];
+  let event: RepEvent | null = null;
+  values.forEach((value, index) => {
+    event = counter.update(value, index * 100) ?? event;
+  });
+  return event;
+}
+
+test("ex_007 tuned boundary: low 0.18 wrist lift remains a false start", () => {
+  assertNull(ex007EventForPeak(0.18), "low lift event");
+});
+
+test("ex_007 tuned boundary: medium 0.24 wrist press records a partial rep", () => {
+  const event = ex007EventForPeak(0.24);
+  if (event === null) throw new Error("medium partial: expected an event, got null");
+  assertEqual(event.classification, "partial", "medium partial classification");
+});
+
+test("ex_007 tuned boundary: full 0.85 wrist press records a complete rep", () => {
+  const event = ex007EventForPeak(0.85);
+  if (event === null) throw new Error("full press: expected an event, got null");
+  assertEqual(event.classification, "complete", "full press classification");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

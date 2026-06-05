@@ -79,7 +79,7 @@ export type MetricName =
   | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
   | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
   | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_005/ex_006/ex_007/ex_008
-  | "shoulderSymmetry"       // existing — used as compensation metric on ex_003/ex_004
+  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_004/ex_006 (and deprecated ex_003)
   | "neckTilt"               // existing — used as compensation metric on ex_005
   | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
@@ -200,6 +200,28 @@ export type CompensationMetricSpec = {
   name: MetricName;
   warningThreshold: number;
   compareDirection?: "above" | "below";
+  /**
+   * When true, this compensation is only meaningful at the PEAK of the
+   * movement, so its warning must NOT surface during the rest of the rep.
+   *
+   * Why this exists: most compensation metrics measure a deviation from
+   * neutral (trunkLean, scapularElevation, neckTilt, shoulderSymmetry) and
+   * are "bad" at any phase, so the per-frame `warningThreshold` check is
+   * always valid. But `elbowFlexion` on the overhead exercises is different:
+   * bent elbows are the CORRECT posture at the bottom/ascent of an Overhead
+   * Shoulder Press (ex_007) or the W-position of a Wall Angel (ex_008) — the
+   * arms are only meant to be straight once they reach the top. Evaluating
+   * the "Straighten arms" warning every frame fired it through the entire
+   * lower portion of every rep, contradicting correct form.
+   *
+   * When `peakRelevant: true`, the warning surfacing (canvas overlay box +
+   * clinical-card highlight) is suppressed unless the primary metric is near
+   * its target ROM — see `isNearPeak` in `poseMetrics.ts`. The raw per-frame
+   * value is still computed and logged unchanged (ML/analytics path is
+   * untouched); only the user-facing warning is gated. Defaults to false,
+   * preserving the always-on behaviour for every other compensation metric.
+   */
+  peakRelevant?: boolean;
   /**
    * When true, the camera loop captures a per-side resting baseline at the
    * start of the exercise and feeds `(baseline − raw)` as the metric value
@@ -337,6 +359,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // weak deltoid. Surfaced as a warning when shrug exceeds the
       // shrug exercise's own start threshold.
       { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
+      // Uneven shoulder line during the raise — one whole shoulder rides
+      // higher than the other (distinct from a symmetric shrug). Drives the
+      // per-shoulder overlay boxes + "LOWER" arrow. Starting threshold 5°
+      // (above the 3° landmark noise floor); tune live.
+      { name: "shoulderSymmetry", warningThreshold: 5 },
     ],
   },
 
@@ -614,6 +641,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
       // Trunk lean during T-pose hold = unbalanced load between arms.
       { name: "trunkLean", warningThreshold: 5 },
+      // Uneven shoulder line during the hold — one shoulder rides higher than
+      // the other. Drives the per-shoulder overlay boxes + "LOWER" arrow.
+      // Starting threshold 5° (above the 3° landmark noise floor); tune live.
+      { name: "shoulderSymmetry", warningThreshold: 5 },
     ],
   },
 
@@ -655,12 +686,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // DISCARD FLOOR (NOT the partial/complete boundary — that is
         // `targetROM`; see repCounter.ts REP CLASSIFICATION). Peaks below
         // this are silently dropped as false starts (no rep counted).
-        // 0.4 = ~40% of trunk length above shoulder; below this we treat
-        // any wrist motion above the start threshold as wobble rather than
-        // a deliberate press. Peaks in [0.4, 0.6) classify as `partial`;
-        // ≥ 0.6 (targetROM) classify as `complete`. STARTING value,
-        // live-tuning required.
-        minimumPeakThreshold: 0.4,
+        // Live wrist-height calibration (2026-06-04) separated low lifts
+        // just above shoulder height (smoothed peak <= 0.18) from intended
+        // medium partial presses (smoothed peak >= 0.24). 0.21 sits in that
+        // observed gap: lower motions remain false starts, while deliberate
+        // partial presses can be recorded. Peaks in [0.21, 0.6) classify as
+        // `partial`; >= 0.6 (targetROM) classify as `complete`.
+        minimumPeakThreshold: 0.21,
         // 0.6 = ~60% of trunk length above shoulder, ≈ arms fully extended
         // overhead. STARTING value.
         targetROM: 0.6,
@@ -695,10 +727,16 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // for compensation metrics, deferred for v1. Trapezius
       // substitution is still partially caught by `trunkLean` (compensatory
       // backward lean) and `elbowFlexion` (incomplete overhead extension).
-      // Elbow flexion < 160° at peak = incomplete overhead extension.
+      // Elbow flexion < 150° at peak = incomplete overhead extension.
       // Interior-angle convention: 180° = arms fully straight overhead.
       // `compareDirection: "below"` because LOWER value = MORE bent = worse.
-      { name: "elbowFlexion", warningThreshold: 160, compareDirection: "below" },
+      // `peakRelevant` because bent elbows are CORRECT at the bottom/ascent of
+      // the press — the warning must only surface near full overhead extension
+      // (gated by isNearPeak in poseMetrics.ts), never through the lower rep.
+      // Threshold lowered 160→150 (2026-06-05) alongside the 0.8→0.9 peak gate
+      // so only a clearly-bent elbow at near-full ROM flags, not one still
+      // finishing extension.
+      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true },
     ],
   },
 
@@ -762,11 +800,15 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // for full rationale. Trapezius-hiking is partially caught by
       // `trunkLean` and `elbowFlexion` in the meantime. Restore once
       // compensation-metric baseline-capture lands as a follow-up.
-      // Elbow flexion < 160° = patient bending the elbow to cheat the
+      // Elbow flexion < 150° = patient bending the elbow to cheat the
       // motion (forearm pulls away from wall instead of arms sliding
       // straight). Interior-angle convention: 180° = arms straight.
       // `compareDirection: "below"` because LOWER value = MORE bent = worse.
-      { name: "elbowFlexion", warningThreshold: 160, compareDirection: "below" },
+      // `peakRelevant` because Wall Angels are bent-by-design at the W-position
+      // (elbows ~90°) and only straighten near the Y-position at the top — the
+      // warning must only surface near peak ROM, never through the W→Y slide.
+      // Threshold lowered 160→150 (2026-06-05) alongside the 0.8→0.9 peak gate.
+      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true },
       // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
       // elbow-off-wall detection) was REMOVED from this compensation list
       // after live-tuning iter #4. The metric was designed to flag an elbow

@@ -227,7 +227,7 @@ function runRepScenario(opts: {
 
   let smoothedPeak = -Infinity;
   let smoothedPeakIdx = 0;
-  let truePeakIdx = ascendSamples + Math.floor(plateauSamples / 2);
+  const truePeakIdx = ascendSamples + Math.floor(plateauSamples / 2);
 
   // For false-descent counting during plateau: track running max and count
   // dips ≥ descentEpsilon below it.

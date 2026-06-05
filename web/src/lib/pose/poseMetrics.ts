@@ -838,6 +838,68 @@ export function computeCompensationScore(
   return Math.max(0, Math.min(100, Math.round(100 - totalDeduction)));
 }
 
+/**
+ * PEAK_GATE_FRACTION
+ *
+ * Fraction of the primary metric's `targetROM` at or above which the movement
+ * is considered "near peak" for the purpose of surfacing `peakRelevant`
+ * compensation warnings (see `isNearPeak`).
+ *
+ * STARTING value — live-tunable, same status as the ex_007 / ex_008 thresholds
+ * it gates. At 0.9 the gate lands at:
+ *   ex_007 Overhead Press → 0.9 × 0.6  = 0.54 trunk-lengths (just below full extension)
+ *   ex_008 Wall Angels     → 0.9 × 150° = 135° (just below the Y-position)
+ * i.e. only flag "Straighten arms" very near the top of the movement, where
+ * straight elbows are actually the expected posture.
+ *
+ * Raised 0.8 → 0.9 (2026-06-05): at 0.8 the cue appeared while the arms were
+ * still mid-press — elbow extension lags the primary ROM and only completes at
+ * the very top, so the elbow was still legitimately bending when the old gate
+ * opened. 0.9 holds the warning until the patient is essentially at full ROM.
+ */
+export const PEAK_GATE_FRACTION = 0.9;
+
+/**
+ * isNearPeak
+ *
+ * True when the active exercise's primary movement has reached the top portion
+ * of its range (>= PEAK_GATE_FRACTION × targetROM). Used to gate
+ * `peakRelevant` compensation warnings (currently `elbowFlexion` on ex_007 /
+ * ex_008) so "Straighten arms" only surfaces near full extension, not through
+ * the bottom/ascent where bent elbows are correct form.
+ *
+ * @param definition      Active exercise.
+ * @param perSidePrimary  Per-side primary values for per-limb exercises
+ *                        (`ExerciseFrameMetrics.perSideMetrics`), or undefined.
+ * @param primaryValue    Single primary value, used when there is no per-side
+ *                        split (bidirectional-alternating / unilateral).
+ *
+ * For per-limb exercises the BETTER-reaching arm drives the gate (max of the
+ * two sides), so a lagging bent arm at the top still flags. Isometric
+ * exercises have no rep peak and no `peakRelevant` compensation today, so this
+ * returns false for them. Returns false when no primary value is available.
+ */
+export function isNearPeak(
+  definition: ExerciseDefinition,
+  perSidePrimary: { left: number | null; right: number | null } | undefined,
+  primaryValue: number | null,
+): boolean {
+  if (definition.kind !== "dynamic") return false;
+  const gate = PEAK_GATE_FRACTION * definition.primaryMetric.thresholds.targetROM;
+
+  let best: number | null = null;
+  if (perSidePrimary) {
+    const { left, right } = perSidePrimary;
+    if (typeof left === "number") best = left;
+    if (typeof right === "number") best = best === null ? right : Math.max(best, right);
+  } else {
+    best = primaryValue;
+  }
+
+  if (best === null) return false;
+  return best >= gate;
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 7 — METRIC STUBS (registry-referenced, math TBD)
@@ -1494,6 +1556,77 @@ export function computeWristShoulderVertical(
   const wristOffsetX = wrist.x - shoulder.x;
   const wristOffsetY = wrist.y - shoulder.y;
   const projection = wristOffsetX * trunkUpX + wristOffsetY * trunkUpY;
+
+  return projection / trunkLen;
+}
+
+/**
+ * Wrist-vs-shoulder displacement along the body-relative OUTWARD axis,
+ * normalized by trunk length. Used by ex_007 raw tuning traces to inspect
+ * whether the wrist travels vertically above the shoulder or drifts inward /
+ * outward during a press.
+ *
+ * Positive values mean the wrist is farther away from the body's midline than
+ * the same-side shoulder. Negative values mean it has crossed inward toward the
+ * midline. The lateral axis is perpendicular to trunk-up and sign-oriented
+ * toward the same-side shoulder, so the convention is identical on both sides
+ * and invariant to camera roll.
+ *
+ * This is an analysis metric, not a registry `MetricName`: it is recorded for
+ * later movement-path tuning but does not drive rep counting or live feedback.
+ */
+export function computeWristShoulderLateral(
+  landmarks: LM[],
+  _tiltRef: TiltReference,
+  side: "left" | "right"
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip))           return null;
+
+  const shoulder = side === "left" ? leftShoulder! : rightShoulder!;
+  const wrist    = side === "left" ? landmarks[15] : landmarks[16];
+  if (!wrist || vis(wrist) < MIN_VIS) return null;
+  if (!inFrame01(wrist)) return null;
+
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+
+  const trunkVecX = shoulderMid.x - hipMid.x;
+  const trunkVecY = shoulderMid.y - hipMid.y;
+  const trunkLen  = Math.hypot(trunkVecX, trunkVecY);
+  const TRUNK_LEN_EPSILON = 0.05;
+  if (trunkLen < TRUNK_LEN_EPSILON) return null;
+
+  const trunkUpX = trunkVecX / trunkLen;
+  const trunkUpY = trunkVecY / trunkLen;
+
+  // One perpendicular to trunk-up. Flip it when needed so it points from the
+  // body midline toward the selected shoulder (the selected side's "outward").
+  let outwardX = -trunkUpY;
+  let outwardY = trunkUpX;
+  const shoulderHintX = shoulder.x - shoulderMid.x;
+  const shoulderHintY = shoulder.y - shoulderMid.y;
+  const outwardHint = shoulderHintX * outwardX + shoulderHintY * outwardY;
+  if (Math.abs(outwardHint) < 1e-6) return null;
+  if (outwardHint < 0) {
+    outwardX = -outwardX;
+    outwardY = -outwardY;
+  }
+
+  const wristOffsetX = wrist.x - shoulder.x;
+  const wristOffsetY = wrist.y - shoulder.y;
+  const projection = wristOffsetX * outwardX + wristOffsetY * outwardY;
 
   return projection / trunkLen;
 }

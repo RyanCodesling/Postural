@@ -10,6 +10,7 @@ import {
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
 import ConsistencyCalendar from "./ConsistencyCalendar";
+import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 
 interface PatientProfile {
   id: string;
@@ -41,21 +42,26 @@ interface AssignedExercise {
   assigned_date: string;
 }
 
-// Trimmed per-session summary — only the fields the dashboard needs. The
-// /api/sessions response carries more; the consistency calendar uses startedAt
-// plus setCount/totalReps to ignore zero-outcome starts.
+// Per-session summary from /api/sessions. Carries the fields the calendar, the
+// exercise tags, and the My Progress trend charts all need (this shape
+// structurally satisfies the shared TrendSession type).
 interface SessionLite {
   id: number;
   exerciseId: string;
+  exerciseName: string;
+  exerciseKind: "dynamic" | "isometric" | null;
   startedAt: string;
   endedAt: string | null;
   endReason: string | null;
-  exerciseName: string;
   setCount: number;
   totalReps: number;
+  avgPeakValue: number | null;
+  completeLeftReps: number;
+  completeRightReps: number;
+  totalPairedHoldMs: number | null;
 }
 
-type ActiveTab = "dashboard" | "view-profile" | "session";
+type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
 
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
@@ -109,8 +115,9 @@ export default function PatientDashboardPage() {
   }, [user?.id, loading]);
 
   const NAV_TABS: { key: ActiveTab; label: string; Icon: () => React.ReactElement }[] = [
-    { key: "dashboard",    label: "Dashboard",    Icon: PatHomeIcon    },
-    { key: "view-profile", label: "View Profile", Icon: PatPersonIcon  },
+    { key: "dashboard",    label: "Dashboard",    Icon: PatHomeIcon     },
+    { key: "my-progress",  label: "My Progress",  Icon: PatProgressIcon },
+    { key: "view-profile", label: "View Profile", Icon: PatPersonIcon   },
   ];
 
   if (loading || pageLoading) {
@@ -280,6 +287,30 @@ export default function PatientDashboardPage() {
             </div>
           </div>
         )}
+
+        {/* ── My Progress ── */}
+        {activeTab === "my-progress" && (() => {
+          const trendGroups = groupSessionsByExercise(sessions);
+          return (
+            <div className="max-w-4xl">
+              <h1 className="text-2xl font-bold text-green-800">My Progress</h1>
+              <p className="text-gray-500 mt-1">Your session-over-session trends per exercise.</p>
+              <p className="text-xs text-gray-400 mt-1 mb-6">Descriptive trends — not a diagnosis.</p>
+
+              {trendGroups.length === 0 ? (
+                <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">
+                  Finish a few sessions to see your progress here.
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {trendGroups.map((g) => (
+                    <ExerciseTrendCard key={g.exerciseId} group={g} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ── Session ── */}
         {activeTab === "session" && (() => {
@@ -677,6 +708,14 @@ function PatHomeIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+    </svg>
+  );
+}
+
+function PatProgressIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/>
     </svg>
   );
 }

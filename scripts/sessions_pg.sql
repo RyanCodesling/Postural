@@ -1,15 +1,17 @@
--- Session persistence: completed exercise sessions, set summaries, and counted reps.
+-- Session persistence: completed exercise sessions, set summaries, counted reps,
+-- and raw metric-only tuning frames.
 -- Run this in pgAdmin after patient_exercises_pg.sql.
 --
--- Three tables:
+-- Four tables:
 --   sessions   — one row per exercise run (Start -> all-sets-complete or End).
 --   set_events — one row per completed/partial set, including isometric holds.
 --   rep_events — one row per counted rep, the queryable analytics surface.
+--   raw_frames — unsmoothed per-frame metrics + selected pose landmarks. This is
+--                NOT video; no image/frame bytes are stored.
 --
--- Scope note: this is the analytics surface only. The per-frame raw-metric
--- ("raw_frames") retraining surface and the session-summary rollup are
--- intentionally NOT created here; they can be added later without touching
--- these tables.
+-- Scope note: raw_frames is intentionally metric-only. The current camera
+-- writer records ex_007 upper-body tuning traces; additional exercises can add
+-- their own trace_kind payloads later without changing this table.
 
 CREATE TABLE IF NOT EXISTS sessions (
   id                       SERIAL       PRIMARY KEY,
@@ -91,9 +93,33 @@ CREATE TABLE IF NOT EXISTS rep_events (
 
 CREATE INDEX IF NOT EXISTS idx_rep_events_session ON rep_events (session_id, rep_index);
 
+CREATE TABLE IF NOT EXISTS raw_frames (
+  id            BIGSERIAL    PRIMARY KEY,
+  session_id    INTEGER      NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  -- Sequential index across VALID recorded frames in the session. Capture-
+  -- readiness failures are not logged, so gaps in captured_at/elapsed_ms expose
+  -- tracking dropouts without persisting unreliable landmark data.
+  frame_index   INT          NOT NULL CHECK (frame_index >= 1),
+  set_index     INT          NOT NULL CHECK (set_index >= 1),
+  elapsed_ms    INT          NOT NULL CHECK (elapsed_ms >= 0),
+  captured_at   TIMESTAMPTZ  NOT NULL,
+  -- Payload contract identifier, e.g. ex_007_upper_body_v1.
+  trace_kind    TEXT         NOT NULL,
+  -- Derived RAW/unsmoothed metrics. Never write One Euro filtered UI values.
+  metrics       JSONB        NOT NULL,
+  -- Selected normalized pose landmarks needed to recompute the metrics later.
+  -- This contains numeric landmark coordinates only, never image/video data.
+  landmarks     JSONB        NOT NULL,
+  UNIQUE (session_id, frame_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_frames_session ON raw_frames (session_id, frame_index);
+
 GRANT ALL PRIVILEGES ON TABLE sessions   TO postural;
 GRANT ALL PRIVILEGES ON TABLE set_events TO postural;
 GRANT ALL PRIVILEGES ON TABLE rep_events TO postural;
+GRANT ALL PRIVILEGES ON TABLE raw_frames TO postural;
 GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq   TO postural;
 GRANT USAGE, SELECT ON SEQUENCE set_events_id_seq TO postural;
 GRANT USAGE, SELECT ON SEQUENCE rep_events_id_seq TO postural;
+GRANT USAGE, SELECT ON SEQUENCE raw_frames_id_seq TO postural;

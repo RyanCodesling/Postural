@@ -6,7 +6,7 @@ types.setTypeParser(1082, (val: string) => val);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Maps snake_case DB columns to camelCase for the app
-function mapUser(row: any) {
+function mapUser(row: Record<string, unknown>) {
   return {
     id:             row.id,
     email:          row.email,
@@ -76,7 +76,7 @@ export async function getUserByEmail(email: string) {
 
 export async function getUsers(filters?: { role?: string; therapistId?: string }) {
   let query = "SELECT * FROM users WHERE role IN ('patient', 'therapist')";
-  const params: any[] = [];
+  const params: unknown[] = [];
 
   if (filters?.role) {
     params.push(filters.role);
@@ -156,7 +156,7 @@ export async function updateUser(id: string, data: Partial<{
   specialty: string;
 }>) {
   const fields: string[] = [];
-  const params: any[] = [];
+  const params: unknown[] = [];
 
   const columnMap: Record<string, string> = {
     name:           "name",
@@ -177,7 +177,7 @@ export async function updateUser(id: string, data: Partial<{
 
   for (const [key, col] of Object.entries(columnMap)) {
     if (key in data) {
-      params.push((data as any)[key]);
+      params.push((data as Record<string, unknown>)[key]);
       fields.push(`${col} = $${params.length}`);
     }
   }
@@ -537,6 +537,20 @@ export type SetEventRow = {
   endTs: string;
 };
 
+/**
+ * One raw, unsmoothed metric-only frame. `metrics` and `landmarks` are versioned
+ * by `traceKind`; no image or video bytes are accepted or stored.
+ */
+export type RawFrameRow = {
+  frameIndex: number;
+  setIndex: number;
+  elapsedMs: number;
+  capturedAt: string;
+  traceKind: string;
+  metrics: Record<string, unknown>;
+  landmarks: Record<string, unknown>;
+};
+
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
@@ -707,6 +721,62 @@ export async function insertSetEvents(
   } finally {
     client.release();
   }
+}
+
+export async function insertRawFrames(
+  sessionId: number,
+  rows: RawFrameRow[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const r of rows) {
+      await client.query(
+        `INSERT INTO raw_frames
+           (session_id, frame_index, set_index, elapsed_ms, captured_at,
+            trace_kind, metrics, landmarks)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (session_id, frame_index) DO NOTHING`,
+        [
+          sessionId,
+          r.frameIndex,
+          r.setIndex,
+          Math.round(r.elapsedMs),
+          r.capturedAt,
+          r.traceKind,
+          JSON.stringify(r.metrics),
+          JSON.stringify(r.landmarks),
+        ]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getRawFramesForSession(sessionId: number) {
+  const result = await pool.query(
+    `SELECT frame_index, set_index, elapsed_ms, captured_at, trace_kind,
+            metrics, landmarks
+       FROM raw_frames
+      WHERE session_id = $1
+      ORDER BY frame_index ASC`,
+    [sessionId]
+  );
+  return result.rows.map((r) => ({
+    frameIndex:  r.frame_index,
+    setIndex:    r.set_index,
+    elapsedMs:   r.elapsed_ms,
+    capturedAt:  r.captured_at,
+    traceKind:   r.trace_kind,
+    metrics:     r.metrics,
+    landmarks:   r.landmarks,
+  }));
 }
 
 // ── Session read side (clinician dashboard) ────────────────────────────────────

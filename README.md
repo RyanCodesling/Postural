@@ -7,17 +7,28 @@
 - Added session end-reason tracking so the dashboard can distinguish completed sessions, deliberate early endings, superseded open rows, and still-open in-progress attempts
 - Added open-session cleanup when a newer session starts for the same assigned exercise, preventing older abandoned rows from pinning dashboard status labels
 - Added a post-session camera recap so patients can review the exercise they just finished before redoing it, moving to the next exercise, or returning to their schedule
-- Added cross-session progress trend charts to the therapist patient-detail page, including exercise-specific primary metrics, separate left/right completion series, and descriptive trend badges
+- Added cross-session progress trend charts to the therapist patient-detail page and the patient-facing My Progress tab, including exercise-specific primary metrics, separate left/right completion series, and descriptive trend badges
+- Moved the trend-card and chart rendering into shared dashboard components so patient and therapist progress views use the same outcome-bearing session grouping and left/right display rules
 - Rebuilt the therapist home page into a dashboard with patient activity KPIs, setup/inactivity counts, and a linked patient roster
 - Refined the patient Dashboard tab so consistency and assigned-exercise summaries sit side by side on wide screens and stack cleanly on smaller screens
 - Added a deterministic demo-data command for populating dashboard KPIs, patient statuses, session history, and trend-chart states
 - Preserved the existing date-gated Session tab as the actionable scheduled-exercise surface while using the Dashboard tab as a read-only progress summary
 - Added a migration-safe `sessions.end_reason` column; existing local databases must rerun `scripts\sessions_pg.sql` or apply the `end_reason` ALTER before using this branch
+- Added a durable patient-only `ex_007` upper-body motion trace for live tuning of shoulder-press starting position and movement path, storing raw unsmoothed metrics plus selected pose landmarks without storing video
+- Added a body-relative wrist lateral-path metric so later analysis can distinguish a vertical press above the shoulder from inward or outward wrist drift
+- Added a dedicated raw-frame API surface for saving and retrieving motion traces without loading large per-frame payloads into ordinary session-detail reads
+- Tuned the `ex_007` partial-rep discard floor from `0.4` to `0.21` after controlled wrist-height traces separated low lifts from deliberate medium partial presses
+- Added directional yellow compensation-overlay cues for shoulder asymmetry, trunk lean, and neck tilt, including mirroring-safe helper coverage for the front-camera display
+- Clarified overhead capture-readiness feedback so the patient is asked to keep the whole body in frame instead of being told to place the head near the top
+- Existing databases must rerun `scripts\sessions_pg.sql` before using the new `ex_007` motion-trace recording path
+- Cleared the commit-blocking TypeScript ESLint errors in the camera/session persistence path, database helper typings, and One Euro profiling script while preserving the existing runtime behavior
 
 ### *scripts\sessions_pg.sql*
 - Added `end_reason` to the `sessions` table definition
 - Added a safe `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason TEXT`
 - Documented the supported end reasons: `user`, `completed`, `superseded`, and `NULL` for still-open sessions
+- Added the metric-only `raw_frames` table with session/frame/set indexes, elapsed and wall-clock timestamps, a versioned trace kind, raw metrics JSON, and selected pose-landmark JSON
+- Added an explicit no-video schema contract, a session/frame uniqueness guard, a session lookup index, and grants for the `postural` database user
 
 ### *web\package.json*
 - Added `npm run seed:demo` as the dashboard demo-data command
@@ -28,16 +39,26 @@
 - Populates patient assignments, therapist programs, sessions, set outcomes, rep outcomes, hold-quality summaries, activity states, and trend-chart examples
 - Reads `DATABASE_URL` from the environment or `web\.env.local`
 
+### *web\scripts\profileOneEuroFilter.ts*
+- Tightened the synthetic peak-index local from `let` to `const` so the profiling helper no longer blocks full ESLint
+
 ### *web\src\lib\db.ts*
 - Updated `createSession()` to close older open sessions for the same assigned exercise as `superseded` when a new session starts
 - Updated `endSession()` to persist `end_reason`, with completed sessions recorded as `completed`
 - Updated `getSessionsForPatient()` to return `endReason`, `setCount`, and `totalReps` for dashboard summaries
 - Added `getTherapistRoster()` to return each assigned patient's outcome-bearing session activity, last active date, assigned-exercise count, and completion count
 - Counts therapist activity from sessions with at least one set or rep outcome so abandoned starts do not inflate the home dashboard
+- Added `RawFrameRow`, `insertRawFrames()`, and `getRawFramesForSession()` for durable metric-only trace batches
+- Replaced remaining broad `any` usage in user mapping, query parameters, and profile-update parameter access with safer typed records/unknown arrays
 
 ### *web\src\app\api\sessions\[id]\route.ts*
 - PATCH now accepts `endReason` and forwards it to the session persistence helper
 - Empty PATCH bodies remain supported for stale-session cleanup paths
+
+### *web\src\app\api\sessions\[id]\raw-frames\route.ts*
+- Added an explicit raw-motion-trace endpoint kept separate from ordinary session detail responses
+- Patient POST writes require session ownership and validate bounded frame batches, indexes, timestamps, trace kind, metrics, and landmark payloads
+- GET allows patients to retrieve their own traces and therapists to retrieve traces only for assigned patients
 
 ### *web\src\app\api\therapist\overview\route.ts*
 - Added a therapist-only overview endpoint for the home dashboard
@@ -52,6 +73,34 @@
 - Dynamic exercise recaps show separate left/right completion totals, average peak versus target, an asymmetry label, and completed sets
 - Isometric exercise recaps show hold time versus target and completed sets without presenting rep counts
 - Added Redo, Next exercise, and patient schedule navigation actions using the existing camera flow handlers
+- Patient `ex_007` sessions now record valid active frames before smoothing or rep-state processing, including wrist vertical/lateral path, shoulder abduction, elbow flexion, scapular elevation, upper-arm distance, trunk lean, shoulder symmetry, tilt reference, and the minimal analysis landmarks needed for later recomputation
+- Raw-frame batches flush periodically, at set boundaries, and at session end; staff debug sessions remain non-persistent
+- Added a patient-facing notice that the motion trace stores raw metrics and pose landmarks only, not video
+- Preserves three-decimal precision for the normalized `ex_007` wrist-height signal before rep counting so low and medium partial motions are not collapsed into the same one-decimal bucket
+- Removed stale local exercise/patient types, replaced API-response `any` casts with `unknown`-based row parsing, removed MediaPipe landmark `any` casts, and fixed hook-dependency warnings through stable cleanup refs
+
+### *web\src\lib\exercises\registry.ts*
+- Updated `ex_007.minimumPeakThreshold` from `0.4` to `0.21`, between the observed smoothed low-lift maximum (`0.18`) and medium-partial minimum (`0.24`)
+- Kept the existing `startThreshold`, `repCompleteThreshold`, and `targetROM`; the controlled trace supported the current start/return behavior and the existing complete-versus-medium separation
+
+### *web\src\lib\pose\poseMetrics.ts* and *web\src\lib\pose\wristShoulderLateral.test.ts*
+- Added `computeWristShoulderLateral()` as a raw analysis metric for same-side wrist drift relative to the shoulder
+- Positive values mean outward drift from the body midline, negative values mean inward drift, and the body-relative axis keeps the metric camera-roll invariant
+- Added synthetic coverage for vertical alignment, inward/outward sign behavior on both sides, camera-roll invariance, and off-frame wrist rejection
+
+### *web\src\lib\pose\wristShoulderVertical.test.ts* and *web\src\lib\pose\peakRelevantGating.test.ts*
+- Added live-tuned `ex_007` boundary coverage for low wrist lifts, medium partial presses, and full presses after the `minimumPeakThreshold` adjustment
+- Updated peak-relevant compensation-gating cases so compensation warnings stay tied to clinically relevant motion ranges instead of low-amplitude setup noise
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Updated the overhead-mode `MOVE_CLOSER` readiness copy to ask for whole-body framing
+- Kept the non-overhead feedback unchanged, where asking for the head near the top remains the intended framing cue
+
+### *web\src\lib\pose\drawCompensationOverlay.ts* and *web\src\lib\pose\drawCompensationOverlay.test.ts*
+- Replaced the generic amber warning treatment with yellow correction cues for active compensation warnings
+- Draws paired shoulder boxes plus a downward `LOWER` arrow on the elevated shoulder for shoulder-asymmetry warnings
+- Draws `STRAIGHTEN` arrows for trunk lean and neck tilt, with anatomical left/right direction converted safely for the mirrored front-camera canvas
+- Added pure helper coverage for anatomical side-to-screen direction and elevated-shoulder selection so mirroring-sensitive overlay logic is regression-tested
 
 ### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
 - New patient consistency calendar component
@@ -63,6 +112,8 @@
 - Fetches `/api/sessions` alongside patient profile and assigned exercises
 - Adds the consistency calendar to the Dashboard tab
 - Adds a read-only assigned-exercises summary with isometric-aware prescription text
+- Adds a My Progress tab that renders per-exercise trend cards from the patient's own outcome-bearing sessions
+- Extends the local session summary shape with exercise kind, average peak, left/right completed reps, and paired hold time so the shared trend component can render patient progress without another API surface
 - Uses the latest session per exercise to map `in_progress` assignments to either `In Progress` or `Ended Early`
 - Places the consistency calendar and assigned-exercises summary side by side on large screens while preserving a stacked mobile layout
 - Moves the general Start Session action into the assigned-exercises summary header
@@ -74,9 +125,14 @@
 - Links patient names to their therapist patient-detail pages
 - Added loading, empty, and error states plus horizontal table scrolling for narrow screens
 
-### *web\src\app\(app)\dashboard\therapist\patients\[id]\TrendChart.tsx*
-- New reusable SVG line-chart component for one or two numeric series
+### *web\src\app\(app)\dashboard\_components\TrendChart.tsx*
+- New shared SVG line-chart component for one or two numeric series
 - Shows plotted points, connected lines, latest values, and min/max scale context without adding a charting dependency
+
+### *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*
+- New shared per-exercise trend grouping and card component used by both the therapist patient-detail page and the patient My Progress tab
+- Filters out zero-outcome started-then-abandoned sessions before charting so accidental starts do not create false trend points
+- Uses the exercise registry to classify dynamic versus isometric cards, keeps left and right completed reps separate, and labels the trend statistics as descriptive rather than diagnostic
 
 ### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
 - Added a Progress Trends section above the existing Sessions Record
@@ -85,17 +141,31 @@
 - Keeps completed left and right reps as separate chart series so the asymmetry signal is not hidden
 - Adds Improving, Plateau, Regressing, and low-data states using descriptive session-level statistics
 - Derives exercise kind from the registry first so legacy or abandoned sessions with no set row cannot mislabel isometric trend cards
+- Replaced the page-local trend chart and grouping helpers with the shared dashboard trend components
 
 ### *Validation*
 - `npx tsc --noEmit --pretty false` passed from `web/`
+- `npx tsx src/lib/pose/wristShoulderLateral.test.ts` passed 5/5
+- `npx tsx src/lib/pose/wristShoulderVertical.test.ts` passed 13/13, including the live-tuned ex_007 low/partial/complete boundary coverage
+- `npx tsx src/lib/pose/drawCompensationOverlay.test.ts` passed 6/6 for the mirroring-sensitive overlay helpers
+- `npx tsx src/lib/pose/peakRelevantGating.test.ts` passed 17/17 for the updated compensation-gating ranges
+- The full pose test sweep passed 116/116, including the new wrist lateral-path and ex_007 boundary coverage
+- Targeted ESLint passed for the new raw-frames API route, wrist lateral-path test, wrist vertical-path test, and exercise registry
 - Focused ESLint passed for the therapist dashboard page, therapist overview route, trend chart component, and demo-data script
 - Focused ESLint for the patient dashboard files and session id route passed with the existing `loadData` hook-dependency warning only
-- Full scoped ESLint still reports pre-existing `no-explicit-any` and hook-dependency debt in `CameraClient.tsx` and `db.ts` outside these edited paths
+- `npx eslint` now completes with 0 errors; 9 warning-level items remain in older admin/auth/dashboard/pose files
+- Targeted `npx eslint "src/app/(app)/camera/CameraClient.tsx"` is clean with 0 errors and 0 warnings
 - The demo-data command completed successfully and produced the same counts on a repeated run
 - Browser verification confirmed the patient dashboard, therapist home dashboard, and therapist patient-detail trend charts render with populated demo data
 - Responsive checks at desktop and narrow mobile widths showed no page-level horizontal overflow; the therapist roster table remains contained by its horizontal-scroll wrapper
 - `git diff --check` passed on the scoped tracked files, with line-ending warnings only
 - Live webcam validation is still required for the camera post-session recap, and the `end_reason` database migration is still required before deployment
+- Live patient `ex_007` validation recorded a completed 3 x 12 run with 3,722 raw metric frames across all three sets, 72 side-specific complete reps, and 99.6% capture-ready coverage
+- Two controlled wrist-height calibration traces separated low lifts (smoothed peak at or below `0.18`), deliberate medium partial presses (at or above `0.24`), and full presses (at or above `0.85`) across both sides
+- Offline replay with three-decimal rep-counter input and `minimumPeakThreshold: 0.21` discarded every observed low lift, recorded every observed medium press as partial, and kept every observed full press complete
+- Live patient confirmation in reverse order recorded the expected `6/6` result: three full presses per side were complete, three medium presses per side were partial, and three low wrist lifts produced no rep events
+- The good-form and controlled-partial traces supported keeping the existing `ex_007` start, completion, and target-ROM thresholds
+- The `raw_frames` migration was applied and verified with the restricted application database user able to select and insert trace rows; other existing databases must still rerun `scripts\sessions_pg.sql` with a migration account
 
 ---
 

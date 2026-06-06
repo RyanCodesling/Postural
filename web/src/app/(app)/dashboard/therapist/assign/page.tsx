@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
+import { useToast } from "@/lib/ToastContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 
@@ -124,6 +125,7 @@ function PrescriptionDetails({
 
 export default function AssignExercisePage() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
@@ -134,7 +136,6 @@ export default function AssignExercisePage() {
   const [assignSelected,    setAssignSelected]    = useState<Set<string>>(new Set());
   const [assignParams,      setAssignParams]      = useState<Record<string, AssignmentParams>>({});
   const [assigning,         setAssigning]         = useState(false);
-  const [showAssignSuccess, setShowAssignSuccess] = useState(false);
   const [showAssignError,   setShowAssignError]   = useState(false);
   const [assignErrorMsg,    setAssignErrorMsg]    = useState("");
 
@@ -155,8 +156,6 @@ export default function AssignExercisePage() {
   // Edit mode per exercise (unlocks fields for existing assignments)
   const [editingExercises, setEditingExercises] = useState<Set<string>>(new Set());
 
-  // Delete success popup
-  const [showDeleteSuccess, setShowDeleteSuccess] = useState(false);
 
   // ── Load patients / exercises / programs ─────────────────────────────────
   useEffect(() => {
@@ -354,7 +353,7 @@ export default function AssignExercisePage() {
         return;
       }
       setShowAssignPreview(false);
-      setShowAssignSuccess(true);
+      showToast({ variant: "success", message: "Exercises assigned and synced." });
       setAssignPatientId(""); setAssignProgramId("");
       setAssignSelected(new Set()); setAssignParams({});
       setExistingAssignments([]); setDeleteSelected(new Set());
@@ -405,7 +404,10 @@ export default function AssignExercisePage() {
       });
       setDeleteSelected(new Set());
       setShowDeleteModal(false);
-      setShowDeleteSuccess(true);
+      showToast({
+        variant: "success",
+        message: `Removed from ${selectedPatient?.name ?? "patient"} and synced.`,
+      });
     } catch {
       setDeleteError("Failed to delete exercises.");
     } finally {
@@ -728,30 +730,6 @@ export default function AssignExercisePage() {
         </>
       )}
 
-      {/* ── Assign Success Modal ──────────────────────────────────────────── */}
-      {showAssignSuccess && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowAssignSuccess(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mx-auto mb-4">
-                <svg className="w-6 h-6 text-green-700" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Assigned Successfully</h2>
-              <p className="text-sm text-gray-500 mb-5">Exercises have been assigned and synced to the database.</p>
-              <button
-                onClick={() => setShowAssignSuccess(false)}
-                className="px-6 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-
       {/* ── Assign Error Modal ────────────────────────────────────────────── */}
       {showAssignError && (
         <>
@@ -768,33 +746,6 @@ export default function AssignExercisePage() {
               <button
                 onClick={() => setShowAssignError(false)}
                 className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ── Delete Success Modal ──────────────────────────────────────────── */}
-      {showDeleteSuccess && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteSuccess(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mx-auto mb-4">
-                <svg className="w-6 h-6 text-green-700" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Deleted Successfully</h2>
-              <p className="text-sm text-gray-500 mb-5">
-                The selected exercises have been removed from{" "}
-                <span className="font-semibold text-gray-700">{selectedPatient?.name}</span> and changes are updated in the database.
-              </p>
-              <button
-                onClick={() => setShowDeleteSuccess(false)}
-                className="px-6 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
               >
                 OK
               </button>

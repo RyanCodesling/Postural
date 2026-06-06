@@ -1,5 +1,55 @@
 # Sprint Updates 
 
+## 📌 Update-6-6-26 | *RyanCodesling*
+
+- Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
+- Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
+- Hardened camera session-save feedback so "Session saved" appears only after the session-end PATCH succeeds, with separate pending/failure states for in-flight or failed persistence
+- Added therapist patient-detail reporting polish: print/PDF layout support, print-only report header/footer, and a visible "Print / Save as PDF" action
+- Added a therapist-facing Form Quality card that surfaces the current rule-based isometric compensation score as a labeled heuristic, plus a clearly reserved calibrated score slot for future integration
+- Hardened the patient-session query so malformed legacy `hold_quality.meanCompensationScore` JSON cannot crash the dashboard aggregate
+- Deferred untested `ex_008` live-tuning trace expansion from this commit; the durable raw-trace path remains `ex_007`-only until `ex_008` can be tested live
+
+### *web\src\lib\ToastContext.tsx*, *web\src\app\layout.tsx*, and *web\src\app\globals.css*
+- Added a global `ToastProvider` around the authenticated app shell
+- Added success, info, and error toast variants with manual dismiss and timed auto-dismiss behavior
+- Added the shared toast entrance animation in global CSS
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Changed session-ending persistence to return `saved`, `pending`, `skipped`, or `failed`
+- Shows "Session saved" only after the session-end request returns OK
+- Shows an info toast when a patient session is still finalizing and an error toast when the save request fails
+- Avoids showing a false saved-success toast for staff/debug sessions where no patient assignment is being persisted
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Uses global toasts for successful assignment and delete operations
+- Removes the large success modals while keeping the existing preview, delete confirmation, and error modal paths
+
+### *web\src\app\(app)\dashboard\_components\Skeleton.tsx*
+- Added reusable dashboard skeleton primitives: `SkeletonBar`, `SkeletonCard`, `SkeletonKpiRow`, and `SkeletonTable`
+- Replaced centered loading text with layout-matching skeleton states on the patient dashboard, therapist home dashboard, and therapist patient-detail page
+
+### *web\src\app\(app)\dashboard\therapist\layout.tsx*
+- Added print-specific layout classes so therapist reports hide navigation chrome and remove screen-only spacing while printing
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added a print-only Patient Progress Report header with generated timestamp and patient name
+- Added a "Print / Save as PDF" action for therapist-facing patient reports
+- Added a print-only disclaimer footer that keeps the proof-of-concept, non-medical-device scope visible on exported reports
+- Added a Form Quality section with a rule-based 0-100 heuristic averaged from scored isometric hold sessions
+- Added a separate "Calibrated form-quality score — coming soon" slot so the future calibrated score is visible as planned work without presenting it as live
+- Added loading skeletons for the patient-detail view
+
+### *web\src\lib\db.ts*
+- Added guarded aggregation for `hold_quality.meanCompensationScore` in `getSessionsForPatient()`
+- Casts JSONB compensation scores only when the value is a JSON number, so malformed or legacy rows become `NULL` and are skipped by `AVG()`
+- Returns `avgCompensationScore` for dashboard consumers that can render the current rule-based heuristic
+
+### Validation
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Focused `npx eslint` over the modified camera, dashboard, helper, database, and layout files exited with 0 errors; remaining warnings are the existing patient-dashboard `loadData` hook dependency and therapist-assign ternary expression warning
+- `git diff --check` exited 0, with only Git CRLF normalization warnings
+
 ## 📌 Update-6-4-26 | *RyanCodesling*
 
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards

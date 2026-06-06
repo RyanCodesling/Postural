@@ -828,7 +828,18 @@ export async function getSessionsForPatient(patientId: string) {
                SUM(paired_hold_ms)  AS total_paired_hold_ms,
                SUM(target_hold_ms)  AS total_target_hold_ms,
                SUM(duration_ms)     AS total_duration_ms,
-               AVG(asymmetry_index) AS avg_asymmetry_index
+               AVG(asymmetry_index) AS avg_asymmetry_index,
+               -- Rule-based compensation score (0-100), persisted only for
+               -- isometric holds inside the hold_quality JSONB. Guard the cast
+               -- because legacy/hand-inserted JSON can contain nonnumeric
+               -- values; AVG skips NULLs.
+               AVG(
+                 CASE
+                   WHEN jsonb_typeof(hold_quality->'meanCompensationScore') = 'number'
+                     THEN (hold_quality->>'meanCompensationScore')::numeric
+                   ELSE NULL
+                 END
+               ) AS avg_compensation_score
         FROM set_events GROUP BY session_id
      ) st ON st.session_id = s.id
      WHERE s.patient_id = $1
@@ -863,6 +874,7 @@ export async function getSessionsForPatient(patientId: string) {
       totalPairedHoldMs: row.total_paired_hold_ms != null ? Number(row.total_paired_hold_ms) : null,
       totalTargetHoldMs: row.total_target_hold_ms != null ? Number(row.total_target_hold_ms) : null,
       avgAsymmetryIndex: row.avg_asymmetry_index != null ? Number(row.avg_asymmetry_index) : null,
+      avgCompensationScore: row.avg_compensation_score != null ? Number(row.avg_compensation_score) : null,
     };
   });
 }

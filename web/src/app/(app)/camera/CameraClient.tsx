@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useToast } from "@/lib/ToastContext";
 import {
   PoseLandmarker,
   FilesetResolver,
@@ -48,6 +49,7 @@ import {
 type CamDevice = MediaDeviceInfo;
 
 type AssignmentStatus = "pending" | "in_progress" | "completed";
+type EndSessionPersistenceResult = "saved" | "pending" | "skipped" | "failed";
 
 interface Exercise {
   id: string;
@@ -719,6 +721,7 @@ type CardSpec = {
 
 export default function CameraClient() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const dashboardHref =
     user?.role === "admin" ? "/dashboard/admin"
     : user?.role === "therapist" ? "/dashboard/therapist"
@@ -1107,8 +1110,8 @@ export default function CameraClient() {
    */
   const sessionTokenRef = useRef<number>(0);
   const endSessionPersistenceRef = useRef<
-    (completed?: boolean, endReason?: "user") => void
-  >(() => undefined);
+    (completed?: boolean, endReason?: "user") => Promise<EndSessionPersistenceResult>
+  >(() => Promise.resolve("skipped"));
   /**
    * If an end (notably the End button) fires before the session create resolves,
    * there's no row yet to PATCH — stash the intended end reason here so the
@@ -1396,8 +1399,13 @@ export default function CameraClient() {
    * Idempotent — no-op when no session is open. Clears persistence state so a
    * subsequent stray rep can't write to the just-ended session.
    */
-  const endSessionPersistence = (completed = false, endReason?: "user") => {
+  const endSessionPersistence = (
+    completed = false,
+    endReason?: "user",
+  ): Promise<EndSessionPersistenceResult> => {
     const sessionId = sessionIdRef.current;
+    const hasPatientAssignment =
+      typeof prescriptionRef.current.patientExerciseId === "number";
     // Invalidate any in-flight create for this run. If the create has not
     // resolved yet (sessionId still null), its handler will see the bumped
     // token and self-close the row it creates, so nothing is left open.
@@ -1407,7 +1415,7 @@ export default function CameraClient() {
       // can record it on the row it self-closes (e.g. a fast End press).
       pendingStaleEndReasonRef.current = endReason;
       resetSessionPersistence();
-      return;
+      return Promise.resolve(hasPatientAssignment ? "pending" : "skipped");
     }
     flushSetEvents();
     flushRepEvents();
@@ -1421,14 +1429,44 @@ export default function CameraClient() {
         : undefined;
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
-    fetch(`/api/sessions/${sessionId}`, {
+    const endRequest = fetch(`/api/sessions/${sessionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ completed, captureQualitySummary, endReason }),
-    }).catch((err) => console.warn("session end failed:", err));
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`session end returned ${response.status}`);
+        }
+        return "saved" as const;
+      })
+      .catch((err) => {
+        console.warn("session end failed:", err);
+        return "failed" as const;
+      });
     resetSessionPersistence();
+    return endRequest;
   };
   endSessionPersistenceRef.current = endSessionPersistence;
+
+  const showSessionPersistenceToast = useCallback(
+    (result: EndSessionPersistenceResult) => {
+      if (result === "saved") {
+        showToast({ variant: "success", message: "Session saved." });
+      } else if (result === "pending") {
+        showToast({
+          variant: "info",
+          message: "Session is finalizing in the background.",
+        });
+      } else if (result === "failed") {
+        showToast({
+          variant: "error",
+          message: "Session save failed. Please try again.",
+        });
+      }
+    },
+    [showToast],
+  );
 
   /**
    * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
@@ -1748,7 +1786,7 @@ export default function CameraClient() {
       // This exercise's session is finished either way — close it (completed:
       // all prescribed sets were reached). Advancing re-selects the next
       // exercise; the patient presses Start to open a new session for it.
-      endSessionPersistence(true);
+      void endSessionPersistence(true).then(showSessionPersistenceToast);
       // This exercise is finished — drop its resume snapshot so a later visit
       // shows the "already completed" recap, not a resume prompt.
       clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
@@ -2004,7 +2042,7 @@ export default function CameraClient() {
     // Flush any reps from the in-progress (partial) set and stamp ended_at.
     // endReason "user" = the End button was pressed — distinguishes a deliberate
     // early end from a tab-close/exit (which leaves the session open).
-    endSessionPersistence(false, "user");
+    void endSessionPersistence(false, "user").then(showSessionPersistenceToast);
     // Deliberate end → drop the resume snapshot so this attempt is not offered
     // for resume on return (the row is also closed, the authoritative guard).
     clearResumeSnapshot(prescriptionRef.current.patientExerciseId);

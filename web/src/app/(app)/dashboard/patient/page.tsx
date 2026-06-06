@@ -11,6 +11,7 @@ import {
 } from "@/lib/exercises/prescriptionDisplay";
 import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
+import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 
 interface PatientProfile {
   id: string;
@@ -122,8 +123,15 @@ export default function PatientDashboardPage() {
 
   if (loading || pageLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-green-50">
-        <div className="text-gray-500">Loading dashboard...</div>
+      <div className="min-h-screen bg-green-50 p-6">
+        <div className="max-w-5xl mx-auto">
+          <SkeletonBar className="h-7 w-48" />
+          <SkeletonBar className="h-4 w-64 mt-2 mb-6" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <SkeletonCard className="h-64" />
+            <SkeletonCard className="h-64" />
+          </div>
+        </div>
       </div>
     );
   }

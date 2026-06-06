@@ -6,6 +6,7 @@ import Link from "next/link";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
+import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
 
 interface Patient {
   id: string;
@@ -52,6 +53,8 @@ interface SessionSummary {
   totalPairedHoldMs: number | null;
   totalTargetHoldMs: number | null;
   avgAsymmetryIndex: number | null;
+  // Rule-based compensation score (0–100), only present for isometric sessions.
+  avgCompensationScore: number | null;
 }
 
 // Per-arm hold-quality summary stored on isometric set rows.
@@ -196,6 +199,17 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
   // charts (the shared helper keeps only outcome-bearing sessions).
   const trendGroups = groupSessionsByExercise(sessions);
 
+  // Rule-based form-quality heuristic — averaged across the sessions that carry
+  // a compensation score (currently only the isometric hold exercise persists
+  // one). Null when the patient has no scored sessions yet.
+  const compScoredSessions = sessions.filter((s) => s.avgCompensationScore != null);
+  const compScoreCount = compScoredSessions.length;
+  const compScoreAvg =
+    compScoreCount > 0
+      ? compScoredSessions.reduce((sum, s) => sum + (s.avgCompensationScore as number), 0) /
+        compScoreCount
+      : null;
+
   const progressStatus = () => {
     if (exercises.length === 0) return "not started";
     if (completedExercises.length === exercises.length) return "completed";
@@ -206,8 +220,15 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-12 text-gray-500">
-        Loading patient profile...
+      <div className="max-w-5xl mx-auto px-8 py-8">
+        <SkeletonBar className="h-4 w-40 mb-6" />
+        <SkeletonBar className="h-9 w-64" />
+        <SkeletonBar className="h-4 w-40 mt-2 mb-8" />
+        <div className="space-y-6">
+          <SkeletonCard className="h-40" />
+          <SkeletonCard className="h-32" />
+          <SkeletonCard className="h-48" />
+        </div>
       </div>
     );
   }
@@ -226,19 +247,37 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-8">
+    <div className="max-w-5xl mx-auto px-8 py-8 print:px-0 print:py-0 print:max-w-none">
+
+      {/* Print-only report header */}
+      <div className="hidden print:block mb-6 border-b border-gray-300 pb-4">
+        <h1 className="text-2xl font-bold text-green-800">Patient Progress Report</h1>
+        <p className="text-sm text-gray-700 mt-1">{patient.name}</p>
+        <p className="text-xs text-gray-500">Generated {fmtDateTime(new Date().toISOString())}</p>
+      </div>
 
       {/* Back link */}
       <Link
         href="/dashboard/therapist/patients"
-        className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-6"
+        className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-6 print:hidden"
       >
         ← Back to Manage Patients
       </Link>
 
       {/* Header */}
-      <h1 className="text-4xl font-bold text-green-800">Patient Profile</h1>
-      <p className="text-gray-500 mt-1 mb-8">{patient.name}</p>
+      <div className="flex items-start justify-between gap-4 print:hidden">
+        <div>
+          <h1 className="text-4xl font-bold text-green-800">Patient Profile</h1>
+          <p className="text-gray-500 mt-1 mb-8">{patient.name}</p>
+        </div>
+        <button
+          onClick={() => window.print()}
+          className="shrink-0 inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
+        >
+          <PrinterIcon />
+          Print / Save as PDF
+        </button>
+      </div>
 
       {/* Personal Information */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
@@ -306,7 +345,7 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
           <h2 className="text-green-700 font-semibold text-lg">Assigned Exercises</h2>
           <button
             onClick={scrollToSessions}
-            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
+            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition print:hidden"
           >
             View Patient Progress
           </button>
@@ -339,7 +378,7 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
                     {ex.status === "in_progress" ? "In Progress" : "Not Started"}
                   </span>
                 </div>
-                <button className="px-4 py-2 border border-green-700 text-green-700 text-sm rounded-lg hover:bg-green-50 transition">
+                <button className="px-4 py-2 border border-green-700 text-green-700 text-sm rounded-lg hover:bg-green-50 transition print:hidden">
                   View Exercise
                 </button>
               </div>
@@ -379,6 +418,61 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
             ))}
           </div>
         )}
+      </div>
+
+      {/* Form Quality */}
+      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+        <h2 className="text-green-700 font-semibold text-lg">Form Quality</h2>
+        <p className="text-xs text-gray-400 mt-1 mb-5">
+          How cleanly the movement was performed (compensation patterns). Supplementary — not a diagnosis.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Rule-based heuristic (currently isometric holds only) */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Rule-based score</p>
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-gray-100 text-gray-500 font-medium">
+                heuristic
+              </span>
+            </div>
+            {compScoreAvg !== null ? (
+              <>
+                <p className="text-3xl font-bold text-green-700">
+                  {Math.round(compScoreAvg)}
+                  <span className="text-base font-medium text-gray-400">/100</span>
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Average over {compScoreCount} isometric hold session
+                  {compScoreCount === 1 ? "" : "s"}. Higher is cleaner form.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-2xl font-semibold text-gray-300">—</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Available for the isometric hold exercise (Arm Abduction at 90°). No scored
+                  sessions yet.
+                </p>
+              </>
+            )}
+          </div>
+
+          {/* Calibrated ML score — reserved slot, not yet integrated */}
+          <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Calibrated form-quality score</p>
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-600 font-medium">
+                coming soon
+              </span>
+            </div>
+            <p className="text-2xl font-semibold text-gray-300">0–100</p>
+            <p className="text-xs text-gray-400 mt-1">
+              A calibrated machine-learning quality score will appear here once the model is
+              integrated.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Progress Trends */}
@@ -428,6 +522,12 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
           </div>
         )}
       </div>
+
+      {/* Print-only disclaimer footer */}
+      <p className="hidden print:block text-[10px] text-gray-500 mt-6 pt-3 border-t border-gray-300">
+        Supplementary monitoring output — not a medical device and not clinically validated.
+        Figures are estimated from a single front-facing camera and require professional interpretation.
+      </p>
 
     </div>
   );
@@ -685,6 +785,14 @@ function PulseIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
       <path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99l1.5 1.5z"/>
+    </svg>
+  );
+}
+
+function PrinterIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v3h12V3z"/>
     </svg>
   );
 }

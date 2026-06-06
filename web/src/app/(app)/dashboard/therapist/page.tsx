@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { SkeletonBar, SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 
 interface RosterPatient {
   id: string;
@@ -56,8 +57,11 @@ export default function TherapistDashboardPage() {
 
   if (loading || dataLoading) {
     return (
-      <div className="flex items-center justify-center p-12 text-gray-500">
-        Loading dashboard...
+      <div className="max-w-5xl">
+        <SkeletonBar className="h-7 w-40" />
+        <SkeletonBar className="h-4 w-56 mt-2 mb-6" />
+        <SkeletonKpiRow />
+        <SkeletonTable />
       </div>
     );
   }

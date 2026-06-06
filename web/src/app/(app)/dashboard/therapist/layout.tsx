@@ -96,7 +96,7 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
     exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <div className="min-h-screen flex bg-green-50">
+    <div className="min-h-screen flex bg-green-50 print:block print:min-h-0 print:bg-white">
 
       {sidebarOpen && (
         <div
@@ -105,7 +105,7 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
         />
       )}
 
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200 print:hidden
         ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
         <div className="mb-8">
@@ -144,9 +144,9 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0">
+      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0 print:p-0 print:overflow-visible">
         <button
-          className="md:hidden mb-4 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
+          className="md:hidden mb-4 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition print:hidden"
           onClick={() => setSidebarOpen(true)}
         >
           ☰ Menu

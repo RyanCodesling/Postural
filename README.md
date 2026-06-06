@@ -119,6 +119,8 @@
 - `git diff --check` exited 0, with only Git CRLF normalization warnings
 - DB migration, demo seed, and live browser verification for the recurrence schedule flow still need to be run against a development database
 
+---
+
 ## 📌 Update-6-4-26 | *RyanCodesling*
 
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards

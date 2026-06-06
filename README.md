@@ -8,22 +8,55 @@
 - Added therapist patient-detail reporting polish: print/PDF layout support, print-only report header/footer, and a visible "Print / Save as PDF" action
 - Added a therapist-facing Form Quality card that surfaces the current rule-based isometric compensation score as a labeled heuristic, plus a clearly reserved calibrated score slot for future integration
 - Hardened the patient-session query so malformed legacy `hold_quality.meanCompensationScore` JSON cannot crash the dashboard aggregate
+- Added therapist assignment cadence controls so prescriptions can repeat every day, every other day, every 3 days, twice weekly, three times weekly, or on custom weekdays across a bounded date range
+- Added a per-occurrence schedule model so recurring prescriptions expand into dated exercise occurrences with make-up windows, per-day completion status, and legacy backfill support
+- Rebuilt the patient Session tab and consistency calendar around scheduled occurrences, including due today, make-up available, missed, partial, complete, upcoming, and rest-day states
+- Enforced a strict scheduled-occurrence lock for patient camera starts so future, missed, or unscheduled exercises cannot create unsaved local-only sessions
+- Updated therapist roster progress and attention states to use scheduled occurrence due/completed/missed counts instead of assignment-level status alone
 - Deferred untested `ex_008` live-tuning trace expansion from this commit; the durable raw-trace path remains `ex_007`-only until `ex_008` can be tested live
+- Existing databases must rerun `scripts\patient_exercises_pg.sql` and `scripts\exercise_occurrences_pg.sql` before using the recurrence schedule, make-up window, or strict occurrence-lock behavior
 
 ### *web\src\lib\ToastContext.tsx*, *web\src\app\layout.tsx*, and *web\src\app\globals.css*
 - Added a global `ToastProvider` around the authenticated app shell
 - Added success, info, and error toast variants with manual dismiss and timed auto-dismiss behavior
 - Added the shared toast entrance animation in global CSS
 
+### *scripts\patient_exercises_pg.sql*, *scripts\exercise_occurrences_pg.sql*, and *scripts\sessions_pg.sql*
+- Added recurrence fields to `patient_exercises`: recurrence kind, interval length, weekday set, start date, and inclusive end date
+- Added the `exercise_occurrences` table for one scheduled row per assigned exercise per due date
+- Added `makeup_until` so an overdue occurrence remains startable until the day before the next scheduled occurrence or the end of the assignment window
+- Added `sessions.occurrence_id` so persisted sessions link to the specific scheduled day they fulfilled
+- Backfilled legacy assignments into one occurrence on their assigned date, filled missing make-up deadlines defensively, and linked legacy sessions when the match is unambiguous
+
+### *web\src\lib\exercises\occurrences.ts*
+- Added shared day-key helpers for interval and weekly recurrence generation using pure `YYYY-MM-DD` calendar math
+- Added schedule expansion that derives each occurrence's make-up deadline from the next scheduled due date
+- Added occurrence and calendar rollup helpers for completed, in-progress, due, overdue, missed, partial, complete, and rest states
+- Added cadence display helpers and scheduling caps so a single assignment cannot materialize an unbounded schedule
+
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Changed session-ending persistence to return `saved`, `pending`, `skipped`, or `failed`
 - Shows "Session saved" only after the session-end request returns OK
 - Shows an info toast when a patient session is still finalizing and an error toast when the save request fails
 - Avoids showing a false saved-success toast for staff/debug sessions where no patient assignment is being persisted
+- Loads patient occurrences alongside assigned exercises and computes the exercises actionable today
+- Disables Start with a "Not scheduled today" state when the selected patient exercise is not due today or inside its make-up window
+- Waits for `/api/sessions` to create the persisted session before entering countdown, and stays idle with a visible notice if the server returns the strict-lock 409 or a save failure
+- Keeps staff/debug camera sessions outside the patient schedule lock
 
 ### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
 - Uses global toasts for successful assignment and delete operations
 - Removes the large success modals while keeping the existing preview, delete confirmation, and error modal paths
+- Replaced the single scheduled-date input with a Repeat dropdown plus start/end dates
+- Added interval presets and weekly weekday selection for recurring exercise assignments
+- Validates schedule windows, interval bounds, and weekly weekday selection before POSTing assignments
+- Shows recurrence details in the assignment preview and existing-assignment cards
+- Restores saved recurrence fields when loading existing assignments or cancelling edit mode, so a recurring assignment does not silently revert to a one-day schedule
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Patient GET now returns both assigned exercises and their scheduled occurrences
+- Assignment POST validates recurrence kind, interval days, weekday sets, start/end dates, and maximum recurrence span before persistence
+- Sends normalized recurrence data to the database helper so each assignment can materialize its occurrence rows consistently
 
 ### *web\src\app\(app)\dashboard\_components\Skeleton.tsx*
 - Added reusable dashboard skeleton primitives: `SkeletonBar`, `SkeletonCard`, `SkeletonKpiRow`, and `SkeletonTable`
@@ -31,6 +64,7 @@
 
 ### *web\src\app\(app)\dashboard\therapist\layout.tsx*
 - Added print-specific layout classes so therapist reports hide navigation chrome and remove screen-only spacing while printing
+- Forces the therapist shell into the light color scheme so print/report screens keep the intended contrast even on dark-mode browsers
 
 ### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
 - Added a print-only Patient Progress Report header with generated timestamp and patient name
@@ -40,15 +74,50 @@
 - Added a separate "Calibrated form-quality score — coming soon" slot so the future calibrated score is visible as planned work without presenting it as live
 - Added loading skeletons for the patient-detail view
 
+### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+- Changed the calendar from session-only coloring to scheduled-occurrence adherence coloring
+- Shows completed, partial, make-up available, missed, due/upcoming, and rest-day legend states
+- Keeps streak, active-day, and total routine counts based on outcome-bearing sessions so accidental starts still do not inflate progress
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Fetches scheduled occurrences from `/api/patient-exercises` alongside the existing exercise and session summaries
+- Rebuilds the Session tab as a due-date grouped schedule with progress-to-date counts
+- Enables Start only for due-today and make-up-available occurrences, disables future occurrences, and labels closed windows as missed
+- Passes occurrences into the consistency calendar so dashboard adherence matches the actionable schedule
+- Forces the patient shell into the light color scheme so dashboard contrast stays consistent on dark-mode browsers
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Changed roster progress to completed scheduled occurrences over due scheduled occurrences
+- Shows missed occurrence counts inline in the Progress column
+- Flags patients as needing attention when they have missed scheduled occurrences, even if the assignment itself still exists
+
+### *web\src\app\api\sessions\route.ts*
+- Maps unscheduled patient start attempts to HTTP 409 when the database helper finds no actionable occurrence for today
+
 ### *web\src\lib\db.ts*
+- Added an Asia/Manila day-key helper so schedule locking and occurrence rollups match the patient-facing calendar day
+- Persists recurrence rules during assignment and materializes matching occurrence rows with make-up deadlines
+- Regenerates only future pending occurrences on assignment edits so past adherence and completed days are preserved
+- Derives assignment status from occurrence rows instead of relying on one sticky assignment-level status
+- Added `getPatientOccurrences()` for the patient schedule tab, consistency calendar, and camera start gate
+- Links new patient sessions to the actionable scheduled occurrence for today and marks that occurrence in progress
+- Completes the linked occurrence when a session finishes all prescribed work
+- Returns therapist roster due, completed, and missed occurrence counts, using a defensive make-up deadline fallback for legacy rows
 - Added guarded aggregation for `hold_quality.meanCompensationScore` in `getSessionsForPatient()`
 - Casts JSONB compensation scores only when the value is a JSON number, so malformed or legacy rows become `NULL` and are skipped by `AVG()`
 - Returns `avgCompensationScore` for dashboard consumers that can render the current rule-based heuristic
 
+### *web\scripts\seedDemo.ts*
+- Seeds interval cadence fields on demo assignments
+- Seeds matching occurrence rows for completed, in-progress, missed, make-up, due-today, and upcoming schedule states
+- Prints an occurrence tally so demo seeding confirms the schedule rows were populated
+
 ### Validation
 - `npx tsc --noEmit --pretty false` passed from `web`
 - Focused `npx eslint` over the modified camera, dashboard, helper, database, and layout files exited with 0 errors; remaining warnings are the existing patient-dashboard `loadData` hook dependency and therapist-assign ternary expression warning
+- Targeted schedule-lock validation passed for the camera, patient dashboard/calendar, therapist assignment/dashboard, patient-exercises API, sessions API, `db.ts`, and `occurrences.ts` with 0 errors and the same 2 known warnings
 - `git diff --check` exited 0, with only Git CRLF normalization warnings
+- DB migration, demo seed, and live browser verification for the recurrence schedule flow still need to be run against a development database
 
 ## 📌 Update-6-4-26 | *RyanCodesling*
 

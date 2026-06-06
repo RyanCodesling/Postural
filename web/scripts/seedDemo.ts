@@ -164,8 +164,18 @@ function iso(d: Date): string {
   return d.toISOString();
 }
 
+// Asia/Manila day key (YYYY-MM-DD) for a Date, matching the calendar/session UI
+// so a seeded occurrence lands on the same cell as the session that fulfilled it.
+function dayKeyPH(d: Date): string {
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
+// Day key `offsetDays` before today (negative offset → future).
+function dueKeyPH(offsetDays: number): string {
+  return dayKeyPH(new Date(Date.now() - offsetDays * DAY_MS));
+}
+
 // ── Tally ────────────────────────────────────────────────────────────────────
-const tally = { patients: 0, programs: 0, sessions: 0, sets: 0, reps: 0 };
+const tally = { patients: 0, programs: 0, sessions: 0, sets: 0, reps: 0, occurrences: 0 };
 
 async function main() {
   const client = new Client({ connectionString: resolveDatabaseUrl() });
@@ -204,13 +214,23 @@ async function main() {
         const def = getExerciseDefinition(ex.exerciseId);
         const isIso = def?.kind === "isometric";
 
-        // Assignment row.
+        // Assignment row. Demo cadence: "every other day" interval over a
+        // 28-days-ago → 14-days-ahead window (display-only; the occurrences below
+        // are placed explicitly to exercise every calendar state).
+        const startDate = dueKeyPH(28);
+        const endDate = dueKeyPH(-14);
         const peRes = await client.query(
-          `INSERT INTO patient_exercises (exercise_id, patient_id, assigned_date, status, sets, reps, rest_seconds, hold_seconds)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-          [ex.exerciseId, plan.id, iso(new Date(Date.now() - 28 * DAY_MS)).slice(0, 10), ex.status, SETS, REPS, 60, HOLD_SECONDS],
+          `INSERT INTO patient_exercises
+             (exercise_id, patient_id, assigned_date, status, sets, reps, rest_seconds, hold_seconds,
+              recurrence, interval_days, weekdays, start_date, end_date)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'interval',2,NULL,$9,$10) RETURNING id`,
+          [ex.exerciseId, plan.id, startDate, ex.status, SETS, REPS, 60, HOLD_SECONDS, startDate, endDate],
         );
         const patientExerciseId = peRes.rows[0].id as number;
+
+        // Track each session's calendar day + whether it finished, to build the
+        // matching scheduled occurrences after the session loop.
+        const sessionDays: { key: string; completed: boolean }[] = [];
 
         // Sessions, oldest → newest. Newest at ~1 day ago (within the 7-day window).
         for (let s = 0; s < ex.sessions; s++) {
@@ -224,6 +244,7 @@ async function main() {
           const setBlockMs = (isIso ? HOLD_SECONDS * 1000 * 2 : REPS * 2 * 2000) + 60000;
           const durationMs = SETS * setBlockMs - 60000;
           const endedAt = open ? null : new Date(startedAt.getTime() + durationMs);
+          sessionDays.push({ key: dayKeyPH(startedAt), completed: endReason === "completed" });
 
           const sessRes = await client.query(
             `INSERT INTO sessions (patient_id, patient_exercise_id, exercise_id, started_at, ended_at, end_reason)
@@ -311,6 +332,42 @@ async function main() {
             tally.sets++;
           }
         }
+
+        // ── Scheduled occurrences for this assignment ──
+        // One per session day (completed vs attempted). For any assignment that
+        // isn't fully completed, also seed: a past day whose make-up window has
+        // closed (renders "missed"), a day due yesterday whose make-up window is
+        // still open through today (renders "make-up / overdue"), a due-today
+        // card, and an upcoming day — so the calendar and Session tab exercise
+        // every state. Completed prescriptions stay all-green. Each row carries a
+        // make-up deadline (makeup_until); past session days use their own day.
+        const occRows = new Map<string, { status: "completed" | "in_progress" | "pending"; makeup: string }>();
+        for (const sd of sessionDays) {
+          if (occRows.get(sd.key)?.status === "completed") continue; // completed wins
+          occRows.set(sd.key, { status: sd.completed ? "completed" : "in_progress", makeup: sd.key });
+        }
+        if (ex.status !== "completed") {
+          // [due offset, makeup_until offset] in days-ago (negative = future).
+          const synthetic: [number, number][] = [
+            [2, 2],   // missed: due 2 days ago, window already closed
+            [1, 0],   // make-up: due yesterday, window open through today
+            [0, 0],   // due today
+            [-3, -3], // upcoming
+          ];
+          for (const [dueOff, makeOff] of synthetic) {
+            const due = dueKeyPH(dueOff);
+            if (!occRows.has(due)) occRows.set(due, { status: "pending", makeup: dueKeyPH(makeOff) });
+          }
+        }
+        for (const [due, { status, makeup }] of occRows) {
+          await client.query(
+            `INSERT INTO exercise_occurrences (patient_exercise_id, due_date, makeup_until, status)
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT (patient_exercise_id, due_date) DO NOTHING`,
+            [patientExerciseId, due, makeup, status],
+          );
+          tally.occurrences++;
+        }
       }
     }
 
@@ -343,6 +400,7 @@ async function main() {
   console.log(`  patients : ${tally.patients} (under ${THERAPIST_ID})`);
   console.log(`  programs : ${tally.programs}`);
   console.log(`  sessions : ${tally.sessions}`);
+  console.log(`  occurr.  : ${tally.occurrences}`);
   console.log(`  sets     : ${tally.sets}`);
   console.log(`  reps     : ${tally.reps}`);
   console.log("Log in as therapist@clinic.com / therapist123 or patient@example.com / patient123.");

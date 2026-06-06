@@ -1,0 +1,66 @@
+-- Scheduled occurrences for patient exercise assignments.
+-- Run this in pgAdmin after patient_exercises_pg.sql and sessions_pg.sql.
+--
+-- An assignment in patient_exercises holds WHAT + the prescribed dose. This
+-- table holds WHEN it is due: one row per (assignment, calendar day). A weekly
+-- recurrence expands into many rows; a one-time assignment is a single row.
+-- Per-day completion lives here (status), so the same exercise can be done on
+-- one day and still be due the next — something the single-row assignment
+-- status could never express.
+--
+-- 'missed' is NOT a stored status: it is derived at read time as
+-- (due_date < today AND status <> 'completed'), so no scheduled job is needed
+-- to flip stale rows.
+
+CREATE TABLE IF NOT EXISTS exercise_occurrences (
+  id                  SERIAL       PRIMARY KEY,
+  patient_exercise_id INTEGER      NOT NULL REFERENCES patient_exercises(id) ON DELETE CASCADE,
+  due_date            DATE         NOT NULL,
+  status              VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                                   CHECK (status IN ('pending', 'in_progress', 'completed')),
+  created_at          TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (patient_exercise_id, due_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_occ_pe  ON exercise_occurrences (patient_exercise_id);
+CREATE INDEX IF NOT EXISTS idx_occ_due ON exercise_occurrences (due_date);
+
+-- Last day this occurrence can still be completed as a make-up (the day before
+-- the assignment's next scheduled occurrence). An occurrence is only "missed"
+-- once today passes makeup_until; for daily/consecutive schedules makeup_until
+-- equals due_date (no make-up). Legacy single occurrences get due_date (no window).
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS makeup_until DATE;
+
+-- Link a session to the specific scheduled day it fulfilled. Kept NULL when a
+-- patient trains on a day nothing was due (an extra/unscheduled session — extra
+-- credit must not silently erase a missed day). Added here (not in
+-- sessions_pg.sql) so the FK target exercise_occurrences already exists.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS occurrence_id INTEGER
+  REFERENCES exercise_occurrences(id) ON DELETE SET NULL;
+
+-- ── Backfill (idempotent) ─────────────────────────────────────────────────────
+-- Give every pre-existing assignment a single occurrence on its assigned_date,
+-- carrying the assignment's current status so historical progress is preserved.
+INSERT INTO exercise_occurrences (patient_exercise_id, due_date, makeup_until, status)
+SELECT pe.id, pe.assigned_date, pe.assigned_date, pe.status
+FROM patient_exercises pe
+ON CONFLICT (patient_exercise_id, due_date) DO UPDATE
+  SET makeup_until = COALESCE(exercise_occurrences.makeup_until, EXCLUDED.makeup_until);
+
+-- Defensive fill for any row created by an older copy of this script before
+-- makeup_until was included in the legacy backfill insert.
+UPDATE exercise_occurrences SET makeup_until = due_date WHERE makeup_until IS NULL;
+
+-- Link legacy sessions to their assignment's occurrence. Restricted to
+-- assignments that have exactly one occurrence so the match is unambiguous;
+-- only fills sessions not already linked. Safe to re-run.
+UPDATE sessions s
+SET occurrence_id = eo.id
+FROM exercise_occurrences eo
+WHERE eo.patient_exercise_id = s.patient_exercise_id
+  AND s.occurrence_id IS NULL
+  AND (SELECT COUNT(*) FROM exercise_occurrences x
+       WHERE x.patient_exercise_id = s.patient_exercise_id) = 1;
+
+GRANT ALL PRIVILEGES ON TABLE exercise_occurrences TO postural;
+GRANT USAGE, SELECT ON SEQUENCE exercise_occurrences_id_seq TO postural;

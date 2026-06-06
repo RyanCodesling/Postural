@@ -934,6 +934,15 @@ export default function CameraClient() {
   // another completed exercise re-shows its recap.
   const [recapDismissed, setRecapDismissed] = useState(false);
 
+  // Strict schedule lock (patients): exercise ids that have an occurrence
+  // actionable today — due today or still inside its make-up window. A patient
+  // may only start one of these; the server enforces the same rule. Empty for
+  // staff debug (which bypasses the lock entirely).
+  const [actionableExerciseIds, setActionableExerciseIds] = useState<Set<string>>(new Set());
+  // Set when a start is blocked because nothing is scheduled today for the
+  // selected exercise (or the server rejects with 409).
+  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+
   // Open (un-ended) session per exercise id (patient only), from the same
   // on-mount `/api/sessions` fetch. The authoritative gate for offering a
   // resume: a disrupted session leaves its row open, whereas End / finish /
@@ -949,6 +958,7 @@ export default function CameraClient() {
   useEffect(() => {
     setRecapDismissed(false);
     setResumeDismissed(false);
+    setScheduleNotice(null);
   }, [selectedExercise]);
 
   const [activeDefinition, setActiveDefinition] =
@@ -1141,62 +1151,83 @@ export default function CameraClient() {
   /**
    * Open a persisted session for the active exercise, if it is a patient
    * assignment (has a patient_exercise_id). Staff debug has none → no-op.
-   * Fire-and-forget: reps emitted before the id resolves stay buffered and
-   * flush once `sessionIdRef` is set.
+   * Returns false when the server refuses the start, so the UI can stay idle
+   * instead of running a local-only session that will never persist.
    */
-  const startSessionPersistence = () => {
+  const startSessionPersistence = async (): Promise<boolean> => {
     resetSessionPersistence();
     pendingStaleEndReasonRef.current = undefined;
     const patientExerciseId = prescriptionRef.current.patientExerciseId;
     const exerciseId = activeDefinitionRef.current?.id;
-    if (typeof patientExerciseId !== "number" || !exerciseId) return;
+    if (typeof patientExerciseId !== "number" || !exerciseId) return true;
     // Token for THIS run; if it changes before the create resolves, the run is
     // already over and the created row must be closed rather than adopted.
     const token = ++sessionTokenRef.current;
     sessionWallStartMsRef.current = Date.now();
     sessionPerfStartMsRef.current = performance.now();
-    fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        patientExerciseId,
-        exerciseId,
-        deviceInfo:
-          typeof navigator !== "undefined"
-            ? { userAgent: navigator.userAgent }
-            : undefined,
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!data || typeof data.sessionId !== "number") return;
-        if (sessionTokenRef.current === token) {
-          // Still the active run — adopt the session and flush buffered outcomes.
-          sessionIdRef.current = data.sessionId;
-          flushSetEvents();
-          flushRepEvents();
-          flushRawFrames();
-          // Write a resume snapshot as soon as the id exists. The snapshot
-          // requires a sessionId, so without this a disruption between Start
-          // and this (slow) create resolving would leave an open row with no
-          // matching snapshot → resume could not be offered on return. This
-          // runs even if the run already unmounted (the refs still read
-          // active/resting); writeResumeSnapshot self-guards otherwise.
-          writeResumeSnapshot();
-        } else {
-          // Stale: the run ended/changed before create resolved. Close the
-          // freshly-created row so it isn't left open, and do NOT adopt its id.
-          // Carry any end reason captured while the create was in flight (e.g. a
-          // fast End-button press) so the row isn't mislabeled "In Progress".
-          fetch(`/api/sessions/${data.sessionId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ endReason: pendingStaleEndReasonRef.current }),
-          }).catch((err) => console.warn("stale session close failed:", err));
-          pendingStaleEndReasonRef.current = undefined;
-        }
-      })
-      .catch((err) => console.warn("session create failed (not persisted):", err));
+    try {
+      const response = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientExerciseId,
+          exerciseId,
+          deviceInfo:
+            typeof navigator !== "undefined"
+              ? { userAgent: navigator.userAgent }
+              : undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const fallback =
+          response.status === 409
+            ? "This exercise isn't scheduled for today, so the session was not started."
+            : "The session could not be saved, so it was not started.";
+        setScheduleNotice(
+          (body && typeof body.error === "string" && body.error) || fallback,
+        );
+        resetSessionPersistence();
+        return false;
+      }
+
+      const data = await response.json();
+      if (!data || typeof data.sessionId !== "number") {
+        setScheduleNotice("The session could not be saved, so it was not started.");
+        resetSessionPersistence();
+        return false;
+      }
+
+      if (sessionTokenRef.current === token) {
+        // Still the active run — adopt the session and flush buffered outcomes.
+        sessionIdRef.current = data.sessionId;
+        flushSetEvents();
+        flushRepEvents();
+        flushRawFrames();
+        // This may no-op before the session reaches active/resting, but it is
+        // safe to keep for the slow-create disruption case.
+        writeResumeSnapshot();
+        return true;
+      }
+
+      // Stale: the run ended/changed before create resolved. Close the
+      // freshly-created row so it isn't left open, and do NOT adopt its id.
+      // Carry any end reason captured while the create was in flight (e.g. a
+      // fast End-button press) so the row isn't mislabeled "In Progress".
+      fetch(`/api/sessions/${data.sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endReason: pendingStaleEndReasonRef.current }),
+      }).catch((err) => console.warn("stale session close failed:", err));
+      pendingStaleEndReasonRef.current = undefined;
+      return false;
+    } catch (err) {
+      console.warn("session create failed (not persisted):", err);
+      setScheduleNotice("The session could not be saved, so it was not started.");
+      resetSessionPersistence();
+      return false;
+    }
   };
 
   /** Convert a monotonic performance.now() timestamp to an ISO wall-clock string. */
@@ -1819,8 +1850,25 @@ export default function CameraClient() {
    * are rebuilt so a restarted session does not inherit stale event buffers
    * or lifetime-of-instance rep indices from the previous session.
    */
-  const handleSessionStart = () => {
+  const handleSessionStart = async () => {
     if (!activeDefinition) return;
+    // Strict schedule lock: a patient may only start an exercise that is
+    // actionable today (due, or still within its make-up window). Staff debug
+    // bypasses this. The server enforces the same rule on session create.
+    if (
+      user?.role === "patient" &&
+      selectedExercise &&
+      !actionableExerciseIds.has(selectedExercise)
+    ) {
+      setScheduleNotice(
+        "This exercise isn't scheduled for today. Start it from your schedule on its due day.",
+      );
+      return;
+    }
+    setScheduleNotice(null);
+    const canPersist = await startSessionPersistence();
+    if (!canPersist) return;
+
     const counters = createRepCountersForDefinition(activeDefinition);
     captureFramesTotalRef.current = 0;
     captureFramesOkRef.current = 0;
@@ -1861,9 +1909,6 @@ export default function CameraClient() {
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
-    // Open a persisted session for this run (patient assignments only; staff
-    // debug has no patient_exercise_id and is skipped inside the helper).
-    startSessionPersistence();
     setSessionState("countdown");
   };
 
@@ -2610,6 +2655,21 @@ export default function CameraClient() {
           if (assigned.length > 0) {
             setSelectedExercise((prev) => prev || assigned[0].id);
           }
+
+          // Strict schedule lock: an exercise is startable today only if it has
+          // an occurrence due today or still inside its make-up window.
+          const todayPH = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+          const actionable = new Set<string>();
+          for (const o of recordsField(data, "occurrences")) {
+            const exId = stringField(o, "exercise_id");
+            const due = stringField(o, "due_date");
+            if (!exId || !due) continue;
+            const makeup = stringField(o, "makeup_until") ?? due;
+            if (stringField(o, "status") !== "completed" && due <= todayPH && makeup >= todayPH) {
+              actionable.add(exId);
+            }
+          }
+          setActionableExerciseIds(actionable);
         })
         .catch((err) => console.error("Error loading exercises:", err));
 
@@ -3837,6 +3897,12 @@ export default function CameraClient() {
   const hasNextExercise =
     selectedExerciseIndex !== -1 &&
     selectedExerciseIndex < assignedExercises.length - 1;
+  // Strict schedule lock (patients): the selected exercise has nothing
+  // actionable today (no due/make-up occurrence). Staff debug is never blocked.
+  const blockedBySchedule =
+    user?.role === "patient" &&
+    !!selectedExercise &&
+    !actionableExerciseIds.has(selectedExercise);
   // Stepper navigation locked while a session is in progress.
   const sessionBusy =
     sessionState === "active" ||
@@ -4954,21 +5020,23 @@ export default function CameraClient() {
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={handleSessionStart}
-                    disabled={!activeDefinition || sessionState === "active" || sessionState === "countdown"}
+                    disabled={!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown"}
                     style={{
                       flex: 1, padding: "10px 12px",
                       background: (sessionState === "active" || sessionState === "countdown") ? "white" : ACCENT.hex,
                       color: (sessionState === "active" || sessionState === "countdown") ? "oklch(0.30 0.01 240)" : "white",
                       border: (sessionState === "active" || sessionState === "countdown") ? "1px solid oklch(0.90 0.003 240)" : `1px solid ${ACCENT.hex}`,
                       borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                      opacity: (!activeDefinition || sessionState === "active" || sessionState === "countdown") ? 0.5 : 1,
+                      opacity: (!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown") ? 0.5 : 1,
                     }}
                   >
                     {sessionState === "ended"
                       ? "Restart"
                       : sessionState === "countdown"
                         ? `Starting… (${countdownSec})`
-                        : "Start session"}
+                        : blockedBySchedule
+                          ? "Not scheduled today"
+                          : "Start session"}
                   </button>
                   <button
                     onClick={() => {
@@ -4988,6 +5056,13 @@ export default function CameraClient() {
                     }}
                   >End</button>
                 </div>
+              )}
+
+              {(blockedBySchedule || scheduleNotice) && sessionState !== "active" && sessionState !== "countdown" && (
+                <p style={{ marginTop: 8, fontSize: 12, color: "oklch(0.55 0.14 45)", lineHeight: 1.4 }}>
+                  {scheduleNotice ??
+                    "Not scheduled today — start this exercise from your schedule on its due day."}
+                </p>
               )}
 
               {sessionState === "ended" && hasNextExercise && (

@@ -39,6 +39,8 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS notes                   TEXT;
 -- finished, 'superseded' = auto-closed when a newer session for the same
 -- assignment started, NULL = still open (tab close / navigation / exit).
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason              TEXT;
+-- occurrence_id (the scheduled day this session fulfilled) is added by
+-- exercise_occurrences_pg.sql, so the FK target table exists before the column.
 
 CREATE TABLE IF NOT EXISTS set_events (
   id              SERIAL            PRIMARY KEY,

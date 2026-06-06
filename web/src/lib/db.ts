@@ -1,9 +1,22 @@
 import { Pool, PoolClient, types } from "pg";
+import {
+  generateSchedule,
+  MAX_INTERVAL_DAYS,
+  type Recurrence,
+} from "@/lib/exercises/occurrences";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Local (Asia/Manila) YYYY-MM-DD day key. The whole app treats "a day" as a
+// Manila calendar day (calendar, session gating); scheduling math must agree, so
+// occurrence lookups compute today here rather than relying on the DB's
+// CURRENT_DATE (which follows the server/session timezone).
+function todayKeyPH(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
 
 // Maps snake_case DB columns to camelCase for the app
 function mapUser(row: Record<string, unknown>) {
@@ -255,8 +268,15 @@ type PatientExerciseAssignment = {
   sets: number;
   reps: number;
   restSeconds?: number;
-  scheduledDate?: string; // YYYY-MM-DD; falls back to CURRENT_DATE if omitted
+  scheduledDate?: string; // YYYY-MM-DD; the recurrence start day. Falls back to today.
   holdSeconds?: number;
+  // Recurrence rule. 'interval' => every `intervalDays` days; 'weekly' => the
+  // given weekdays. Both span [scheduledDate, endDate]. A missing/unknown
+  // recurrence falls back to a single occurrence on scheduledDate.
+  recurrence?: Recurrence;
+  intervalDays?: number; // interval mode; every N days
+  weekdays?: number[];   // weekly mode; JS getDay() numbering 0=Sun..6=Sat
+  endDate?: string;      // inclusive window end (YYYY-MM-DD)
 };
 
 function normalizeRestSeconds(restSeconds: unknown): number {
@@ -293,24 +313,73 @@ export async function assignExercisesToPatient(
     for (const ex of exercises) {
       const restSeconds = normalizeRestSeconds(ex.restSeconds);
       const holdSeconds = normalizeHoldSeconds(ex.holdSeconds);
-      const assignedDate =
+      const startDate =
         ex.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.scheduledDate)
           ? ex.scheduledDate
-          : new Date().toISOString().split("T")[0];
-      await client.query(
-        `INSERT INTO patient_exercises (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date, hold_seconds)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+          : todayKeyPH();
+      // Default to 'interval' (daily, single-day window) when unspecified so a
+      // missing rule yields exactly one occurrence rather than zero.
+      const recurrence: Recurrence = ex.recurrence === "weekly" ? "weekly" : "interval";
+      const intervalDays =
+        recurrence === "interval"
+          ? Math.min(MAX_INTERVAL_DAYS, Math.max(1, Math.floor(ex.intervalDays ?? 1)))
+          : null;
+      const weekdays =
+        recurrence === "weekly"
+          ? (ex.weekdays ?? []).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+          : null;
+      const endDate =
+        ex.endDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.endDate) && ex.endDate >= startDate
+          ? ex.endDate
+          : startDate; // missing/invalid window collapses to a single day
+
+      // assigned_date keeps its meaning as the "first scheduled day" for display
+      // and back-compat; the recurrence rule + window live alongside it. Status
+      // is not reset here — per-day completion lives in exercise_occurrences, so
+      // an edit must not wipe historical adherence.
+      const upsert = await client.query(
+        `INSERT INTO patient_exercises
+           (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date, hold_seconds,
+            recurrence, interval_days, weekdays, start_date, end_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::smallint[], $11, $12)
          ON CONFLICT (exercise_id, patient_id) DO UPDATE
          SET sets          = EXCLUDED.sets,
              reps          = EXCLUDED.reps,
              rest_seconds  = EXCLUDED.rest_seconds,
              assigned_date = EXCLUDED.assigned_date,
              hold_seconds  = EXCLUDED.hold_seconds,
-             -- Re-prescribing is a fresh assignment: reset status so a
-             -- previously-completed exercise returns to the active list.
-             status        = 'pending'`,
-        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, assignedDate, holdSeconds]
+             recurrence    = EXCLUDED.recurrence,
+             interval_days = EXCLUDED.interval_days,
+             weekdays      = EXCLUDED.weekdays,
+             start_date    = EXCLUDED.start_date,
+             end_date      = EXCLUDED.end_date
+         RETURNING id`,
+        [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, startDate, holdSeconds,
+         recurrence, intervalDays, weekdays, startDate, endDate]
       );
+      const patientExerciseId = upsert.rows[0].id as number;
+
+      // Regenerate the schedule. Drop only future, un-started occurrences so past
+      // days and any in-progress/completed day (the adherence record) survive an
+      // edit; then materialize the rule's due dates + make-up deadlines (refreshing
+      // makeup_until on any day that still exists, e.g. today, in case the cadence changed).
+      await client.query(
+        `DELETE FROM exercise_occurrences
+          WHERE patient_exercise_id = $1
+            AND status = 'pending'
+            AND due_date > $2::date`,
+        [patientExerciseId, todayKeyPH()]
+      );
+      const schedule = generateSchedule({ recurrence, intervalDays, weekdays, startDate, endDate });
+      for (const occ of schedule) {
+        await client.query(
+          `INSERT INTO exercise_occurrences (patient_exercise_id, due_date, makeup_until)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (patient_exercise_id, due_date) DO UPDATE
+             SET makeup_until = EXCLUDED.makeup_until`,
+          [patientExerciseId, occ.dueDate, occ.makeupUntil]
+        );
+      }
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -332,12 +401,44 @@ export async function deletePatientExercises(patientId: string, exerciseIds: str
 export async function getPatientExercises(patientId: string) {
   const result = await pool.query(
     `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
-            pe.status, pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
-            e.name, e.description
+            pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+            pe.recurrence, pe.interval_days, pe.weekdays, pe.start_date, pe.end_date,
+            e.name, e.description,
+            -- At-a-glance status derived from the schedule rather than a sticky
+            -- flag: all occurrences done => completed; any activity => in_progress;
+            -- otherwise pending. Falls back to pe.status only if (unexpectedly) the
+            -- assignment has no occurrences yet.
+            (SELECT CASE
+               WHEN COUNT(*) = 0 THEN pe.status
+               WHEN COUNT(*) FILTER (WHERE eo.status <> 'completed') = 0 THEN 'completed'
+               WHEN COUNT(*) FILTER (WHERE eo.status IN ('completed','in_progress')) > 0 THEN 'in_progress'
+               ELSE 'pending'
+             END
+             FROM exercise_occurrences eo WHERE eo.patient_exercise_id = pe.id) AS status
      FROM patient_exercises pe
      JOIN exercises e ON e.id = pe.exercise_id
      WHERE pe.patient_id = $1
      ORDER BY pe.id ASC`,
+    [patientId]
+  );
+  return result.rows;
+}
+
+// Dated schedule instances for a patient, newest-relevant first by due_date,
+// joined to exercise name + the prescription dose. Powers the patient Session
+// schedule tab and the consistency calendar; per-day display state ('missed' vs
+// 'upcoming') is derived client-side from status + due_date.
+export async function getPatientOccurrences(patientId: string) {
+  const result = await pool.query(
+    `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
+            COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
+            pe.exercise_id, pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+            e.name, e.description
+     FROM exercise_occurrences eo
+     JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+     JOIN exercises e ON e.id = pe.exercise_id
+     WHERE pe.patient_id = $1
+     ORDER BY eo.due_date ASC, e.name ASC`,
     [patientId]
   );
   return result.rows;
@@ -551,21 +652,53 @@ export type RawFrameRow = {
   landmarks: Record<string, unknown>;
 };
 
+/**
+ * Thrown by createSession when a patient tries to start an exercise that has no
+ * actionable occurrence today (nothing due, or only future/missed days). The API
+ * layer maps this to a 409 so the camera can surface a clear message.
+ */
+export class SessionNotScheduledError extends Error {
+  constructor(message = "No session is scheduled for this exercise today.") {
+    super(message);
+    this.name = "SessionNotScheduledError";
+  }
+}
+
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
   exerciseId: string;
   deviceInfo?: unknown;
 }): Promise<{ id: number; startedAt: string }> {
+  // Strict schedule lock: a patient may only start an exercise that has an
+  // actionable occurrence today — due today, or earlier with its make-up window
+  // still open. Future, missed, or unscheduled starts are refused. Occurrence
+  // windows are disjoint and contiguous, so at most one can match.
+  const today = todayKeyPH();
+  const occ = await pool.query(
+    `SELECT id FROM exercise_occurrences
+      WHERE patient_exercise_id = $1
+        AND due_date <= $2::date AND COALESCE(makeup_until, due_date) >= $2::date
+        AND status <> 'completed'
+      ORDER BY due_date ASC
+      LIMIT 1`,
+    [data.patientExerciseId, today]
+  );
+  if (occ.rows.length === 0) {
+    throw new SessionNotScheduledError();
+  }
+  const occurrenceId = occ.rows[0].id as number;
+
   const result = await pool.query(
-    `INSERT INTO sessions (patient_id, patient_exercise_id, exercise_id, device_info)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO sessions (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id, started_at`,
     [
       data.patientId,
       data.patientExerciseId,
       data.exerciseId,
       data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+      occurrenceId,
     ]
   );
   const row = result.rows[0];
@@ -579,12 +712,10 @@ export async function createSession(data: {
       WHERE patient_exercise_id = $1 AND ended_at IS NULL AND id <> $2`,
     [data.patientExerciseId, row.id]
   );
-  // Flip the assignment to in_progress on its first session. Guarded on
-  // status='pending' so a re-run of an already-completed exercise is not
-  // downgraded.
+  // Mark the fulfilled occurrence in_progress (until endSession completes it).
   await pool.query(
-    "UPDATE patient_exercises SET status = 'in_progress' WHERE id = $1 AND status = 'pending'",
-    [data.patientExerciseId]
+    "UPDATE exercise_occurrences SET status = 'in_progress' WHERE id = $1 AND status = 'pending'",
+    [occurrenceId]
   );
   return { id: row.id, startedAt: row.started_at };
 }
@@ -627,12 +758,15 @@ export async function endSession(
       endReasonValue,
     ]
   );
-  // When the patient finished all prescribed sets, mark the linked assignment
-  // completed (joined via the session's patient_exercise_id).
+  // When the patient finished all prescribed sets, mark the scheduled occurrence
+  // this session fulfilled as completed. Keyed on the session's occurrence_id, so
+  // an extra/unscheduled session (no occurrence) completes nothing on the
+  // schedule. The assignment-level status is derived from occurrences at read
+  // time and is intentionally not written here.
   if (data.completed) {
     await pool.query(
-      `UPDATE patient_exercises SET status = 'completed'
-        WHERE id = (SELECT patient_exercise_id FROM sessions WHERE id = $1)`,
+      `UPDATE exercise_occurrences SET status = 'completed'
+        WHERE id = (SELECT occurrence_id FROM sessions WHERE id = $1)`,
       [sessionId]
     );
   }
@@ -894,7 +1028,9 @@ export async function getTherapistRoster(therapistId: string) {
         COALESCE(sess.sessions_this_week, 0) AS sessions_this_week,
         sess.last_session_at,
         COALESCE(ex.assigned_count, 0)       AS assigned_count,
-        COALESCE(ex.completed_count, 0)      AS completed_count
+        COALESCE(ex.due_count, 0)            AS due_count,
+        COALESCE(ex.completed_count, 0)      AS completed_count,
+        COALESCE(ex.missed_count, 0)         AS missed_count
      FROM users u
      LEFT JOIN (
         SELECT s.patient_id,
@@ -907,15 +1043,22 @@ export async function getTherapistRoster(therapistId: string) {
         GROUP BY s.patient_id
      ) sess ON sess.patient_id = u.id
      LEFT JOIN (
-        SELECT patient_id,
-               COUNT(*)                                     AS assigned_count,
-               COUNT(*) FILTER (WHERE status = 'completed') AS completed_count
-        FROM patient_exercises
-        GROUP BY patient_id
+        -- Adherence over scheduled occurrences. assigned_count is the number of
+        -- distinct prescriptions (drives "No exercises"); due/completed/missed are
+        -- over occurrences up to today, so progress reads as work-done / work-due.
+        SELECT pe.patient_id,
+               COUNT(DISTINCT pe.id)                                              AS assigned_count,
+               COUNT(eo.id) FILTER (WHERE eo.due_date <= $2::date)                AS due_count,
+               COUNT(eo.id) FILTER (WHERE eo.status = 'completed')                AS completed_count,
+               COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $2::date
+                                      AND eo.status <> 'completed')               AS missed_count
+        FROM patient_exercises pe
+        LEFT JOIN exercise_occurrences eo ON eo.patient_exercise_id = pe.id
+        GROUP BY pe.patient_id
      ) ex ON ex.patient_id = u.id
      WHERE u.role = 'patient' AND u.therapist_id = $1
      ORDER BY u.name`,
-    [therapistId],
+    [therapistId, todayKeyPH()],
   );
   return result.rows.map((row) => ({
     id:               row.id as string,
@@ -924,7 +1067,9 @@ export async function getTherapistRoster(therapistId: string) {
     sessionsThisWeek: Number(row.sessions_this_week),
     lastSessionAt:    (row.last_session_at as string | null) ?? null,
     assignedCount:    Number(row.assigned_count),
+    dueCount:         Number(row.due_count),
     completedCount:   Number(row.completed_count),
+    missedCount:      Number(row.missed_count),
   }));
 }
 

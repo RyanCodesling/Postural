@@ -12,8 +12,10 @@ interface RosterPatient {
   totalSessions: number;
   sessionsThisWeek: number;
   lastSessionAt: string | null;
-  assignedCount: number;
-  completedCount: number;
+  assignedCount: number;  // distinct prescriptions (drives "No exercises")
+  dueCount: number;       // scheduled occurrences due on or before today
+  completedCount: number; // occurrences completed
+  missedCount: number;    // past-due occurrences never completed
 }
 
 export default function TherapistDashboardPage() {
@@ -68,8 +70,10 @@ export default function TherapistDashboardPage() {
 
   const sessionsThisWeek = patients.reduce((sum, p) => sum + p.sessionsThisWeek, 0);
   const noExercises = patients.filter((p) => p.assignedCount === 0).length;
+  // Flag a patient when they have prescriptions but either no activity this week
+  // or scheduled days that slipped past uncompleted.
   const needsAttention = patients.filter(
-    (p) => p.assignedCount > 0 && p.sessionsThisWeek === 0,
+    (p) => p.assignedCount > 0 && (p.sessionsThisWeek === 0 || p.missedCount > 0),
   ).length;
 
   return (
@@ -149,7 +153,12 @@ export default function TherapistDashboardPage() {
                       </td>
                       <td className="py-3 px-4 text-gray-600">{p.sessionsThisWeek}</td>
                       <td className="py-3 px-4 text-gray-600">
-                        {p.completedCount}/{p.assignedCount}
+                        {p.dueCount > 0 ? `${p.completedCount}/${p.dueCount}` : "—"}
+                        {p.missedCount > 0 && (
+                          <span className="ml-2 text-xs text-amber-600">
+                            {p.missedCount} missed
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 pl-4">
                         <span
@@ -172,12 +181,16 @@ export default function TherapistDashboardPage() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// "Needs attention" = the patient has assigned exercises but no outcome-bearing
-// session in the server's 7-day window (sessionsThisWeek === 0). The window is a
-// tunable heuristic, set in getTherapistRoster.
+// "Needs attention" = the patient has prescriptions but either no outcome-bearing
+// session in the server's 7-day window (sessionsThisWeek === 0) or scheduled days
+// that slipped past uncompleted (missedCount > 0). The 7-day window is a tunable
+// heuristic set in getTherapistRoster.
 function rosterStatus(p: RosterPatient): { label: string; classes: string } {
   if (p.assignedCount === 0) {
     return { label: "No exercises", classes: "bg-gray-100 text-gray-500" };
+  }
+  if (p.missedCount > 0) {
+    return { label: "Needs attention", classes: "bg-amber-100 text-amber-700" };
   }
   if (p.sessionsThisWeek > 0) {
     return { label: "Active", classes: "bg-green-100 text-green-700" };

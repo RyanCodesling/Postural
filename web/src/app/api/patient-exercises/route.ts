@@ -5,9 +5,17 @@ import {
   assignExercisesToPatient,
   deletePatientExercises,
   getPatientExercises,
+  getPatientOccurrences,
   getUsers,
 } from "@/lib/db";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import {
+  MAX_RECURRENCE_SPAN_DAYS,
+  MAX_INTERVAL_DAYS,
+  isDateKey,
+  spanDays,
+  type Recurrence,
+} from "@/lib/exercises/occurrences";
 
 type PatientExerciseAssignmentRequest = {
   exerciseId?: unknown;
@@ -16,6 +24,10 @@ type PatientExerciseAssignmentRequest = {
   restSeconds?: unknown;
   scheduledDate?: unknown;
   holdSeconds?: unknown;
+  recurrence?: unknown;
+  intervalDays?: unknown;
+  weekdays?: unknown;
+  endDate?: unknown;
 };
 
 export async function GET(request: NextRequest) {
@@ -56,8 +68,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const exercises = filterDeprecated(await getPatientExercises(user.id));
-    return NextResponse.json({ exercises });
+    const [exercises, occurrences] = await Promise.all([
+      getPatientExercises(user.id),
+      getPatientOccurrences(user.id),
+    ]);
+    return NextResponse.json({
+      exercises: filterDeprecated(exercises),
+      occurrences: filterDeprecated(occurrences),
+    });
   } catch (error) {
     console.error("GET /api/patient-exercises error:", error);
     return NextResponse.json({ error: "Failed to fetch exercises" }, { status: 500 });
@@ -143,6 +161,26 @@ export async function POST(request: NextRequest) {
           ? exercise.scheduledDate
           : undefined;
 
+      // Recurrence: 'interval' (every N days) or 'weekly' (weekday set). Both
+      // carry an inclusive window end. Malformed values are normalized here and
+      // rejected below so a bad rule never reaches occurrence generation.
+      const recurrence: Recurrence =
+        exercise.recurrence === "weekly" ? "weekly" : "interval";
+      const intervalDays =
+        typeof exercise.intervalDays === "number" && Number.isFinite(exercise.intervalDays)
+          ? Math.floor(exercise.intervalDays)
+          : undefined;
+      const weekdays = Array.isArray(exercise.weekdays)
+        ? Array.from(
+            new Set(
+              exercise.weekdays.filter(
+                (d): d is number => Number.isInteger(d) && d >= 0 && d <= 6,
+              ),
+            ),
+          )
+        : [];
+      const endDate = isDateKey(exercise.endDate) ? exercise.endDate : undefined;
+
       return {
         exerciseId: exercise.exerciseId,
         sets: exercise.sets,
@@ -150,6 +188,10 @@ export async function POST(request: NextRequest) {
         restSeconds,
         scheduledDate,
         holdSeconds,
+        recurrence,
+        intervalDays,
+        weekdays,
+        endDate,
       };
     });
 
@@ -171,6 +213,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Every schedule needs a start + an end within the span cap. Interval mode
+    // needs a valid N (1..cap); weekly mode needs ≥1 weekday.
+    const invalidSchedule = normalizedExercises.find((exercise) => {
+      if (!exercise.scheduledDate) return true;
+      if (!exercise.endDate) return true;
+      const span = spanDays(exercise.scheduledDate, exercise.endDate);
+      if (span === null || span > MAX_RECURRENCE_SPAN_DAYS) return true;
+      if (exercise.recurrence === "weekly") {
+        return exercise.weekdays.length === 0;
+      }
+      // interval
+      return (
+        exercise.intervalDays === undefined ||
+        exercise.intervalDays < 1 ||
+        exercise.intervalDays > MAX_INTERVAL_DAYS
+      );
+    });
+    if (invalidSchedule) {
+      return NextResponse.json(
+        {
+          error:
+            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
+            `Choose a repeat interval (1–${MAX_INTERVAL_DAYS} days) or at least one weekday.`,
+        },
+        { status: 400 },
+      );
+    }
+
     await assignExercisesToPatient(
       patientId,
       normalizedExercises.map((exercise) => ({
@@ -180,6 +250,10 @@ export async function POST(request: NextRequest) {
         restSeconds:   exercise.restSeconds,
         scheduledDate: exercise.scheduledDate as string | undefined,
         holdSeconds: exercise.holdSeconds,
+        recurrence:  exercise.recurrence,
+        intervalDays: exercise.intervalDays,
+        weekdays:    exercise.weekdays,
+        endDate:     exercise.endDate as string | undefined,
       })),
     );
     return NextResponse.json({ success: true });

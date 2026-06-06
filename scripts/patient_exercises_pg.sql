@@ -34,5 +34,19 @@ ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NU
 -- Per-prescription target hold duration, in seconds, for isometric exercises.
 ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30;
 
+-- ── Recurrence rule ──────────────────────────────────────────────────────────
+-- How this assignment repeats. The rule lives on the assignment; the expanded
+-- per-day instances live in exercise_occurrences. A NULL recurrence (legacy
+-- rows) is treated as 'once'. weekdays uses JS Date.getDay() numbering
+-- (0=Sun … 6=Sat) so it lines up with the calendar UI with no conversion.
+-- assigned_date is retained as the "first scheduled day" for display/back-compat.
+-- recurrence: 'interval' (every N days) | 'weekly' (specific weekdays). A NULL
+-- recurrence (legacy rows) is treated as a single fixed occurrence.
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS recurrence    TEXT;        -- 'interval' | 'weekly'
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS interval_days INT;         -- 'interval' mode: every N days
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS weekdays      SMALLINT[];  -- 'weekly' mode: e.g. {1,3,5}
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS start_date    DATE;        -- recurrence window start (defaults to assigned_date)
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS end_date      DATE;        -- recurrence window end (inclusive)
+
 GRANT ALL PRIVILEGES ON TABLE patient_exercises TO postural;
 GRANT USAGE, SELECT ON SEQUENCE patient_exercises_id_seq TO postural;

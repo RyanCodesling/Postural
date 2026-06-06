@@ -12,6 +12,7 @@ import {
 import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
+import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 
 interface PatientProfile {
   id: string;
@@ -43,6 +44,22 @@ interface AssignedExercise {
   assigned_date: string;
 }
 
+// One scheduled day for an assigned exercise (a row of exercise_occurrences
+// joined to its prescription). Drives the Session schedule tab and the calendar.
+interface PatientOccurrence {
+  id: number;
+  patient_exercise_id: number;
+  due_date: string;
+  makeup_until: string;
+  status: OccurrenceStatus;
+  exercise_id: string;
+  name: string;
+  sets: number;
+  reps: number;
+  rest_seconds: number;
+  hold_seconds: number;
+}
+
 // Per-session summary from /api/sessions. Carries the fields the calendar, the
 // exercise tags, and the My Progress trend charts all need (this shape
 // structurally satisfies the shared TrendSession type).
@@ -72,6 +89,7 @@ export default function PatientDashboardPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [patientProfile, setPatientProfile] = useState<PatientProfile | null>(null);
   const [exercises, setExercises] = useState<AssignedExercise[]>([]);
+  const [occurrences, setOccurrences] = useState<PatientOccurrence[]>([]);
   const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -98,6 +116,7 @@ export default function PatientDashboardPage() {
       if (exercisesRes.ok) {
         const d = await exercisesRes.json();
         setExercises(d.exercises ?? []);
+        setOccurrences(d.occurrences ?? []);
       }
 
       if (sessionsRes.ok) {
@@ -149,7 +168,10 @@ export default function PatientDashboardPage() {
   }
 
   return (
-    <div className="min-h-screen flex bg-green-50">
+    <div
+      className="min-h-screen flex bg-green-50 text-gray-900"
+      style={{ colorScheme: "light" }}
+    >
 
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -241,7 +263,7 @@ export default function PatientDashboardPage() {
             {/* Consistency + Your Exercises, side by side on wide screens. */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
               {/* Consistency calendar */}
-              <ConsistencyCalendar sessions={sessions} />
+              <ConsistencyCalendar sessions={sessions} occurrences={occurrences} />
 
               {/* Your Exercises — status-at-a-glance list (the Session tab is the
                   date-scheduled, actionable view). Start Session lives here. */}
@@ -322,145 +344,141 @@ export default function PatientDashboardPage() {
 
         {/* ── Session ── */}
         {activeTab === "session" && (() => {
-          // Sort ascending by assigned_date then group by date
-          const sorted = [...exercises].sort((a, b) =>
-            (a.assigned_date ?? "").localeCompare(b.assigned_date ?? "")
+          const today = sessionTodayPH();
+          // Group scheduled occurrences by due date (ascending). Each occurrence
+          // is one exercise due on one day; a recurring exercise appears as a
+          // separate row on each of its scheduled days.
+          const sorted = [...occurrences].sort((a, b) =>
+            a.due_date.localeCompare(b.due_date)
           );
-          const groups: { date: string; label: string; items: AssignedExercise[] }[] = [];
-          for (const ex of sorted) {
-            const date = ex.assigned_date ?? "";
+          const groups: { date: string; label: string; items: PatientOccurrence[] }[] = [];
+          for (const occ of sorted) {
+            const date = occ.due_date ?? "";
             const label = date
               ? new Date(date + "T00:00:00").toLocaleDateString("en-US", {
                   month: "long", day: "numeric", year: "numeric",
                 })
               : "No Date";
             const last = groups[groups.length - 1];
-            if (last && last.date === date) {
-              last.items.push(ex);
-            } else {
-              groups.push({ date, label, items: [ex] });
-            }
+            if (last && last.date === date) last.items.push(occ);
+            else groups.push({ date, label, items: [occ] });
           }
 
-          const completed = exercises.filter((e) => e.status === "completed").length;
-          const total = exercises.length;
-          const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+          // Adherence to date: completed vs everything scheduled on or before today.
+          const dueToDate = occurrences.filter((o) => o.due_date <= today);
+          const completed = dueToDate.filter((o) => o.status === "completed").length;
+          const due = dueToDate.length;
+          const pct = due > 0 ? Math.round((completed / due) * 100) : 0;
+          const total = occurrences.length;
 
           return (
             <div>
               <h1 className="text-2xl font-bold text-green-800 mb-1">Session Schedule</h1>
               <p className="text-gray-500 mb-6">Track your exercises by scheduled date</p>
 
-              {/* Progress card */}
-              {total > 0 && (
+              {/* Progress card — adherence to date */}
+              {due > 0 && (
                 <div className="bg-white border border-green-200 rounded-2xl p-6 mb-6">
                   <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-base font-semibold text-green-700">Overall Progress</h2>
-                    <span className="text-xl font-bold text-green-700">{completed}/{total}</span>
+                    <h2 className="text-base font-semibold text-green-700">Progress to date</h2>
+                    <span className="text-xl font-bold text-green-700">{completed}/{due}</span>
                   </div>
                   <div className="w-full bg-green-100 rounded-full h-3 overflow-hidden">
                     <div className="bg-green-700 h-full rounded-full transition-all" style={{ width: `${pct}%` }} />
                   </div>
-                  <p className="text-xs text-green-700 mt-2">{pct}% complete</p>
+                  <p className="text-xs text-green-700 mt-2">{pct}% of scheduled sessions done</p>
                 </div>
               )}
 
-              {/* Exercise groups */}
+              {/* Scheduled groups */}
               {total === 0 ? (
                 <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">
                   No exercises assigned yet. Your therapist will assign exercises to you.
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {groups.map((group) => (
-                    <div key={group.date}>
-                      {/* Date header */}
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-sm font-semibold text-green-800">
-                          Scheduled: {group.label}
-                        </span>
-                        <div className="flex-1 h-px bg-green-200" />
-                      </div>
+                  {groups.map((group) => {
+                    const isToday = group.date === today;
+                    return (
+                      <div key={group.date}>
+                        {/* Date header */}
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className="text-sm font-semibold text-green-800">
+                            Scheduled: {group.label}{isToday && " · Today"}
+                          </span>
+                          <div className="flex-1 h-px bg-green-200" />
+                        </div>
 
-                      {/* Exercises under this date */}
-                      <div className="space-y-3">
-                        {group.items.map((ex) => {
-                          const available = !!ex.assigned_date && ex.assigned_date <= sessionTodayPH();
-                          return (
-                            <div
-                              key={ex.exercise_id}
-                              className={`rounded-2xl border p-5 transition-all ${
-                                ex.status === "completed"
-                                  ? "bg-green-50 border-green-200"
-                                  : ex.status === "in_progress"
-                                  ? "bg-blue-50 border-blue-200"
-                                  : "bg-red-50 border-red-200"
-                              }`}
-                            >
-                              <div className="flex items-start justify-between mb-3">
-                                <h3 className="text-base font-semibold text-gray-900">{ex.name}</h3>
-                                <span className={`text-xs px-3 py-1 rounded-full font-medium ${
-                                  ex.status === "completed"
-                                    ? "bg-green-100 text-green-700"
-                                    : ex.status === "in_progress"
-                                    ? "bg-blue-100 text-blue-700"
-                                    : "bg-red-100 text-red-700"
-                                }`}>
-                                  {ex.status === "completed" ? "Completed" : ex.status === "in_progress" ? "In Progress" : "Not Started"}
-                                </span>
-                              </div>
+                        {/* Occurrences under this date */}
+                        <div className="space-y-3">
+                          {group.items.map((occ) => {
+                            const s = occurrenceCardStyle(occ.status, occ.due_date, occ.makeup_until, today);
+                            return (
+                              <div
+                                key={occ.id}
+                                className={`rounded-2xl border p-5 transition-all ${s.card}`}
+                              >
+                                <div className="flex items-start justify-between mb-3">
+                                  <h3 className="text-base font-semibold text-gray-900">{occ.name}</h3>
+                                  <span className={`text-xs px-3 py-1 rounded-full font-medium ${s.badge}`}>
+                                    {s.label}
+                                  </span>
+                                </div>
 
-                              <div className="flex items-center gap-6">
-                                <div>
-                                  <p className="text-xs text-gray-500 mb-1">Sets</p>
-                                  <p className="text-lg font-bold text-gray-900">{ex.sets}</p>
-                                </div>
-                                <div>
-                                  <p className="text-xs text-gray-500 mb-1">
-                                    {prescriptionMetricLabel(ex.exercise_id)}
-                                  </p>
-                                  <p className="text-lg font-bold text-gray-900">
-                                    {prescriptionMetricValue({
-                                      exerciseId: ex.exercise_id,
-                                      reps: ex.reps,
-                                      holdSeconds: ex.hold_seconds,
-                                    })}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-xs text-gray-500 mb-1">Rest</p>
-                                  <p className="text-lg font-bold text-gray-900">{ex.rest_seconds}s</p>
-                                </div>
-                                {ex.status === "completed" ? (
-                                  <div className="ml-auto flex items-center gap-2">
-                                    <svg className="w-5 h-5 text-green-700" fill="currentColor" viewBox="0 0 20 20">
-                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                    </svg>
-                                    <span className="text-green-700 text-sm font-medium">Done</span>
+                                <div className="flex items-center gap-6">
+                                  <div>
+                                    <p className="text-xs text-gray-500 mb-1">Sets</p>
+                                    <p className="text-lg font-bold text-gray-900">{occ.sets}</p>
                                   </div>
-                                ) : available ? (
-                                  <button
-                                    onClick={() => router.push(`/camera?exerciseId=${ex.exercise_id}`)}
-                                    className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
-                                  >
-                                    Start Session
-                                  </button>
-                                ) : (
-                                  <button
-                                    disabled
-                                    title={`Available on ${ex.assigned_date}`}
-                                    className="ml-auto px-4 py-2 bg-gray-200 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                                  >
-                                    Start Session
-                                  </button>
-                                )}
+                                  <div>
+                                    <p className="text-xs text-gray-500 mb-1">
+                                      {prescriptionMetricLabel(occ.exercise_id)}
+                                    </p>
+                                    <p className="text-lg font-bold text-gray-900">
+                                      {prescriptionMetricValue({
+                                        exerciseId: occ.exercise_id,
+                                        reps: occ.reps,
+                                        holdSeconds: occ.hold_seconds,
+                                      })}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-500 mb-1">Rest</p>
+                                    <p className="text-lg font-bold text-gray-900">{occ.rest_seconds}s</p>
+                                  </div>
+                                  {s.action === "done" ? (
+                                    <div className="ml-auto flex items-center gap-2">
+                                      <svg className="w-5 h-5 text-green-700" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                      </svg>
+                                      <span className="text-green-700 text-sm font-medium">Done</span>
+                                    </div>
+                                  ) : s.action === "start" ? (
+                                    <button
+                                      onClick={() => router.push(`/camera?exerciseId=${occ.exercise_id}`)}
+                                      className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
+                                    >
+                                      Start Session
+                                    </button>
+                                  ) : s.action === "upcoming" ? (
+                                    <button
+                                      disabled
+                                      title={`Available on ${occ.due_date}`}
+                                      className="ml-auto px-4 py-2 bg-gray-200 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed"
+                                    >
+                                      Start Session
+                                    </button>
+                                  ) : (
+                                    <span className="ml-auto text-sm font-medium text-red-600">Missed</span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -628,6 +646,37 @@ function exerciseStatusTag(
     default:
       return { label: "Not Started", classes: "bg-gray-100 text-gray-600" };
   }
+}
+
+// Card/badge styling + the action affordance for one scheduled occurrence.
+// A patient may start an occurrence that is due today OR still inside its make-up
+// window (overdue but not yet missed). Once today passes makeup_until it is
+// "Missed" (no start); future days are disabled until their date.
+function occurrenceCardStyle(
+  status: OccurrenceStatus,
+  dueDate: string,
+  makeupUntil: string,
+  today: string
+): { label: string; card: string; badge: string; action: "done" | "start" | "upcoming" | "missed" } {
+  if (status === "completed") {
+    return { label: "Completed", card: "bg-green-50 border-green-200", badge: "bg-green-100 text-green-700", action: "done" };
+  }
+  if (dueDate === today) {
+    return {
+      label: status === "in_progress" ? "In Progress" : "Due today",
+      card: "bg-blue-50 border-blue-200",
+      badge: "bg-blue-100 text-blue-700",
+      action: "start",
+    };
+  }
+  if (dueDate > today) {
+    return { label: "Upcoming", card: "bg-white border-gray-200", badge: "bg-gray-100 text-gray-600", action: "upcoming" };
+  }
+  // Past due. Still actionable while the make-up window is open, else missed.
+  if (makeupUntil >= today) {
+    return { label: "Make-up", card: "bg-amber-50 border-amber-200", badge: "bg-amber-100 text-amber-700", action: "start" };
+  }
+  return { label: "Missed", card: "bg-red-50 border-red-200", badge: "bg-red-100 text-red-700", action: "missed" };
 }
 
 // ── Profile helpers ────────────────────────────────────────────────────────

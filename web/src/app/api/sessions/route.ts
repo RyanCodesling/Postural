@@ -4,6 +4,7 @@ import {
   getPatientExercises,
   getSessionsForPatient,
   getUsers,
+  SessionNotScheduledError,
 } from "@/lib/db";
 
 function getSessionUser(request: NextRequest) {
@@ -95,6 +96,10 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ sessionId: session.id, startedAt: session.startedAt });
   } catch (error) {
+    // Strict schedule lock: nothing actionable for this exercise today.
+    if (error instanceof SessionNotScheduledError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     console.error("POST /api/sessions error:", error);
     return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }

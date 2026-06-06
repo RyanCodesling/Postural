@@ -5,6 +5,14 @@ import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
+import {
+  WEEKDAY_SHORT,
+  MAX_RECURRENCE_SPAN_DAYS,
+  MAX_INTERVAL_DAYS,
+  formatCadence,
+  spanDays,
+  type Recurrence,
+} from "@/lib/exercises/occurrences";
 
 interface Exercise {
   id: string;
@@ -35,6 +43,11 @@ interface PatientExercise {
   rest_seconds: number;
   assigned_date: string;
   hold_seconds: number;
+  recurrence: Recurrence | null;
+  interval_days: number | null;
+  weekdays: number[] | null;
+  start_date: string | null;
+  end_date: string | null;
 }
 
 type AssignmentParams = {
@@ -42,7 +55,11 @@ type AssignmentParams = {
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
-  scheduledDate?: string;
+  scheduledDate?: string; // recurrence start date
+  recurrence?: Recurrence;
+  intervalDays?: number;
+  weekdays?: number[];
+  endDate?: string;
 };
 
 type AssignmentPayload = {
@@ -52,6 +69,10 @@ type AssignmentPayload = {
   restSeconds: number;
   holdSeconds: number;
   scheduledDate: string;
+  recurrence: Recurrence;
+  intervalDays: number | null;
+  weekdays: number[];
+  endDate: string;
 };
 
 type PreviewSnapshot = {
@@ -60,7 +81,43 @@ type PreviewSnapshot = {
   restSeconds: number;
   holdSeconds: number;
   scheduledDate: string;
+  recurrence: Recurrence;
+  intervalDays: number | null;
+  weekdays: number[];
+  endDate: string;
 };
+
+// Friendly cadence presets shown in the Repeat dropdown. Each maps to either an
+// 'interval' (every N days) or 'weekly' (specific weekdays, with a default set
+// the therapist can adjust) rule.
+type CadencePreset = {
+  id: string;
+  label: string;
+  recurrence: Recurrence;
+  intervalDays?: number;
+  defaultWeekdays?: number[];
+};
+const CADENCE_PRESETS: CadencePreset[] = [
+  { id: "every_day",        label: "Every day",        recurrence: "interval", intervalDays: 1 },
+  { id: "every_other_day",  label: "Every other day",  recurrence: "interval", intervalDays: 2 },
+  { id: "every_3_days",     label: "Every 3 days",     recurrence: "interval", intervalDays: 3 },
+  { id: "twice_a_week",     label: "Twice a week",     recurrence: "weekly",   defaultWeekdays: [1, 4] },
+  { id: "three_a_week",     label: "3 times a week",   recurrence: "weekly",   defaultWeekdays: [1, 3, 5] },
+  { id: "custom_weekdays",  label: "Custom weekdays",  recurrence: "weekly" },
+];
+
+// Pick the preset id that matches the current params (for the dropdown value).
+function presetIdFor(p: AssignmentParams): string {
+  if ((p.recurrence ?? "interval") === "interval") {
+    const n = p.intervalDays ?? 1;
+    return CADENCE_PRESETS.find((c) => c.recurrence === "interval" && c.intervalDays === n)?.id
+      ?? "every_day";
+  }
+  const count = (p.weekdays ?? []).length;
+  if (count === 2) return "twice_a_week";
+  if (count === 3) return "three_a_week";
+  return "custom_weekdays";
+}
 
 type PreviewItem = {
   exerciseId: string;
@@ -93,12 +150,30 @@ function fmtDate(d: string) {
   });
 }
 
-function fmtDateFull(d: string): string {
-  if (!d) return "—";
-  const dt = new Date(d + "T00:00:00");
-  const datePart = dt.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-  const dayPart  = dt.toLocaleDateString("en-US", { weekday: "long" });
-  return `${datePart} ${dayPart}`;
+// Order-insensitive equality for weekday sets (used by change detection).
+function sameWeekdays(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort((x, y) => x - y);
+  const sb = [...b].sort((x, y) => x - y);
+  return sa.every((v, i) => v === sb[i]);
+}
+
+// Build editable params from a saved assignment. Single source of truth so the
+// initial load and Cancel-Edit restore identical values (Cancel-Edit previously
+// dropped the recurrence fields, silently reverting recurring rows to one-time).
+function paramsFromExisting(ex: PatientExercise): AssignmentParams {
+  return {
+    sets: ex.sets,
+    reps: ex.reps,
+    restSeconds: ex.rest_seconds,
+    holdSeconds: ex.hold_seconds,
+    scheduledDate: ex.start_date ?? ex.assigned_date,
+    // Anything that isn't 'weekly' (null, or a legacy 'once') edits as interval.
+    recurrence: ex.recurrence === "weekly" ? "weekly" : "interval",
+    intervalDays: ex.interval_days ?? 1,
+    weekdays: ex.weekdays ?? [],
+    endDate: ex.end_date ?? (ex.start_date ?? ex.assigned_date),
+  };
 }
 
 function PrescriptionDetails({
@@ -118,7 +193,8 @@ function PrescriptionDetails({
         <p>Reps: {snapshot.reps}</p>
       )}
       <p>Rest: {snapshot.restSeconds}s</p>
-      <p>Scheduled Date: {fmtDateFull(snapshot.scheduledDate)}</p>
+      <p>Repeat: {formatCadence({ recurrence: snapshot.recurrence, intervalDays: snapshot.intervalDays, weekdays: snapshot.weekdays })}</p>
+      <p>From {fmtDate(snapshot.scheduledDate)} to {fmtDate(snapshot.endDate)}</p>
     </>
   );
 }
@@ -195,13 +271,7 @@ export default function AssignExercisePage() {
         const params: Record<string, AssignmentParams> = {};
         existing.forEach((ex) => {
           selected.add(ex.exercise_id);
-          params[ex.exercise_id] = {
-            sets: ex.sets,
-            reps: ex.reps,
-            restSeconds: ex.rest_seconds,
-            scheduledDate: ex.assigned_date,
-            holdSeconds: ex.hold_seconds,
-          };
+          params[ex.exercise_id] = paramsFromExisting(ex);
         });
         setAssignSelected(selected);
         setAssignParams(params);
@@ -281,11 +351,41 @@ export default function AssignExercisePage() {
         setShowAssignError(true);
         return;
       }
+      const recurrence: Recurrence = p.recurrence === "weekly" ? "weekly" : "interval";
+      const intervalDays = recurrence === "interval" ? (p.intervalDays ?? 1) : null;
+      const weekdays = recurrence === "weekly" ? (p.weekdays ?? []) : [];
       if (!p.scheduledDate) {
-        setAssignErrorMsg(`Please select a scheduled date for "${ex?.name ?? exId}".`);
+        setAssignErrorMsg(`Please select a start date for "${ex?.name ?? exId}".`);
         setShowAssignError(true);
         return;
       }
+      if (recurrence === "weekly" && weekdays.length === 0) {
+        setAssignErrorMsg(`Please pick at least one weekday for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      if (recurrence === "interval" && (!intervalDays || intervalDays < 1 || intervalDays > MAX_INTERVAL_DAYS)) {
+        setAssignErrorMsg(`Please choose a valid repeat interval for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      if (!p.endDate) {
+        setAssignErrorMsg(`Please select an end date for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      const span = spanDays(p.scheduledDate, p.endDate);
+      if (span === null) {
+        setAssignErrorMsg(`The end date for "${ex?.name ?? exId}" must be on or after the start date.`);
+        setShowAssignError(true);
+        return;
+      }
+      if (span > MAX_RECURRENCE_SPAN_DAYS) {
+        setAssignErrorMsg(`The schedule for "${ex?.name ?? exId}" can span at most ${MAX_RECURRENCE_SPAN_DAYS} days.`);
+        setShowAssignError(true);
+        return;
+      }
+      const endDate = p.endDate;
       // Rest defaults to DEFAULT_REST_SECONDS when left blank; 0 = no rest.
       const restSeconds =
         p.restSeconds === undefined || p.restSeconds < 0
@@ -306,6 +406,10 @@ export default function AssignExercisePage() {
         restSeconds,
         holdSeconds,
         scheduledDate: p.scheduledDate,
+        recurrence,
+        intervalDays,
+        weekdays,
+        endDate,
       });
     }
 
@@ -314,21 +418,38 @@ export default function AssignExercisePage() {
       const ex = exercises.find((e) => e.id === item.exerciseId);
       const name = ex?.name ?? item.exerciseId;
       const existing = existingAssignments.find((e) => e.exercise_id === item.exerciseId);
+      const after: PreviewSnapshot = {
+        sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds,
+        scheduledDate: item.scheduledDate, recurrence: item.recurrence, intervalDays: item.intervalDays,
+        weekdays: item.weekdays, endDate: item.endDate,
+      };
       if (!existing) {
-        return { exerciseId: item.exerciseId, name, type: "new", after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds, scheduledDate: item.scheduledDate } };
+        return { exerciseId: item.exerciseId, name, type: "new", after };
       }
+      const before: PreviewSnapshot = {
+        sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, holdSeconds: existing.hold_seconds,
+        scheduledDate: existing.start_date ?? existing.assigned_date,
+        recurrence: existing.recurrence ?? "interval",
+        intervalDays: existing.interval_days ?? null,
+        weekdays: existing.weekdays ?? [],
+        endDate: existing.end_date ?? existing.assigned_date,
+      };
       const changed =
-        item.sets !== existing.sets ||
-        item.reps !== existing.reps ||
-        item.restSeconds !== existing.rest_seconds ||
-        item.holdSeconds !== existing.hold_seconds ||
-        item.scheduledDate !== existing.assigned_date;
+        after.sets !== before.sets ||
+        after.reps !== before.reps ||
+        after.restSeconds !== before.restSeconds ||
+        after.holdSeconds !== before.holdSeconds ||
+        after.scheduledDate !== before.scheduledDate ||
+        after.recurrence !== before.recurrence ||
+        after.intervalDays !== before.intervalDays ||
+        after.endDate !== before.endDate ||
+        !sameWeekdays(after.weekdays, before.weekdays);
       return {
         exerciseId: item.exerciseId,
         name,
         type: changed ? "updated" : "unchanged",
-        before: { sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, holdSeconds: existing.hold_seconds, scheduledDate: existing.assigned_date },
-        after: { sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds, scheduledDate: item.scheduledDate },
+        before,
+        after,
       };
     });
 
@@ -431,12 +552,18 @@ export default function AssignExercisePage() {
       if (!editingExercises.has(exId)) continue; // locked — can't have changed
       const restSeconds = p.restSeconds === undefined || p.restSeconds < 0 ? DEFAULT_REST_SECONDS : p.restSeconds;
       const holdSeconds = p.holdSeconds === undefined || p.holdSeconds < 1 ? DEFAULT_HOLD_SECONDS : p.holdSeconds;
+      const recurrence = p.recurrence ?? "interval";
+      const intervalDays = recurrence === "interval" ? (p.intervalDays ?? 1) : null;
       if (
         p.sets !== existing.sets ||
         p.reps !== existing.reps ||
         restSeconds !== existing.rest_seconds ||
         holdSeconds !== existing.hold_seconds ||
-        p.scheduledDate !== existing.assigned_date
+        p.scheduledDate !== (existing.start_date ?? existing.assigned_date) ||
+        recurrence !== (existing.recurrence ?? "interval") ||
+        intervalDays !== (existing.interval_days ?? (recurrence === "interval" ? 1 : null)) ||
+        (p.endDate ?? "") !== (existing.end_date ?? existing.assigned_date) ||
+        !sameWeekdays(p.weekdays ?? [], existing.weekdays ?? [])
       ) return true;
     }
     return false;
@@ -518,7 +645,9 @@ export default function AssignExercisePage() {
                         : `${ex.reps} reps`}
                     </span>
                     <span>{ex.rest_seconds}s rest</span>
-                    <span className="text-green-700 font-medium">{fmtDate(ex.assigned_date)}</span>
+                    <span className="text-green-700 font-medium">
+                      {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}
+                    </span>
                   </div>
                 </label>
               ))}
@@ -606,13 +735,13 @@ export default function AssignExercisePage() {
                 onCancelEdit={() => {
                   setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
                   const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, holdSeconds: original.hold_seconds, scheduledDate: original.assigned_date } }));
+                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
                 }}
                 onParam={(f, v) =>
                   setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
                 }
-                onDate={(v) =>
-                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], scheduledDate: v } }))
+                onSchedule={(patch) =>
+                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
                 }
               />
             ))}
@@ -638,13 +767,13 @@ export default function AssignExercisePage() {
                     onCancelEdit={() => {
                       setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
                       const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: { sets: original.sets, reps: original.reps, restSeconds: original.rest_seconds, holdSeconds: original.hold_seconds, scheduledDate: original.assigned_date } }));
+                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
                     }}
                     onParam={(f, v) =>
                       setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
                     }
-                    onDate={(v) =>
-                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], scheduledDate: v } }))
+                    onSchedule={(patch) =>
+                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
                     }
                   />
                 ))}
@@ -698,7 +827,8 @@ export default function AssignExercisePage() {
                             <p>Reps: {ex.reps}</p>
                           )}
                           <p>Rest: {ex.rest_seconds}s</p>
-                          <p>Scheduled Date: {fmtDateFull(ex.assigned_date)}</p>
+                          <p>Repeat: {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}</p>
+                          <p>From {fmtDate(ex.start_date ?? ex.assigned_date)} to {fmtDate(ex.end_date ?? ex.assigned_date)}</p>
                         </div>
                     </div>
                   ))}
@@ -860,7 +990,7 @@ export default function AssignExercisePage() {
 // ── AssignRow ─────────────────────────────────────────────────────────────────
 
 function AssignRow({
-  exercise, checked, params, minDate, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onDate,
+  exercise, checked, params, minDate, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onSchedule,
 }: {
   exercise: Exercise;
   checked: boolean;
@@ -872,12 +1002,36 @@ function AssignRow({
   onEdit: () => void;
   onCancelEdit: () => void;
   onParam: (field: "sets" | "reps" | "restSeconds" | "holdSeconds", val: number | undefined) => void;
-  onDate: (val: string) => void;
+  onSchedule: (patch: Partial<AssignmentParams>) => void;
 }) {
   const locked = isExisting && !isEditing;
   // Isometric exercises (e.g. ex_006 T-pose) are timed holds, not rep-counted —
   // show a per-side "Hold (sec)" input instead of Reps.
   const isIsometric = getExerciseDefinition(exercise.id)?.kind === "isometric";
+  const recurrence: Recurrence = params.recurrence ?? "interval";
+  const weekdays = params.weekdays ?? [];
+  const presetId = presetIdFor(params);
+  const showWeekdayPicker = recurrence === "weekly";
+  const applyPreset = (id: string) => {
+    const preset = CADENCE_PRESETS.find((c) => c.id === id);
+    if (!preset) return;
+    onSchedule({
+      recurrence: preset.recurrence,
+      intervalDays: preset.recurrence === "interval" ? preset.intervalDays : undefined,
+      // Seed a default weekday set when switching into a fixed times-per-week
+      // preset; "Custom weekdays" keeps whatever is already chosen.
+      weekdays:
+        preset.recurrence === "weekly"
+          ? preset.defaultWeekdays ?? (weekdays.length ? weekdays : [])
+          : [],
+    });
+  };
+  const toggleWeekday = (d: number) => {
+    const next = weekdays.includes(d)
+      ? weekdays.filter((x) => x !== d)
+      : [...weekdays, d].sort((a, b) => a - b);
+    onSchedule({ weekdays: next });
+  };
   return (
     <div className={`rounded-xl border p-3 transition ${checked ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
       <label className="flex items-start gap-3 cursor-pointer">
@@ -965,18 +1119,74 @@ function AssignRow({
               />
             </div>
           </div>
+          {/* Schedule: a repeat cadence over a start–end date range */}
           <div>
             <label className="block text-xs text-gray-500 mb-1">
-              Scheduled Date <span className="text-red-500">*</span>
+              Repeat <span className="text-red-500">*</span>
             </label>
-            <input
-              type="date"
-              min={minDate}
-              value={params.scheduledDate ?? ""}
-              onChange={(e) => onDate(e.target.value)}
+            <select
+              value={presetId}
+              onChange={(e) => applyPreset(e.target.value)}
               disabled={locked}
-              className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
-            />
+              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+            >
+              {CADENCE_PRESETS.map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </select>
+
+            {showWeekdayPicker && (
+              <div className="flex flex-wrap gap-1 mb-2">
+                {WEEKDAY_SHORT.map((lbl, d) => {
+                  const on = weekdays.includes(d);
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => toggleWeekday(d)}
+                      aria-pressed={on}
+                      className={`w-9 h-8 rounded-md text-xs font-medium transition ${
+                        on
+                          ? "bg-green-700 text-white"
+                          : "border border-gray-300 text-gray-600 hover:bg-gray-50"
+                      } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
+                    >
+                      {lbl.slice(0, 2)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-gray-400 mb-1">
+                  Start date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  min={minDate}
+                  value={params.scheduledDate ?? ""}
+                  onChange={(e) => onSchedule({ scheduledDate: e.target.value })}
+                  disabled={locked}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-400 mb-1">
+                  End date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  min={params.scheduledDate || minDate}
+                  value={params.endDate ?? ""}
+                  onChange={(e) => onSchedule({ endDate: e.target.value })}
+                  disabled={locked}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}

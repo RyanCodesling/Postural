@@ -1,10 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import {
+  rollupDay,
+  type DayState,
+  type OccurrenceLite,
+  type OccurrenceStatus,
+} from "@/lib/exercises/occurrences";
 
-// A patient "did a routine" on a day if at least one session was started that
-// day. This component takes the patient's sessions and renders a month-view
-// calendar marking active days, plus streak / activity summary stats.
+// Month-view calendar of a patient's adherence. Each day is colored by how the
+// scheduled work due that day went (complete / partial / missed / upcoming /
+// rest), computed from the patient's exercise occurrences. Sessions still drive
+// the activity stats (streak / totals) and mark "extra" training done on days
+// nothing was scheduled.
 
 interface CalendarSession {
   startedAt: string;
@@ -13,6 +21,12 @@ interface CalendarSession {
   // counts as "did a routine" once it has recorded at least one set or rep.
   setCount?: number;
   totalReps?: number;
+}
+
+interface CalendarOccurrence {
+  due_date: string;
+  makeup_until: string;
+  status: OccurrenceStatus;
 }
 
 const MONTH_NAMES = [
@@ -69,7 +83,31 @@ function computeStreak(counts: Map<string, number>, todayKey: string): number {
   return streak;
 }
 
-export default function ConsistencyCalendar({ sessions }: { sessions: CalendarSession[] }) {
+// Tailwind classes for a day cell by its adherence state.
+function cellClasses(state: DayState, isFuture: boolean): string {
+  switch (state) {
+    case "complete":
+      return "bg-green-600 text-white font-semibold";
+    case "partial":
+      return "bg-amber-400 text-white font-semibold";
+    case "overdue":
+      return "bg-white border border-amber-400 text-amber-700";
+    case "missed":
+      return "bg-red-500 text-white font-semibold";
+    case "due":
+      return "bg-white border border-green-400 text-green-700";
+    default: // rest
+      return isFuture ? "bg-gray-50 text-gray-300" : "bg-gray-50 text-gray-500";
+  }
+}
+
+export default function ConsistencyCalendar({
+  sessions,
+  occurrences,
+}: {
+  sessions: CalendarSession[];
+  occurrences: CalendarOccurrence[];
+}) {
   // Only "outcome-bearing" sessions count as a routine day — a session row is
   // created the moment Start is pressed, so accidental or immediately-abandoned
   // starts (no set, no rep) must not inflate the streak / totals / "did a routine".
@@ -83,6 +121,15 @@ export default function ConsistencyCalendar({ sessions }: { sessions: CalendarSe
     const key = dayKeyPH(s.startedAt);
     if (!key) continue;
     counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  // Scheduled occurrences grouped by due day, for the adherence rollup.
+  const occByDay = new Map<string, OccurrenceLite[]>();
+  for (const o of occurrences) {
+    if (!o.due_date) continue;
+    const list = occByDay.get(o.due_date) ?? [];
+    list.push({ dueDate: o.due_date, makeupUntil: o.makeup_until ?? o.due_date, status: o.status });
+    occByDay.set(o.due_date, list);
   }
 
   const todayKey = todayKeyPH();
@@ -171,26 +218,24 @@ export default function ConsistencyCalendar({ sessions }: { sessions: CalendarSe
         {cells.map((day, i) => {
           if (day === null) return <div key={`blank-${i}`} />;
           const key = makeKey(view.y, view.m, day);
-          const count = counts.get(key) ?? 0;
-          const isActive = count > 0;
+          const sessionCount = counts.get(key) ?? 0;
+          const dueList = occByDay.get(key) ?? [];
+          const state = rollupDay(dueList, key, todayKey);
           const isToday = key === todayKey;
           const isFuture = key > todayKey;
           return (
             <div
               key={key}
-              title={isActive ? `${count} session${count === 1 ? "" : "s"} on ${key}` : key}
-              className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs relative ${
-                isActive
-                  ? "bg-green-600 text-white font-semibold"
-                  : isFuture
-                  ? "bg-gray-50 text-gray-300"
-                  : "bg-gray-50 text-gray-500"
-              } ${isToday ? "ring-2 ring-green-700 ring-offset-1" : ""}`}
+              title={dayTitle(key, state, dueList, sessionCount)}
+              className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs relative ${cellClasses(
+                state,
+                isFuture
+              )} ${isToday ? "ring-2 ring-green-700 ring-offset-1" : ""}`}
             >
               <span>{day}</span>
-              {isActive && (
+              {state === "complete" && (
                 <span className="text-[9px] leading-none -mt-0.5">
-                  {count > 1 ? `×${count}` : "✓"}
+                  {sessionCount > 1 ? `×${sessionCount}` : "✓"}
                 </span>
               )}
             </div>
@@ -198,15 +243,53 @@ export default function ConsistencyCalendar({ sessions }: { sessions: CalendarSe
         })}
       </div>
 
-      {/* Legend / empty note */}
-      <div className="mt-4 flex items-center justify-between text-[11px] text-gray-400">
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded bg-green-600" />
-          did a routine
-        </span>
-        {totalSessions === 0 && <span>No routines logged yet</span>}
+      {/* Legend */}
+      <div className="mt-4 grid grid-cols-2 gap-y-1.5 gap-x-3 text-[11px] text-gray-500">
+        <LegendDot className="bg-green-600" label="Completed all due" />
+        <LegendDot className="bg-amber-400" label="Partly done" />
+        <LegendDot className="bg-white border border-amber-400" label="Make-up available" />
+        <LegendDot className="bg-red-500" label="Missed" />
+        <LegendDot className="bg-white border border-green-400" label="Due / upcoming" />
+        <LegendDot className="bg-gray-100" label="Rest day" />
       </div>
+      {occurrences.length === 0 && totalSessions === 0 && (
+        <p className="mt-2 text-[11px] text-gray-400">No schedule or routines logged yet</p>
+      )}
     </div>
+  );
+}
+
+// Tooltip text describing a day's adherence and any sessions logged.
+function dayTitle(
+  key: string,
+  state: DayState,
+  dueList: OccurrenceLite[],
+  sessionCount: number
+): string {
+  const done = dueList.filter((o) => o.status === "completed").length;
+  const sess = sessionCount > 0 ? ` · ${sessionCount} session${sessionCount === 1 ? "" : "s"}` : "";
+  switch (state) {
+    case "complete":
+      return `${key}: completed ${done}/${dueList.length} due${sess}`;
+    case "partial":
+      return `${key}: ${done}/${dueList.length} due done${sess}`;
+    case "overdue":
+      return `${key}: ${dueList.length} due — make-up still open${sess}`;
+    case "missed":
+      return `${key}: missed ${dueList.length} due`;
+    case "due":
+      return `${key}: ${dueList.length} due`;
+    default:
+      return sessionCount > 0 ? `${key}${sess}` : key;
+  }
+}
+
+function LegendDot({ className, label }: { className: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className={`inline-block w-3 h-3 rounded ${className}`} />
+      {label}
+    </span>
   );
 }
 

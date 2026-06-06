@@ -96,7 +96,10 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
     exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <div className="min-h-screen flex bg-green-50 print:block print:min-h-0 print:bg-white">
+    <div
+      className="min-h-screen flex bg-green-50 text-gray-900 print:block print:min-h-0 print:bg-white"
+      style={{ colorScheme: "light" }}
+    >
 
       {sidebarOpen && (
         <div

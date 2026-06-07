@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
@@ -728,6 +728,8 @@ export default function CameraClient() {
     : "/dashboard/patient";
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -4034,6 +4036,7 @@ export default function CameraClient() {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 20 }}>
             <button
+              id="cam-tour-sidebar"
               onClick={() => setSidebarOpen(true)}
               aria-label="Open menu"
               style={{
@@ -4070,6 +4073,7 @@ export default function CameraClient() {
             flexWrap: "wrap",
             gap: compactLayout ? 10 : 16,
           }}>
+            <div id="cam-tour-status" style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <ClinicalStatusDot ok={modelLoaded} />
               <span style={{ fontSize: 12, color: "oklch(0.30 0.01 240)" }}>
@@ -4092,12 +4096,14 @@ export default function CameraClient() {
                 {captureOk ? "Capture OK" : captureMessage}
               </span>
             </div>
+            </div>{/* end cam-tour-status */}
             <div style={{ width: 1, height: 20, background: "oklch(0.92 0.003 240)", display: tightLayout ? "none" : "block" }} />
             <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)", display: tightLayout ? "none" : "inline" }}>
               {currentTime}
             </span>
             <div style={{ display: "flex", gap: 6 }}>
               <button
+                id="cam-tour-stop"
                 onClick={stopCamera}
                 style={{
                   padding: "6px 14px", border: "1px solid oklch(0.90 0.003 240)",
@@ -4106,6 +4112,7 @@ export default function CameraClient() {
                 }}
               >Stop</button>
               <button
+                id="cam-tour-start"
                 onClick={() => startCamera(selectedDeviceId || undefined)}
                 disabled={isStarting || !modelLoaded}
                 style={{
@@ -4118,6 +4125,24 @@ export default function CameraClient() {
                 }}
               >
                 {isStarting ? "Starting…" : "Start camera"}
+              </button>
+              <button
+                onClick={() => { setTutorialStep(0); setShowTutorial(true); }}
+                style={{
+                  padding: "6px 14px",
+                  border: `1px solid ${ACCENT.hex}`,
+                  background: "white",
+                  borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  color: ACCENT.text, cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                How to Use
               </button>
             </div>
           </div>
@@ -4144,7 +4169,7 @@ export default function CameraClient() {
           minHeight: 0,
         }}>
           {/* LEFT RAIL — live metrics */}
-          <aside style={{
+          <aside id="cam-tour-metrics" style={{
             background: "white",
             borderRight: compactLayout ? "none" : "1px solid oklch(0.93 0.003 240)",
             borderTop: compactLayout ? "1px solid oklch(0.93 0.003 240)" : "none",
@@ -4199,7 +4224,7 @@ export default function CameraClient() {
           </aside>
 
           {/* CAMERA CENTER */}
-          <main style={{
+          <main id="cam-tour-feed" style={{
             minWidth: 0,
             padding: compactLayout ? 12 : 16,
             display: "flex",
@@ -4777,7 +4802,7 @@ export default function CameraClient() {
                   No exercises assigned yet.
                 </div>
               ) : (
-                <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
+                <div id="cam-tour-exercise" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
                   <button
                     type="button"
                     onClick={() => goToAdjacentExercise(-1)}
@@ -4939,7 +4964,7 @@ export default function CameraClient() {
             </div>
 
             {/* Session controls */}
-            <div style={{ padding: 16, marginTop: "auto" }}>
+            <div id="cam-tour-session" style={{ padding: 16, marginTop: "auto" }}>
               {sessionState === "resting" ? (
                 <>
                   <div style={{
@@ -5083,6 +5108,460 @@ export default function CameraClient() {
           </aside>
         </div>
       </div>
+
+      {/* ── Spotlight Tour ──────────────────────────────────────────────── */}
+      {showTutorial && (
+        <CameraTour
+          step={tutorialStep}
+          onNext={() => setTutorialStep(s => s + 1)}
+          onBack={() => setTutorialStep(s => s - 1)}
+          onGoTo={setTutorialStep}
+          onClose={() => setShowTutorial(false)}
+        />
+      )}
+    </>
+  );
+}
+
+// ── Spotlight Tour ────────────────────────────────────────────────────────────
+
+const TOUR_STEPS: {
+  targetId: string;
+  /** When set, card is positioned relative to this element instead of targetId */
+  anchorId?: string;
+  title: string;
+  lines: string[];
+  placement: "below" | "above" | "right" | "left";
+  /** Override estimated card height (px) used for "above"/"right"/"left" placement */
+  cardH?: number;
+  /** Extra gap (px) between card and target for "above" placement (default 16) */
+  aboveGap?: number;
+}[] = [
+  {
+    targetId: "cam-tour-start",
+    title: "Start Camera",
+    placement: "below",
+    lines: [
+      "Click this button to turn on your camera.",
+      "Your browser will ask permission — click Allow when prompted.",
+      "The camera view will appear in the centre of the screen once ready.",
+      "Check that both status dots (AI ready & Capture OK) are green before continuing.",
+    ],
+  },
+  {
+    targetId: "cam-tour-status",
+    title: "Status Indicators",
+    placement: "below",
+    lines: [
+      "AI ready (green dot) — the movement detection engine is loaded.",
+      "Capture OK (green dot) — the app can see your body clearly.",
+      "If a dot is orange, adjust your position or lighting until both turn green.",
+      "Never start a session while a dot is still orange.",
+    ],
+  },
+  {
+    targetId: "cam-tour-exercise",
+    title: "Your Assigned Exercise",
+    placement: "left",
+    lines: [
+      "This card shows the exercise assigned to you by your therapist.",
+      "Use the left ( ‹ ) and right ( › ) arrows to move between exercises.",
+      "The exercise name, sets, reps, and rest time are displayed in the card.",
+      "Make sure you select the right exercise before starting your session.",
+    ],
+  },
+  {
+    targetId: "cam-tour-feed",
+    anchorId: "cam-tour-metrics",
+    title: "Camera View — Position Yourself Here",
+    placement: "right",
+    lines: [
+      "Stand or sit about 1–2 metres (3–6 feet) from the camera.",
+      "Make sure your full upper body — head to hips — is visible on screen.",
+      "A green skeleton outline appears when the app can track you correctly.",
+      "Good lighting helps. Avoid a bright window directly behind you.",
+    ],
+  },
+  {
+    targetId: "cam-tour-metrics",
+    title: "Live Metrics Panel",
+    placement: "right",
+    lines: [
+      "This panel shows your movement angles in real time.",
+      "You do not need to read every number — the on-screen cues will guide you.",
+      "A coloured warning means your posture needs a small adjustment.",
+      "The score at the top summarises your overall form for each frame.",
+    ],
+  },
+  {
+    // No real element — targetId won't be found, card falls back to centered
+    targetId: "cam-tour-clothing",
+    title: "Clothing & Environment Tips",
+    placement: "below",
+    lines: [
+      "Wear light or contrasting colours — dark clothing on a dark background makes it hard for the AI to track your joints.",
+      "Face the light source (window or lamp). A bright light behind you silhouettes your body and reduces tracking accuracy.",
+      "Clear the area behind you — plain or lightly patterned walls work best. Busy wallpaper or moving objects confuse the system.",
+      "Make sure the room is well lit. Low light causes the camera to produce noise that reduces pose detection quality.",
+      "Keep about 1–2 metres of free space in front of the camera so your full upper body stays in frame as you move.",
+    ],
+  },
+  {
+    targetId: "cam-tour-session",
+    title: "Start Session & End",
+    placement: "above",
+    cardH: 300,
+    aboveGap: 100,
+    lines: [
+      "Press Start session when both status dots are green and you are ready.",
+      "A 3-2-1 countdown gives you time to get into position before counting begins.",
+      "Press End at any time to stop the exercise early — your progress is still saved.",
+      "After finishing all sets, the session saves automatically and is sent to your therapist.",
+      "Not happy with your performance? Press Restart button to redo the exercise — your therapist will see the latest attempt.",
+    ],
+  },
+];
+
+function CameraTour({
+  step,
+  onNext,
+  onBack,
+  onGoTo,
+  onClose,
+}: {
+  step: number;
+  onNext: () => void;
+  onBack: () => void;
+  onGoTo: (i: number) => void;
+  onClose: () => void;
+}) {
+  const total = TOUR_STEPS.length;
+  const def = TOUR_STEPS[step];
+
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    const refresh = () => {
+      const el = document.getElementById(def.targetId);
+      setRect(el ? el.getBoundingClientRect() : null);
+      const anchor = def.anchorId ? document.getElementById(def.anchorId) : null;
+      setAnchorRect(anchor ? anchor.getBoundingClientRect() : null);
+    };
+    refresh();
+    window.addEventListener("resize", refresh);
+    return () => window.removeEventListener("resize", refresh);
+  }, [def.targetId, def.anchorId]);
+
+  const PAD = 8; // spotlight padding around target
+  const CARD_W = 360;
+
+  // Spotlight ring — always follows targetId
+  const spot = rect
+    ? {
+        x: rect.left - PAD,
+        y: rect.top - PAD,
+        w: rect.width + PAD * 2,
+        h: rect.height + PAD * 2,
+        cx: rect.left + rect.width / 2,
+        cy: rect.top + rect.height / 2,
+      }
+    : null;
+
+  // Card anchor — anchorId when provided, otherwise targetId
+  const aRect = anchorRect ?? rect;
+  const anchor = aRect
+    ? {
+        x: aRect.left - PAD,
+        y: aRect.top - PAD,
+        w: aRect.width + PAD * 2,
+        h: aRect.height + PAD * 2,
+        cx: aRect.left + aRect.width / 2,
+        cy: aRect.top + aRect.height / 2,
+      }
+    : null;
+
+  // Card position: default center, then adjust based on placement + anchor
+  let cardStyle: CSSProperties = {
+    position: "fixed",
+    zIndex: 62,
+    width: CARD_W,
+    maxWidth: "calc(100vw - 32px)",
+    background: "white",
+    borderRadius: 14,
+    boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
+    overflow: "hidden",
+  };
+
+  // Arrow: which side of the card points toward the target
+  let arrowSide: "top" | "bottom" | "left" | "right" = "top";
+
+  if (anchor) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cardH = def.cardH ?? 260;
+
+    if (def.placement === "below") {
+      const top = anchor.y + anchor.h + 16;
+      let left = anchor.cx - CARD_W / 2;
+      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
+      cardStyle = { ...cardStyle, top, left };
+      arrowSide = "top";
+    } else if (def.placement === "above") {
+      const gap = def.aboveGap ?? 16;
+      const top = Math.max(16, anchor.y - cardH - gap);
+      let left = anchor.cx - CARD_W / 2;
+      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
+      cardStyle = { ...cardStyle, top, left };
+      arrowSide = "bottom";
+    } else if (def.placement === "right") {
+      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
+      const left = Math.min(anchor.x + anchor.w + 16, vw - CARD_W - 16);
+      cardStyle = { ...cardStyle, top, left };
+      arrowSide = "left";
+    } else {
+      // left: card sits to the left of anchor
+      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
+      const left = Math.max(16, anchor.x - CARD_W - 16);
+      cardStyle = { ...cardStyle, top, left };
+      arrowSide = "right";
+    }
+  } else {
+    // Fallback: center
+    cardStyle = {
+      ...cardStyle,
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%,-50%)",
+    };
+  }
+
+  const arrowSize = 10;
+  const arrowColor = ACCENT.hex;
+
+  const arrowEl: Record<"top" | "bottom" | "left" | "right", CSSProperties> = {
+    top: {
+      position: "absolute", top: -arrowSize, left: "50%",
+      transform: "translateX(-50%)",
+      width: 0, height: 0,
+      borderLeft: `${arrowSize}px solid transparent`,
+      borderRight: `${arrowSize}px solid transparent`,
+      borderBottom: `${arrowSize}px solid ${arrowColor}`,
+    },
+    bottom: {
+      position: "absolute", bottom: -arrowSize, left: "50%",
+      transform: "translateX(-50%)",
+      width: 0, height: 0,
+      borderLeft: `${arrowSize}px solid transparent`,
+      borderRight: `${arrowSize}px solid transparent`,
+      borderTop: `${arrowSize}px solid ${arrowColor}`,
+    },
+    left: {
+      position: "absolute", left: -arrowSize, top: "50%",
+      transform: "translateY(-50%)",
+      width: 0, height: 0,
+      borderTop: `${arrowSize}px solid transparent`,
+      borderBottom: `${arrowSize}px solid transparent`,
+      borderRight: `${arrowSize}px solid ${arrowColor}`,
+    },
+    right: {
+      position: "absolute", right: -arrowSize, top: "50%",
+      transform: "translateY(-50%)",
+      width: 0, height: 0,
+      borderTop: `${arrowSize}px solid transparent`,
+      borderBottom: `${arrowSize}px solid transparent`,
+      borderLeft: `${arrowSize}px solid ${arrowColor}`,
+    },
+  };
+
+  return (
+    <>
+      {/* Dim overlay — no blur, with transparent cutout via SVG */}
+      <svg
+        style={{ position: "fixed", inset: 0, zIndex: 60, pointerEvents: "none" }}
+        width="100%"
+        height="100%"
+      >
+        <defs>
+          <mask id="tour-spotlight-mask">
+            <rect width="100%" height="100%" fill="white" />
+            {spot && (
+              <rect
+                x={spot.x} y={spot.y}
+                width={spot.w} height={spot.h}
+                rx={8} ry={8}
+                fill="black"
+              />
+            )}
+          </mask>
+        </defs>
+        <rect
+          width="100%" height="100%"
+          fill="rgba(0,0,0,0.45)"
+          mask="url(#tour-spotlight-mask)"
+        />
+      </svg>
+
+      {/* Pulsing highlight ring around target */}
+      {spot && (
+        <div
+          style={{
+            position: "fixed",
+            zIndex: 61,
+            left: spot.x, top: spot.y,
+            width: spot.w, height: spot.h,
+            borderRadius: 8,
+            border: `2px solid ${ACCENT.hex}`,
+            boxShadow: `0 0 0 3px ${ACCENT.hex}40, 0 0 16px ${ACCENT.hex}60`,
+            pointerEvents: "none",
+            animation: "tour-pulse 1.6s ease-in-out infinite",
+          }}
+        />
+      )}
+
+      {/* Backdrop click to close */}
+      <div
+        style={{ position: "fixed", inset: 0, zIndex: 60 }}
+        onClick={onClose}
+      />
+
+      {/* Tooltip card */}
+      <div style={{ ...cardStyle, position: "fixed", zIndex: 62 }}>
+        {/* Arrow */}
+        {spot && <div style={arrowEl[arrowSide]} />}
+
+        {/* Header */}
+        <div style={{
+          background: ACCENT.hex,
+          padding: "14px 16px 12px",
+          position: "relative",
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 8,
+        }}>
+          <div>
+            <div style={{
+              fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+              textTransform: "uppercase", color: "oklch(0.95 0.02 200)", marginBottom: 3,
+            }}>
+              Step {step + 1} of {total}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
+              {def.title}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close tour"
+            style={{
+              flexShrink: 0, width: 24, height: 24,
+              border: "1px solid oklch(0.95 0.02 200 / 0.35)",
+              background: "oklch(0.95 0.02 200 / 0.12)",
+              borderRadius: 6, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "white",
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "14px 16px 10px" }}>
+          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
+            {def.lines.map((line, i) => (
+              <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{
+                  flexShrink: 0, marginTop: 4,
+                  width: 6, height: 6, borderRadius: 99,
+                  background: ACCENT.hex, display: "inline-block",
+                }} />
+                <span style={{ fontSize: 12.5, color: "oklch(0.22 0.01 240)", lineHeight: 1.55 }}>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: "10px 16px 14px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          {/* Step dots */}
+          <div style={{ display: "flex", gap: 5 }}>
+            {Array.from({ length: total }).map((_, i) => (
+              <button
+                key={i}
+                onClick={(e) => { e.stopPropagation(); onGoTo(i); }}
+                aria-label={`Go to step ${i + 1}`}
+                style={{
+                  width: i === step ? 18 : 7, height: 7,
+                  borderRadius: 99,
+                  background: i === step ? ACCENT.hex : "oklch(0.88 0.003 240)",
+                  border: "none", cursor: "pointer", padding: 0,
+                  transition: "width .18s, background .18s",
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Nav buttons */}
+          <div style={{ display: "flex", gap: 6 }}>
+            {step > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onBack(); }}
+                style={{
+                  padding: "5px 13px",
+                  border: "1px solid oklch(0.90 0.003 240)",
+                  background: "white", borderRadius: 7,
+                  fontSize: 12, fontWeight: 500,
+                  color: "oklch(0.35 0.01 240)", cursor: "pointer",
+                }}
+              >Back</button>
+            )}
+            {step < total - 1 ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); onNext(); }}
+                style={{
+                  padding: "5px 14px",
+                  border: `1px solid ${ACCENT.hex}`,
+                  background: ACCENT.hex, borderRadius: 7,
+                  fontSize: 12, fontWeight: 600,
+                  color: "white", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}
+              >
+                Next
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
+                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                </svg>
+              </button>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); onClose(); }}
+                style={{
+                  padding: "5px 14px",
+                  border: `1px solid ${ACCENT.hex}`,
+                  background: ACCENT.hex, borderRadius: 7,
+                  fontSize: 12, fontWeight: 600,
+                  color: "white", cursor: "pointer",
+                }}
+              >Got it!</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Keyframe animation injected once */}
+      <style>{`
+        @keyframes tour-pulse {
+          0%, 100% { box-shadow: 0 0 0 3px ${ACCENT.hex}40, 0 0 14px ${ACCENT.hex}50; }
+          50%       { box-shadow: 0 0 0 6px ${ACCENT.hex}25, 0 0 24px ${ACCENT.hex}70; }
+        }
+      `}</style>
     </>
   );
 }

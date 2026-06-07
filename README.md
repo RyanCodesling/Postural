@@ -29,6 +29,14 @@
 - Both Forgot Password and Change Password flows now block if the new password is identical to the current password — server returns 400 "New password must be different from your current password." and the Change Password page also catches this client-side before the API call
 - Fixed Change Password modal (OTP flow from patient/therapist dashboard) — was missing `resetToken` in the reset-password request causing "Email, newPassword, and resetToken are required" error; modal now stores the token returned by verify-OTP and sends it correctly
 
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added `showTutorial` and `tutorialStep` state variables
+- Added `id` attributes to 8 key elements: `cam-tour-sidebar` (☰ button), `cam-tour-status` (status dots wrapper), `cam-tour-stop` (Stop button), `cam-tour-start` (Start camera button), `cam-tour-metrics` (left rail `<aside>`), `cam-tour-feed` (center camera `<main>`), `cam-tour-exercise` (exercise stepper div), `cam-tour-session` (session controls div)
+- Added **How to Use** button with inline info SVG icon, rendered as an outlined teal button to the right of Start camera
+- Added `TOUR_STEPS` constant array (7 entries) outside the component — each entry carries `targetId`, optional `anchorId`, `title`, `lines[]`, `placement`, and optional `cardH` / `aboveGap` overrides
+- Added `CameraTour` standalone function component: reads target and anchor bounding rects via `useEffect` + `useState`, computes card position per placement, renders an SVG dim-with-cutout overlay, a pulsing ring div, a backdrop click-to-close div, and the tooltip card with teal header strip, bullet list, animated step dots, and Back / Next / Got it navigation
+- Added `ReactNode` to the React named imports
+
 ### *scripts\email_features.sql*
 - Added `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`
 - Added `CREATE TABLE IF NOT EXISTS password_reset_otps` with user_id FK, email, otp, expires_at, used, created_at
@@ -159,6 +167,24 @@
 - All new pages registered: `/change-password`, `/forgot-password`
 - Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, then `scripts\reset_token_migration.sql` as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email and forgot-password features
 - Gmail App Password must be configured in `web\.env.local` (`SMTP_PASS`) before emails will be sent
+
+### How to Use - Camera Module
+- Added a **How to Use** button in the camera header, positioned to the right of Start camera (button order: Stop → Start camera → How to Use)
+- Clicking How to Use launches a 7-step interactive spotlight tour that highlights and explains each part of the camera UI — no external library, pure inline React
+- The tour dims the screen without blurring it; a transparent SVG cutout spotlights the active element, and a pulsing teal ring (via `@keyframes tour-pulse`) draws attention to it
+- A floating tooltip card with a CSS triangle arrow appears near each highlighted element; the arrow points toward the target and the card repositions itself per step (below / above / left / right) using live `getBoundingClientRect()` measurements
+- Added `anchorId` field so a step can spotlight one element (e.g. the whole camera feed) while anchoring the card to a different element (e.g. the metrics panel) to keep the card on screen and readable
+- Added `cardH` and `aboveGap` overrides per step so tall cards and bottom-of-screen targets (session controls) do not overlap the highlighted buttons
+- Arrow is suppressed on steps with no spotlight target (step 6 — Clothing & Environment), which falls back to a centered card over the dimmed screen
+
+**Tour steps:**
+1. **Start Camera** — highlights the Start camera button; explains the camera permission flow
+2. **Status Indicators** — highlights the AI ready / Capture OK dots; explains green vs orange state
+3. **Your Assigned Exercise(s)** — highlights the exercise stepper card with left/right arrows; explains how to navigate between assigned exercises
+4. **Camera View** — spotlights the full camera feed; card anchors off the left metrics panel so it appears inside the camera area; explains positioning, distance, and lighting
+5. **Live Metrics Panel** — highlights the left rail; explains movement angle numbers and colour-coded warnings
+6. **Clothing & Environment** — no spotlight (centered card); explains that dark clothing on dark backgrounds, backlighting, busy walls, and low light reduce pose tracking accuracy; advises plain contrasting clothes and a clear well-lit space
+7. **Start Session & End** — highlights the Start session / End buttons in the session controls panel; explains the 3-2-1 countdown, early End, auto-save, and how to redo an exercise using Restart if not satisfied
 
 ---
 

@@ -26,7 +26,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS age               INT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gender            VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id_num  VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty         VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_archived       BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at       TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
+CREATE INDEX IF NOT EXISTS idx_is_archived  ON users (is_archived);
 
 -- Insert demo credentials
 INSERT INTO users (id, email, password, name, first_name, last_name, role, "clinicId") VALUES

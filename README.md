@@ -38,8 +38,14 @@
 - Live follow-up confirmed the warning can still be triggered by residual landmark noise, but flicker occurrence is reduced and accepted for this sprint
 
 ## 📌 Update-6-7-26 | *Enah*
+- Added secure password hashing using `bcryptjs` for all newly registered accounts and password modifications, protecting user data from plaintext storage
+- Retained plaintext storage and verification for the three system demo credentials (`patient123`, `therapist123`, and `admin123`) to support non-disruptive testing
+- Replaced the "Delete" action in Manage Users with "Archive" — archived users are blocked from logging in, but their historical records are preserved and can be fully restored by the administrator
+- Added automated email notifications when user accounts are archived or restored (sent to the user and admin)
+- Added a permanent user deletion feature: archived users can be permanently deleted from the database. This triggers a 2-step confirmation modal on the admin page and sends permanent deletion confirmation emails to both user and admin
 - Added Email Notification feature using Nodemailer + Gmail SMTP (free, no paid API) — sends emails for account creation, password change confirmation, and forgot password OTP
-- Admin adding a user now auto-generates default password as `LastName + YearOfBirth` (e.g., `DelaCruz2004`) and sends a welcome email with login credentials to the user's email
+- Admin adding a user now auto-generates default password as `LastName + YearOfBirth` (e.g., `DelaCruz2004`), automatically stripping common suffixes (e.g., `Sr.`, `Jr.`, `I`, `II`, Roman numerals) and punctuation from last names, and sends a welcome email with login credentials to the user's email
+- Added a custom login warning for archived users: trying to log in with an archived account now returns `"Your account has been archived and you no longer have access."` instead of `"No account is registered with this email address."`
 - First-time login with default password now forces the user to change password before accessing the dashboard — sends confirmation email after password is changed
 - Added Forgot Password feature with 6-digit OTP email verification — user enters email → receives OTP (5-minute expiry) → verifies OTP → sets new password; wrong OTP blocks access
 - Added `must_change_password` column to users table and `password_reset_otps` table for OTP storage
@@ -89,7 +95,7 @@
 
 ### *web\src\lib\email.ts*
 - New Nodemailer email utility with Gmail SMTP (smtp.gmail.com:587) using `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` env vars
-- `sendAccountCreationEmail()` — welcome email with login credentials, login link, ACC Bacoor green-themed branding
+- `sendAccountCreationEmail()` — welcome email with login credentials (using password hint instead of plaintext), login link, ACC Bacoor green-themed branding
 - `sendPasswordChangedEmail()` — confirmation email with security warning
 - `sendOTPEmail()` — 6-digit OTP code with 5-minute expiry warning
 - Graceful fallback when SMTP is not configured (logs warning, does not crash)
@@ -97,11 +103,16 @@
 - `sendEmailChangedToNewAddress(newEmail, name, oldEmail)` — notifies new address it is now active, includes Log In button
 - `sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail)` — audit notification to admin with old/new email and user name
 - `sendAccountCreatedAdminEmail(adminEmail, newUserName, newUserEmail, newUserRole)` — notifies admin of new account creation with name, email, role, and a note that activation email was sent to the user
-- `sendAccountDeletedUserEmail(email, name, role)` — informs deleted user their credentials are no longer valid
-- `sendAccountDeletedAdminEmail(adminEmail, deletedName, deletedEmail, deletedRole)` — deletion confirmation to admin with full user details
+- `sendAccountArchivedUserEmail(email, name, role)` — informs archived user their account has been archived
+- `sendAccountArchivedAdminEmail(adminEmail, archivedName, archivedEmail, archivedRole)` — archiving confirmation to admin
+- `sendAccountRestoredUserEmail(email, name)` — notifies user their account has been restored
+- `sendAccountRestoredAdminEmail(adminEmail, restoredName, restoredEmail, restoredRole)` — restoration confirmation to admin
+- `sendAccountDeletedUserEmail(email, name, role)` — informs permanently deleted user that their records have been removed
+- `sendAccountDeletedAdminEmail(adminEmail, deletedName, deletedEmail, deletedRole)` — permanent deletion confirmation to admin
 
 ### *web\src\lib\db.ts*
-- Added `mustChangePassword: row.must_change_password ?? false` to `mapUser()`
+- Added `mustChangePassword: row.must_change_password ?? false`, `isArchived: row.is_archived ?? false`, and `archivedAt: row.archived_at ?? null` to `mapUser()`
+- Updated `createUser()` and `updateUserPassword()` to hash passwords via `hashPassword` before saving
 - Added `updateUserPassword(userId, newPassword)` — updates password and clears `must_change_password` flag
 - Added `setMustChangePassword(userId, value)` — sets the `must_change_password` flag
 - Added `getUserRawById(id)` — returns raw DB row including password for verification
@@ -110,9 +121,14 @@
 - Added `validateAndConsumeResetToken(email, token)` — checks token against DB (not expired), nulls it out on match so it is single-use, returns `boolean`
 - Added `invalidateOTPs(email)` — marks all unused OTPs for an email as used
 - Added `isEmailTaken(email, excludeId?)` — returns `true` if another account already uses this email; `excludeId` omits the current user during edits
+- Added `archiveUser(id)` — archives a user by setting `is_archived = TRUE` and `archived_at = NOW()`
+- Added `restoreUser(id)` — restores a user by setting `is_archived = FALSE` and `archived_at = NULL`
+- Added `getUserByEmailWithArchived(email)` helper to query users regardless of their archive status
+- Updated query filters to prevent archived users from logging in
 - Removed `diagnosis`, `prescription`, `condition` from `mapUser()`, `createUser()` signature and INSERT query, and `updateUser()` type and column map
 
 ### *scripts\user_credentials_pg.sql*
+- Added `is_archived` (boolean) and `archived_at` (timestamp) columns with index on `is_archived`
 - Removed `ADD COLUMN IF NOT EXISTS` lines for `diagnosis`, `prescription`, and `condition`
 - Added `DROP COLUMN IF EXISTS diagnosis`, `DROP COLUMN IF EXISTS prescription`, `DROP COLUMN IF EXISTS condition` — safe to re-run on existing databases
 - Changed admin demo credential email from `admin@postural.com` to `accbpostural.noreply@gmail.com` in the INSERT block
@@ -121,9 +137,11 @@
 ### *web\src\app\api\auth\login\route.ts*
 - Added `mustChangePassword: user.must_change_password ?? false` to the login JSON response body
 - Separated null-user and wrong-password cases: returns "No account is registered with this email address." (401) when email is not found, and "Invalid email or password." (401) when password is wrong
+- Updated password verification to use `comparePassword` to support both hashed and plaintext credentials
+- Replaced `getUserByEmail` with `getUserByEmailWithArchived` and added a check for `user.is_archived` to return a custom error message (`"Your account has been archived and you no longer have access."`) with a 403 Forbidden status
 
 ### *web\src\app\api\auth\change-password\route.ts*
-- New POST endpoint — validates userId, currentPassword, newPassword; verifies current password; updates password via `updateUserPassword()`; sends confirmation email; refreshes auth cookie
+- New POST endpoint — validates userId, currentPassword, newPassword; verifies current password using `comparePassword`; updates password via `updateUserPassword()`; sends confirmation email; refreshes auth cookie
 - Added same-password guard — returns 400 "New password must be different from your current password." if newPassword equals the verified current password
 
 ### *web\src\app\api\auth\forgot-password\route.ts*
@@ -135,7 +153,7 @@
 - Now returns `{ success: true, resetToken }` on success — `resetToken` is a 64-char hex token with a 15-minute expiry, required to call `/api/auth/reset-password`
 
 ### *web\src\app\api\auth\reset-password\route.ts*
-- New POST endpoint — requires `resetToken` validated via `validateAndConsumeResetToken()` (returns 401 if missing, invalid, or expired); blocks same-password with 400 "New password must be different from your current password."; updates password via `updateUserPassword()` and sends confirmation email
+- New POST endpoint — requires `resetToken` validated via `validateAndConsumeResetToken()` (returns 401 if missing, invalid, or expired); blocks same-password with 400 "New password must be different from your current password." by checking via `comparePassword`; updates password via `updateUserPassword()` and sends confirmation email
 
 ### *web\src\app\api\users\route.ts*
 - POST now sets `must_change_password = TRUE` on newly created users via `setMustChangePassword()`
@@ -143,12 +161,14 @@
 - Sends `sendAccountCreatedAdminEmail` to the admin (email read from auth cookie) fire-and-forget after user creation
 - Returns `{ user, emailSent }` in response
 - POST now checks `isEmailTaken(email)` before creating — returns 409 "This email address is already registered to an account." if duplicate
+- Strips name suffixes (`Sr.`, `Jr.`, Roman numerals like `I`, `II`, `III`, `IV`, etc.) and punctuation from last names during default password generation
 - Removed `diagnosis`, `prescription`, `condition` from POST body destructuring and `createUser()` call
 
 ### *web\src\app\api\users\[id]\route.ts*
 - PUT fetches the existing user before updating to detect email changes; if email changed, fires `sendEmailChangedToOldAddress`, `sendEmailChangedToNewAddress`, and `sendEmailChangedAdminNotification` (admin email read from auth cookie) — all fire-and-forget
 - PUT checks `isEmailTaken(email, id)` before updating — returns 409 if email already belongs to another account
-- DELETE fetches user data before deletion, then fires `sendAccountDeletedUserEmail` and `sendAccountDeletedAdminEmail` fire-and-forget after the row is removed
+- Replaced the DELETE handler to archive users (`is_archived` and `archived_at`), OR permanently delete users from the database if `?permanent=true` query param is provided, sending archiving or permanent deletion notification emails to user and admin
+- Added PATCH handler supporting `{ action: "restore" }` to restore an archived user and send restoration emails to user and admin
 
 ### *web\src\app\(auth)\change-password\page.tsx*
 - New force-change-password page — same glassmorphic card design as login page (green theme, background image, floating labels)
@@ -170,6 +190,9 @@
 - Wrapped component in `<Suspense>` boundary for `useSearchParams()` Next.js compatibility
 
 ### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Replaced the "Delete" button/action on active users with an amber "Archive" action, opening a confirmation modal explaining that the user will be blocked from accessing the system but their records remain intact
+- Added an "Archived Users" list under an "Archived Users" header, showing the archival date, a green "Restore" action button to reactivate accounts, and a red "Delete" action button to permanently delete the account
+- Implemented a 2-step permanent deletion confirmation modal warning flow for archived users to prevent accidental deletion
 - Updated `handleConfirmAdd` success message to conditionally include email notification text: "An activation email with login credentials has been sent to {email}"
 - Added `text-black` to Add User and Edit User form container divs so all headings, labels, inputs, and buttons are readable on the white modal background
 - Replaced emoji icons (👤 Patient, 👨‍⚕️ Therapist) with inline SVG icons — Patient uses a person silhouette (`M12 12c2.21...`), Therapist uses Material Design `medical_services` briefcase with cross icon — in role selection buttons, Add User heading, and Edit User heading
@@ -177,6 +200,13 @@
 - Added `emailError` and `editEmailError` states — email inputs in both Add and Edit forms check the already-loaded `users` list on every keystroke; a red inline error appears instantly if the email is already in use; form submission (`handleAddUser`, `handleSaveEditUser`) is blocked while an error is present
 - "Add User" button is disabled and grayed (`bg-gray-400 cursor-not-allowed`) when `emailError` is set; "Save Changes" button is disabled and grayed when `editEmailError` is set — both buttons restore green styling automatically once the error clears
 - Fixed "Assign to Therapist" dropdown text not readable — added `text-black bg-white` to the select element
+
+### *web\src\lib\crypto.ts*
+- New password hashing and comparison utility using `bcryptjs`
+- Implemented smart password comparison fallback: checks if the hash begins with standard bcrypt signatures, falling back to plaintext comparison if not (for demo credentials)
+
+### *web\package.json*
+- Added `bcryptjs` and `@types/bcryptjs` dependencies
 
 ### *web\src\app\(app)\dashboard\_components\ChangePasswordModal.tsx*
 - New frosted-glass modal component (`bg-green-800/55 backdrop-blur-sm border border-green-700/50`) for OTP-verified password change
@@ -200,6 +230,7 @@
 
 ### Validation
 - `npm run build` passed — 32/32 pages compiled successfully
+- `npx tsc --noEmit` checks passed cleanly
 - All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`
 - All new pages registered: `/change-password`, `/forgot-password`
 - Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, then `scripts\reset_token_migration.sql` as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email and forgot-password features

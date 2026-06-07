@@ -101,7 +101,7 @@ function wrapTemplate(title: string, body: string): string {
 export async function sendAccountCreationEmail(
   email: string,
   name: string,
-  defaultPassword: string
+  _defaultPassword: string
 ): Promise<boolean> {
   const subject = "Welcome to ACC Bacoor Postural Monitoring System";
   const body = `
@@ -117,7 +117,10 @@ export async function sendAccountCreationEmail(
           <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Email</p>
           <p style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:600;">${email}</p>
           <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Password</p>
-          <p style="margin:0;color:#111827;font-size:16px;font-weight:600;font-family:monospace;background:#e5e7eb;padding:8px 12px;border-radius:4px;display:inline-block;">${defaultPassword}</p>
+          <p style="margin:0;color:#374151;font-size:14px;line-height:1.6;background:#f0fdf4;border:1px solid #bbf7d0;padding:12px 16px;border-radius:6px;">
+            Your password is your <strong>last name + year of birth</strong><br/>
+            <span style="color:#6b7280;font-size:13px;">(e.g. DelaCruz2004)</span>
+          </p>
         </td>
       </tr>
     </table>
@@ -365,26 +368,26 @@ export async function sendEmailChangedAdminNotification(
   return sendEmail(adminEmail, subject, wrapTemplate("Email Address Change Notice", body));
 }
 
-// ── Account deleted — user notification ───────────────────────────────────────
+// ── Account archived — user notification ─────────────────────────────────────
 
-export async function sendAccountDeletedUserEmail(
+export async function sendAccountArchivedUserEmail(
   email: string,
   name: string,
   role: string
 ): Promise<boolean> {
-  const subject = "Your Account Has Been Removed";
+  const subject = "Your Account Has Been Archived";
   const body = `
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
       Hello <strong>${name}</strong>,
     </p>
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
-      Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been permanently removed by an administrator.
+      Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been archived by an administrator.
     </p>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin:0 0 20px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;margin:0 0 20px;">
       <tr>
         <td style="padding:16px 20px;">
-          <p style="margin:0;color:#991b1b;font-size:14px;line-height:1.5;">
-            Your login credentials are no longer valid. If you believe this was done in error, please contact your administrator.
+          <p style="margin:0;color:#92400e;font-size:14px;line-height:1.5;">
+            ⚠️ Your account access has been temporarily suspended. Your records remain intact in the system. If you believe this was done in error, please contact your administrator.
           </p>
         </td>
       </tr>
@@ -393,10 +396,145 @@ export async function sendAccountDeletedUserEmail(
       Thank you for using the ACC Bacoor Postural Monitoring System.
     </p>
   `;
-  return sendEmail(email, subject, wrapTemplate("Account Removed", body));
+  return sendEmail(email, subject, wrapTemplate("Account Archived", body));
 }
 
-// ── Account deleted — admin notification ─────────────────────────────────────
+// ── Account archived — admin notification ────────────────────────────────────
+
+export async function sendAccountArchivedAdminEmail(
+  adminEmail: string,
+  archivedName: string,
+  archivedEmail: string,
+  archivedRole: string
+): Promise<boolean> {
+  const subject = "User Account Archived";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      This is a confirmation that the following user account has been archived in the system.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;margin:0 0 20px;">
+      <tr>
+        <td style="padding:20px;">
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Name</p>
+          <p style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:600;">${archivedName}</p>
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Email</p>
+          <p style="margin:0 0 16px;color:#111827;font-size:15px;">${archivedEmail || "—"}</p>
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Role</p>
+          <p style="margin:0 0 16px;color:#111827;font-size:15px;text-transform:capitalize;">${archivedRole}</p>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
+      The user's records remain intact. You can restore the account at any time from the Manage Users panel.
+    </p>
+  `;
+  return sendEmail(adminEmail, subject, wrapTemplate("Account Archived", body));
+}
+
+// ── Account restored — user notification ─────────────────────────────────────
+
+export async function sendAccountRestoredUserEmail(
+  email: string,
+  name: string,
+  role: string
+): Promise<boolean> {
+  const subject = "Your Account Has Been Restored";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      Hello <strong>${name}</strong>,
+    </p>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      Great news! Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been restored by an administrator.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin:0 0 20px;">
+      <tr>
+        <td style="padding:16px 20px;">
+          <p style="margin:0;color:#166534;font-size:14px;line-height:1.5;">
+            ✅ Your account is now active again. You can log in using your existing credentials.
+          </p>
+        </td>
+      </tr>
+    </table>
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 20px;">
+      <tr>
+        <td style="background-color:#166534;border-radius:8px;">
+          <a href="${APP_URL}" target="_blank" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+            Log In Now
+          </a>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
+      All your past records and data remain intact. Welcome back!
+    </p>
+  `;
+  return sendEmail(email, subject, wrapTemplate("Account Restored", body));
+}
+
+// ── Account restored — admin notification ────────────────────────────────────
+
+export async function sendAccountRestoredAdminEmail(
+  adminEmail: string,
+  restoredName: string,
+  restoredEmail: string,
+  restoredRole: string
+): Promise<boolean> {
+  const subject = "User Account Restored";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      This is a confirmation that the following user account has been restored and can now access the system.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin:0 0 20px;">
+      <tr>
+        <td style="padding:20px;">
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Name</p>
+          <p style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:600;">${restoredName}</p>
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Email</p>
+          <p style="margin:0 0 16px;color:#111827;font-size:15px;">${restoredEmail || "—"}</p>
+          <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Role</p>
+          <p style="margin:0;color:#111827;font-size:15px;text-transform:capitalize;">${restoredRole}</p>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
+      The user can now log in and access the system with all their previous records restored.
+    </p>
+  `;
+  return sendEmail(adminEmail, subject, wrapTemplate("Account Restoration Confirmation", body));
+}
+
+// ── Account permanently deleted — user notification ───────────────────────────
+
+export async function sendAccountDeletedUserEmail(
+  email: string,
+  name: string,
+  role: string
+): Promise<boolean> {
+  const subject = "Your Account Has Been Permanently Deleted";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      Hello <strong>${name}</strong>,
+    </p>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+      Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been permanently deleted by an administrator.
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef2f2;border:1px solid #fee2e2;border-radius:8px;margin:0 0 20px;">
+      <tr>
+        <td style="padding:16px 20px;">
+          <p style="margin:0;color:#991b1b;font-size:14px;line-height:1.5;">
+            🚨 This action is permanent. All of your records, details, and access tokens have been completely deleted from the system and cannot be recovered.
+          </p>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
+      Thank you for your time using our system.
+    </p>
+  `;
+  return sendEmail(email, subject, wrapTemplate("Account Deleted", body));
+}
+
+// ── Account permanently deleted — admin notification ──────────────────────────
 
 export async function sendAccountDeletedAdminEmail(
   adminEmail: string,
@@ -404,12 +542,12 @@ export async function sendAccountDeletedAdminEmail(
   deletedEmail: string,
   deletedRole: string
 ): Promise<boolean> {
-  const subject = "User Account Deleted";
+  const subject = "User Account Permanently Deleted";
   const body = `
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
       This is a confirmation that the following user account has been permanently deleted from the system.
     </p>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin:0 0 20px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef2f2;border:1px solid #fee2e2;border-radius:8px;margin:0 0 20px;">
       <tr>
         <td style="padding:20px;">
           <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;">Name</p>
@@ -422,7 +560,7 @@ export async function sendAccountDeletedAdminEmail(
       </tr>
     </table>
     <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
-      This action is permanent and cannot be undone.
+      All database records associated with this user have been completely removed and cannot be restored.
     </p>
   `;
   return sendEmail(adminEmail, subject, wrapTemplate("Account Deletion Confirmation", body));

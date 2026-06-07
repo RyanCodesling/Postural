@@ -35,8 +35,15 @@ export async function POST(request: NextRequest) {
     const nameParts = [firstName, middleName, lastName].filter(Boolean);
     const fullName = nameParts.join(" ");
 
+    const suffixes = new Set(["jr", "jr.", "sr", "sr.", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"]);
     const birthYear = dateOfBirth ? new Date(dateOfBirth).getFullYear() : "";
-    const capitalizedLast = lastName
+    const lastNameClean = lastName
+      .split(" ")
+      .filter((w: string) => !suffixes.has(w.toLowerCase().replace(/[^a-z0-9]/g, "")))
+      .join(" ")
+      .replace(/[^a-zA-Z0-9 ]/g, "");
+
+    const capitalizedLast = lastNameClean
       .split(" ")
       .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
       .join("");

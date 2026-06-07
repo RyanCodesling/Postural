@@ -4012,11 +4012,6 @@ export default function CameraClient() {
       >
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <div style={{
-              width: 20, height: 20, borderRadius: 4, background: ACCENT.hex,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "white", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
-            }}>P</div>
             <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>Postural</span>
           </div>
           {user?.name && (
@@ -4097,11 +4092,6 @@ export default function CameraClient() {
               </svg>
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{
-                width: 20, height: 20, borderRadius: 4, background: ACCENT.hex,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                color: "white", fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
-              }}>P</div>
               <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em" }}>Postural</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>

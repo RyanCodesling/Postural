@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserByEmail, updateUserPassword, validateAndConsumeResetToken } from "@/lib/db";
 import { sendPasswordChangedEmail } from "@/lib/email";
+import { comparePassword } from "@/lib/crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (newPassword === user.password) {
+    if (comparePassword(newPassword, user.password)) {
       return NextResponse.json(
         { error: "New password must be different from your current password." },
         { status: 400 }

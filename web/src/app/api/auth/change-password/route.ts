@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserById, getUserRawById, updateUserPassword } from "@/lib/db";
 import { sendPasswordChangedEmail } from "@/lib/email";
+import { comparePassword } from "@/lib/crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,8 +24,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Plaintext password comparison (existing system convention)
-    if (rawUser.password !== currentPassword) {
+    // Hashed or plaintext password comparison
+    if (!comparePassword(currentPassword, rawUser.password)) {
       return NextResponse.json(
         { error: "Current password is incorrect" },
         { status: 401 }

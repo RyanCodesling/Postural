@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserByEmail } from "@/lib/db";
+import { getUserByEmailWithArchived } from "@/lib/db";
+import { comparePassword } from "@/lib/crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,7 +14,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user = await getUserByEmail(email);
+    const user = await getUserByEmailWithArchived(email);
 
     if (!user) {
       return NextResponse.json(
@@ -22,7 +23,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (user.password !== password) {
+    if (user.is_archived) {
+      return NextResponse.json(
+        { error: "Your account has been archived and you no longer have access." },
+        { status: 403 }
+      );
+    }
+
+    if (!comparePassword(password, user.password)) {
       return NextResponse.json(
         { error: "Invalid email or password." },
         { status: 401 }

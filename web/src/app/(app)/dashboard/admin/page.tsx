@@ -22,6 +22,8 @@ interface User {
   // Therapist-specific fields
   therapistIDNum?: string;
   specialty?: string;
+  isArchived?: boolean;
+  archivedAt?: string;
 }
 
 interface Exercise {
@@ -61,10 +63,13 @@ export default function AdminDashboard() {
   const [showStatusModal,  setShowStatusModal]  = useState(false);
   const [statusModalMsg,   setStatusModalMsg]   = useState("");
   const [statusModalType,  setStatusModalType]  = useState<"success" | "error">("success");
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [isFinalArchiveOpen, setIsFinalArchiveOpen] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isFinalConfirmOpen, setIsFinalConfirmOpen] = useState(false);
-  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
-  const [deleteUserName, setDeleteUserName] = useState<string | null>(null);
+  const [isFinalDeleteOpen, setIsFinalDeleteOpen] = useState(false);
+  const [targetUserId, setTargetUserId] = useState<string | null>(null);
+  const [targetUserName, setTargetUserName] = useState<string | null>(null);
   const [showAddPreview, setShowAddPreview] = useState(false);
   const [showEditPreview, setShowEditPreview] = useState(false);
 
@@ -162,45 +167,78 @@ export default function AdminDashboard() {
     setEditingUser(null);
   };
 
-  const handleDeleteUser = async (id: string) => {
+  const handleArchiveUser = (u: User) => {
+    setTargetUserId(u.id);
+    setTargetUserName(u.name || `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "this user");
+    setIsArchiveModalOpen(true);
+  };
+
+  const closeArchiveModal = () => {
+    setIsArchiveModalOpen(false);
+    setTargetUserId(null);
+    setTargetUserName(null);
+  };
+
+  const confirmArchiveUser = () => {
+    if (!targetUserId) return;
+    setIsArchiveModalOpen(false);
+    setIsFinalArchiveOpen(true);
+  };
+
+  const handleFinalArchive = async () => {
+    if (!targetUserId) return;
     try {
-      await fetch(`/api/users/${id}`, { method: "DELETE" });
-      setUsers(users.filter((u) => u.id !== id));
+      const res = await fetch(`/api/users/${targetUserId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to archive user.");
+      const archivedEmail = users.find((u) => u.id === targetUserId)?.email;
+      setUsers(users.map((u) =>
+        u.id === targetUserId ? { ...u, isArchived: true, archivedAt: new Date().toISOString() } : u
+      ));
+      setStatusModalType("success");
+      setStatusModalMsg(
+        archivedEmail
+          ? `${targetUserName} has been archived. An email notification has been sent to ${archivedEmail}.`
+          : `${targetUserName} has been archived.`
+      );
+      setShowStatusModal(true);
     } catch (err) {
-      console.error("Failed to delete user:", err);
+      console.error("Failed to archive user:", err);
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to archive user. Please try again.");
+      setShowStatusModal(true);
+    } finally {
+      setIsFinalArchiveOpen(false);
+      setTargetUserId(null);
+      setTargetUserName(null);
     }
   };
 
-  const openDeleteModal = (user: User) => {
-    setDeleteUserId(user.id);
-    setDeleteUserName(user.name || `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || "this user");
+  const handleDeleteUser = (u: User) => {
+    setTargetUserId(u.id);
+    setTargetUserName(u.name || `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "this user");
     setIsDeleteModalOpen(true);
   };
 
-  const closeDeleteModal = () => {
-    setIsDeleteModalOpen(false);
-    setDeleteUserId(null);
-    setDeleteUserName(null);
-  };
-
   const confirmDeleteUser = () => {
-    if (!deleteUserId) return;
+    if (!targetUserId) return;
     setIsDeleteModalOpen(false);
-    setIsFinalConfirmOpen(true);
+    setIsFinalDeleteOpen(true);
   };
 
   const handleFinalDelete = async () => {
-    if (!deleteUserId) return;
+    if (!targetUserId) return;
     try {
-      const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
+      const res = await fetch(`/api/users/${targetUserId}?permanent=true`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete user.");
-      const deletedEmail = users.find((u) => u.id === deleteUserId)?.email;
-      setUsers(users.filter((u) => u.id !== deleteUserId));
+      const deletedUser = users.find((u) => u.id === targetUserId);
+      const deletedEmail = deletedUser?.email;
+      
+      setUsers(users.filter((u) => u.id !== targetUserId));
       setStatusModalType("success");
       setStatusModalMsg(
         deletedEmail
-          ? `${deleteUserName} successfully deleted. An email notification has been sent to ${deletedEmail}.`
-          : `${deleteUserName} successfully deleted.`
+          ? `${targetUserName} has been permanently deleted. An email notification has been sent to ${deletedEmail}.`
+          : `${targetUserName} has been permanently deleted.`
       );
       setShowStatusModal(true);
     } catch (err) {
@@ -209,9 +247,47 @@ export default function AdminDashboard() {
       setStatusModalMsg("Unable to delete user. Please try again.");
       setShowStatusModal(true);
     } finally {
-      setIsFinalConfirmOpen(false);
-      setDeleteUserId(null);
-      setDeleteUserName(null);
+      setIsFinalDeleteOpen(false);
+      setTargetUserId(null);
+      setTargetUserName(null);
+    }
+  };
+
+  const handleRestoreUser = (u: User) => {
+    setTargetUserId(u.id);
+    setTargetUserName(u.name || `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() || "this user");
+    setIsRestoreModalOpen(true);
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!targetUserId) return;
+    try {
+      const res = await fetch(`/api/users/${targetUserId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "restore" }),
+      });
+      if (!res.ok) throw new Error("Failed to restore user.");
+      const restoredEmail = users.find((u) => u.id === targetUserId)?.email;
+      setUsers(users.map((u) =>
+        u.id === targetUserId ? { ...u, isArchived: false, archivedAt: undefined } : u
+      ));
+      setStatusModalType("success");
+      setStatusModalMsg(
+        restoredEmail
+          ? `${targetUserName} has been restored and can now access the system. An email notification has been sent to ${restoredEmail}.`
+          : `${targetUserName} has been restored.`
+      );
+      setShowStatusModal(true);
+    } catch (err) {
+      console.error("Failed to restore user:", err);
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to restore user. Please try again.");
+      setShowStatusModal(true);
+    } finally {
+      setIsRestoreModalOpen(false);
+      setTargetUserId(null);
+      setTargetUserName(null);
     }
   };
 
@@ -361,10 +437,12 @@ export default function AdminDashboard() {
   };
 
   // Helper functions
-  const patients = users.filter((u) => u.role === "patient");
-  const therapists = users.filter((u) => u.role === "therapist");
+  const activeUsers   = users.filter((u) => !u.isArchived);
+  const archivedUsers = users.filter((u) => u.isArchived);
+  const patients    = activeUsers.filter((u) => u.role === "patient");
+  const therapists  = activeUsers.filter((u) => u.role === "therapist");
   const unassignedPatients = patients.filter((p) => !p.therapistId);
-  const assignedPatients = patients.filter((p) => p.therapistId);
+  const assignedPatients   = patients.filter((p) => p.therapistId);
 
   const getTherapistName = (therapistId: string) => {
     return therapists.find((t) => t.id === therapistId)?.name || "Unknown";
@@ -920,76 +998,6 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {isDeleteModalOpen && (
-              <>
-                <div className="fixed inset-0 z-40 bg-black/50" onClick={closeDeleteModal} />
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-                      </svg>
-                    </div>
-                    <h2 className="text-lg font-bold text-gray-900 mb-1">Confirm Delete</h2>
-                    <p className="text-sm text-gray-500 mb-5">
-                      Are you sure you want to delete <span className="font-semibold text-gray-900">{deleteUserName}</span>? This action cannot be undone.
-                    </p>
-                    <div className="flex gap-3">
-                      <button
-                        type="button"
-                        onClick={closeDeleteModal}
-                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={confirmDeleteUser}
-                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {isFinalConfirmOpen && (
-              <>
-                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }} />
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
-                      </svg>
-                    </div>
-                    <h2 className="text-lg font-bold text-gray-900 mb-1">Final Confirmation</h2>
-                    <p className="text-sm text-gray-500 mb-5">
-                      This is your final confirmation. Deleting <span className="font-semibold text-gray-900">{deleteUserName}</span> is permanent and cannot be recovered.
-                    </p>
-                    <div className="flex gap-3">
-                      <button
-                        type="button"
-                        onClick={() => { setIsFinalConfirmOpen(false); setDeleteUserId(null); setDeleteUserName(null); }}
-                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleFinalDelete}
-                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
-                      >
-                        Yes, Delete Permanently
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
             {showAddPreview && (
               <>
                 <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowAddPreview(false)} />
@@ -1042,7 +1050,7 @@ export default function AdminDashboard() {
                       onClick={handleConfirmAdd}
                       className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
                     >
-                      Confirm & Add User
+                      Confirm &amp; Add User
                     </button>
                   </div>
                 </div>
@@ -1101,7 +1109,7 @@ export default function AdminDashboard() {
                           onClick={handleConfirmEdit}
                           className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
                         >
-                          Confirm & Save Changes
+                          Confirm &amp; Save Changes
                         </button>
                       </div>
                     </div>
@@ -1110,58 +1118,304 @@ export default function AdminDashboard() {
               );
             })()}
 
-            {/* Users List */}
-            <div className="bg-white rounded shadow overflow-x-auto">
-              <table className="w-full min-w-[600px]">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Email
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Role
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {users.map((u) => (
-                    <tr key={u.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">{u.name}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
-                      <td className="px-6 py-4 text-sm">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleEditUser(u)}
-                            className="text-green-700 hover:text-green-900 font-medium"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => openDeleteModal(u)}
-                            className="text-red-600 hover:text-red-800 font-medium"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
+            {/* Archive Confirmation Modal */}
+            {isArchiveModalOpen && (
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={closeArchiveModal} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-amber-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-amber-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Archive User</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      Are you sure you want to archive <span className="font-semibold text-gray-900">{targetUserName}</span>? They will lose access to the system, but their records will remain intact and can be restored.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={closeArchiveModal}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmArchiveUser}
+                        className="flex-1 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Archive
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Final Archive Confirmation */}
+            {isFinalArchiveOpen && (
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsFinalArchiveOpen(false); setTargetUserId(null); setTargetUserName(null); }} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-amber-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-amber-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Confirm Archive</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      <span className="font-semibold text-gray-900">{targetUserName}</span> will be archived. Their data stays in the database and can be restored at any time.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setIsFinalArchiveOpen(false); setTargetUserId(null); setTargetUserName(null); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFinalArchive}
+                        className="flex-1 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Yes, Archive
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Restore Confirmation Modal */}
+            {isRestoreModalOpen && (
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsRestoreModalOpen(false); setTargetUserId(null); setTargetUserName(null); }} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-green-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Restore User</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      Restore <span className="font-semibold text-gray-900">{targetUserName}</span>? They will regain access to the system with all their previous records intact.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setIsRestoreModalOpen(false); setTargetUserId(null); setTargetUserName(null); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmRestore}
+                        className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Yes, Restore
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Delete Confirmation Modal (Step 1) */}
+            {isDeleteModalOpen && (
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsDeleteModalOpen(false); setTargetUserId(null); setTargetUserName(null); }} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">Delete User Account</h2>
+                    <p className="text-sm text-gray-500 mb-5">
+                      Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{targetUserName}</span>? This will remove all their records from the database.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setIsDeleteModalOpen(false); setTargetUserId(null); setTargetUserName(null); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmDeleteUser}
+                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Final Delete Confirmation (Step 2) */}
+            {isFinalDeleteOpen && (
+              <>
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { setIsFinalDeleteOpen(false); setTargetUserId(null); setTargetUserName(null); }} />
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                      </svg>
+                    </div>
+                    <h2 className="text-lg font-bold text-gray-900 mb-1">WARNING: Permanent Deletion</h2>
+                    <p className="text-sm text-red-600 mb-5 font-semibold">
+                      This action CANNOT be undone. All database records and session history for {targetUserName} will be lost forever.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => { setIsFinalDeleteOpen(false); setTargetUserId(null); setTargetUserName(null); }}
+                        className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFinalDelete}
+                        className="flex-1 px-4 py-2 bg-red-700 hover:bg-red-800 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        Permanently Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Users List — Active */}
+            <div className="mb-8">
+              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>
+                Active Users
+                <span className="ml-1 text-sm font-normal text-gray-500">({activeUsers.length})</span>
+              </h3>
+              <div className="bg-white rounded shadow overflow-x-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Name</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Role</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y">
+                    {activeUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">No active users.</td>
+                      </tr>
+                    ) : (
+                      activeUsers.map((u) => (
+                        <tr key={u.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm text-gray-900">{u.name}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
+                          <td className="px-6 py-4 text-sm">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                              {u.role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleEditUser(u)}
+                                className="text-green-700 hover:text-green-900 font-medium"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleArchiveUser(u)}
+                                className="text-amber-600 hover:text-amber-800 font-medium"
+                              >
+                                Archive
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Users List — Archived */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                Archived Users
+                <span className="ml-1 text-sm font-normal text-gray-500">({archivedUsers.length})</span>
+              </h3>
+              <div className="bg-white rounded shadow overflow-x-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Name</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Role</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Archived On</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {archivedUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-6 text-center text-sm text-gray-500">No archived users.</td>
+                      </tr>
+                    ) : (
+                      archivedUsers.map((u) => (
+                        <tr key={u.id} className="hover:bg-amber-50 opacity-80">
+                          <td className="px-6 py-4 text-sm text-gray-700">{u.name}</td>
+                          <td className="px-6 py-4 text-sm text-gray-500">{u.email}</td>
+                          <td className="px-6 py-4 text-sm">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
+                              {u.role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {u.archivedAt ? new Date(u.archivedAt).toLocaleDateString() : "—"}
+                          </td>
+                          <td className="px-6 py-4 text-sm">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleRestoreUser(u)}
+                                className="text-green-700 hover:text-green-900 font-medium"
+                              >
+                                Restore
+                              </button>
+                              <button
+                                onClick={() => handleDeleteUser(u)}
+                                className="text-red-600 hover:text-red-800 font-medium"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
+
 
         {/* Exercises Tab */}
         {activeTab === "exercises" && (

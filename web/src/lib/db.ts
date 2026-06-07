@@ -1,4 +1,5 @@
 import { Pool, PoolClient, types } from "pg";
+import { hashPassword } from "./crypto";
 import {
   generateSchedule,
   MAX_INTERVAL_DAYS,
@@ -37,6 +38,8 @@ function mapUser(row: Record<string, unknown>) {
     specialty:      row.specialty         ?? null,
     createdAt:      row.created_at        ?? null,
     mustChangePassword: row.must_change_password ?? false,
+    isArchived:     row.is_archived       ?? false,
+    archivedAt:     row.archived_at       ?? null,
   };
 }
 
@@ -69,13 +72,21 @@ export async function getUserById(id: string) {
 
 export async function getUser(email: string, role: string) {
   const result = await pool.query(
-    "SELECT * FROM users WHERE email = $1 AND role = $2",
+    "SELECT * FROM users WHERE email = $1 AND role = $2 AND (is_archived IS NULL OR is_archived = FALSE)",
     [email, role]
   );
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
 export async function getUserByEmail(email: string) {
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email = $1 AND (is_archived IS NULL OR is_archived = FALSE)",
+    [email]
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
+export async function getUserByEmailWithArchived(email: string) {
   const result = await pool.query(
     "SELECT * FROM users WHERE email = $1",
     [email]
@@ -125,6 +136,7 @@ export async function createUser(data: {
   therapistIDNum?: string;
   specialty?: string;
 }) {
+  const hashedPassword = hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
@@ -135,7 +147,7 @@ export async function createUser(data: {
     [
       data.id,
       data.email ?? null,
-      data.password,
+      hashedPassword,
       data.name,
       data.firstName ?? null,
       data.middleName ?? null,
@@ -202,10 +214,25 @@ export async function deleteUser(id: string) {
   await pool.query("DELETE FROM users WHERE id = $1", [id]);
 }
 
+export async function archiveUser(id: string) {
+  await pool.query(
+    "UPDATE users SET is_archived = TRUE, archived_at = NOW() WHERE id = $1",
+    [id]
+  );
+}
+
+export async function restoreUser(id: string) {
+  await pool.query(
+    "UPDATE users SET is_archived = FALSE, archived_at = NULL WHERE id = $1",
+    [id]
+  );
+}
+
 export async function updateUserPassword(userId: string, newPassword: string) {
+  const hashedPassword = hashPassword(newPassword);
   await pool.query(
     "UPDATE users SET password = $1, must_change_password = FALSE WHERE id = $2",
-    [newPassword, userId]
+    [hashedPassword, userId]
   );
 }
 

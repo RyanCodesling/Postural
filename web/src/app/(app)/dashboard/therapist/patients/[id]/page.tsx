@@ -370,17 +370,14 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
                       holdSeconds: ex.hold_seconds,
                     })} · {ex.rest_seconds}s rest
                   </p>
-                  <span className={`inline-block mt-2 px-3 py-1 text-xs rounded-full font-medium ${
-                    ex.status === "in_progress"
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-red-100 text-red-700"
-                  }`}>
-                    {ex.status === "in_progress" ? "In Progress" : "Not Started"}
-                  </span>
                 </div>
-                <button className="px-4 py-2 border border-green-700 text-green-700 text-sm rounded-lg hover:bg-green-50 transition print:hidden">
-                  View Exercise
-                </button>
+                <span className={`px-3 py-1 text-sm rounded-full font-medium shrink-0 ${
+                  ex.status === "in_progress"
+                    ? "bg-blue-100 text-blue-700"
+                    : "bg-red-100 text-red-700"
+                }`}>
+                  {ex.status === "in_progress" ? "In Progress" : "Not Started"}
+                </span>
               </div>
             ))}
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
@@ -31,6 +31,7 @@ interface Exercise {
   id: string;
   name: string;
   description: string;
+  is_custom: boolean;
 }
 
 export default function AdminDashboard() {
@@ -102,6 +103,16 @@ export default function AdminDashboard() {
     description: "",
   });
   const [showExerciseForm, setShowExerciseForm] = useState(false);
+
+  // Exercise states matching therapist exercises list
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDesc, setEditDesc] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [exerciseQuery, setExerciseQuery] = useState("");
+  const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargetName, setDeleteTargetName] = useState<string | null>(null);
 
   // Load users and exercises from PostgreSQL on mount
   useEffect(() => {
@@ -406,7 +417,7 @@ export default function AdminDashboard() {
       const res = await fetch("/api/exercises", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newExercise),
+        body: JSON.stringify({ ...newExercise, isCustom: true }),
       });
       const data = await res.json();
       if (res.ok) setExercises([...exercises, data.exercise]);
@@ -418,12 +429,62 @@ export default function AdminDashboard() {
     setShowExerciseForm(false);
   };
 
-  const handleDeleteExercise = async (id: string) => {
+  const startEdit = (ex: Exercise) => {
+    setEditingId(ex.id);
+    setEditDesc(ex.description);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDesc("");
+  };
+
+  const saveExercise = async (id: string) => {
+    if (!editDesc.trim()) return;
+    const original = exercises.find((e) => e.id === id);
+    if (!original) return;
+    setSaving(true);
     try {
-      await fetch(`/api/exercises/${id}`, { method: "DELETE" });
-      setExercises(exercises.filter((e) => e.id !== id));
+      const res = await fetch(`/api/exercises/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: original.name, description: editDesc.trim() }),
+      });
+      if (res.ok) {
+        const { exercise } = await res.json();
+        setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...exercise } : e)));
+        cancelEdit();
+      }
     } catch (err) {
-      console.error("Failed to delete exercise:", err);
+      console.error("Error saving exercise:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteClick = (id: string, name: string) => {
+    setDeleteTargetId(id);
+    setDeleteTargetName(name);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteExercise = async () => {
+    if (!deleteTargetId) return;
+    try {
+      const res = await fetch(`/api/exercises/${deleteTargetId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setExercises((prev) => prev.filter((e) => e.id !== deleteTargetId));
+        setShowDeleteConfirm(false);
+      } else {
+        console.error("Failed to delete exercise");
+      }
+    } catch (err) {
+      console.error("Error deleting exercise:", err);
+    } finally {
+      setDeleteTargetId(null);
+      setDeleteTargetName(null);
     }
   };
 
@@ -448,6 +509,14 @@ export default function AdminDashboard() {
   const getTherapistName = (therapistId: string) => {
     return therapists.find((t) => t.id === therapistId)?.name || "Unknown";
   };
+
+  const filteredExercises = exercises.filter((e) =>
+    e.name.toLowerCase().includes(exerciseQuery.toLowerCase()) ||
+    e.description.toLowerCase().includes(exerciseQuery.toLowerCase())
+  );
+
+  const systemExercises = filteredExercises.filter((e) => !e.is_custom);
+  const customExercises = filteredExercises.filter((e) => e.is_custom);
 
   return (
     <div className="min-h-screen flex bg-green-50">
@@ -1439,7 +1508,7 @@ export default function AdminDashboard() {
 
             {showExerciseForm && (
               <div className="bg-white p-6 rounded shadow mb-6">
-                <h3 className="text-xl font-semibold mb-4">Add New Exercise</h3>
+                <h3 className="text-xl font-semibold text-gray-900 mb-4">Add New Exercise</h3>
                 <form onSubmit={handleAddExercise} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1451,7 +1520,7 @@ export default function AdminDashboard() {
                       onChange={(e) =>
                         setNewExercise({ ...newExercise, name: e.target.value })
                       }
-                      className="w-full border border-gray-300 rounded px-3 py-2"
+                      className="w-full border border-gray-300 rounded px-3 py-2 bg-white text-black"
                       required
                     />
                   </div>
@@ -1465,7 +1534,7 @@ export default function AdminDashboard() {
                       onChange={(e) =>
                         setNewExercise({ ...newExercise, description: e.target.value })
                       }
-                      className="w-full border border-gray-300 rounded px-3 py-2"
+                      className="w-full border border-gray-300 rounded px-3 py-2 bg-white text-black"
                       rows={3}
                       required
                     />
@@ -1481,21 +1550,84 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {/* Exercises Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {exercises.map((ex) => (
-                <div key={ex.id} className="bg-white p-6 rounded shadow hover:shadow-lg transition">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">{ex.name}</h3>
-                  <p className="text-sm text-gray-600 mb-4">{ex.description}</p>
+            {/* Search bar */}
+            <div className="mb-6">
+              <div className="relative w-full max-w-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                <input
+                  value={exerciseQuery}
+                  onChange={(e) => setExerciseQuery(e.target.value)}
+                  placeholder="Search exercises"
+                  className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
+                />
+              </div>
+            </div>
 
-                  <button
-                    onClick={() => handleDeleteExercise(ex.id)}
-                    className="w-full px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded transition font-medium"
-                  >
-                    Delete
-                  </button>
-                </div>
-              ))}
+            {/* Exercises List */}
+            <div className="grid gap-6">
+              {exercises.length === 0 ? (
+                <div className="text-gray-500">No exercises found.</div>
+              ) : (
+                <>
+                  {systemExercises.length > 0 && (
+                    <section>
+                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                        System Exercises ({systemExercises.length})
+                      </h3>
+                      <div className="grid gap-4">
+                        {systemExercises.map((ex) => (
+                          <AdminExerciseRow
+                            key={ex.id}
+                            exercise={ex}
+                            isEditing={editingId === ex.id}
+                            editDesc={editDesc}
+                            saving={saving}
+                            onEdit={() => startEdit(ex)}
+                            onCancel={cancelEdit}
+                            onSave={() => saveExercise(ex.id)}
+                            onEditDesc={setEditDesc}
+                            onView={() => setViewingExercise(ex)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {customExercises.length > 0 ? (
+                    <section className="mt-4">
+                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                        Custom Exercises ({customExercises.length})
+                      </h3>
+                      <div className="grid gap-4">
+                        {customExercises.map((ex) => (
+                          <AdminExerciseRow
+                            key={ex.id}
+                            exercise={ex}
+                            isEditing={editingId === ex.id}
+                            editDesc={editDesc}
+                            saving={saving}
+                            onEdit={() => startEdit(ex)}
+                            onCancel={cancelEdit}
+                            onSave={() => saveExercise(ex.id)}
+                            onEditDesc={setEditDesc}
+                            onView={() => setViewingExercise(ex)}
+                            onDelete={() => handleDeleteClick(ex.id, ex.name)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ) : exerciseQuery === "" ? (
+                    <section className="mt-4">
+                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                        Custom Exercises (0)
+                      </h3>
+                      <p className="text-gray-400 text-sm">No custom exercises yet.</p>
+                    </section>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1707,6 +1839,208 @@ export default function AdminDashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {/* View Exercise Details Modal */}
+      {viewingExercise && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setViewingExercise(null)}
+          />
+
+          {/* Modal Content */}
+          <div className="relative z-10 w-full max-w-lg bg-white rounded-2xl shadow-xl p-6 overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex justify-between items-start mb-4 shrink-0">
+              <h3 className="text-xl font-bold text-gray-900">{viewingExercise.name}</h3>
+              <button
+                onClick={() => setViewingExercise(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Scrollable content area */}
+            <div className="overflow-y-auto pr-1 flex-1 space-y-4">
+              {/* Video Player */}
+              <div className="w-full">
+                <VideoPlayer src="/sample-video.mp4" />
+              </div>
+
+              {/* Description */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Description
+                </h4>
+                <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                  {viewingExercise.description}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Styled Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteConfirm(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{deleteTargetName}</span>? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setShowDeleteConfirm(false); setDeleteTargetId(null); setDeleteTargetName(null); }}
+                  className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteExercise}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AdminExerciseRow({
+  exercise, isEditing, editDesc, saving,
+  onEdit, onCancel, onSave, onEditDesc, onView, onDelete,
+}: {
+  exercise: Exercise;
+  isEditing: boolean;
+  editDesc: string;
+  saving: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onEditDesc: (v: string) => void;
+  onView: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div className="border border-gray-200 bg-white rounded-xl p-4 transition hover:shadow-sm">
+      {isEditing ? (
+        <div className="space-y-3">
+          <div className="font-semibold text-gray-900 text-sm">{exercise.name}</div>
+          <textarea
+            value={editDesc}
+            onChange={(e) => onEditDesc(e.target.value)}
+            placeholder="Description"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
+            rows={3}
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={onSave}
+              disabled={saving}
+              className="px-3 py-1.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-xs font-medium rounded-lg transition"
+            >
+              {saving ? "Saving..." : "Save"}
+            </button>
+            <button
+              onClick={onCancel}
+              className="px-3 py-1.5 border border-gray-300 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
+            <p className="text-xs text-gray-500 mt-1">{exercise.description}</p>
+          </div>
+          <div className="flex gap-2 ml-4 shrink-0">
+            <button
+              onClick={onView}
+              className="px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-medium rounded-lg transition"
+            >
+              View
+            </button>
+            <button
+              onClick={onEdit}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
+            >
+              Edit
+            </button>
+            {exercise.is_custom && onDelete && (
+              <button
+                onClick={onDelete}
+                className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 transition"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoPlayer({ src }: { src: string }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const togglePlay = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => console.error("Video play error:", err));
+    }
+  };
+
+  return (
+    <div
+      className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center cursor-pointer group"
+      onClick={togglePlay}
+    >
+      <video
+        ref={videoRef}
+        src={src}
+        className="w-full h-full object-cover"
+        playsInline
+        onEnded={() => setIsPlaying(false)}
+      />
+      {!isPlaying && (
+        <button
+          onClick={togglePlay}
+          className="absolute p-4 rounded-full bg-white/90 shadow-lg hover:bg-white text-green-700 hover:scale-105 transition flex items-center justify-center z-10"
+          aria-label="Play video"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        </button>
       )}
     </div>
   );

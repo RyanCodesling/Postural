@@ -37,6 +37,8 @@
 - `git diff --check` exited clean with only Git CRLF normalization warnings
 - Live follow-up confirmed the warning can still be triggered by residual landmark noise, but flicker occurrence is reduced and accepted for this sprint
 
+---
+
 ## 📌 Update-6-7-26 | *Enah*
 - Added secure password hashing using `bcryptjs` for all newly registered accounts and password modifications, protecting user data from plaintext storage
 - Retained plaintext storage and verification for the three system demo credentials (`patient123`, `therapist123`, and `admin123`) to support non-disruptive testing
@@ -78,6 +80,11 @@
 - Added bulk deletion support via dropdown checkboxes and a trash bin icon in the notification bell layout, plus individual deletion within the notification details modal
 - Integrated the notification bell component into parent layouts and headers (admin, patient, therapist) to prevent unmounting and ensure uninterrupted audio alerts and polling across pages
 - Enabled automated triggers to create notifications for user log-ins/log-outs, therapist password changes on first login, therapist and exercise assignments, patient session start and completion, missed exercises, and upcoming exercises
+- Styled the "Create New Program" and "Add New Custom Exercise" action toggle buttons and form submission buttons on Therapist Exercise Program page to use exact fixed widths to prevent shifting/stretching
+- Streamlined patient details view under therapist's Manage Patients by removing the "View Exercise" button on Assigned Exercises and moving the status pill to the right side of the card, matching the Completed Exercises layout
+- Aligned Admin Dashboard exercises management with Therapist's exercises dashboard, including system/custom categorization, search bar filtering, play-only video details modal, description-only inline editing, and deletion controls restricted to custom exercises
+- Configured exercise creation flow from Admin page to automatically mark newly added exercises as Custom Exercises
+- Fixed a visual bug in the Admin "Add New Exercise" form heading by adding text-gray-900 to ensure readability on white backgrounds
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added `showTutorial` and `tutorialStep` state variables
@@ -264,6 +271,29 @@
 
 ### *web\src\app\(app)\dashboard\therapist\layout.tsx*
 - Integrated global `<NotificationBell />` header component in the therapist layout wrapper, ensuring uninterrupted continuous polling and audio chime playback across views
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*
+- Aligned card styles to match the Manage Patients design
+- Added a green **View** button that displays a play-only video preview of `/sample-video.mp4` with the description
+- Updated the **Edit** action button to red, locking name modifications and allowing updates only to the description
+- Removed display of raw exercise IDs
+- Added a custom styled confirmation modal overlay for deleting custom exercises
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Styled "+ Create New Program" and "+ Add New Custom Exercise" buttons with an exact fixed width (`w-60`) and height (`h-10`) with centered alignment, preventing size changes when toggling cancel
+- Styled program form save/cancel buttons with exact width `w-40` and height `h-10`, and custom exercise form save/cancel buttons with exact width `w-48` and height `h-10`, ensuring visual alignment
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Removed the "View Exercise" button from Assigned Exercises cards
+- Relocated the exercise status pill ("In Progress" / "Not Started") to the right side of the card, styled to match the Completed Exercises pill layout
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Copied system/custom exercise lists, search filtering, and description editing logic from therapist's exercises page
+- Bound new state variables (`editingId`, `editDesc`, `saving`, `exerciseQuery`, `viewingExercise`, `showDeleteConfirm`, `deleteTargetId`, `deleteTargetName`) to support exercises list features
+- Added `isCustom: true` payload to added exercises in `handleAddExercise` so newly added admin exercises are custom by default
+- Declared helper subcomponents `AdminExerciseRow` and `VideoPlayer` at the bottom of the file
+- Rendered play-only `/sample-video.mp4` preview modal and styled trash-icon deletion confirmation dialog for custom exercises
+- Added `text-gray-900` class to the "Add New Exercise" form heading to ensure readability
 
 ### Validation
 - `npm run build` passed — 33/33 pages compiled successfully

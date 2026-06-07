@@ -268,6 +268,11 @@ function drawShoulderAsymmetry(
  * computation results not surfaced in `metricValues`.
  *
  * Call after drawConnectors/drawLandmarks so the overlay renders on top.
+ *
+ * `activeWarningNames` is optional for backwards compatibility. When supplied,
+ * the caller has already applied any display-layer hysteresis/debounce and this
+ * function should trust that latched warning state instead of rechecking the
+ * raw threshold every frame.
  */
 export function drawCompensationOverlay(
   ctx: CanvasRenderingContext2D,
@@ -277,11 +282,15 @@ export function drawCompensationOverlay(
   compensationMetrics: readonly CompensationMetricSpec[],
   metricValues: Partial<Record<MetricName, number | null>>,
   metricDirections?: Partial<Record<MetricName, string>>,
+  activeWarningNames?: ReadonlySet<MetricName>,
 ): void {
   for (const spec of compensationMetrics) {
     const value = metricValues[spec.name];
     if (typeof value !== "number") continue;
-    if (!isWarning(spec, value)) continue;
+    const warningActive = activeWarningNames
+      ? activeWarningNames.has(spec.name)
+      : isWarning(spec, value);
+    if (!warningActive) continue;
 
     // ── Shoulder asymmetry: per-shoulder boxes + down-arrow on the high side ──
     // The warning has already fired (isWarning above); place the cue on the

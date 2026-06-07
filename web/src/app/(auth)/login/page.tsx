@@ -1,21 +1,30 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { loginUser } from "@/lib/auth";
 import { useAuth } from "@/lib/AuthContext";
 import bgImage from "../../../../media/acc_bacoor_landing_page.png";
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
   const { login } = useAuth();
+
+  const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("reset") === "success") {
+      setSuccessMsg("Password reset successful! Please log in with your new password.");
+    }
+  }, [searchParams]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,6 +34,12 @@ export default function LoginPage() {
     try {
       const result = await loginUser(email, password);
       login(result.user);
+
+      // Check if user must change password
+      if (result.mustChangePassword) {
+        router.push("/change-password");
+        return;
+      }
 
       const id: string = result.user.id;
       if (id.startsWith("admin_")) {
@@ -107,6 +122,20 @@ export default function LoginPage() {
             </button>
           </div>
 
+          <div className="text-right -mt-2">
+            <button
+              type="button"
+              onClick={() => router.push("/forgot-password")}
+              className="text-sm text-green-300 hover:text-white transition-colors underline underline-offset-2"
+            >
+              Forgot Password?
+            </button>
+          </div>
+
+          {successMsg && (
+            <p className="text-sm text-left px-3 py-2 rounded-lg bg-green-500/20 border border-green-400/40 text-green-200">{successMsg}</p>
+          )}
+
           {error && (
             <p className="text-sm text-left px-3 py-2 rounded-lg bg-red-500/20 border border-red-400/40 text-red-200">{error}</p>
           )}
@@ -129,5 +158,13 @@ export default function LoginPage() {
 
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginContent />
+    </Suspense>
   );
 }

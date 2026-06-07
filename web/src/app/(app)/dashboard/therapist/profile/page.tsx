@@ -4,6 +4,7 @@ import React from "react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import ChangePasswordModal from "../../_components/ChangePasswordModal";
 
 interface TherapistProfile {
   id: string;
@@ -19,6 +20,7 @@ export default function TherapistProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<TherapistProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -97,8 +99,8 @@ export default function TherapistProfilePage() {
             <div className="space-y-3">
               <button
                 type="button"
-                disabled
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 text-white text-sm font-medium cursor-not-allowed opacity-90"
+                onClick={() => setShowChangePassword(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white text-sm font-medium transition"
               >
                 <KeyIcon />
                 Change Password
@@ -116,6 +118,13 @@ export default function TherapistProfilePage() {
 
         </div>
       </div>
+
+      {showChangePassword && profile?.email && (
+        <ChangePasswordModal
+          email={profile.email}
+          onClose={() => setShowChangePassword(false)}
+        />
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
 import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
+import ChangePasswordModal from "../_components/ChangePasswordModal";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 
 interface PatientProfile {
@@ -92,6 +93,7 @@ export default function PatientDashboardPage() {
   const [occurrences, setOccurrences] = useState<PatientOccurrence[]>([]);
   const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -593,8 +595,8 @@ export default function PatientDashboardPage() {
                   <div className="space-y-3">
                     <button
                       type="button"
-                      disabled
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 text-white text-sm font-medium cursor-not-allowed opacity-90"
+                      onClick={() => setShowChangePassword(true)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white text-sm font-medium transition"
                     >
                       <KeyIcon />
                       Change Password
@@ -616,6 +618,13 @@ export default function PatientDashboardPage() {
         )}
 
       </main>
+
+      {showChangePassword && patientProfile?.email && (
+        <ChangePasswordModal
+          email={patientProfile.email}
+          onClose={() => setShowChangePassword(false)}
+        />
+      )}
     </div>
   );
 }

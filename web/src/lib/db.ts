@@ -33,12 +33,10 @@ function mapUser(row: Record<string, unknown>) {
     dateOfBirth:    row.date_of_birth     ?? null,
     age:            row.age               ?? null,
     gender:         row.gender            ?? null,
-    diagnosis:      row.diagnosis         ?? null,
-    prescription:   row.prescription      ?? null,
-    condition:      row.condition         ?? null,
     therapistIDNum: row.therapist_id_num  ?? null,
     specialty:      row.specialty         ?? null,
     createdAt:      row.created_at        ?? null,
+    mustChangePassword: row.must_change_password ?? false,
   };
 }
 
@@ -85,6 +83,13 @@ export async function getUserByEmail(email: string) {
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
+export async function isEmailTaken(email: string, excludeId?: string): Promise<boolean> {
+  const result = excludeId
+    ? await pool.query("SELECT id FROM users WHERE email = $1 AND id != $2 LIMIT 1", [email, excludeId])
+    : await pool.query("SELECT id FROM users WHERE email = $1 LIMIT 1", [email]);
+  return result.rows.length > 0;
+}
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 export async function getUsers(filters?: { role?: string; therapistId?: string }) {
@@ -117,9 +122,6 @@ export async function createUser(data: {
   dateOfBirth?: string;
   age?: number;
   gender?: string;
-  diagnosis?: string;
-  prescription?: string;
-  condition?: string;
   therapistIDNum?: string;
   specialty?: string;
 }) {
@@ -127,8 +129,8 @@ export async function createUser(data: {
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
         role, date_of_birth, age, gender,
-        diagnosis, prescription, condition, therapist_id_num, specialty)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        therapist_id_num, specialty)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING *`,
     [
       data.id,
@@ -142,9 +144,6 @@ export async function createUser(data: {
       data.dateOfBirth ?? null,
       data.age ?? null,
       data.gender ?? null,
-      data.diagnosis ?? null,
-      data.prescription ?? null,
-      data.condition ?? null,
       data.therapistIDNum ?? null,
       data.specialty ?? null,
     ]
@@ -162,9 +161,6 @@ export async function updateUser(id: string, data: Partial<{
   dateOfBirth: string;
   age: number;
   gender: string;
-  diagnosis: string;
-  prescription: string;
-  condition: string;
   therapistIDNum: string;
   specialty: string;
 }>) {
@@ -181,9 +177,6 @@ export async function updateUser(id: string, data: Partial<{
     dateOfBirth:    "date_of_birth",
     age:            "age",
     gender:         "gender",
-    diagnosis:      "diagnosis",
-    prescription:   "prescription",
-    condition:      "condition",
     therapistIDNum: "therapist_id_num",
     specialty:      "specialty",
   };
@@ -207,6 +200,83 @@ export async function updateUser(id: string, data: Partial<{
 
 export async function deleteUser(id: string) {
   await pool.query("DELETE FROM users WHERE id = $1", [id]);
+}
+
+export async function updateUserPassword(userId: string, newPassword: string) {
+  await pool.query(
+    "UPDATE users SET password = $1, must_change_password = FALSE WHERE id = $2",
+    [newPassword, userId]
+  );
+}
+
+export async function setMustChangePassword(userId: string, value: boolean) {
+  await pool.query(
+    "UPDATE users SET must_change_password = $1 WHERE id = $2",
+    [value, userId]
+  );
+}
+
+/** Returns the raw DB row for a user (including password). Used for password verification. */
+export async function getUserRawById(id: string) {
+  const result = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
+export async function createOTP(
+  userId: string,
+  email: string,
+  otp: string,
+  expiresAt: Date
+) {
+  await pool.query(
+    `INSERT INTO password_reset_otps (user_id, email, otp, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [userId, email, otp, expiresAt]
+  );
+}
+
+export async function verifyOTP(email: string, otp: string): Promise<string | null> {
+  const result = await pool.query(
+    `SELECT id FROM password_reset_otps
+     WHERE email = $1 AND otp = $2 AND used = FALSE AND expires_at > NOW()
+     LIMIT 1`,
+    [email, otp]
+  );
+  if (result.rows.length === 0) return null;
+
+  const { randomBytes } = await import("crypto");
+  const resetToken = randomBytes(32).toString("hex");
+  const resetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+  await pool.query(
+    `UPDATE password_reset_otps
+     SET used = TRUE, reset_token = $1, reset_token_expires_at = $2
+     WHERE id = $3`,
+    [resetToken, resetTokenExpiresAt, result.rows[0].id]
+  );
+  return resetToken;
+}
+
+export async function validateAndConsumeResetToken(email: string, token: string): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT id FROM password_reset_otps
+     WHERE email = $1 AND reset_token = $2 AND reset_token_expires_at > NOW()
+     LIMIT 1`,
+    [email, token]
+  );
+  if (result.rows.length === 0) return false;
+  await pool.query(
+    "UPDATE password_reset_otps SET reset_token = NULL WHERE id = $1",
+    [result.rows[0].id]
+  );
+  return true;
+}
+
+export async function invalidateOTPs(email: string) {
+  await pool.query(
+    "UPDATE password_reset_otps SET used = TRUE WHERE email = $1 AND used = FALSE",
+    [email]
+  );
 }
 
 // ── Exercises ─────────────────────────────────────────────────────────────────

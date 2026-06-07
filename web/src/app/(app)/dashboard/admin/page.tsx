@@ -19,10 +19,6 @@ interface User {
   dateOfBirth?: string;
   age?: number;
   gender?: string;
-  // Patient-specific fields
-  diagnosis?: string;
-  prescription?: string;
-  condition?: string;
   // Therapist-specific fields
   therapistIDNum?: string;
   specialty?: string;
@@ -54,12 +50,11 @@ export default function AdminDashboard() {
     dateOfBirth: "",
     age: undefined,
     gender: "",
-    diagnosis: "",
-    prescription: "",
-    condition: "",
     therapistIDNum: "",
     specialty: ""
   });
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [editEmailError, setEditEmailError] = useState<string | null>(null);
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -120,7 +115,7 @@ export default function AdminDashboard() {
     if (!newUser.firstName || !newUser.lastName || !newUser.role) return;
 
     if (newUser.role === "patient") {
-      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.diagnosis || !newUser.prescription || !newUser.condition) return;
+      if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || emailError) return;
     } else if (newUser.role === "therapist") {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
@@ -140,7 +135,11 @@ export default function AdminDashboard() {
         setUsers([...users, data.user]);
         const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
         setStatusModalType("success");
-        setStatusModalMsg(`${fullName} successfully added.`);
+        setStatusModalMsg(
+          newUser.email
+            ? `${fullName} successfully added. An activation email with login credentials has been sent to ${newUser.email}.`
+            : `${fullName} successfully added.`
+        );
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -155,7 +154,8 @@ export default function AdminDashboard() {
     }
 
     setShowAddPreview(false);
-    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", diagnosis: "", prescription: "", condition: "", therapistIDNum: "", specialty: "" });
+    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "" });
+    setEmailError(null);
     setSelectedRole(null);
     setShowUserForm(false);
     setEditingUserId(null);
@@ -194,9 +194,14 @@ export default function AdminDashboard() {
     try {
       const res = await fetch(`/api/users/${deleteUserId}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete user.");
+      const deletedEmail = users.find((u) => u.id === deleteUserId)?.email;
       setUsers(users.filter((u) => u.id !== deleteUserId));
       setStatusModalType("success");
-      setStatusModalMsg(`${deleteUserName} successfully deleted.`);
+      setStatusModalMsg(
+        deletedEmail
+          ? `${deleteUserName} successfully deleted. An email notification has been sent to ${deletedEmail}.`
+          : `${deleteUserName} successfully deleted.`
+      );
       setShowStatusModal(true);
     } catch (err) {
       console.error("Failed to delete user:", err);
@@ -219,6 +224,7 @@ export default function AdminDashboard() {
   const handleSaveEditUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
+    if (editEmailError) return;
     setShowEditPreview(true);
   };
 
@@ -234,8 +240,14 @@ export default function AdminDashboard() {
       if (res.ok) {
         setUsers(users.map((u) => (u.id === editingUserId ? data.user : u)));
         const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
+        const originalEmail = users.find((u) => u.id === editingUserId)?.email;
+        const emailChanged = editingUser.email && originalEmail && editingUser.email !== originalEmail;
         setStatusModalType("success");
-        setStatusModalMsg(`${fullName} successfully updated.`);
+        setStatusModalMsg(
+          emailChanged
+            ? `${fullName} successfully updated. Email notifications have been sent to ${originalEmail} and ${editingUser.email} about the email address change.`
+            : `${fullName} successfully updated.`
+        );
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -256,6 +268,7 @@ export default function AdminDashboard() {
   const handleCancelEdit = () => {
     setEditingUserId(null);
     setEditingUser(null);
+    setEditEmailError(null);
   };
 
   const handleAssignPatient = async () => {
@@ -492,12 +505,10 @@ export default function AdminDashboard() {
                         dateOfBirth: "",
                         age: undefined,
                         gender: "",
-                        diagnosis: "",
-                        prescription: "",
-                        condition: "",
                         therapistIDNum: "",
                         specialty: ""
                       });
+                      setEmailError(null);
                     }
                   }
                 }}
@@ -512,8 +523,8 @@ export default function AdminDashboard() {
             </div>
 
             {showUserForm && !editingUserId && (
-              <div className="bg-white p-6 rounded shadow mb-6">
-                <h3 className="text-xl font-semibold mb-4">Add New User</h3>
+              <div className="bg-white p-6 rounded shadow mb-6 text-black">
+                <h3 className="text-xl font-semibold mb-4 text-black">Add New User</h3>
                 <form onSubmit={handleAddUser} className="space-y-4">
                   {!selectedRole ? (
                     <>
@@ -528,9 +539,10 @@ export default function AdminDashboard() {
                               setSelectedRole("patient");
                               setNewUser({ ...newUser, role: "patient" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
                           >
-                            👤 Patient
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                            Patient
                           </button>
                           <button
                             type="button"
@@ -538,9 +550,10 @@ export default function AdminDashboard() {
                               setSelectedRole("therapist");
                               setNewUser({ ...newUser, role: "therapist" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium"
+                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
                           >
-                            👨‍⚕️ Therapist
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4zm6 11h-3v3h-2v-3H8v-2h3v-3h2v3h3v2z"/></svg>
+                            Therapist
                           </button>
                         </div>
                       </div>
@@ -548,8 +561,12 @@ export default function AdminDashboard() {
                   ) : (
                     <>
                       <div className="flex items-center justify-between mb-4 pb-4 border-b">
-                        <h4 className="text-lg font-semibold">
-                          {selectedRole === "patient" ? "👤 Patient Information" : "👨‍⚕️ Therapist Information"}
+                        <h4 className="text-lg font-semibold flex items-center gap-2">
+                          {selectedRole === "patient" ? (
+                            <><svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg> Patient Information</>
+                          ) : (
+                            <><svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4zm6 11h-3v3h-2v-3H8v-2h3v-3h2v3h3v2z"/></svg> Therapist Information</>
+                          )}
                         </h4>
                         <button
                           type="button"
@@ -656,49 +673,16 @@ export default function AdminDashboard() {
                             <input
                               type="email"
                               value={newUser.email || ""}
-                              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewUser({ ...newUser, email: val });
+                                const duplicate = users.some(u => u.email === val);
+                                setEmailError(duplicate ? "This email address is already registered to an account." : null);
+                              }}
+                              className={`w-full border rounded px-3 py-2 ${emailError ? "border-red-500" : "border-gray-300"}`}
                               required
                             />
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Diagnosis <span className="text-red-500">*</span>
-                            </label>
-                            <textarea
-                              value={newUser.diagnosis || ""}
-                              onChange={(e) => setNewUser({ ...newUser, diagnosis: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
-                              rows={4}
-                              required
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Prescription <span className="text-red-500">*</span>
-                            </label>
-                            <textarea
-                              value={newUser.prescription || ""}
-                              onChange={(e) => setNewUser({ ...newUser, prescription: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
-                              rows={4}
-                              required
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                              Condition <span className="text-red-500">*</span>
-                            </label>
-                            <textarea
-                              value={newUser.condition || ""}
-                              onChange={(e) => setNewUser({ ...newUser, condition: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
-                              rows={4}
-                              required
-                            />
+                            {emailError && <p className="mt-1 text-xs text-red-600">{emailError}</p>}
                           </div>
                         </>
                       )}
@@ -713,10 +697,16 @@ export default function AdminDashboard() {
                             <input
                               type="email"
                               value={newUser.email || ""}
-                              onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setNewUser({ ...newUser, email: val });
+                                const duplicate = users.some(u => u.email === val);
+                                setEmailError(duplicate ? "This email address is already registered to an account." : null);
+                              }}
+                              className={`w-full border rounded px-3 py-2 ${emailError ? "border-red-500" : "border-gray-300"}`}
                               required
                             />
+                            {emailError && <p className="mt-1 text-xs text-red-600">{emailError}</p>}
                           </div>
 
                           <div>
@@ -736,7 +726,8 @@ export default function AdminDashboard() {
 
                       <button
                         type="submit"
-                        className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
+                        disabled={!!emailError}
+                        className={`w-full px-4 py-2 text-white rounded transition ${emailError ? "bg-gray-400 cursor-not-allowed" : "bg-green-700 hover:bg-green-800"}`}
                       >
                         Add User
                       </button>
@@ -748,11 +739,15 @@ export default function AdminDashboard() {
 
             {/* Edit User Form */}
             {editingUserId && editingUser && (
-              <div className="bg-white p-6 rounded shadow mb-6 border-l-4 border-yellow-500">
+              <div className="bg-white p-6 rounded shadow mb-6 border-l-4 border-yellow-500 text-black">
                 <h3 className="text-xl font-semibold mb-4">Edit User Details</h3>
                 <form onSubmit={handleSaveEditUser} className="space-y-4">
-                  <h4 className="text-lg font-semibold">
-                    {editingUser.role === "patient" ? "👤 Patient Information" : "👨‍⚕️ Therapist Information"}
+                  <h4 className="text-lg font-semibold flex items-center gap-2">
+                    {editingUser.role === "patient" ? (
+                      <><svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg> Patient Information</>
+                    ) : (
+                      <><svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4zm6 11h-3v3h-2v-3H8v-2h3v-3h2v3h3v2z"/></svg> Therapist Information</>
+                    )}
                   </h4>
 
                   {/* Common Fields */}
@@ -855,53 +850,15 @@ export default function AdminDashboard() {
                         <input
                           type="email"
                           value={editingUser.email || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, email: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditingUser({ ...editingUser, email: val });
+                            const duplicate = users.some(u => u.email === val && u.id !== editingUserId);
+                            setEditEmailError(duplicate ? "This email address is already registered to an account." : null);
+                          }}
+                          className={`w-full border rounded px-3 py-2 ${editEmailError ? "border-red-500" : "border-gray-300"}`}
                         />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Diagnosis
-                        </label>
-                        <textarea
-                          value={editingUser.diagnosis || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, diagnosis: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                          rows={4}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Prescription
-                        </label>
-                        <textarea
-                          value={editingUser.prescription || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, prescription: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                          rows={4}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Condition
-                        </label>
-                        <textarea
-                          value={editingUser.condition || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, condition: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
-                          rows={4}
-                        />
+                        {editEmailError && <p className="mt-1 text-xs text-red-600">{editEmailError}</p>}
                       </div>
                     </>
                   )}
@@ -916,11 +873,15 @@ export default function AdminDashboard() {
                         <input
                           type="email"
                           value={editingUser.email || ""}
-                          onChange={(e) =>
-                            setEditingUser({ ...editingUser, email: e.target.value })
-                          }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditingUser({ ...editingUser, email: val });
+                            const duplicate = users.some(u => u.email === val && u.id !== editingUserId);
+                            setEditEmailError(duplicate ? "This email address is already registered to an account." : null);
+                          }}
+                          className={`w-full border rounded px-3 py-2 ${editEmailError ? "border-red-500" : "border-gray-300"}`}
                         />
+                        {editEmailError && <p className="mt-1 text-xs text-red-600">{editEmailError}</p>}
                       </div>
                       
                       <div>
@@ -942,7 +903,8 @@ export default function AdminDashboard() {
                   <div className="flex gap-3">
                     <button
                       type="submit"
-                      className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
+                      disabled={!!editEmailError}
+                      className={`flex-1 px-4 py-2 text-white rounded transition ${editEmailError ? "bg-gray-400 cursor-not-allowed" : "bg-green-700 hover:bg-green-800"}`}
                     >
                       Save Changes
                     </button>
@@ -1060,22 +1022,6 @@ export default function AdminDashboard() {
                       <span className="w-32 shrink-0 text-gray-500">Gender</span>
                       <span className="font-medium text-gray-900 capitalize">{newUser.gender}</span>
                     </div>
-                    {newUser.role === "patient" && (
-                      <>
-                        <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Diagnosis</span>
-                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.diagnosis}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Prescription</span>
-                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.prescription}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Condition</span>
-                          <span className="font-medium text-gray-900 whitespace-pre-wrap">{newUser.condition}</span>
-                        </div>
-                      </>
-                    )}
                     {newUser.role === "therapist" && (
                       <div className="flex gap-2">
                         <span className="w-32 shrink-0 text-gray-500">Specialty</span>
@@ -1114,11 +1060,6 @@ export default function AdminDashboard() {
                 { label: "Date of Birth", oldVal: original?.dateOfBirth, newVal: editingUser.dateOfBirth },
                 { label: "Age", oldVal: original?.age, newVal: editingUser.age },
                 { label: "Gender", oldVal: original?.gender, newVal: editingUser.gender },
-                ...(editingUser.role === "patient" ? [
-                  { label: "Diagnosis", oldVal: original?.diagnosis, newVal: editingUser.diagnosis },
-                  { label: "Prescription", oldVal: original?.prescription, newVal: editingUser.prescription },
-                  { label: "Condition", oldVal: original?.condition, newVal: editingUser.condition },
-                ] : []),
                 ...(editingUser.role === "therapist" ? [
                   { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
                 ] : []),
@@ -1354,7 +1295,7 @@ export default function AdminDashboard() {
                         <select
                           value={selectedTherapistId || ""}
                           onChange={(e) => setSelectedTherapistId(e.target.value || null)}
-                          className="w-full border border-gray-300 rounded px-3 py-2 mb-4"
+                          className="w-full border border-gray-300 rounded px-3 py-2 mb-4 text-black bg-white"
                         >
                           <option value="">-- Select a Therapist --</option>
                           {therapists.map((therapist) => (

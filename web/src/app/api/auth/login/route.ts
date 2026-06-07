@@ -15,9 +15,16 @@ export async function POST(request: NextRequest) {
 
     const user = await getUserByEmail(email);
 
-    if (!user || user.password !== password) {
+    if (!user) {
       return NextResponse.json(
-        { error: "Invalid email or password" },
+        { error: "No account is registered with this email address." },
+        { status: 401 }
+      );
+    }
+
+    if (user.password !== password) {
+      return NextResponse.json(
+        { error: "Invalid email or password." },
         { status: 401 }
       );
     }
@@ -33,7 +40,7 @@ export async function POST(request: NextRequest) {
     };
 
     const response = NextResponse.json(
-      { success: true, user: sessionUser },
+      { success: true, user: sessionUser, mustChangePassword: user.must_change_password ?? false },
       { status: 200 }
     );
 

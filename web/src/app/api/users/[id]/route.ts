@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, deleteUser } from "@/lib/db";
+import { getUserById, updateUser, deleteUser, isEmailTaken } from "@/lib/db";
+import {
+  sendEmailChangedToOldAddress,
+  sendEmailChangedToNewAddress,
+  sendEmailChangedAdminNotification,
+  sendAccountDeletedUserEmail,
+  sendAccountDeletedAdminEmail,
+} from "@/lib/email";
 
 export async function GET(
   request: NextRequest,
@@ -52,10 +59,39 @@ export async function PUT(
       if (parts.length > 0) body.name = parts.join(" ");
     }
 
+    // Duplicate email check (excluding self)
+    if (body.email) {
+      const taken = await isEmailTaken(body.email, id);
+      if (taken) {
+        return NextResponse.json(
+          { error: "This email address is already registered to an account." },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Capture old user data before update to detect email change
+    const oldUser = await getUserById(id);
+
     const updated = await updateUser(id, body);
 
     if (!updated) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    // Send email change notifications if email changed
+    const oldEmail = oldUser?.email as string | undefined;
+    const newEmail = updated.email as string | undefined;
+    if (oldEmail && newEmail && oldEmail !== newEmail) {
+      const authToken = request.cookies.get("auth_token");
+      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+      const userName = updated.name as string;
+
+      sendEmailChangedToOldAddress(oldEmail, userName, newEmail).catch(console.error);
+      sendEmailChangedToNewAddress(newEmail, userName, oldEmail).catch(console.error);
+      if (adminEmail) {
+        sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail).catch(console.error);
+      }
     }
 
     return NextResponse.json({ user: updated });
@@ -66,12 +102,38 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+
+    // Capture user data before deletion for email notifications
+    const userToDelete = await getUserById(id);
+
     await deleteUser(id);
+
+    // Send deletion notifications fire-and-forget
+    if (userToDelete?.email) {
+      const authToken = request.cookies.get("auth_token");
+      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+
+      sendAccountDeletedUserEmail(
+        userToDelete.email as string,
+        userToDelete.name as string,
+        userToDelete.role as string
+      ).catch(console.error);
+
+      if (adminEmail) {
+        sendAccountDeletedAdminEmail(
+          adminEmail,
+          userToDelete.name as string,
+          userToDelete.email as string,
+          userToDelete.role as string
+        ).catch(console.error);
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/users/[id] error:", error);

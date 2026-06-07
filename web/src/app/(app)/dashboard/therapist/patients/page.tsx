@@ -59,9 +59,9 @@ export default function ManagePatientsPage() {
   }, [user?.id]);
 
   const statusColor = (s: string) =>
-    s === "completed" ? "bg-green-100 text-green-700"
-    : s === "in_progress" ? "bg-blue-100 text-blue-700"
-    : "bg-gray-100 text-gray-600";
+    s === "completed" ? "bg-green-100 text-green-700 border border-green-200"
+    : s === "in_progress" ? "bg-green-50 text-green-600 border border-green-200"
+    : "bg-green-50 text-green-600 border border-green-100";
 
   const filtered = patients.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase())
@@ -92,12 +92,17 @@ export default function ManagePatientsPage() {
       </div>
 
       <div className="mb-6">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search patients"
-          className="w-full max-w-sm border p-2 rounded"
-        />
+        <div className="relative w-full max-w-sm">
+          <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search patients"
+            className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
+          />
+        </div>
       </div>
 
       <div className="grid gap-4">
@@ -118,7 +123,7 @@ export default function ManagePatientsPage() {
           <div className="text-gray-500">No patients found matching your search.</div>
         ) : (
           filtered.map((p) => (
-            <div key={p.id} className="border rounded p-4">
+            <div key={p.id} className="border border-gray-200 rounded-xl p-4 transition hover:shadow-sm">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="font-semibold text-gray-900">{p.name}</div>

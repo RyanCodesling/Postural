@@ -1,5 +1,167 @@
 # Sprint Updates 
 
+## 📌 Update-6-7-26 | *Enah*
+- Added Email Notification feature using Nodemailer + Gmail SMTP (free, no paid API) — sends emails for account creation, password change confirmation, and forgot password OTP
+- Admin adding a user now auto-generates default password as `LastName + YearOfBirth` (e.g., `DelaCruz2004`) and sends a welcome email with login credentials to the user's email
+- First-time login with default password now forces the user to change password before accessing the dashboard — sends confirmation email after password is changed
+- Added Forgot Password feature with 6-digit OTP email verification — user enters email → receives OTP (5-minute expiry) → verifies OTP → sets new password; wrong OTP blocks access
+- Added `must_change_password` column to users table and `password_reset_otps` table for OTP storage
+- Login page now shows "Forgot Password?" link and displays success message after password reset
+- Admin dashboard success modal now mentions activation email sent to user after account creation
+- Forgot Password now shows "No account found with this email address" error when email doesn't exist instead of silently succeeding
+- Fixed admin dashboard Add User / Edit User form text color — added `text-black` to form containers so all headings, labels, inputs, and buttons are readable on white background
+- Replaced emoji icons (👤, 👨‍⚕️) with inline SVG icons in admin Add User and Edit User forms, matching the sidebar navigation style
+- Enabled Change Password button under Account Actions on therapist and patient View Profile — opens a frosted-glass floating modal overlay (same glassmorphic green styling as Forgot Password page) with 3-step OTP-verified flow: email auto-filled → OTP input → new password; Cancel closes the modal and returns to profile
+- Refined Manage Patients page on therapist dashboard — replaced solid black card outlines with smooth `rounded-xl border-gray-200` borders with hover shadow; updated assigned exercises pills from plain gray/blue to green-themed colors matching the UI; added search icon SVG inside the search patients input with refined `rounded-xl` styling and green focus ring
+- Fixed security gap where `/api/auth/reset-password` accepted any email + new password without verifying OTP was actually completed — endpoint now requires a `resetToken` issued only after successful OTP verification; direct API calls without a valid token are rejected with 401
+- Added `scripts\reset_token_migration.sql` — adds `reset_token` and `reset_token_expires_at` columns to `password_reset_otps`; must be run after `email_features.sql`
+- Updated both SQL migration script headers to state `REQUIRES: PostgreSQL superuser (postural)`, explain why ownership is needed, and show the exact `psql` command so other developers can run them without additional guidance
+- When admin edits a user's email address, notifications are sent to the old email (informing it is no longer active), the new email (confirming it is now active for login), and the admin (audit trail) — all fire-and-forget
+- Login now shows "No account is registered with this email address." when the email does not exist, distinct from the "Invalid email or password." message shown when the password is wrong
+- Added duplicate email validation on the Add User and Edit User email fields — inline red error appears immediately when a typed email already belongs to another account; form submission is blocked until resolved; server-side 409 guard also added
+- When admin deletes a user, a deletion notification is sent to the deleted user's email and a confirmation is sent to the admin; both fire-and-forget
+- When admin adds a new user, a creation confirmation is sent to the admin listing the new user's name, email, and role
+- Removed Diagnosis, Prescription, and Condition fields from Add Patient and Edit Patient forms and from the database — `scripts\user_credentials_pg.sql` now drops those columns via `DROP COLUMN IF EXISTS`
+- Updated admin demo credential email from `admin@postural.com` to `accbpostural.noreply@gmail.com` — rerunning `scripts\user_credentials_pg.sql` will sync an existing admin row to the new address; all admin notification emails (email change, account deletion) go to this address since it is read from the admin's session cookie
+- "Add User" and "Save Changes" buttons are now visually disabled (gray, `cursor-not-allowed`) and unclickable when the email field has a duplicate-email error, replacing the previous submit-time block-only behavior
+- Edit success modal now conditionally appends "Email notifications have been sent to {oldEmail} and {newEmail} about the email address change." when the email was changed; shows plain "successfully updated." otherwise
+- Delete success modal now conditionally appends "An email notification has been sent to {email}." when the deleted user had an email address on file
+- Both Forgot Password and Change Password flows now block if the new password is identical to the current password — server returns 400 "New password must be different from your current password." and the Change Password page also catches this client-side before the API call
+- Fixed Change Password modal (OTP flow from patient/therapist dashboard) — was missing `resetToken` in the reset-password request causing "Email, newPassword, and resetToken are required" error; modal now stores the token returned by verify-OTP and sends it correctly
+
+### *scripts\email_features.sql*
+- Added `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`
+- Added `CREATE TABLE IF NOT EXISTS password_reset_otps` with user_id FK, email, otp, expires_at, used, created_at
+- Added `CREATE INDEX IF NOT EXISTS idx_otp_email ON password_reset_otps(email, used)`
+- Added `GRANT CREATE ON SCHEMA public TO postural` and `GRANT ALL ON SCHEMA public TO postural`
+- Added `GRANT ALL ON TABLE password_reset_otps TO postural` and sequence grants for the `postural` application user
+- Header updated — now explicitly states `REQUIRES: PostgreSQL superuser (postural)` with reason and exact run command: `psql -U postural -d postural -f scripts/email_features.sql`
+
+### *scripts\reset_token_migration.sql*
+- New migration script — adds `reset_token VARCHAR(64)` and `reset_token_expires_at TIMESTAMP` columns to `password_reset_otps`
+- Added `CREATE INDEX IF NOT EXISTS idx_otp_reset_token ON password_reset_otps(email, reset_token) WHERE reset_token IS NOT NULL`
+- Must be run after `email_features.sql`; requires `postural` superuser: `psql -U postural -d postural -f scripts/reset_token_migration.sql`
+
+### *web\src\lib\email.ts*
+- New Nodemailer email utility with Gmail SMTP (smtp.gmail.com:587) using `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` env vars
+- `sendAccountCreationEmail()` — welcome email with login credentials, login link, ACC Bacoor green-themed branding
+- `sendPasswordChangedEmail()` — confirmation email with security warning
+- `sendOTPEmail()` — 6-digit OTP code with 5-minute expiry warning
+- Graceful fallback when SMTP is not configured (logs warning, does not crash)
+- `sendEmailChangedToOldAddress(oldEmail, name, newEmail)` — notifies old address that it is no longer active for login, shows old/new email side by side
+- `sendEmailChangedToNewAddress(newEmail, name, oldEmail)` — notifies new address it is now active, includes Log In button
+- `sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail)` — audit notification to admin with old/new email and user name
+- `sendAccountCreatedAdminEmail(adminEmail, newUserName, newUserEmail, newUserRole)` — notifies admin of new account creation with name, email, role, and a note that activation email was sent to the user
+- `sendAccountDeletedUserEmail(email, name, role)` — informs deleted user their credentials are no longer valid
+- `sendAccountDeletedAdminEmail(adminEmail, deletedName, deletedEmail, deletedRole)` — deletion confirmation to admin with full user details
+
+### *web\src\lib\db.ts*
+- Added `mustChangePassword: row.must_change_password ?? false` to `mapUser()`
+- Added `updateUserPassword(userId, newPassword)` — updates password and clears `must_change_password` flag
+- Added `setMustChangePassword(userId, value)` — sets the `must_change_password` flag
+- Added `getUserRawById(id)` — returns raw DB row including password for verification
+- Added `createOTP(userId, email, otp, expiresAt)` — inserts OTP record
+- Updated `verifyOTP(email, otp)` — now returns `string | null` (the reset token) instead of `boolean`; on success generates a 64-char hex `resetToken`, stores it with a 15-minute expiry in `reset_token` / `reset_token_expires_at`, marks OTP as used, and returns the token
+- Added `validateAndConsumeResetToken(email, token)` — checks token against DB (not expired), nulls it out on match so it is single-use, returns `boolean`
+- Added `invalidateOTPs(email)` — marks all unused OTPs for an email as used
+- Added `isEmailTaken(email, excludeId?)` — returns `true` if another account already uses this email; `excludeId` omits the current user during edits
+- Removed `diagnosis`, `prescription`, `condition` from `mapUser()`, `createUser()` signature and INSERT query, and `updateUser()` type and column map
+
+### *scripts\user_credentials_pg.sql*
+- Removed `ADD COLUMN IF NOT EXISTS` lines for `diagnosis`, `prescription`, and `condition`
+- Added `DROP COLUMN IF EXISTS diagnosis`, `DROP COLUMN IF EXISTS prescription`, `DROP COLUMN IF EXISTS condition` — safe to re-run on existing databases
+- Changed admin demo credential email from `admin@postural.com` to `accbpostural.noreply@gmail.com` in the INSERT block
+- Added `UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001'` after the INSERT so rerunning the script syncs an existing admin row to the new address
+
+### *web\src\app\api\auth\login\route.ts*
+- Added `mustChangePassword: user.must_change_password ?? false` to the login JSON response body
+- Separated null-user and wrong-password cases: returns "No account is registered with this email address." (401) when email is not found, and "Invalid email or password." (401) when password is wrong
+
+### *web\src\app\api\auth\change-password\route.ts*
+- New POST endpoint — validates userId, currentPassword, newPassword; verifies current password; updates password via `updateUserPassword()`; sends confirmation email; refreshes auth cookie
+- Added same-password guard — returns 400 "New password must be different from your current password." if newPassword equals the verified current password
+
+### *web\src\app\api\auth\forgot-password\route.ts*
+- New POST endpoint — generates 6-digit OTP via `crypto.randomInt()`, stores with 5-minute expiry, sends OTP email
+- Returns 404 with "No account found with this email address" when the email doesn't match any account
+
+### *web\src\app\api\auth\verify-otp\route.ts*
+- New POST endpoint — verifies OTP against DB, returns 400 with "Invalid or expired OTP" if invalid
+- Now returns `{ success: true, resetToken }` on success — `resetToken` is a 64-char hex token with a 15-minute expiry, required to call `/api/auth/reset-password`
+
+### *web\src\app\api\auth\reset-password\route.ts*
+- New POST endpoint — requires `resetToken` validated via `validateAndConsumeResetToken()` (returns 401 if missing, invalid, or expired); blocks same-password with 400 "New password must be different from your current password."; updates password via `updateUserPassword()` and sends confirmation email
+
+### *web\src\app\api\users\route.ts*
+- POST now sets `must_change_password = TRUE` on newly created users via `setMustChangePassword()`
+- Sends welcome email fire-and-forget after user creation (does not block response)
+- Sends `sendAccountCreatedAdminEmail` to the admin (email read from auth cookie) fire-and-forget after user creation
+- Returns `{ user, emailSent }` in response
+- POST now checks `isEmailTaken(email)` before creating — returns 409 "This email address is already registered to an account." if duplicate
+- Removed `diagnosis`, `prescription`, `condition` from POST body destructuring and `createUser()` call
+
+### *web\src\app\api\users\[id]\route.ts*
+- PUT fetches the existing user before updating to detect email changes; if email changed, fires `sendEmailChangedToOldAddress`, `sendEmailChangedToNewAddress`, and `sendEmailChangedAdminNotification` (admin email read from auth cookie) — all fire-and-forget
+- PUT checks `isEmailTaken(email, id)` before updating — returns 409 if email already belongs to another account
+- DELETE fetches user data before deletion, then fires `sendAccountDeletedUserEmail` and `sendAccountDeletedAdminEmail` fire-and-forget after the row is removed
+
+### *web\src\app\(auth)\change-password\page.tsx*
+- New force-change-password page — same glassmorphic card design as login page (green theme, background image, floating labels)
+- Three password fields (Current, New, Confirm) each with show/hide toggles
+- Validates password match, POSTs to `/api/auth/change-password`, redirects to role-based dashboard on success
+- No back/skip button — user must change password to proceed
+- Added client-side same-password check before API call — shows error immediately if new password equals current password
+
+### *web\src\app\(auth)\forgot-password\page.tsx*
+- New 3-step forgot password page with visual step indicator (circles with connecting lines, checkmarks for completed steps)
+- Step 1: Email input → POSTs to `/api/auth/forgot-password`
+- Step 2: 6 individual OTP digit boxes with auto-focus, backspace navigation, paste support; 5-minute countdown timer; resend OTP link
+- Step 3: New Password + Confirm Password fields → POSTs to `/api/auth/reset-password` with `resetToken` stored from Step 2 → redirects to `/login?reset=success`
+
+### *web\src\app\(auth)\login\page.tsx*
+- Added "Forgot Password?" link below password field (green underlined text)
+- Added `mustChangePassword` check after login — redirects to `/change-password` if true
+- Added `?reset=success` query param detection — displays green success banner after password reset
+- Wrapped component in `<Suspense>` boundary for `useSearchParams()` Next.js compatibility
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Updated `handleConfirmAdd` success message to conditionally include email notification text: "An activation email with login credentials has been sent to {email}"
+- Added `text-black` to Add User and Edit User form container divs so all headings, labels, inputs, and buttons are readable on the white modal background
+- Replaced emoji icons (👤 Patient, 👨‍⚕️ Therapist) with inline SVG icons — Patient uses a person silhouette (`M12 12c2.21...`), Therapist uses Material Design `medical_services` briefcase with cross icon — in role selection buttons, Add User heading, and Edit User heading
+- Removed Diagnosis, Prescription, and Condition from `User` interface, `newUser` initial state, patient validation, Add Patient form, Edit Patient form, Add preview modal, and Edit preview diff table
+- Added `emailError` and `editEmailError` states — email inputs in both Add and Edit forms check the already-loaded `users` list on every keystroke; a red inline error appears instantly if the email is already in use; form submission (`handleAddUser`, `handleSaveEditUser`) is blocked while an error is present
+- "Add User" button is disabled and grayed (`bg-gray-400 cursor-not-allowed`) when `emailError` is set; "Save Changes" button is disabled and grayed when `editEmailError` is set — both buttons restore green styling automatically once the error clears
+- Fixed "Assign to Therapist" dropdown text not readable — added `text-black bg-white` to the select element
+
+### *web\src\app\(app)\dashboard\_components\ChangePasswordModal.tsx*
+- New frosted-glass modal component (`bg-green-800/55 backdrop-blur-sm border border-green-700/50`) for OTP-verified password change
+- 3-step flow: Step 1 email auto-filled (read-only) → Step 2 six OTP digit boxes with auto-focus, paste, backspace, countdown timer, resend → Step 3 new password + confirm with show/hide toggles
+- Cancel button on every step closes the modal; success auto-closes after 1.5 seconds
+- Shared by therapist profile and patient dashboard
+- Fixed missing `resetToken` — now stores the token from verify-OTP response in state and includes it in the reset-password request body
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*
+- Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
+- Added `showChangePassword` state and `ChangePasswordModal` rendering with therapist email
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
+- Added `showChangePassword` state and `ChangePasswordModal` rendering with patient email
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
+- Replaced solid black card borders with smooth `border border-gray-200 rounded-xl` and added `hover:shadow-sm` transition
+- Updated `statusColor()` from gray/blue pills to green-themed pills (`bg-green-100 text-green-700`, `bg-green-50 text-green-600`) with subtle green borders
+- Replaced plain search input with a search icon SVG (`Material Design search`) inside a relative wrapper, `rounded-xl border-gray-200` with `focus:ring-green-400`
+
+### Validation
+- `npm run build` passed — 32/32 pages compiled successfully
+- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`
+- All new pages registered: `/change-password`, `/forgot-password`
+- Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, then `scripts\reset_token_migration.sql` as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email and forgot-password features
+- Gmail App Password must be configured in `web\.env.local` (`SMTP_PASS`) before emails will be sent
+
+---
+
 ## 📌 Update-6-6-26 | *RyanCodesling*
 
 - Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
@@ -118,6 +280,8 @@
 - Targeted schedule-lock validation passed for the camera, patient dashboard/calendar, therapist assignment/dashboard, patient-exercises API, sessions API, `db.ts`, and `occurrences.ts` with 0 errors and the same 2 known warnings
 - `git diff --check` exited 0, with only Git CRLF normalization warnings
 - DB migration, demo seed, and live browser verification for the recurrence schedule flow still need to be run against a development database
+
+--- 
 
 ## 📌 Update-6-4-26 | *RyanCodesling*
 

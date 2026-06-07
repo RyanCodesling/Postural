@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, getUserRawById, updateUserPassword } from "@/lib/db";
+import { getUserById, getUserRawById, updateUserPassword, createAdminNotification } from "@/lib/db";
 import { sendPasswordChangedEmail } from "@/lib/email";
 import { comparePassword } from "@/lib/crypto";
 
@@ -24,6 +24,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const wasFirstLoginPasswordChange = rawUser.must_change_password;
+
     // Hashed or plaintext password comparison
     if (!comparePassword(currentPassword, rawUser.password)) {
       return NextResponse.json(
@@ -40,6 +42,19 @@ export async function POST(request: NextRequest) {
     }
 
     await updateUserPassword(userId, newPassword);
+
+    // Log admin notification if changing password on first login
+    if (wasFirstLoginPasswordChange) {
+      try {
+        await createAdminNotification(
+          "First Login Password Change",
+          `${rawUser.name} changed their password on first login.`,
+          "first_login_password_change"
+        );
+      } catch (err) {
+        console.error("Failed to create first login password change notification:", err);
+      }
+    }
 
     // Get the mapped user for the response cookie
     const user = await getUserById(userId);

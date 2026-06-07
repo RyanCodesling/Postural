@@ -804,7 +804,7 @@ export async function createSession(data: {
   // just-created session should stay open. Marked 'superseded' so it is never
   // read as an End-button "Ended Early".
   await pool.query(
-    `UPDATE sessions
+`UPDATE sessions
         SET ended_at = NOW(), end_reason = 'superseded'
       WHERE patient_exercise_id = $1 AND ended_at IS NULL AND id <> $2`,
     [data.patientExerciseId, row.id]
@@ -814,6 +814,23 @@ export async function createSession(data: {
     "UPDATE exercise_occurrences SET status = 'in_progress' WHERE id = $1 AND status = 'pending'",
     [occurrenceId]
   );
+  // Trigger start notification for therapist
+  try {
+    const patient = await getUserById(data.patientId);
+    if (patient && patient.therapistId) {
+      const exerciseNameResult = await pool.query("SELECT name FROM exercises WHERE id = $1", [data.exerciseId]);
+      const exerciseName = exerciseNameResult.rows[0]?.name || data.exerciseId;
+      await createNotification(
+        patient.therapistId as string,
+        "Exercise Started",
+        `${patient.name as string} started exercise ${exerciseName}.`,
+        "patient_started_exercise",
+        occurrenceId
+      );
+    }
+  } catch (err) {
+    console.error("Failed to create start notification:", err);
+  }
   return { id: row.id, startedAt: row.started_at };
 }
 
@@ -866,6 +883,40 @@ export async function endSession(
         WHERE id = (SELECT occurrence_id FROM sessions WHERE id = $1)`,
       [sessionId]
     );
+  }
+  // Trigger completion notifications for therapist
+  try {
+    const sessionResult = await pool.query(
+      `SELECT s.patient_id, s.exercise_id, s.occurrence_id, u.name AS patient_name, u.therapist_id, e.name AS exercise_name
+       FROM sessions s
+       JOIN users u ON u.id = s.patient_id
+       JOIN exercises e ON e.id = s.exercise_id
+       WHERE s.id = $1`,
+      [sessionId]
+    );
+    if (sessionResult.rows.length > 0) {
+      const row = sessionResult.rows[0];
+      if (row.therapist_id) {
+        if (data.completed) {
+          await createNotification(
+            row.therapist_id,
+            "Exercise Completed",
+            `${row.patient_name} completed exercise ${row.exercise_name}.`,
+            "patient_completed_exercise",
+            row.occurrence_id
+          );
+          await createNotification(
+            row.therapist_id,
+            "Session Completed",
+            `${row.patient_name} completed a session.`,
+            "session_complete",
+            row.occurrence_id
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Failed to create completion notification:", err);
   }
 }
 
@@ -1236,6 +1287,162 @@ export async function getSessionDetail(sessionId: number) {
       classification: r.classification,
     })),
   };
+}
+
+// ── Notifications ────────────────────────────────────────────────────────────
+
+export async function createNotification(
+  userId: string,
+  title: string,
+  message: string,
+  type: string,
+  occurrenceId: number | null = null
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO notifications (user_id, title, message, type, occurrence_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, title, message, type, occurrenceId]
+  );
+}
+
+export async function createAdminNotification(
+  title: string,
+  message: string,
+  type: string,
+  occurrenceId: number | null = null
+): Promise<void> {
+  const admins = await pool.query("SELECT id FROM users WHERE role = 'admin'");
+  for (const admin of admins.rows) {
+    await createNotification(admin.id, title, message, type, occurrenceId);
+  }
+}
+
+export async function getNotifications(userId: string) {
+  const result = await pool.query(
+    `SELECT id, user_id AS "userId", title, message, type, occurrence_id AS "occurrenceId", is_read AS "isRead", created_at AS "createdAt"
+     FROM notifications
+     WHERE user_id = $1 AND (is_deleted IS NULL OR is_deleted = FALSE)
+     ORDER BY created_at DESC`,
+    [userId]
+  );
+  return result.rows;
+}
+
+export async function markNotificationAsRead(id: number, userId: string): Promise<void> {
+  await pool.query(
+    "UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2",
+    [id, userId]
+  );
+}
+
+export async function markAllNotificationsAsRead(userId: string): Promise<void> {
+  await pool.query(
+    "UPDATE notifications SET is_read = TRUE WHERE user_id = $1",
+    [userId]
+  );
+}
+
+export async function syncTimeNotifications(patientId: string): Promise<void> {
+  const today = todayKeyPH();
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+
+  // 1. Fetch missed occurrences: makeup_until < today AND status <> 'completed'
+  const missedResult = await pool.query(
+    `SELECT eo.id, eo.due_date, pe.exercise_id, e.name AS exercise_name, u.name AS patient_name, u.therapist_id
+     FROM exercise_occurrences eo
+     JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+     JOIN exercises e ON e.id = pe.exercise_id
+     JOIN users u ON u.id = pe.patient_id
+     WHERE pe.patient_id = $1 AND eo.status <> 'completed' AND eo.makeup_until < $2::date`,
+    [patientId, today]
+  );
+
+  for (const row of missedResult.rows) {
+    // Check if patient notification exists
+    const pCheck = await pool.query(
+      "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'exercise_missed'",
+      [patientId, row.id]
+    );
+    if (pCheck.rows.length === 0) {
+      const formattedDate = new Date(row.due_date).toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric"
+      });
+      await createNotification(
+        patientId,
+        "Exercise Missed",
+        `You missed exercise ${row.exercise_name} scheduled for ${formattedDate}.`,
+        "exercise_missed",
+        row.id
+      );
+    }
+
+    // Check if therapist notification exists
+    if (row.therapist_id) {
+      const tCheck = await pool.query(
+        "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'exercise_missed'",
+        [row.therapist_id, row.id]
+      );
+      if (tCheck.rows.length === 0) {
+        const formattedDate = new Date(row.due_date).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric"
+        });
+        await createNotification(
+          row.therapist_id,
+          "Exercise Missed",
+          `${row.patient_name} missed exercise ${row.exercise_name} scheduled for ${formattedDate}.`,
+          "exercise_missed",
+          row.id
+        );
+      }
+    }
+  }
+
+  // 2. Fetch tomorrow's occurrences: due_date = tomorrowStr AND status = 'pending'
+  const tomorrowResult = await pool.query(
+    `SELECT eo.id, e.name AS exercise_name
+     FROM exercise_occurrences eo
+     JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+     JOIN exercises e ON e.id = pe.exercise_id
+     WHERE pe.patient_id = $1 AND eo.status = 'pending' AND eo.due_date = $2::date`,
+    [patientId, tomorrowStr]
+  );
+
+  for (const row of tomorrowResult.rows) {
+    const pCheck = await pool.query(
+      "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'scheduled_tomorrow'",
+      [patientId, row.id]
+    );
+    if (pCheck.rows.length === 0) {
+      await createNotification(
+        patientId,
+        "Exercise Starting Tomorrow",
+        `Exercise ${row.exercise_name} is scheduled to start tomorrow.`,
+        "scheduled_tomorrow",
+        row.id
+      );
+    }
+  }
+}
+
+export async function deleteNotification(id: number, userId: string): Promise<void> {
+  await pool.query(
+    "UPDATE notifications SET is_deleted = TRUE WHERE id = $1 AND user_id = $2",
+    [id, userId]
+  );
+}
+
+export async function deleteMultipleNotifications(ids: number[], userId: string): Promise<void> {
+  if (ids.length === 0) return;
+  await pool.query(
+    "UPDATE notifications SET is_deleted = TRUE WHERE id = ANY($1::integer[]) AND user_id = $2",
+    [ids, userId]
+  );
 }
 
 export default pool;

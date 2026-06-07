@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import NotificationBell from "../_components/NotificationBell";
 
 // ── Nav icons ──────────────────────────────────────────────────────────────
 
@@ -148,12 +149,18 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
       </aside>
 
       <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0 print:p-0 print:overflow-visible">
-        <button
-          className="md:hidden mb-4 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition print:hidden"
-          onClick={() => setSidebarOpen(true)}
-        >
-          ☰ Menu
-        </button>
+        <div className="flex justify-between items-center mb-6 print:hidden">
+          <button
+            className="md:hidden flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
+            onClick={() => setSidebarOpen(true)}
+          >
+            ☰ Menu
+          </button>
+          <div className="md:hidden flex-1" />
+          <div className="ml-auto">
+            <NotificationBell />
+          </div>
+        </div>
         {children}
       </main>
     </div>

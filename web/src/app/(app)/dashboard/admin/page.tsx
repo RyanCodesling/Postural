@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import NotificationBell from "../_components/NotificationBell";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
@@ -547,12 +548,18 @@ export default function AdminDashboard() {
 
       {/* Main Content */}
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto min-w-0">
-        <button
-          className="md:hidden mb-4 flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
-          onClick={() => setSidebarOpen(true)}
-        >
-          ☰ Menu
-        </button>
+        <div className="flex justify-between items-center mb-6">
+          <button
+            className="md:hidden flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
+            onClick={() => setSidebarOpen(true)}
+          >
+            ☰ Menu
+          </button>
+          <div className="md:hidden flex-1" />
+          <div className="ml-auto">
+            <NotificationBell />
+          </div>
+        </div>
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
           <div>

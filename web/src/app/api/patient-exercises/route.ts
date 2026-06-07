@@ -7,6 +7,7 @@ import {
   getPatientExercises,
   getPatientOccurrences,
   getUsers,
+  createNotification,
 } from "@/lib/db";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import {
@@ -256,6 +257,19 @@ export async function POST(request: NextRequest) {
         endDate:     exercise.endDate as string | undefined,
       })),
     );
+
+    // Notify patient about assigned exercises
+    try {
+      await createNotification(
+        patientId,
+        "Exercises Assigned",
+        `Therapist ${user.name} assigned exercises to you.`,
+        "therapist_assigned_exercises"
+      );
+    } catch (err) {
+      console.error("Failed to create exercises assigned notification:", err);
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("POST /api/patient-exercises error:", error);

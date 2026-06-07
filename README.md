@@ -71,6 +71,13 @@
 - Delete success modal now conditionally appends "An email notification has been sent to {email}." when the deleted user had an email address on file
 - Both Forgot Password and Change Password flows now block if the new password is identical to the current password — server returns 400 "New password must be different from your current password." and the Change Password page also catches this client-side before the API call
 - Fixed Change Password modal (OTP flow from patient/therapist dashboard) — was missing `resetToken` in the reset-password request causing "Email, newPassword, and resetToken are required" error; modal now stores the token returned by verify-OTP and sends it correctly
+- Added a real-time, in-app notification system across all dashboards (admin, therapist, patient) with continuous 3-second polling to ensure persistent updates
+- Excluded login and logout actions from the notification dropdown list, redirecting them instead to temporary top-floating notification popups (toasts) that are immediately marked as read on the backend
+- Built a custom audio chime using the browser Web Audio API to play a clean dual-tone melody (C5 -> E5) when new unread notifications are detected
+- Implemented soft-deletion for notifications (`is_deleted` flag) so user deletions (individual or bulk) hide the alerts from their dashboards while preserving records in the database for compliance and auditing
+- Added bulk deletion support via dropdown checkboxes and a trash bin icon in the notification bell layout, plus individual deletion within the notification details modal
+- Integrated the notification bell component into parent layouts and headers (admin, patient, therapist) to prevent unmounting and ensure uninterrupted audio alerts and polling across pages
+- Enabled automated triggers to create notifications for user log-ins/log-outs, therapist password changes on first login, therapist and exercise assignments, patient session start and completion, missed exercises, and upcoming exercises
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added `showTutorial` and `tutorialStep` state variables
@@ -92,6 +99,12 @@
 - New migration script — adds `reset_token VARCHAR(64)` and `reset_token_expires_at TIMESTAMP` columns to `password_reset_otps`
 - Added `CREATE INDEX IF NOT EXISTS idx_otp_reset_token ON password_reset_otps(email, reset_token) WHERE reset_token IS NOT NULL`
 - Must be run after `email_features.sql`; requires `postural` superuser: `psql -U postural -d postural -f scripts/reset_token_migration.sql`
+
+### *scripts\notifications_pg.sql*
+- New SQL schema script — creates `notifications` table structure, defines the `is_deleted` column, applies indexing and role grants, and includes `ALTER TABLE` safeguards for existing databases to support soft-deletion of alerts
+
+### *scripts\runMigration.ts*
+- New database migration utility — runs the SQL statements defined in `scripts/notifications_pg.sql` against the target database
 
 ### *web\src\lib\email.ts*
 - New Nodemailer email utility with Gmail SMTP (smtp.gmail.com:587) using `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` env vars
@@ -126,6 +139,10 @@
 - Added `getUserByEmailWithArchived(email)` helper to query users regardless of their archive status
 - Updated query filters to prevent archived users from logging in
 - Removed `diagnosis`, `prescription`, `condition` from `mapUser()`, `createUser()` signature and INSERT query, and `updateUser()` type and column map
+- Added notification helper functions: `createNotification()`, `createAdminNotification()`, `getNotifications()` (gated to ignore soft-deleted ones), `markNotificationAsRead()`, `markAllNotificationsAsRead()`, `deleteNotification()`, and `deleteMultipleNotifications()`
+- Added `syncTimeNotifications()` to query, format, and generate notifications for missed exercise occurrences or upcoming exercises starting tomorrow
+- Refactored `deleteNotification()` and `deleteMultipleNotifications()` to soft-delete notifications by updating `is_deleted = TRUE` instead of hard-deleting
+- Added automatic trigger hooks to `createSession()` (exercise started) and `endSession()` (session / exercise completed) to notify the assigned therapist
 
 ### *scripts\user_credentials_pg.sql*
 - Added `is_archived` (boolean) and `archived_at` (timestamp) columns with index on `is_archived`
@@ -139,10 +156,15 @@
 - Separated null-user and wrong-password cases: returns "No account is registered with this email address." (401) when email is not found, and "Invalid email or password." (401) when password is wrong
 - Updated password verification to use `comparePassword` to support both hashed and plaintext credentials
 - Replaced `getUserByEmail` with `getUserByEmailWithArchived` and added a check for `user.is_archived` to return a custom error message (`"Your account has been archived and you no longer have access."`) with a 403 Forbidden status
+- Triggers admin notification (`createAdminNotification`) on successful therapist or patient login
+
+### *web\src\app\api\auth\logout\route.ts*
+- Triggers admin notification when user logs out, capturing user's role and full name
 
 ### *web\src\app\api\auth\change-password\route.ts*
 - New POST endpoint — validates userId, currentPassword, newPassword; verifies current password using `comparePassword`; updates password via `updateUserPassword()`; sends confirmation email; refreshes auth cookie
 - Added same-password guard — returns 400 "New password must be different from your current password." if newPassword equals the verified current password
+- Triggers admin notification when user changes their default password on first login
 
 ### *web\src\app\api\auth\forgot-password\route.ts*
 - New POST endpoint — generates 6-digit OTP via `crypto.randomInt()`, stores with 5-minute expiry, sends OTP email
@@ -169,6 +191,13 @@
 - PUT checks `isEmailTaken(email, id)` before updating — returns 409 if email already belongs to another account
 - Replaced the DELETE handler to archive users (`is_archived` and `archived_at`), OR permanently delete users from the database if `?permanent=true` query param is provided, sending archiving or permanent deletion notification emails to user and admin
 - Added PATCH handler supporting `{ action: "restore" }` to restore an archived user and send restoration emails to user and admin
+- Triggers therapist assignment change notification: notifies therapist (`Patient Assigned`) and patient (`Therapist Assigned`) if the therapist ID is updated
+
+### *web\src\app\api\notifications\route.ts*
+- New API route endpoint — handles GET (retrieving all notifications, filtering out login/logout events for standard bell list, returning unread login/logout as `realtimeLogs` for top-floating toasts), PUT (marking single/all notifications as read), and DELETE (soft-deleting single or multiple notifications)
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Triggers patient notification (`Exercises Assigned`) upon successful POST of exercise assignments
 
 ### *web\src\app\(auth)\change-password\page.tsx*
 - New force-change-password page — same glassmorphic card design as login page (green theme, background image, floating labels)
@@ -200,6 +229,7 @@
 - Added `emailError` and `editEmailError` states — email inputs in both Add and Edit forms check the already-loaded `users` list on every keystroke; a red inline error appears instantly if the email is already in use; form submission (`handleAddUser`, `handleSaveEditUser`) is blocked while an error is present
 - "Add User" button is disabled and grayed (`bg-gray-400 cursor-not-allowed`) when `emailError` is set; "Save Changes" button is disabled and grayed when `editEmailError` is set — both buttons restore green styling automatically once the error clears
 - Fixed "Assign to Therapist" dropdown text not readable — added `text-black bg-white` to the select element
+- Integrated global `<NotificationBell />` header component to display admin-specific notification chimes, details modal, and delete options
 
 ### *web\src\lib\crypto.ts*
 - New password hashing and comparison utility using `bcryptjs`
@@ -215,6 +245,9 @@
 - Shared by therapist profile and patient dashboard
 - Fixed missing `resetToken` — now stores the token from verify-OTP response in state and includes it in the reset-password request body
 
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+- New UI component for in-app notifications — features a bell icon with dynamic unread badge count, C5->E5 dual-tone audio chime alerts on new updates, w-[28rem] width, checkboxes for multi-selection, bulk deletion via a trash icon, and individual details viewing modal overlay with a single "Delete" option
+
 ### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*
 - Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
 - Added `showChangePassword` state and `ChangePasswordModal` rendering with therapist email
@@ -222,18 +255,22 @@
 ### *web\src\app\(app)\dashboard\patient\page.tsx*
 - Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
 - Added `showChangePassword` state and `ChangePasswordModal` rendering with patient email
+- Integrated global `<NotificationBell />` header component to check and display patient-specific notification alerts
 
 ### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
 - Replaced solid black card borders with smooth `border border-gray-200 rounded-xl` and added `hover:shadow-sm` transition
 - Updated `statusColor()` from gray/blue pills to green-themed pills (`bg-green-100 text-green-700`, `bg-green-50 text-green-600`) with subtle green borders
 - Replaced plain search input with a search icon SVG (`Material Design search`) inside a relative wrapper, `rounded-xl border-gray-200` with `focus:ring-green-400`
 
+### *web\src\app\(app)\dashboard\therapist\layout.tsx*
+- Integrated global `<NotificationBell />` header component in the therapist layout wrapper, ensuring uninterrupted continuous polling and audio chime playback across views
+
 ### Validation
-- `npm run build` passed — 32/32 pages compiled successfully
+- `npm run build` passed — 33/33 pages compiled successfully
 - `npx tsc --noEmit` checks passed cleanly
-- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`
+- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`, `/api/notifications`
 - All new pages registered: `/change-password`, `/forgot-password`
-- Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, then `scripts\reset_token_migration.sql` as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email and forgot-password features
+- Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, `scripts\reset_token_migration.sql`, and `scripts\notifications_pg.sql` (which includes the `ALTER TABLE` statement for existing tables) as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email, forgot-password, and notification features
 - Gmail App Password must be configured in `web\.env.local` (`SMTP_PASS`) before emails will be sent
 
 ### How to Use - Camera Module

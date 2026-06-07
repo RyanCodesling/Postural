@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken } from "@/lib/db";
+import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken, createNotification } from "@/lib/db";
 import {
   sendEmailChangedToOldAddress,
   sendEmailChangedToNewAddress,
@@ -81,6 +81,31 @@ export async function PUT(
 
     if (!updated) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    // Check if therapist assignment changed and notify
+    if ("therapistId" in body && body.therapistId && body.therapistId !== oldUser?.therapistId) {
+      try {
+        const therapist = await getUserById(body.therapistId);
+        if (therapist) {
+          // Notify therapist
+          await createNotification(
+            body.therapistId,
+            "Patient Assigned",
+            `Admin assigned patient ${updated.name} to you.`,
+            "patient_assigned_to_therapist"
+          );
+          // Notify patient
+          await createNotification(
+            id,
+            "Therapist Assigned",
+            `${therapist.name} is now your assigned therapist.`,
+            "assigned_therapist"
+          );
+        }
+      } catch (err) {
+        console.error("Failed to create therapist assignment notifications:", err);
+      }
     }
 
     // Send email change notifications if email changed

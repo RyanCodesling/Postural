@@ -1,5 +1,42 @@
 # Sprint Updates 
 
+## 📌 Update-6-7-26 | *RyanCodesling*
+- Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
+- Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged
+- Kept peak-only warnings, such as elbow extension cues near overhead ROM, gated to the relevant movement phase while adding temporal persistence to the final warning display state
+- Follow-up live check showed residual warnings can still be triggered near noisy threshold boundaries, but the flicker occurrence is reduced enough for the current proof-of-concept pass
+
+### *web\src\lib\pose\compensationWarningState.ts*
+- New display-layer warning latch for compensation metrics
+- Added dual-threshold hysteresis so warnings turn on at the configured threshold and turn off only after clearing a small margin
+- Added a 300 ms debounce window before warning state appears or disappears, matching the existing low-frequency metrics refresh cadence
+- Handles both `"above"` metrics, such as trunk lean and shoulder symmetry, and `"below"` metrics, such as elbow flexion
+- Uses unit-scaled margins for normalized metrics like scapular elevation so small-ratio signals are not given degree-sized deadbands
+- Removes stale warning state when an exercise changes its compensation metric list or when a metric becomes unavailable
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added per-metric compensation warning state that updates alongside the existing 150 ms frame-metrics cadence
+- Clinical metric cards now read from the latched warning state instead of directly comparing the current value to `warningThreshold` on every render
+- Resets compensation warning state on exercise changes, session start, session resume, set completion, no-exercise state, and sustained capture-readiness dropout so stale warnings do not carry into a new context
+- Preserves the existing `peakRelevant` suppression for warnings that are only meaningful near peak ROM
+- Shares the same latched warning decision with the canvas overlay so the left rail and camera overlay do not disagree during jitter
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- Added an optional active-warning set that lets the camera pass in the already-debounced warning decision
+- Keeps the previous instant-threshold fallback for existing callers and tests that do not pass a latched warning set
+- Continues drawing the same shoulder, trunk, neck, and generic compensation cues once a warning is active
+
+### *web\src\lib\pose\compensationWarningState.test.ts*
+- New focused no-framework regression tests for warning debounce, hysteresis deadband behavior, `"above"` and `"below"` threshold directions, suppressed or unavailable metrics, normalized margins, and stale-spec cleanup
+
+### Validation
+- `npx tsx web/src/lib/pose/compensationWarningState.test.ts` passed — 6/6 checks
+- `npx tsx web/src/lib/pose/drawCompensationOverlay.test.ts` passed — 6/6 checks
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Targeted ESLint passed for `CameraClient.tsx`, `drawCompensationOverlay.ts`, `compensationWarningState.ts`, and `compensationWarningState.test.ts`
+- `git diff --check` exited clean with only Git CRLF normalization warnings
+- Live follow-up confirmed the warning can still be triggered by residual landmark noise, but flicker occurrence is reduced and accepted for this sprint
+
 ## 📌 Update-6-7-26 | *Enah*
 - Added Email Notification feature using Nodemailer + Gmail SMTP (free, no paid API) — sends emails for account creation, password change confirmation, and forgot password OTP
 - Admin adding a user now auto-generates default password as `LastName + YearOfBirth` (e.g., `DelaCruz2004`) and sends a welcome email with login credentials to the user's email

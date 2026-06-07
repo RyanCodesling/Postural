@@ -34,6 +34,10 @@ import {
   type ExerciseFrameMetrics,
 } from "@/lib/pose/poseMetrics";
 import {
+  updateCompensationWarningMap,
+  type CompensationWarningLatch,
+} from "@/lib/pose/compensationWarningState";
+import {
   getExerciseDefinition,
   type ExerciseDefinition,
   type MetricName,
@@ -711,6 +715,7 @@ type CardSpec = {
   kind: "primary" | "compensation";
   warningThreshold?: number;
   compareDirection?: "above" | "below";
+  warningActive?: boolean;
   /**
    * True when this is a `peakRelevant` compensation whose warning is gated
    * off this frame because the movement isn't near peak ROM (see isNearPeak).
@@ -761,6 +766,16 @@ export default function CameraClient() {
   const leftScapBaselineRef  = useRef<BaselineState>({ samples: [], value: null });
   const rightScapBaselineRef = useRef<BaselineState>({ samples: [], value: null });
   const lastMetricsUpdateRef = useRef(0);
+  const compensationWarningLatchesRef = useRef<Map<MetricName, CompensationWarningLatch>>(
+    new Map(),
+  );
+  const [activeCompensationWarnings, setActiveCompensationWarnings] = useState<Set<MetricName>>(
+    new Set(),
+  );
+  const resetCompensationWarnings = useCallback(() => {
+    compensationWarningLatchesRef.current.clear();
+    setActiveCompensationWarnings(new Set());
+  }, []);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
   left: 0,
@@ -1803,6 +1818,7 @@ export default function CameraClient() {
       resetHoldQualityAccum();
       setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
     }
+    resetCompensationWarnings();
     currentSetStartMsRef.current = tNow;
     setConfirmingEnd(false);
 
@@ -1889,6 +1905,7 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
+    resetCompensationWarnings();
     if (
       (activeDefinition.kind === "dynamic" &&
         !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
@@ -1948,6 +1965,7 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
+    resetCompensationWarnings();
 
     // Restore the current set's progress (fresh state machines; the counts live
     // in repCountsRef / pairedHoldMsRef, so detection continues from there).
@@ -2485,6 +2503,7 @@ export default function CameraClient() {
         kind: "compensation",
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
+        warningActive: activeCompensationWarnings.has(comp.name),
         // peakRelevant comps (elbowFlexion on ex_007/ex_008) only warn near
         // peak ROM — bent elbows are correct form lower in the movement.
         suppressWarning: comp.peakRelevant === true && !nearPeak,
@@ -2763,6 +2782,7 @@ export default function CameraClient() {
         window.__neckRepDebug = neckRepDebugRef.current;
       }
       setRepCounts({ left: 0, right: 0 });
+      resetCompensationWarnings();
       return;
     }
 
@@ -2793,6 +2813,7 @@ export default function CameraClient() {
     lastIsometricTickMsRef.current = null;
     resetHoldQualityAccumRef.current();
     setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+    resetCompensationWarnings();
 
     // Reset filters whenever the exercise changes — old filter history would
     // bleed across exercises and produce a misleading first-frame jump.
@@ -2846,7 +2867,7 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
-  }, [selectedExercise, setBaselinePhase]);
+  }, [selectedExercise, resetCompensationWarnings, setBaselinePhase]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
@@ -2981,6 +3002,9 @@ export default function CameraClient() {
           if (r.ok) {
             if (!activeDefinition) {
               // No exercise selected — nothing to compute. Clear stale state.
+              if (compensationWarningLatchesRef.current.size > 0) {
+                resetCompensationWarnings();
+              }
               setFrameMetrics({
                 tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
                 metrics: {},
@@ -3661,6 +3685,18 @@ export default function CameraClient() {
 
               if (tNow - lastMetricsUpdateRef.current > 150) {
                 lastMetricsUpdateRef.current = tNow;
+                const suppressedWarningNames = new Set(
+                  activeDefinition.compensationMetrics
+                    .filter((comp) => comp.peakRelevant === true && !nearPeakNow)
+                    .map((comp) => comp.name),
+                );
+                const activeWarningNames = updateCompensationWarningMap(
+                  compensationWarningLatchesRef.current,
+                  activeDefinition.compensationMetrics,
+                  smoothedMetrics,
+                  tNow,
+                  suppressedWarningNames,
+                );
                 setFrameMetrics({
                   tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
                   metrics: smoothedMetrics,
@@ -3675,6 +3711,7 @@ export default function CameraClient() {
                   ),
                 });
                 setNearPeak(nearPeakNow);
+                setActiveCompensationWarnings(activeWarningNames);
                 if (activeDefinition.kind === "isometric") {
                   setHoldState({
                     pairedSec: pairedHoldMsRef.current / 1000,
@@ -3686,9 +3723,14 @@ export default function CameraClient() {
               // Suppress `peakRelevant` compensation warnings (elbowFlexion
               // "Straighten arms" on ex_007/ex_008) unless the movement is near
               // peak ROM — drawn every frame, so gate with the per-frame value.
-              const overlayComps = nearPeakNow
-                ? activeDefinition.compensationMetrics
-                : activeDefinition.compensationMetrics.filter((c) => !c.peakRelevant);
+              const overlayWarningNames = new Set<MetricName>();
+              const overlayComps = activeDefinition.compensationMetrics.filter((comp) => {
+                if (comp.peakRelevant === true && !nearPeakNow) return false;
+                const isActive =
+                  compensationWarningLatchesRef.current.get(comp.name)?.active === true;
+                if (isActive) overlayWarningNames.add(comp.name);
+                return isActive;
+              });
               drawCompensationOverlay(
                 ctx,
                 landmarks,
@@ -3697,6 +3739,7 @@ export default function CameraClient() {
                 overlayComps,
                 smoothedMetrics,
                 metricDirections,
+                overlayWarningNames,
               );
             }
           } else {
@@ -3731,6 +3774,7 @@ export default function CameraClient() {
               lastIsometricTickMsRef.current = null;
               resetHoldQualityAccum();
               setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+              resetCompensationWarnings();
               captureDropoutResetDoneRef.current = true;
             }
 
@@ -5654,7 +5698,8 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
     card.kind === "compensation" &&
     card.warningThreshold !== undefined &&
     !card.suppressWarning &&
-    isCompensationFlagging(card.value, card.warningThreshold, compareDirection);
+    card.warningActive === true &&
+    card.value !== null;
 
   const displayValue = card.value === null ? "—" : Math.abs(card.value).toFixed(1);
   const warnLabel = metricWarnLabel(card.key);
@@ -6012,26 +6057,6 @@ function metricLabel(name: MetricName): string {
     case "wristShoulderVertical":  return "OVERHEAD";
     case "shoulderElbowDistance":  return "ELBOW POS";
   }
-}
-
-/**
- * True iff a compensation metric value crosses its `warningThreshold` in
- * the bad direction.
- *
- *   "above" (default): flag when `Math.abs(value) >= warningThreshold`.
- *   "below":           flag when `value < warningThreshold`.
- *
- * Mirrors `CompensationMetricSpec.compareDirection` in registry.ts.
- */
-function isCompensationFlagging(
-  value: number | null,
-  threshold: number,
-  direction: "above" | "below",
-): boolean {
-  if (value === null) return false;
-  return direction === "below"
-    ? value < threshold
-    : Math.abs(value) >= threshold;
 }
 
 function CameraHomeIcon() {

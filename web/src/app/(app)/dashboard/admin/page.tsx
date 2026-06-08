@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
+import { SkeletonBar, SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
@@ -35,11 +36,97 @@ interface Exercise {
 }
 
 export default function AdminDashboard() {
-  const { user, logout } = useAuth();
+  const { user, loading, logout } = useAuth();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Dashboard states
+  const [dashboardData, setDashboardData] = useState<{
+    stats: {
+      activePatients: number;
+      activeTherapists: number;
+      archivedUsers: number;
+      systemExercises: number;
+      customExercises: number;
+      totalSessions: number;
+      activeAssignments: number;
+    };
+    activityLogs: {
+      id: number;
+      title: string;
+      message: string;
+      type: string;
+      createdAt: string;
+    }[];
+    recentSessions: {
+      id: number;
+      startedAt: string;
+      patientName: string;
+      exerciseName: string;
+      endReason: string | null;
+    }[];
+  } | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+
+  const fetchDashboardData = async (silent = false) => {
+    if (!silent) setDashboardLoading(true);
+    try {
+      const res = await fetch("/api/admin/dashboard");
+      if (res.ok) {
+        const data = await res.json();
+        setDashboardData(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch dashboard data:", err);
+    } finally {
+      if (!silent) setDashboardLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "dashboard") return;
+
+    // Fetch initially with skeleton loaders visible
+    fetchDashboardData(false);
+
+    // Setup 3-second background polling
+    const interval = setInterval(() => {
+      fetchDashboardData(true);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  const handleClearActivityLogs = async () => {
+    try {
+      const res = await fetch("/api/notifications", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear_activity_logs" }),
+      });
+      if (res.ok) {
+        setDashboardData((prev) => prev ? {
+          ...prev,
+          activityLogs: [],
+        } : null);
+      }
+    } catch (err) {
+      console.error("Failed to clear activity logs:", err);
+    }
+  };
+
+  const formatLogDate = (isoStr: string) => {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
   const [users, setUsers] = useState<User[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
 
@@ -632,8 +719,180 @@ export default function AdminDashboard() {
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-500 mt-1">Welcome, {user?.name}.</p>
+            <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
+            <style>{`
+              @keyframes logFadeIn {
+                from {
+                  opacity: 0;
+                  transform: translateY(-8px);
+                }
+                to {
+                  opacity: 1;
+                  transform: translateY(0);
+                }
+              }
+              .animate-log-in {
+                animation: logFadeIn 0.3s ease-out forwards;
+              }
+            `}</style>
+            <p className="text-gray-500 mt-1 mb-6">Welcome, {user?.name}.</p>
+
+            {dashboardLoading || !dashboardData ? (
+              <div className="max-w-5xl">
+                <SkeletonKpiRow />
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
+                  <div className="lg:col-span-7">
+                    <SkeletonTable />
+                  </div>
+                  <div className="lg:col-span-5">
+                    <SkeletonTable />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="max-w-5xl">
+                {/* KPI cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+                  <KpiCard label="Active Patients" value={dashboardData.stats.activePatients} />
+                  <KpiCard label="Active Therapists" value={dashboardData.stats.activeTherapists} />
+                  <KpiCard label="Active Assignments" value={dashboardData.stats.activeAssignments} />
+                  <KpiCard label="Total Sessions" value={dashboardData.stats.totalSessions} accent="blue" />
+                  <KpiCard label="Archived Users" value={dashboardData.stats.archivedUsers} accent="amber" />
+                  <KpiCard label="Total Exercises" value={dashboardData.stats.systemExercises + dashboardData.stats.customExercises} />
+                </div>
+
+                {/* System Activity & Recent Sessions */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+                  {/* Activity Feed */}
+                  <div className="lg:col-span-7 bg-white rounded-2xl border border-green-100 p-6 flex flex-col min-h-[350px]">
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
+                      <h2 className="text-green-700 font-semibold text-lg flex items-center gap-2">
+                        <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        System Activity Feed
+                      </h2>
+                      {dashboardData.activityLogs.length > 0 && (
+                        <button
+                          onClick={handleClearActivityLogs}
+                          className="text-xs text-red-600 hover:text-red-800 hover:underline cursor-pointer"
+                        >
+                          Clear Feed
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto max-h-[300px] divide-y divide-gray-50 pr-1">
+                      {dashboardData.activityLogs.length === 0 ? (
+                        <p className="text-gray-400 text-sm text-center py-12">No recent system activity.</p>
+                      ) : (
+                        dashboardData.activityLogs.map((log) => (
+                          <div key={log.id} className="py-3 flex gap-3 items-start hover:bg-green-50/20 px-2 rounded-lg transition animate-log-in">
+                            <div className="mt-1.5 shrink-0">
+                              {log.type === "user_login" ? (
+                                <span className="flex h-2 w-2 rounded-full bg-green-500" title="Login"></span>
+                              ) : log.type === "user_logout" ? (
+                                <span className="flex h-2 w-2 rounded-full bg-gray-400" title="Logout"></span>
+                              ) : (
+                                <span className="flex h-2 w-2 rounded-full bg-blue-500" title="System"></span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-gray-800 font-medium">{log.title}</p>
+                              <p className="text-xs text-gray-500 mt-0.5">{log.message}</p>
+                            </div>
+                            <span className="text-[10px] text-gray-400 shrink-0 whitespace-nowrap">
+                              {formatLogDate(log.createdAt)}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Recent Sessions */}
+                  <div className="lg:col-span-5 bg-white rounded-2xl border border-green-100 p-6 flex flex-col min-h-[350px]">
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
+                      <h2 className="text-green-700 font-semibold text-lg flex items-center gap-2">
+                        <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Recent Patient Sessions
+                      </h2>
+                    </div>
+
+                    <div className="flex-1 overflow-x-auto">
+                      {dashboardData.recentSessions.length === 0 ? (
+                        <p className="text-gray-400 text-sm text-center py-12">No patient sessions logged yet.</p>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+                              <th className="py-2 pr-2 font-medium">Patient</th>
+                              <th className="py-2 px-2 font-medium">Exercise</th>
+                              <th className="py-2 pl-2 font-medium">Completed</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dashboardData.recentSessions.map((session) => (
+                              <tr key={session.id} className="border-b border-gray-50 hover:bg-green-50/40 transition">
+                                <td className="py-2.5 pr-2 font-semibold text-green-700">{session.patientName}</td>
+                                <td className="py-2.5 px-2 text-gray-600">{session.exerciseName}</td>
+                                <td className="py-2.5 pl-2 text-gray-400 text-xs whitespace-nowrap">
+                                  {formatLogDate(session.startedAt)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="bg-white rounded-2xl border border-green-100 p-6 animate-fade-in">
+                  <h2 className="text-green-700 font-semibold text-lg mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Quick Actions
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <button
+                      onClick={() => { setActiveTab("users"); setShowUserForm(true); }}
+                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-semibold text-green-800 text-sm">Add New User</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Register a new patient or therapist</p>
+                      </div>
+                      <span className="text-green-700 font-bold">&rarr;</span>
+                    </button>
+                    <button
+                      onClick={() => { setActiveTab("exercises"); setShowExerciseForm(true); }}
+                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-semibold text-green-800 text-sm">Add Custom Exercise</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Create a custom rehabilitation exercise</p>
+                      </div>
+                      <span className="text-green-700 font-bold">&rarr;</span>
+                    </button>
+                    <button
+                      onClick={() => { setActiveTab("assignments"); }}
+                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-semibold text-green-800 text-sm">Assign Patients</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Link patients to therapists</p>
+                      </div>
+                      <span className="text-green-700 font-bold">&rarr;</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2093,5 +2352,26 @@ function AdminLogoutIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
     </svg>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  accent = "green",
+}: {
+  label: string;
+  value: number;
+  accent?: "green" | "amber" | "blue";
+}) {
+  const valueColor =
+    accent === "amber" ? "text-amber-600"
+    : accent === "blue" ? "text-blue-600"
+    : "text-green-700";
+  return (
+    <div className="bg-white rounded-2xl border border-green-100 p-5">
+      <p className={`text-3xl font-bold ${valueColor}`}>{value}</p>
+      <p className="text-xs text-gray-500 mt-1">{label}</p>
+    </div>
   );
 }

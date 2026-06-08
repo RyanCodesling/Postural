@@ -85,6 +85,10 @@
 - Aligned Admin Dashboard exercises management with Therapist's exercises dashboard, including system/custom categorization, search bar filtering, play-only video details modal, description-only inline editing, and deletion controls restricted to custom exercises
 - Configured exercise creation flow from Admin page to automatically mark newly added exercises as Custom Exercises
 - Fixed a visual bug in the Admin "Add New Exercise" form heading by adding text-gray-900 to ensure readability on white backgrounds
+- Redesigned the previously empty Admin Dashboard page to be feature-rich, adding KPI metrics cards (active patients/therapists, active assignments, custom/system exercises, and total completed sessions), recent patient session logs, and quick action shortcuts to register users, assign patients, or add custom exercises
+- Added a 3-second live background polling mechanism to update all admin dashboard statistics, activity logs, and recent patient sessions seamlessly in the background
+- Moved login/logout popups out of floating popup toasts into a dedicated dashboard System Activity Feed, allowing admins to monitor therapist/patient login/logout logs in one place, and added a soft-deletion "Clear Feed" action that keeps raw SQL records intact for security compliance and audit logs
+- Removed the redundant `runMigration.ts` runner and updated notifications SQL schema comments to align with direct manual execution via `psql` or pgAdmin (consistent with all other 9 schema migrations)
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 - Added `showTutorial` and `tutorialStep` state variables
@@ -110,8 +114,6 @@
 ### *scripts\notifications_pg.sql*
 - New SQL schema script — creates `notifications` table structure, defines the `is_deleted` column, applies indexing and role grants, and includes `ALTER TABLE` safeguards for existing databases to support soft-deletion of alerts
 
-### *scripts\runMigration.ts*
-- New database migration utility — runs the SQL statements defined in `scripts/notifications_pg.sql` against the target database
 
 ### *web\src\lib\email.ts*
 - New Nodemailer email utility with Gmail SMTP (smtp.gmail.com:587) using `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` env vars
@@ -150,6 +152,7 @@
 - Added `syncTimeNotifications()` to query, format, and generate notifications for missed exercise occurrences or upcoming exercises starting tomorrow
 - Refactored `deleteNotification()` and `deleteMultipleNotifications()` to soft-delete notifications by updating `is_deleted = TRUE` instead of hard-deleting
 - Added automatic trigger hooks to `createSession()` (exercise started) and `endSession()` (session / exercise completed) to notify the assigned therapist
+- Added `getAdminDashboardData(adminId)` to query stats (KPI metrics), recent login/logout notifications (activity logs), and recent completed patient sessions
 
 ### *scripts\user_credentials_pg.sql*
 - Added `is_archived` (boolean) and `archived_at` (timestamp) columns with index on `is_archived`
@@ -201,7 +204,11 @@
 - Triggers therapist assignment change notification: notifies therapist (`Patient Assigned`) and patient (`Therapist Assigned`) if the therapist ID is updated
 
 ### *web\src\app\api\notifications\route.ts*
-- New API route endpoint — handles GET (retrieving all notifications, filtering out login/logout events for standard bell list, returning unread login/logout as `realtimeLogs` for top-floating toasts), PUT (marking single/all notifications as read), and DELETE (soft-deleting single or multiple notifications)
+- New API route endpoint — handles GET (retrieving all notifications, filtering out login/logout events for standard bell list), PUT (marking single/all notifications as read), and DELETE (soft-deleting single or multiple notifications)
+- Disabled `realtimeLogs` popup triggers by returning an empty array to silence login/logout toast popups
+
+### *web\src\app\api\admin\dashboard\route.ts*
+- New API route endpoint — handles GET (retrieving stats counts, recent system activity notifications, and recent completed patient sessions) for authorized admins
 
 ### *web\src\app\api\patient-exercises\route.ts*
 - Triggers patient notification (`Exercises Assigned`) upon successful POST of exercise assignments
@@ -294,11 +301,15 @@
 - Declared helper subcomponents `AdminExerciseRow` and `VideoPlayer` at the bottom of the file
 - Rendered play-only `/sample-video.mp4` preview modal and styled trash-icon deletion confirmation dialog for custom exercises
 - Added `text-gray-900` class to the "Add New Exercise" form heading to ensure readability
+- Redesigned the previously empty Dashboard tab to include stats KPI cards, quick actions bar, recent sessions table, and recent system activity feed layout, with slide-in entry animations for new logs
+- Bound dashboard stats and activity feed data to fetch automatically on mount or tab select, and added background polling every 3 seconds for live dashboard updates
+- Linked clearing of system activity logs to calling the notifications DELETE API with a persistent database-wide clear action so they stay cleared across admin sessions
+- Handled loading states using the existing therapist/patient `Skeleton` loader components (`SkeletonKpiRow`, `SkeletonTable`) for design consistency
 
 ### Validation
 - `npm run build` passed — 33/33 pages compiled successfully
 - `npx tsc --noEmit` checks passed cleanly
-- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`, `/api/notifications`
+- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`, `/api/notifications`, `/api/admin/dashboard`
 - All new pages registered: `/change-password`, `/forgot-password`
 - Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, `scripts\reset_token_migration.sql`, and `scripts\notifications_pg.sql` (which includes the `ALTER TABLE` statement for existing tables) as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email, forgot-password, and notification features
 - Gmail App Password must be configured in `web\.env.local` (`SMTP_PASS`) before emails will be sent

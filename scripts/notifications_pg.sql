@@ -1,5 +1,5 @@
 -- In-app notifications schema.
--- Run this in pgAdmin or via scripts/runMigration.ts.
+-- Run this in pgAdmin or via psql.
 
 CREATE TABLE IF NOT EXISTS notifications (
   id            SERIAL       PRIMARY KEY,

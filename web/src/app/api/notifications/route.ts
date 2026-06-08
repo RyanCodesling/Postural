@@ -7,6 +7,7 @@ import {
   getUsers,
   deleteNotification,
   deleteMultipleNotifications,
+  clearActivityLogs,
 } from "@/lib/db";
 
 function getSessionUser(request: NextRequest) {
@@ -51,10 +52,8 @@ export async function GET(request: NextRequest) {
       (n: any) => n.type !== "user_login" && n.type !== "user_logout"
     );
 
-    // Return unread login/logout events as real-time logs to trigger top-floating popups
-    const realtimeLogs = allNotifications.filter(
-      (n: any) => (n.type === "user_login" || n.type === "user_logout") && !n.isRead
-    );
+    // Return empty array for realtimeLogs to disable top-floating popup toasts
+    const realtimeLogs: any[] = [];
 
     return NextResponse.json({ notifications, realtimeLogs });
   } catch (error) {
@@ -96,7 +95,12 @@ export async function DELETE(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { id, ids } = body;
+    const { id, ids, action } = body;
+
+    if (action === "clear_activity_logs") {
+      await clearActivityLogs(user.id);
+      return NextResponse.json({ success: true });
+    }
 
     if (ids && Array.isArray(ids)) {
       await deleteMultipleNotifications(ids.map(Number), user.id);

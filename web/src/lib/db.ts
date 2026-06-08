@@ -1445,4 +1445,72 @@ export async function deleteMultipleNotifications(ids: number[], userId: string)
   );
 }
 
+export async function getAdminDashboardData(adminId: string) {
+  // 1. Stats queries
+  const activePatients = await pool.query(
+    "SELECT COUNT(*)::integer FROM users WHERE role = 'patient' AND (is_archived IS NULL OR is_archived = FALSE)"
+  );
+  const activeTherapists = await pool.query(
+    "SELECT COUNT(*)::integer FROM users WHERE role = 'therapist' AND (is_archived IS NULL OR is_archived = FALSE)"
+  );
+  const archivedUsers = await pool.query(
+    "SELECT COUNT(*)::integer FROM users WHERE is_archived = TRUE"
+  );
+  const systemExercises = await pool.query(
+    "SELECT COUNT(*)::integer FROM exercises WHERE is_custom = FALSE"
+  );
+  const customExercises = await pool.query(
+    "SELECT COUNT(*)::integer FROM exercises WHERE is_custom = TRUE"
+  );
+  const totalSessions = await pool.query(
+    "SELECT COUNT(*)::integer FROM sessions"
+  );
+  const activeAssignments = await pool.query(
+    "SELECT COUNT(*)::integer FROM patient_exercises"
+  );
+
+  // 2. Recent activity logs (login/logout events and other admin notifications)
+  const activityLogs = await pool.query(
+    `SELECT id, title, message, type, created_at AS "createdAt"
+     FROM notifications
+     WHERE user_id = $1 AND type IN ('user_login', 'user_logout', 'therapist_password_change') AND (is_deleted IS NULL OR is_deleted = FALSE)
+     ORDER BY created_at DESC
+     LIMIT 20`,
+    [adminId]
+  );
+
+  // 3. Recent completed sessions
+  const recentSessions = await pool.query(
+    `SELECT s.id, s.started_at AS "startedAt", p.name AS "patientName", e.name AS "exerciseName", s.end_reason AS "endReason"
+     FROM sessions s
+     JOIN users p ON s.patient_id = p.id
+     JOIN exercises e ON s.exercise_id = e.id
+     ORDER BY s.started_at DESC
+     LIMIT 5`
+  );
+
+  return {
+    stats: {
+      activePatients: activePatients.rows[0].count,
+      activeTherapists: activeTherapists.rows[0].count,
+      archivedUsers: archivedUsers.rows[0].count,
+      systemExercises: systemExercises.rows[0].count,
+      customExercises: customExercises.rows[0].count,
+      totalSessions: totalSessions.rows[0].count,
+      activeAssignments: activeAssignments.rows[0].count,
+    },
+    activityLogs: activityLogs.rows,
+    recentSessions: recentSessions.rows,
+  };
+}
+
+export async function clearActivityLogs(adminId: string): Promise<void> {
+  await pool.query(
+    `UPDATE notifications
+     SET is_deleted = TRUE
+     WHERE user_id = $1 AND type IN ('user_login', 'user_logout', 'therapist_password_change')`,
+    [adminId]
+  );
+}
+
 export default pool;

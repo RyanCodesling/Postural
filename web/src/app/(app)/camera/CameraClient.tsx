@@ -752,6 +752,18 @@ export default function CameraClient() {
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
 
+  // Footer telemetry (resolution + processing FPS). Both are driven from the
+  // rAF loop via refs to avoid per-frame setState: resolution commits only when
+  // the dimensions actually change, and FPS is the count of processed frames
+  // over a rolling ~1 s window, committed once per second.
+  const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+  const videoResolutionRef = useRef<{ width: number; height: number } | null>(null);
+  const [fps, setFps] = useState<number | null>(null);
+  const fpsFrameCountRef = useRef(0);
+  const fpsWindowStartMsRef = useRef(0);
+
   const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
@@ -2930,6 +2942,27 @@ export default function CameraClient() {
       if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
       if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
 
+      // Footer telemetry. Commit resolution only on change; tally one processed
+      // frame and recompute FPS over a rolling ~1 s window.
+      if (
+        videoResolutionRef.current?.width !== video.videoWidth ||
+        videoResolutionRef.current?.height !== video.videoHeight
+      ) {
+        videoResolutionRef.current = { width: video.videoWidth, height: video.videoHeight };
+        setVideoResolution({ width: video.videoWidth, height: video.videoHeight });
+      }
+      const nowFrame = performance.now();
+      fpsFrameCountRef.current += 1;
+      if (fpsWindowStartMsRef.current === 0) {
+        fpsWindowStartMsRef.current = nowFrame;
+      } else if (nowFrame - fpsWindowStartMsRef.current >= 1000) {
+        setFps(
+          Math.round((fpsFrameCountRef.current * 1000) / (nowFrame - fpsWindowStartMsRef.current)),
+        );
+        fpsFrameCountRef.current = 0;
+        fpsWindowStartMsRef.current = nowFrame;
+      }
+
       const ctx = canvas.getContext("2d");
       if (ctx) {
         const results = landmarker.detectForVideo(video, performance.now());
@@ -3870,6 +3903,14 @@ export default function CameraClient() {
         cancelAnimationFrame(requestRef.current);
         requestRef.current = null;
       }
+
+      // Drop footer telemetry so a stopped/restarting camera doesn't show a
+      // stale resolution or FPS.
+      videoResolutionRef.current = null;
+      setVideoResolution(null);
+      fpsFrameCountRef.current = 0;
+      fpsWindowStartMsRef.current = 0;
+      setFps(null);
     } catch {
       // ignore
     }
@@ -4298,12 +4339,12 @@ export default function CameraClient() {
               <div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Resolution</div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>
-                  {videoRef.current ? `${videoRef.current.videoWidth} × ${videoRef.current.videoHeight}` : "—"}
+                  {videoResolution ? `${videoResolution.width} × ${videoResolution.height}` : "—"}
                 </div>
               </div>
               <div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame rate</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>30 fps</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{fps !== null ? `${fps} fps` : "—"}</div>
               </div>
             </div>
           </aside>

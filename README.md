@@ -7,6 +7,7 @@
 - Added velocity-aware bidirectional rep segmentation for `ex_004` Neck Lateral Flexion to reduce passive return-stroke overshoot and near-neutral ghost counts while preserving deliberate reduced-ROM partial reps
 - Updated the live camera loop to pass smoothed metric velocity into bidirectional counters and to use smoothed camera tilt for display/warning compensation metrics while preserving raw metrics for logging and ML data discipline
 - Added n=1 at-rest noise measurement snapshots that explain why raw camera-tilt jitter can trigger false compensation warnings during still posture
+- Activated the live camera footer telemetry so the resolution and processing frame-rate readouts report real values from the camera loop instead of fixed placeholders
 
 ### *ml\README.md*
 - Documents the offline ML layer, environment setup, layout, synthetic-only data scope, baselines, and feasibility framing
@@ -79,6 +80,8 @@
 - Stores smoothed metric velocities during the metrics pass and provides the primary metric velocity to the bidirectional rep counter
 - Recomputes compensation metric inputs against the already-smoothed camera tilt before value-smoothing, warning checks, compensation scoring, and display
 - Leaves `raw.metrics` untouched so raw unsmoothed values remain available for logging and the ML/analytics path
+- Replaced the placeholder footer readouts with live telemetry: resolution now reflects the active video dimensions, and frame rate reports the number of pose-detection passes per second over a rolling one-second window (the realized pose-loop throughput, capped by the animation-frame/display refresh rate, not the webcam's native capture rate)
+- Drives both readouts from the camera loop through refs and commits resolution only when the dimensions change, avoiding per-frame React state updates; clears both when the camera stops so a stopped or switching camera does not show stale values
 
 ### *web\src\lib\pose\poseMetrics.ts*
 - Added an optional `tiltOverride` argument to `computePoseMetricsForExercise`
@@ -102,6 +105,7 @@
 - `git diff --check` exited clean with only Git CRLF normalization warnings
 - Python syntax parsing passed for 14 ML `.py` files with `python -B`
 - ML pytest was not run successfully in this local environment: the system Python did not have `pytest`, and the existing ML virtualenv points at a missing Python 3.10 launcher. Recreate the ML venv from `ml\requirements.txt` before treating the Python test suite as validated.
+- `npx tsc --noEmit` re-run clean from `web` after the footer telemetry change; on-screen retest of the live resolution and frame-rate readouts is still pending
 
 ---
 

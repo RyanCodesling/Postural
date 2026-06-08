@@ -1,5 +1,110 @@
 # Sprint Updates 
 
+## 📌 Update-6-8-26 | *Offline ML + ex_004 live tuning*
+- Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
+- Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
+- Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app
+- Added velocity-aware bidirectional rep segmentation for `ex_004` Neck Lateral Flexion to reduce passive return-stroke overshoot and near-neutral ghost counts while preserving deliberate reduced-ROM partial reps
+- Updated the live camera loop to pass smoothed metric velocity into bidirectional counters and to use smoothed camera tilt for display/warning compensation metrics while preserving raw metrics for logging and ML data discipline
+- Added n=1 at-rest noise measurement snapshots that explain why raw camera-tilt jitter can trigger false compensation warnings during still posture
+
+### *ml\README.md*
+- Documents the offline ML layer, environment setup, layout, synthetic-only data scope, baselines, and feasibility framing
+- States that the current pipeline is proven end-to-end on `ex_001` first and can be replicated to other active exercises later
+- Separates the offline 0-100 calibrated quality score from the live rule-based browser feedback
+
+### *ml\LEARNING.md*
+- Adds a project-specific study guide for defending the ML pipeline: binary classification, calibrated probability, leave-one-subject-out evaluation, baselines, data leakage, feature engineering, smoothness metrics, and synthetic-data validity
+- Grounds each concept in concrete local files instead of generic ML theory
+- Includes a one-week learning plan, experiments to run against the code, and self-test questions for thesis defense preparation
+
+### *ml\generators\base.py*, *ml\generators\framings.py*, *ml\generators\ex_generator.py*, *ml\generators\registry.py*
+- Added registry-driven synthetic session generation for dynamic per-limb and bidirectional exercise framings
+- Samples subject latent factors such as strength, asymmetry, steadiness, fatigue susceptibility, and tempo so sessions are subject-correlated
+- Generates good-vs-compensated labels with overlapping severity distributions so the task is not a single obvious threshold
+- Emits long-format per-frame Parquet datasets plus set/session metadata under `ml\data\` for downstream feature extraction
+- Leaves isometric framing as a clear future extension point rather than forcing it into the rep-based generator
+
+### *ml\features\extract.py*
+- Added rep-level feature extraction from raw per-frame trajectories: peak value, timing, hold/descent duration, completion class, smoothness, submovement count, shape checkpoints, and compensation aggregates
+- Added session-level aggregation for completion rate, count/ROM asymmetry, ROM variability, tempo variability, fatigue drift, smoothness means, shape means, and per-compensation summaries
+- Keeps identifiers and labels out of the model feature list to reduce leakage risk
+- Maintains the raw-frame analytics path; the only internal smoothing is a short local moving average used for submovement counting
+
+### *ml\baselines.py*
+- Added majority-class and rule-based compensation-score baselines for model comparison
+- Reimplemented the app's banded compensation deductions for scored metrics such as trunk lean, shoulder symmetry, neck tilt, and scapular elevation
+- Aggregates rule scores per rep and then per session so long reps do not dominate the baseline
+
+### *ml\training\train.py* and *ml\run.py*
+- Added an end-to-end `generate -> extract -> train/evaluate` driver for one exercise
+- Trains a calibrated Random Forest and optional XGBoost secondary model on engineered session features
+- Evaluates with leave-one-subject-out cross-validation, ROC-AUC, PR-AUC, Brier score, accuracy, single-feature separability, and feature importances
+- Writes trained model and report artifacts under `ml\training\out\`
+- Frames the Random Forest result against the rule baseline instead of presenting standalone accuracy as clinical proof
+
+### *ml\config\registry.json* and *web\scripts\export-registry.ts*
+- Added a generated JSON copy of the web exercise registry for the Python ML layer
+- Added a web-side export script that serializes `EXERCISE_REGISTRY` and runs registry validation during export
+- Regenerated the JSON after the `ex_004` rep-strategy and smoothing changes so the offline config matches the current TypeScript registry
+
+### *ml\tests\test_extract.py*, *ml\conftest.py*, *ml\requirements.txt*, *ml\requirements.lock.txt*, *ml\notebooks\ex001_eda.ipynb*
+- Added deterministic tests for feature extraction, compensation-score baseline knots, registry-driven compensation columns, and bidirectional session generation
+- Added Python dependency manifests for NumPy, pandas, SciPy, scikit-learn, XGBoost, matplotlib, pyarrow, Jupyter, and pytest
+- Added an initial `ex_001` exploratory notebook placeholder/artifact for offline ML inspection
+
+### *web\src\lib\exercises\registry.ts*
+- Added `BidirectionalRepStrategy` with `"magnitude-settle"` and `"velocity-zero-crossing"` options
+- Added optional One Euro derivative cutoff support through `primaryMetric.smoothing.dCutoff`
+- Switched `ex_004` to `bidirectionalRepStrategy: "velocity-zero-crossing"`
+- Tuned `ex_004` smoothing to `{ minCutoff: 0.45, beta: 0.04, dCutoff: 0.8 }` so near-neutral derivative spikes are reduced without fully muting real reduced-ROM reps
+- Extended registry validation to reject bidirectional strategy metadata outside dynamic bidirectional-alternating exercises and to require positive `dCutoff`
+
+### *web\src\lib\pose\velocityBidirectionalRepCounter.ts* and *web\src\lib\pose\velocityBidirectionalRepCounter.test.ts*
+- Added a signed velocity-zero-crossing segmenter for small-range bidirectional motions such as neck lateral flexion
+- Arms strokes only from a low-angle, low-velocity rest band, then launches on directed velocity away from neutral
+- Suppresses passive opposite-side overshoot on return while still allowing deliberate loose-neutral alternation
+- Uses a minimum stroke excursion and duration to reject small posture adjustments around the live-observed 3-8° zone
+- Restored the live gate to honor the registry's 12° `minimumPeakThreshold` so 13° reduced-ROM partial reps count again
+- Added synthetic regression coverage for overshoot suppression, loose-neutral alternation, rapid alternation, slow drift rejection, near-neutral ghost-count rejection, and reduced-ROM partial counting
+
+### *web\src\lib\pose\bidirectionalRepCounter.ts* and *web\src\lib\pose\oneEuroFilter.ts*
+- Extended the shared bidirectional debug snapshot with optional strategy, velocity, rest-band, armed-state, and stroke-phase fields
+- Kept the existing magnitude-settle counter backward-compatible by accepting and ignoring an optional velocity argument
+- Added `filterWithDerivative()` to `OneEuroFilter` so callers can read both the smoothed value and smoothed derivative without duplicating filter state
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Dispatches bidirectional-alternating exercises to either the existing magnitude-settle counter or the new velocity-zero-crossing counter based on registry metadata
+- Passes optional `dCutoff` into primary and per-metric One Euro filters
+- Stores smoothed metric velocities during the metrics pass and provides the primary metric velocity to the bidirectional rep counter
+- Recomputes compensation metric inputs against the already-smoothed camera tilt before value-smoothing, warning checks, compensation scoring, and display
+- Leaves `raw.metrics` untouched so raw unsmoothed values remain available for logging and the ML/analytics path
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added an optional `tiltOverride` argument to `computePoseMetricsForExercise`
+- Preserves the original raw per-frame tilt behavior for existing callers while allowing the camera loop to request smoothed-tilt compensation metrics for display
+- Cleaned narrow lint-only unused-parameter/exhaustiveness guard warnings without changing metric behavior
+
+### *ml\noise_measurement_inbrowser.json* and *ml\noise_measurement_realapp.json*
+- Added at-rest noise snapshots from a browser pipeline and the real app camera pipeline
+- Records measured jitter for shoulder symmetry, neck tilt, trunk lean, hip/ear lines, and camera tilt while the subject stands still
+- Supports the smoothed-tilt compensation change by showing that tilt correction contributes to false warning flicker and that smoothing helps modestly but does not eliminate all drift
+
+### *.gitignore*
+- Added Python ML ignores for virtual environments, generated data, training output folders, `__pycache__`, `.pyc`, and notebook checkpoints
+
+### Validation
+- `npx tsx scripts/export-registry.ts` passed from `web` and wrote 8 exercise definitions to `ml\config\registry.json`
+- `npx tsx src/lib/pose/velocityBidirectionalRepCounter.test.ts` passed — 7/7 velocity-profile checks
+- `npx tsx src/lib/pose/bidirectionalRepCounter.test.ts` passed — 12/12 existing bidirectional-counter checks
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Targeted ESLint passed for `registry.ts`, `CameraClient.tsx`, `oneEuroFilter.ts`, `bidirectionalRepCounter.ts`, `poseMetrics.ts`, `velocityBidirectionalRepCounter.ts`, and `velocityBidirectionalRepCounter.test.ts`
+- `git diff --check` exited clean with only Git CRLF normalization warnings
+- Python syntax parsing passed for 14 ML `.py` files with `python -B`
+- ML pytest was not run successfully in this local environment: the system Python did not have `pytest`, and the existing ML virtualenv points at a missing Python 3.10 launcher. Recreate the ML venv from `ml\requirements.txt` before treating the Python test suite as validated.
+
+---
+
 ## 📌 Update-6-7-26 | *RyanCodesling*
 - Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
 - Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged

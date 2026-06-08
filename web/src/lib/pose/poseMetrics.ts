@@ -1218,6 +1218,7 @@ export function computeNeckLateralFlexionSigned(
   tiltRef: TiltReference,
   _side: "left" | "right"
 ): number | null {
+  void _side;
   return signedNeckFlexionAngle(landmarks, tiltRef);
 }
 
@@ -1278,6 +1279,7 @@ export function computeTrunkLateralFlexionSigned(
   tiltRef: TiltReference,
   _side: "left" | "right"
 ): number | null {
+  void _side;
   return computeTrunkLateralFlexionWithCameraTiltSigned(
     landmarks,
     tiltRef.cameraTiltDeg,
@@ -1793,9 +1795,15 @@ export type ExerciseFrameMetrics = {
  */
 export function computePoseMetricsForExercise(
   landmarks: LM[],
-  definition: ExerciseDefinition
+  definition: ExerciseDefinition,
+  // Optional pre-resolved tilt reference. When provided (e.g. a smoothed
+  // camera-tilt estimate), metrics are tilt-corrected against it instead of
+  // the raw per-frame consensus tilt. Callers use this to get a less jittery
+  // display/warning value while keeping a separate raw-tilt call for the
+  // ML/log pipeline. Backward compatible: omit for the original behavior.
+  tiltOverride?: TiltReference
 ): ExerciseFrameMetrics {
-  const tiltReference = computeTiltReference(landmarks);
+  const tiltReference = tiltOverride ?? computeTiltReference(landmarks);
   const metrics: Partial<Record<MetricName, number | null>> = {};
   let perSideMetrics: { left: number | null; right: number | null } | undefined;
 
@@ -1963,6 +1971,7 @@ function computeMetricByName(
       // Exhaustiveness guard — TypeScript will complain if a MetricName is
       // ever added without a case here.
       const _exhaustive: never = metricName;
+      void _exhaustive;
       return null;
     }
   }

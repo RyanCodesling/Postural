@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
@@ -49,6 +49,7 @@ import {
   type BidirectionalRepCounterDebugSnapshot,
   type BidirectionalSide,
 } from "@/lib/pose/bidirectionalRepCounter";
+import { VelocityBidirectionalRepCounter } from "@/lib/pose/velocityBidirectionalRepCounter";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -403,8 +404,12 @@ const MAX_ISO_TICK_MS = 250;
 type RepCounterSet = {
   left: RepCounter | null;
   right: RepCounter | null;
-  bidirectional: BidirectionalRepCounter | null;
+  bidirectional: BidirectionalCounter | null;
 };
+
+type BidirectionalCounter =
+  | BidirectionalRepCounter
+  | VelocityBidirectionalRepCounter;
 
 function createRepCountersForDefinition(
   def: ExerciseDefinition | null,
@@ -431,10 +436,14 @@ function createRepCountersForDefinition(
   }
 
   if (def.bilateral && def.bilateralMode === "bidirectional-alternating") {
+    const bidirectional =
+      def.bidirectionalRepStrategy === "velocity-zero-crossing"
+        ? new VelocityBidirectionalRepCounter(thresholds, options)
+        : new BidirectionalRepCounter(thresholds, options);
     return {
       left: null,
       right: null,
-      bidirectional: new BidirectionalRepCounter(thresholds, options),
+      bidirectional,
     };
   }
 
@@ -789,10 +798,10 @@ export default function CameraClient() {
   const leftRepCounterRef = useRef<RepCounter | null>(null);
   const rightRepCounterRef = useRef<RepCounter | null>(null);
 
-  // Bidirectional exercises use one signed metric. The wrapper feeds |angle|
-  // into RepCounter, tags the side from the sign at peak, and gates immediate
-  // opposite-side return-stroke overshoot until neutral has settled.
-  const bidirectionalRepCounterRef = useRef<BidirectionalRepCounter | null>(null);
+  // Bidirectional exercises use one signed metric. The selected strategy tags
+  // the side from the sign at peak while suppressing immediate opposite-side
+  // return-stroke overshoot.
+  const bidirectionalRepCounterRef = useRef<BidirectionalCounter | null>(null);
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
@@ -2824,14 +2833,16 @@ export default function CameraClient() {
     const primaryParams =
       def?.kind === "dynamic" && def.primaryMetric.smoothing
         ? def.primaryMetric.smoothing
-        : { minCutoff: 1.0, beta: 0.1 };
+        : { minCutoff: 1.0, beta: 0.1, dCutoff: undefined };
     leftPrimaryFilterRef.current = new OneEuroFilter(
       primaryParams.minCutoff,
       primaryParams.beta,
+      primaryParams.dCutoff,
     );
     rightPrimaryFilterRef.current = new OneEuroFilter(
       primaryParams.minCutoff,
       primaryParams.beta,
+      primaryParams.dCutoff,
     );
 
     // Rebuild rep counters based on the new definition. Isometric exercises
@@ -3055,6 +3066,28 @@ export default function CameraClient() {
                 tNow
               );
 
+              // Re-correct the tilt-dependent COMPENSATION metrics against the
+              // smoothed camera tilt instead of the raw per-frame consensus
+              // tilt. The raw consensus tilt (hip/ear lines) carries several
+              // degrees of landmark jitter at rest, which leaked into trunk
+              // lean / shoulder symmetry / neck tilt and tripped compensation
+              // warnings while the patient held still. We reuse the same metric
+              // computation (identical sign/worst-side/rounding) with only the
+              // tilt swapped, then value-smooth as usual below. `raw.metrics`
+              // is left untouched and continues to feed the ML/log pipeline
+              // (data-flow discipline: raw -> ML, smoothed -> display/warnings).
+              const smoothedTiltMetrics = computePoseMetricsForExercise(
+                landmarks,
+                activeDefinition,
+                { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
+              );
+              for (const comp of activeDefinition.compensationMetrics) {
+                if (comp.name in smoothedTiltMetrics.metrics) {
+                  metricInputs[comp.name] =
+                    smoothedTiltMetrics.metrics[comp.name] ?? null;
+                }
+              }
+
               if (
                 activeDefinition.kind === "dynamic" &&
                 activeDefinition.id === "ex_005"
@@ -3192,11 +3225,15 @@ export default function CameraClient() {
               // gets cleared when the exercise changes (see the
               // `selectedExercise` effect).
               const smoothedMetrics: Partial<Record<MetricName, number | null>> = {};
+              const smoothedMetricVelocities: Partial<
+                Record<MetricName, number | null>
+              > = {};
               for (const [metricName, value] of Object.entries(metricInputs) as Array<
                 [MetricName, number | null]
               >) {
                 if (typeof value !== "number") {
                   smoothedMetrics[metricName] = null;
+                  smoothedMetricVelocities[metricName] = null;
                   continue;
                 }
                 let filter = metricFiltersRef.current.get(metricName);
@@ -3216,12 +3253,18 @@ export default function CameraClient() {
                   const params =
                     isPrimary && activeDefinition.primaryMetric.smoothing
                       ? activeDefinition.primaryMetric.smoothing
-                      : { minCutoff: 1.0, beta: 0.1 };
-                  filter = new OneEuroFilter(params.minCutoff, params.beta);
+                      : { minCutoff: 1.0, beta: 0.1, dCutoff: undefined };
+                  filter = new OneEuroFilter(
+                    params.minCutoff,
+                    params.beta,
+                    params.dCutoff,
+                  );
                   metricFiltersRef.current.set(metricName, filter);
                 }
+                const filtered = filter.filterWithDerivative(value, tNow);
                 smoothedMetrics[metricName] =
-                  Math.round(filter.filter(value, tNow) * 10) / 10;
+                  Math.round(filtered.value * 10) / 10;
+                smoothedMetricVelocities[metricName] = filtered.velocity;
               }
 
               // Near-peak gate for `peakRelevant` compensation warnings
@@ -3403,6 +3446,10 @@ export default function CameraClient() {
                     typeof rawMetricValue === "number" ? rawMetricValue : null;
                   const smoothedSignedDeg =
                     typeof rawValue === "number" ? rawValue : null;
+                  const smoothedVelocityDegPerSec =
+                    typeof smoothedMetricVelocities[primaryName] === "number"
+                      ? smoothedMetricVelocities[primaryName]
+                      : null;
 
                   // ── TEMPORARY ex_005 head-lean diagnostic (2026-05-26) ──
                   // Opt-in with `enableEx005Debug()` from the browser console.
@@ -3457,7 +3504,11 @@ export default function CameraClient() {
                       if (counter) {
                         const before = counter.getDebugSnapshot(tNow, rawValue);
                         const rep = sessionIsActive
-                          ? counter.update(rawValue, tNow)
+                          ? counter.update(
+                              rawValue,
+                              tNow,
+                              smoothedVelocityDegPerSec ?? undefined,
+                            )
                           : null;
                         if (rep) {
                           const { side, event } = rep;

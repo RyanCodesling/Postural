@@ -110,6 +110,10 @@ export type Side = "left" | "right";
  */
 export type BilateralMode = "per-limb" | "bidirectional-alternating";
 
+export type BidirectionalRepStrategy =
+  | "magnitude-settle"
+  | "velocity-zero-crossing";
+
 
 /**
  * Thresholds for the dynamic rep-counting state machine.
@@ -166,6 +170,7 @@ export type PrimaryMetricSpec = {
   smoothing?: {
     minCutoff: number;
     beta: number;
+    dCutoff?: number;
   };
 };
 
@@ -259,6 +264,14 @@ export type ExerciseDefinition =
        * routes angles into RepCounter instances. Ignored when `bilateral: false`.
        */
       bilateralMode?: BilateralMode;
+      /**
+       * Optional strategy override for signed bidirectional rep segmentation.
+       * Defaults to the magnitude/neutral-settle wrapper. ex_004 uses the
+       * velocity strategy so passive return-stroke overshoot does not count as
+       * an opposite-side rep while loose-neutral deliberate alternation still
+       * counts.
+       */
+      bidirectionalRepStrategy?: BidirectionalRepStrategy;
       /**
        * When true, the exercise involves reaching above head height (e.g.,
        * overhead press, wall angels). The capture-readiness framing rule
@@ -501,8 +514,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // ────────────────────────────────────────────────────────────────────────
   // ex_004 — Neck Lateral Flexion (Cervical Side Bending)
   // Patient tilts head ear-toward-shoulder, alternating sides. Bilateral
-  // by prescription convention ("10 each side"). Independent state machines
-  // per side handle the natural left/right sequence cleanly.
+  // by prescription convention ("10 each side"). A signed bidirectional
+  // segmenter tags left/right from the peak sign.
   // ────────────────────────────────────────────────────────────────────────
   ex_004: {
     id: "ex_004",
@@ -510,6 +523,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     kind: "dynamic",
     bilateral: true,
     bilateralMode: "bidirectional-alternating",
+    bidirectionalRepStrategy: "velocity-zero-crossing",
     primaryMetric: {
       name: "neckLateralFlexion",
       thresholds: {
@@ -535,12 +549,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // arm-raise range; at ~5× smaller scale it is too light and landmark
       // jitter crosses the 5° startThreshold, accumulating phantom reps
       // while the patient holds still (same failure mode ex_003 documents,
-      // milder — its signal is ~3000× smaller, this one ~5×). minCutoff is
-      // the dominant knob for at-rest jitter rejection; beta barely matters
-      // here since |dxHat| stays small at low speed. STARTING values —
-      // expected to need one tuning iteration against the live stillness
-      // diagnostic before being treated as final.
-      smoothing: { minCutoff: 0.5, beta: 0.05 },
+      // milder — its signal is ~3000× smaller, this one ~5×). The velocity
+      // segmenter also reads the filter's smoothed derivative, so ex_004 uses
+      // a lower derivative cutoff to avoid near-neutral velocity spikes. These
+      // are live-tuned starting values; too much smoothing can lag real reps.
+      smoothing: { minCutoff: 0.45, beta: 0.04, dCutoff: 0.8 },
     },
     compensationMetrics: [
       // Trunk lean during neck flexion = patient is bending the whole spine
@@ -868,6 +881,17 @@ function validateRegistry(): void {
         `("per-limb" or "bidirectional-alternating").`
       );
     }
+    if (
+      def.kind === "dynamic" &&
+      def.bidirectionalRepStrategy &&
+      (!def.bilateral || def.bilateralMode !== "bidirectional-alternating")
+    ) {
+      throw new Error(
+        `Registry invariant violated for ${def.id}: ` +
+        `bidirectionalRepStrategy can only be set on ` +
+        `bidirectional-alternating dynamic exercises.`
+      );
+    }
     if (def.kind === "dynamic") {
       const t = def.primaryMetric.thresholds;
       if (!(t.repCompleteThreshold < t.startThreshold)) {
@@ -919,6 +943,13 @@ function validateRegistry(): void {
             `smoothing.beta (${s.beta}) must be ≥ 0. Negative beta would ` +
             `make the filter more aggressive during motion, the opposite ` +
             `of what the adaptive cutoff is meant to do.`
+          );
+        }
+        if (s.dCutoff !== undefined && !(s.dCutoff > 0)) {
+          throw new Error(
+            `Registry invariant violated for ${def.id}: ` +
+            `smoothing.dCutoff (${s.dCutoff}) must be > 0. ` +
+            `OneEuroFilter uses it to smooth derivative estimates.`
           );
         }
       }

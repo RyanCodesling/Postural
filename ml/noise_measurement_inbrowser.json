@@ -1,0 +1,25 @@
+{
+  "conditions": {
+    "method": "real browser pipeline (Chrome, GPU delegate, pose_landmarker_full.task, MediaPipe tasks-vision 0.10.34)",
+    "filter": "verbatim OneEuroFilter port, degree-scale default (minCutoff=1.0, beta=0.1, dCutoff=1.0)",
+    "pose": "single subject standing still, arms relaxed at sides, facing camera",
+    "duration_s": 34.98,
+    "fps": 32.4,
+    "frames_total": 1133,
+    "frames_analyzed_post_warmup": 1038,
+    "warmup_ms": 3000,
+    "all8_landmarks_visible_frac": 1.0,
+    "caveats": "n=1 subject, 1 session, ~35s, good frontal lighting at ~2-3m. Held-human pose conflates sensor noise with real postural sway. Not a full multi-condition characterization."
+  },
+  "metrics_deg": {
+    "shoulder_symmetry_RAW":      { "mean": 0.123, "sd": 1.026, "p2p": 9.204, "p2p_99_1": 5.878 },
+    "shoulder_symmetry_FILTERED": { "mean": 0.117, "sd": 1.011, "p2p": 8.391, "p2p_99_1": 5.792 },
+    "neck_tilt_RAW":              { "mean": 0.044, "sd": 0.781, "p2p": 10.106, "p2p_99_1": 5.575 },
+    "neck_tilt_FILTERED":         { "mean": 0.041, "sd": 0.770, "p2p": 9.431, "p2p_99_1": 5.789 },
+    "shoulder_line_uncorrected":  { "mean": -0.607, "sd": 0.803, "p2p": 3.670, "p2p_99_1": 3.257 },
+    "hip_line":                   { "mean": -0.709, "sd": 0.986, "p2p": 8.855, "p2p_99_1": 5.690 },
+    "ear_line":                   { "mean": -0.687, "sd": 0.511, "p2p": 3.732, "p2p_99_1": 2.260 },
+    "camera_tilt_consensus":      { "mean": -0.730, "sd": 0.772, "p2p": 8.855, "p2p_99_1": 4.462 }
+  },
+  "headline": "At-rest 1-sigma noise in shoulder symmetry is ~1.0 deg (not 3). Robust peak-to-peak ~5.9 deg, worst-case ~9.2 deg. Noise is dominated by low-frequency drift/sway (One Euro barely reduces it at rest). Camera-tilt correction ADDS noise: raw shoulder line is SD 0.80/p2p 3.7, but the tilt-corrected symmetry is SD 1.03/p2p 9.2 because the hip-line reference is the noisiest input."
+}

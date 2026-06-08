@@ -1,0 +1,29 @@
+{
+  "conditions": {
+    "method": "LITERAL app pipeline — CameraClient.tsx running on localhost dev server, temporary in-loop capture hook (since removed)",
+    "camera": "EMEET SmartCam C60E 4K @ 1280x720",
+    "exercise_active": "ex_001 Lateral Arm Raises",
+    "pose": "single subject standing still, arms relaxed at sides",
+    "analyzed_frames": 3932,
+    "span_s": 153.3,
+    "fps": 25.7,
+    "settle_drop_s": 5,
+    "all_landmarks_visible_frac": 1.0,
+    "note": "Captured the app's raw per-frame landmarks PLUS the app's raw and smoothed camera tilt, so every metric is computed both ways. Symmetry/neck/trunk shown with raw tilt (what the app uses for compensation metrics) and smoothed tilt (what tiltFilterRef computes).",
+    "caveats": "n=1, single ~2.5-min session. Longer hold => more real postural sway than the 32s standalone run. Different camera + framing than the standalone, so numbers differ; noise is condition-dependent."
+  },
+  "metrics_deg": {
+    "shoulder_symmetry_rawTilt":  { "sd": 1.816, "p99_1": 8.98, "p2p": 16.99, "mean": 2.50 },
+    "shoulder_symmetry_smoothTilt": { "sd": 1.70, "p99_1": 8.76, "p2p": 15.83, "mean": 2.50 },
+    "neck_tilt_rawTilt":          { "sd": 2.333, "p99_1": 11.46, "p2p": 17.79, "mean": 0.86 },
+    "neck_tilt_smoothTilt":       { "sd": 2.29, "p99_1": 10.95, "p2p": 15.94, "mean": 0.85 },
+    "trunk_lean_rawTilt":         { "sd": 1.306, "p99_1": 5.89, "p2p": 10.84, "mean": 0.94 },
+    "trunk_lean_smoothTilt":      { "sd": 1.112, "p99_1": 4.90, "p2p": 9.25, "mean": 0.93 },
+    "shoulder_line_uncorrected":  { "sd": 1.348, "p99_1": 6.87, "p2p": 14.77, "mean": 1.03 },
+    "hip_line":                   { "sd": 1.642, "p99_1": 7.11, "p2p": 14.45, "mean": -1.54 },
+    "ear_line":                   { "sd": 2.202, "p99_1": 9.53, "p2p": 13.76, "mean": -0.61 },
+    "camera_tilt_raw":            { "sd": 1.595, "p99_1": 7.10, "p2p": 14.45, "mean": -1.47 },
+    "camera_tilt_smooth":         { "sd": 1.43, "p99_1": 6.17, "p2p": 12.35, "mean": -1.46 }
+  },
+  "headline": "Real-app at-rest noise this session: shoulder symmetry ~1.8 deg SD (robust p2p ~9 deg); neck/ear noisiest at ~2.3 deg SD (robust p2p ~11 deg); trunk lean ~1.3 deg SD (p2p ~11 deg). Higher than the 32s standalone (~1 deg symmetry) — condition/duration/camera dependent. Trunk-lean p2p ~11 deg fully explains the live STRAIGHTEN flicker crossing the ~3 deg threshold. Smoothing the tilt helps modestly (trunk -15%, symmetry -7%); the app currently uses RAW tilt for compensation metrics."
+}

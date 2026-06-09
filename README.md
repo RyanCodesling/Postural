@@ -1,6 +1,6 @@
 # Sprint Updates 
 
-## 📌 Update-6-8-26 | *Offline ML + ex_004 live tuning*
+## 📌 Update-6-8-26 | *RyanCodesling*
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
 - Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
 - Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app

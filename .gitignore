@@ -137,3 +137,11 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Python ML layer (ml/)
+ml/.venv/
+ml/data/
+ml/**/out/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

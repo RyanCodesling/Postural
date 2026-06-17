@@ -1,5 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, deleteUser } from "@/lib/db";
+import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken, createNotification } from "@/lib/db";
+import {
+  sendEmailChangedToOldAddress,
+  sendEmailChangedToNewAddress,
+  sendEmailChangedAdminNotification,
+  sendAccountArchivedUserEmail,
+  sendAccountArchivedAdminEmail,
+  sendAccountRestoredUserEmail,
+  sendAccountRestoredAdminEmail,
+  sendAccountDeletedUserEmail,
+  sendAccountDeletedAdminEmail,
+} from "@/lib/email";
 
 export async function GET(
   request: NextRequest,
@@ -52,10 +63,64 @@ export async function PUT(
       if (parts.length > 0) body.name = parts.join(" ");
     }
 
+    // Duplicate email check (excluding self)
+    if (body.email) {
+      const taken = await isEmailTaken(body.email, id);
+      if (taken) {
+        return NextResponse.json(
+          { error: "This email address is already registered to an account." },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Capture old user data before update to detect email change
+    const oldUser = await getUserById(id);
+
     const updated = await updateUser(id, body);
 
     if (!updated) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    // Check if therapist assignment changed and notify
+    if ("therapistId" in body && body.therapistId && body.therapistId !== oldUser?.therapistId) {
+      try {
+        const therapist = await getUserById(body.therapistId);
+        if (therapist) {
+          // Notify therapist
+          await createNotification(
+            body.therapistId,
+            "Patient Assigned",
+            `Admin assigned patient ${updated.name} to you.`,
+            "patient_assigned_to_therapist"
+          );
+          // Notify patient
+          await createNotification(
+            id,
+            "Therapist Assigned",
+            `${therapist.name} is now your assigned therapist.`,
+            "assigned_therapist"
+          );
+        }
+      } catch (err) {
+        console.error("Failed to create therapist assignment notifications:", err);
+      }
+    }
+
+    // Send email change notifications if email changed
+    const oldEmail = oldUser?.email as string | undefined;
+    const newEmail = updated.email as string | undefined;
+    if (oldEmail && newEmail && oldEmail !== newEmail) {
+      const authToken = request.cookies.get("auth_token");
+      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+      const userName = updated.name as string;
+
+      sendEmailChangedToOldAddress(oldEmail, userName, newEmail).catch(console.error);
+      sendEmailChangedToNewAddress(newEmail, userName, oldEmail).catch(console.error);
+      if (adminEmail) {
+        sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail).catch(console.error);
+      }
     }
 
     return NextResponse.json({ user: updated });
@@ -65,16 +130,124 @@ export async function PUT(
   }
 }
 
-export async function DELETE(
-  _request: NextRequest,
+// PATCH — restore an archived user
+export async function PATCH(
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
-    await deleteUser(id);
+    const body = await request.json();
+
+    if (body.action !== "restore") {
+      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+    }
+
+    // Capture user data before restore for email notifications
+    const userToRestore = await getUserById(id);
+    if (!userToRestore) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    await restoreUser(id);
+
+    // Send restore notifications fire-and-forget
+    if (userToRestore.email) {
+      const authToken = request.cookies.get("auth_token");
+      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+
+      sendAccountRestoredUserEmail(
+        userToRestore.email as string,
+        userToRestore.name as string,
+        userToRestore.role as string
+      ).catch(console.error);
+
+      if (adminEmail) {
+        sendAccountRestoredAdminEmail(
+          adminEmail,
+          userToRestore.name as string,
+          userToRestore.email as string,
+          userToRestore.role as string
+        ).catch(console.error);
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error("PATCH /api/users/[id] error:", error);
+    return NextResponse.json({ error: "Failed to restore user" }, { status: 500 });
+  }
+}
+
+// DELETE — archives the user (soft delete) OR permanently deletes them if permanent=true query param is passed
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const { searchParams } = request.nextUrl;
+    const isPermanent = searchParams.get("permanent") === "true";
+
+    // Capture user data before deleting/archiving for email notifications
+    const userToProcess = await getUserById(id);
+    if (!userToProcess) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    if (isPermanent) {
+      await deleteUser(id);
+
+      // Send delete notifications fire-and-forget
+      if (userToProcess.email) {
+        const authToken = request.cookies.get("auth_token");
+        const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+
+        sendAccountDeletedUserEmail(
+          userToProcess.email as string,
+          userToProcess.name as string,
+          userToProcess.role as string
+        ).catch(console.error);
+
+        if (adminEmail) {
+          sendAccountDeletedAdminEmail(
+            adminEmail,
+            userToProcess.name as string,
+            userToProcess.email as string,
+            userToProcess.role as string
+          ).catch(console.error);
+        }
+      }
+
+      return NextResponse.json({ success: true, message: "User permanently deleted." });
+    } else {
+      await archiveUser(id);
+
+      // Send archive notifications fire-and-forget
+      if (userToProcess.email) {
+        const authToken = request.cookies.get("auth_token");
+        const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+
+        sendAccountArchivedUserEmail(
+          userToProcess.email as string,
+          userToProcess.name as string,
+          userToProcess.role as string
+        ).catch(console.error);
+
+        if (adminEmail) {
+          sendAccountArchivedAdminEmail(
+            adminEmail,
+            userToProcess.name as string,
+            userToProcess.email as string,
+            userToProcess.role as string
+          ).catch(console.error);
+        }
+      }
+
+      return NextResponse.json({ success: true, message: "User archived." });
+    }
+  } catch (error) {
     console.error("DELETE /api/users/[id] error:", error);
-    return NextResponse.json({ error: "Failed to delete user" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to process delete/archive request" }, { status: 500 });
   }
 }

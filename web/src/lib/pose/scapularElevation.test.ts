@@ -282,7 +282,7 @@ test("synthetic single shrug counts as 1 rep on each side after baseline capture
     });
   };
 
-  // Phase 1: collect 60 rest samples as baseline (mirrors camera-loop logic).
+  // Step 1: collect 60 rest samples as baseline (mirrors camera-loop logic).
   const leftSamples: number[] = [];
   const rightSamples: number[] = [];
   for (let i = 0; i < 60; i++) {
@@ -299,7 +299,7 @@ test("synthetic single shrug counts as 1 rep on each side after baseline capture
   const leftBaseline  = mean(leftSamples);
   const rightBaseline = mean(rightSamples);
 
-  // Phase 2: feed the rest of the timeline through the counters with the
+  // Step 2: feed the rest of the timeline through the counters with the
   // (baseline − raw) transform that the camera loop applies.
   let leftReps  = 0;
   let rightReps = 0;

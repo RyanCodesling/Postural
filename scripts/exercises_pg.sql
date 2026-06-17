@@ -23,4 +23,14 @@ INSERT INTO exercises (id, name, description) VALUES
   ('ex_006', 'Arm Abduction at 90°',  'Raise arms to 90 degrees from body. Targets shoulder stability and strength.')
 ON CONFLICT (id) DO NOTHING;
 
+-- EX_SWAP 2026-05-21: ex_007/ex_008 replace deprecated ex_002/ex_003.
+-- Deprecated rows stay for audit/history and are filtered from active UI.
+-- Use DO UPDATE here so rerunning the seed refreshes name/description text.
+INSERT INTO exercises (id, name, description) VALUES
+  ('ex_007', 'Overhead Shoulder Press', 'Press both arms straight up overhead from shoulder height. Bilateral, frontal-plane (front-camera-clean).'),
+  ('ex_008', 'Wall Angels',             'Slide arms up a wall from a W-position (elbows at shoulder height) to a Y-position (arms extended overhead), keeping back and arms against the wall.')
+ON CONFLICT (id) DO UPDATE
+  SET name = EXCLUDED.name,
+      description = EXCLUDED.description;
+
 GRANT ALL PRIVILEGES ON TABLE exercises TO postural;

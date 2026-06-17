@@ -1,0 +1,13 @@
+# ML form-quality layer — offline/batch (Python).
+# Versions are left loose so pip resolves wheels compatible with the active
+# interpreter; a pinned snapshot is written to requirements.lock.txt after the
+# first successful install for reproducibility.
+numpy
+pandas
+scipy
+scikit-learn
+xgboost
+matplotlib
+pyarrow
+jupyter
+pytest

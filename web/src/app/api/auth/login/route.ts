@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserByEmail } from "@/lib/db";
+import { getUserByEmailWithArchived, createAdminNotification } from "@/lib/db";
+import { comparePassword } from "@/lib/crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,11 +14,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const user = await getUserByEmail(email);
+    const user = await getUserByEmailWithArchived(email);
 
-    if (!user || user.password !== password) {
+    if (!user) {
       return NextResponse.json(
-        { error: "Invalid email or password" },
+        { error: "No account is registered with this email address." },
+        { status: 401 }
+      );
+    }
+
+    if (user.is_archived) {
+      return NextResponse.json(
+        { error: "Your account has been archived and you no longer have access." },
+        { status: 403 }
+      );
+    }
+
+    if (!comparePassword(password, user.password)) {
+      return NextResponse.json(
+        { error: "Invalid email or password." },
         { status: 401 }
       );
     }
@@ -32,8 +47,21 @@ export async function POST(request: NextRequest) {
       }),
     };
 
+    // Log admin notification on login (for therapists and patients)
+    if (user.role !== "admin") {
+      try {
+        await createAdminNotification(
+          "User Logged In",
+          `${user.name} has logged in.`,
+          "user_login"
+        );
+      } catch (err) {
+        console.error("Failed to create user login notification:", err);
+      }
+    }
+
     const response = NextResponse.json(
-      { success: true, user: sessionUser },
+      { success: true, user: sessionUser, mustChangePassword: user.must_change_password ?? false },
       { status: 200 }
     );
 

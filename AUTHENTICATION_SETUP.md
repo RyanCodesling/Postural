@@ -186,5 +186,69 @@ The `users` table includes:
 - `name` - User full name
 - `role` - User role (`patient`, `therapist`, `admin`)
 - `clinicId` - Clinic identifier (therapists only)
+- `must_change_password` - Boolean flag (forces password change on first login)
 - `created_at` - Timestamp
 - `updated_at` - Timestamp
+
+The `password_reset_otps` table includes:
+- `id` - Primary key (auto-increment)
+- `user_id` - Foreign key to users(id)
+- `email` - Email the OTP was sent to
+- `otp` - 6-digit OTP code
+- `expires_at` - When the OTP expires (5 minutes)
+- `used` - Whether the OTP has been consumed
+- `created_at` - Timestamp
+
+---
+
+## Email Notification Features
+
+### Overview
+The system sends emails for three scenarios:
+1. **Account Creation** — When admin adds a user, the user receives a welcome email with login credentials
+2. **Password Changed** — Confirmation email sent when a user changes their password
+3. **Forgot Password OTP** — 6-digit verification code sent for password reset
+
+### Default Password Format
+When admin creates a new user, the password is auto-generated as:
+`LastName + YearOfBirth` (e.g., `DelaCruz2004`)
+- Spaces in last names are removed
+- The user is forced to change this password on first login
+
+### Gmail App Password Setup
+
+1. Log into the Gmail account: `accbpostural.noreply@gmail.com`
+2. Go to [Google Account Security](https://myaccount.google.com/security)
+3. Enable **2-Step Verification** (required for App Passwords)
+4. Go to [App Passwords](https://myaccount.google.com/apppasswords)
+5. Enter app name: `Postural System` → Click **Create**
+6. Copy the **16-character password** (format: `xxxx xxxx xxxx xxxx`)
+7. Paste it as `SMTP_PASS` in `web/.env.local` (remove the spaces)
+
+### Environment Variables for Email
+Add these to `web/.env.local`:
+```
+SMTP_USER=accbpostural.noreply@gmail.com
+SMTP_PASS=your-16-char-app-password-here
+SMTP_FROM=accbpostural.noreply@gmail.com
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+### ‼️ Run the Email Features SQL Migration
+Right-click the `postural` database → Query Tool
+Open File → select `scripts/email_features.sql`
+Run the SQL by clicking Execute script or F5
+
+### New API Routes
+- **POST `/api/auth/change-password`** — Changes user password (requires userId, currentPassword, newPassword)
+- **POST `/api/auth/forgot-password`** — Sends OTP to user email (requires email)
+- **POST `/api/auth/verify-otp`** — Verifies OTP code (requires email, otp)
+- **POST `/api/auth/reset-password`** — Resets password after OTP verification (requires email, newPassword)
+
+### New Pages
+- **`/change-password`** — Force password change page (shown after first-time login)
+- **`/forgot-password`** — 3-step forgot password flow (Email → OTP → New Password)
+
+### Modified Pages
+- **`/login`** — Added "Forgot Password?" link, password reset success message, and first-time login redirect
+- **`/dashboard/admin`** — Success message now mentions activation email sent to user

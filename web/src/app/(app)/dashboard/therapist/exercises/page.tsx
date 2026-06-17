@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface Exercise {
   id: string;
@@ -12,39 +12,56 @@ interface Exercise {
 export default function ManageExercisesPage() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
+
+  // Styled modal states for custom exercise deletion
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargetName, setDeleteTargetName] = useState<string | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/exercises");
+      if (res.ok) {
+        const d = await res.json();
+        setExercises(d.exercises ?? []);
+      }
+    } catch (err) {
+      console.error("Error loading exercises:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    fetch("/api/exercises")
-      .then((r) => r.json())
-      .then((d) => { setExercises(d.exercises ?? []); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    loadData();
   }, []);
 
   const startEdit = (ex: Exercise) => {
     setEditingId(ex.id);
-    setEditName(ex.name);
     setEditDesc(ex.description);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
-    setEditName("");
     setEditDesc("");
   };
 
   const saveExercise = async (id: string) => {
-    if (!editName.trim() || !editDesc.trim()) return;
+    if (!editDesc.trim()) return;
+    const original = exercises.find((e) => e.id === id);
+    if (!original) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/exercises/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editName.trim(), description: editDesc.trim() }),
+        body: JSON.stringify({ name: original.name, description: editDesc.trim() }),
       });
       if (res.ok) {
         const { exercise } = await res.json();
@@ -58,8 +75,39 @@ export default function ManageExercisesPage() {
     }
   };
 
-  const systemExercises = exercises.filter((e) => !e.is_custom);
-  const customExercises = exercises.filter((e) => e.is_custom);
+  const handleDeleteClick = (id: string, name: string) => {
+    setDeleteTargetId(id);
+    setDeleteTargetName(name);
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteExercise = async () => {
+    if (!deleteTargetId) return;
+    try {
+      const res = await fetch(`/api/exercises/${deleteTargetId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setExercises((prev) => prev.filter((e) => e.id !== deleteTargetId));
+        setShowDeleteModal(false);
+      } else {
+        console.error("Failed to delete exercise");
+      }
+    } catch (err) {
+      console.error("Error deleting exercise:", err);
+    } finally {
+      setDeleteTargetId(null);
+      setDeleteTargetName(null);
+    }
+  };
+
+  const filtered = exercises.filter((e) =>
+    e.name.toLowerCase().includes(query.toLowerCase()) ||
+    e.description.toLowerCase().includes(query.toLowerCase())
+  );
+
+  const systemExercises = filtered.filter((e) => !e.is_custom);
+  const customExercises = filtered.filter((e) => e.is_custom);
 
   if (loading) {
     return (
@@ -71,92 +119,209 @@ export default function ManageExercisesPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Manage Exercises</h1>
-      <p className="text-gray-500 mb-6">View and edit system and custom exercises.</p>
-
-      <section className="mb-8">
-        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-          System Exercises ({systemExercises.length})
-        </h2>
-        <div className="space-y-2">
-          {systemExercises.map((ex) => (
-            <ExerciseRow
-              key={ex.id}
-              exercise={ex}
-              isEditing={editingId === ex.id}
-              editName={editName}
-              editDesc={editDesc}
-              saving={saving}
-              onEdit={() => startEdit(ex)}
-              onCancel={cancelEdit}
-              onSave={() => saveExercise(ex.id)}
-              onEditName={setEditName}
-              onEditDesc={setEditDesc}
-            />
-          ))}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Manage Exercises</h1>
+          <p className="text-gray-600 mt-1">View and edit system and custom exercises.</p>
         </div>
-      </section>
+        <button
+          onClick={loadData}
+          className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded text-sm font-medium transition"
+        >
+          <RefreshIcon />
+          Refresh
+        </button>
+      </div>
 
-      <section>
-        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-          Custom Exercises ({customExercises.length})
-        </h2>
-        {customExercises.length === 0 ? (
-          <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Program.</p>
+      <div className="mb-6">
+        <div className="relative w-full max-w-sm">
+          <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+          </svg>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search exercises"
+            className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-6">
+        {exercises.length === 0 ? (
+          <div className="text-gray-500">No exercises found.</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-gray-500">No exercises found matching your search.</div>
         ) : (
-          <div className="space-y-2">
-            {customExercises.map((ex) => (
-              <ExerciseRow
-                key={ex.id}
-                exercise={ex}
-                isEditing={editingId === ex.id}
-                editName={editName}
-                editDesc={editDesc}
-                saving={saving}
-                onEdit={() => startEdit(ex)}
-                onCancel={cancelEdit}
-                onSave={() => saveExercise(ex.id)}
-                onEditName={setEditName}
-                onEditDesc={setEditDesc}
-              />
-            ))}
-          </div>
+          <>
+            {systemExercises.length > 0 && (
+              <section>
+                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                  System Exercises ({systemExercises.length})
+                </h2>
+                <div className="grid gap-4">
+                  {systemExercises.map((ex) => (
+                    <ExerciseRow
+                      key={ex.id}
+                      exercise={ex}
+                      isEditing={editingId === ex.id}
+                      editDesc={editDesc}
+                      saving={saving}
+                      onEdit={() => startEdit(ex)}
+                      onCancel={cancelEdit}
+                      onSave={() => saveExercise(ex.id)}
+                      onEditDesc={setEditDesc}
+                      onView={() => setViewingExercise(ex)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {customExercises.length > 0 ? (
+              <section className="mt-4">
+                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                  Custom Exercises ({customExercises.length})
+                </h2>
+                <div className="grid gap-4">
+                  {customExercises.map((ex) => (
+                    <ExerciseRow
+                      key={ex.id}
+                      exercise={ex}
+                      isEditing={editingId === ex.id}
+                      editDesc={editDesc}
+                      saving={saving}
+                      onEdit={() => startEdit(ex)}
+                      onCancel={cancelEdit}
+                      onSave={() => saveExercise(ex.id)}
+                      onEditDesc={setEditDesc}
+                      onView={() => setViewingExercise(ex)}
+                      onDelete={() => handleDeleteClick(ex.id, ex.name)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : query === "" ? (
+              <section className="mt-4">
+                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+                  Custom Exercises (0)
+                </h2>
+                <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Program.</p>
+              </section>
+            ) : null}
+          </>
         )}
-      </section>
+      </div>
+
+      {/* View Exercise Details Modal */}
+      {viewingExercise && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setViewingExercise(null)}
+          />
+
+          {/* Modal Content */}
+          <div className="relative z-10 w-full max-w-lg bg-white rounded-2xl shadow-xl p-6 overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex justify-between items-start mb-4 shrink-0">
+              <h3 className="text-xl font-bold text-gray-900">{viewingExercise.name}</h3>
+              <button
+                onClick={() => setViewingExercise(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Scrollable content area */}
+            <div className="overflow-y-auto pr-1 flex-1 space-y-4">
+              {/* Video Player */}
+              <div className="w-full">
+                <VideoPlayer src="/sample-video.mp4" />
+              </div>
+
+              {/* Description */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Description
+                </h4>
+                <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                  {viewingExercise.description}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Styled Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteModal(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{deleteTargetName}</span>? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setShowDeleteModal(false); setDeleteTargetId(null); setDeleteTargetName(null); }}
+                  className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteExercise}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 function ExerciseRow({
-  exercise, isEditing, editName, editDesc, saving,
-  onEdit, onCancel, onSave, onEditName, onEditDesc,
+  exercise, isEditing, editDesc, saving,
+  onEdit, onCancel, onSave, onEditDesc, onView, onDelete,
 }: {
   exercise: Exercise;
   isEditing: boolean;
-  editName: string;
   editDesc: string;
   saving: boolean;
   onEdit: () => void;
   onCancel: () => void;
   onSave: () => void;
-  onEditName: (v: string) => void;
   onEditDesc: (v: string) => void;
+  onView: () => void;
+  onDelete?: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-gray-100 p-4">
+    <div className="border border-gray-200 rounded-xl p-4 transition hover:shadow-sm">
       {isEditing ? (
-        <div className="space-y-2">
-          <input
-            value={editName}
-            onChange={(e) => onEditName(e.target.value)}
-            placeholder="Exercise name"
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
-          />
-          <input
+        <div className="space-y-3">
+          <div className="font-semibold text-gray-900 text-sm">{exercise.name}</div>
+          <textarea
             value={editDesc}
             onChange={(e) => onEditDesc(e.target.value)}
             placeholder="Description"
-            className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
+            rows={3}
           />
           <div className="flex gap-2">
             <button
@@ -177,22 +342,84 @@ function ExerciseRow({
       ) : (
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400 font-mono">{exercise.id}</span>
-              {exercise.is_custom && (
-                <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">custom</span>
-              )}
-            </div>
-            <p className="font-medium text-gray-900 text-sm mt-0.5">{exercise.name}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{exercise.description}</p>
+            <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
+            <p className="text-xs text-gray-500 mt-1">{exercise.description}</p>
           </div>
-          <button
-            onClick={onEdit}
-            className="px-3 py-1.5 border border-gray-300 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition shrink-0"
-          >
-            Edit
-          </button>
+          <div className="flex gap-2 ml-4 shrink-0">
+            <button
+              onClick={onView}
+              className="px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-medium rounded-lg transition"
+            >
+              View
+            </button>
+            <button
+              onClick={onEdit}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
+            >
+              Edit
+            </button>
+            {exercise.is_custom && onDelete && (
+              <button
+                onClick={onDelete}
+                className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 transition"
+              >
+                Delete
+              </button>
+            )}
+          </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+    </svg>
+  );
+}
+
+function VideoPlayer({ src }: { src: string }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const togglePlay = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      videoRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => console.error("Video play error:", err));
+    }
+  };
+
+  return (
+    <div
+      className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center cursor-pointer group"
+      onClick={togglePlay}
+    >
+      <video
+        ref={videoRef}
+        src={src}
+        className="w-full h-full object-cover"
+        playsInline
+        onEnded={() => setIsPlaying(false)}
+      />
+      {!isPlaying && (
+        <button
+          onClick={togglePlay}
+          className="absolute p-4 rounded-full bg-white/90 shadow-lg hover:bg-white text-green-700 hover:scale-105 transition flex items-center justify-center z-10"
+          aria-label="Play video"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+        </button>
       )}
     </div>
   );

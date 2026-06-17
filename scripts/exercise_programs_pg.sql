@@ -17,8 +17,15 @@ CREATE TABLE IF NOT EXISTS program_exercises (
   description  TEXT,
   is_custom    BOOLEAN      NOT NULL DEFAULT FALSE,
   sets         INT,
-  reps         INT
+  reps         INT,
+  rest_seconds INT          NOT NULL DEFAULT 60,
+  -- Per-side target hold duration (seconds) for isometric program entries.
+  -- Ignored by dynamic exercises.
+  hold_seconds INT          NOT NULL DEFAULT 30
 );
+
+ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS rest_seconds INT NOT NULL DEFAULT 60;
+ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30;
 
 CREATE INDEX IF NOT EXISTS idx_ep_therapist_id ON exercise_programs (therapist_id);
 CREATE INDEX IF NOT EXISTS idx_pe_program_id   ON program_exercises  (program_id);

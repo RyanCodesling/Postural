@@ -24,18 +24,26 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id      VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth     DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age               INT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gender            VARCHAR(50);
-ALTER TABLE users ADD COLUMN IF NOT EXISTS diagnosis         TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS prescription      TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS condition         TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id_num  VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty         VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_archived       BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at       TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
+CREATE INDEX IF NOT EXISTS idx_is_archived  ON users (is_archived);
 
 -- Insert demo credentials
 INSERT INTO users (id, email, password, name, first_name, last_name, role, "clinicId") VALUES
-('patient_001',   'patient@example.com',  'patient123',   'John Patient',    'John',  'Patient',   'patient',   NULL),
-('therapist_001', 'therapist@clinic.com', 'therapist123', 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
-('admin_001',     'admin@postural.com',   'admin123',     'Admin User',      'Admin', 'User',      'admin',     NULL)
+('patient_001',   'patient@example.com',           'patient123',   'John Patient',    'John',  'Patient',   'patient',   NULL),
+('therapist_001', 'therapist@clinic.com',          'therapist123', 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
+('admin_001',     'accbpostural.noreply@gmail.com', 'admin123',     'Admin User',      'Admin', 'User',      'admin',     NULL)
 ON CONFLICT (id) DO NOTHING;
+
+-- Sync admin email to the system address on re-runs
+UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001';
+
+-- Remove deprecated clinical fields
+ALTER TABLE users DROP COLUMN IF EXISTS diagnosis;
+ALTER TABLE users DROP COLUMN IF EXISTS prescription;
+ALTER TABLE users DROP COLUMN IF EXISTS condition;
 
 GRANT ALL PRIVILEGES ON TABLE users TO postural;

@@ -1,3 +1,8 @@
+export type OneEuroFilterResult = {
+  value: number;
+  velocity: number;
+};
+
 export class OneEuroFilter {
   private minCutoff: number;
   private beta: number;
@@ -19,10 +24,14 @@ export class OneEuroFilter {
   }
 
   filter(x: number, tMs: number): number {
+    return this.filterWithDerivative(x, tMs).value;
+  }
+
+  filterWithDerivative(x: number, tMs: number): OneEuroFilterResult {
     if (this.tPrev === null || this.xPrev === null) {
       this.tPrev = tMs;
       this.xPrev = x;
-      return x;
+      return { value: x, velocity: 0 };
     }
 
     const dt = Math.max((tMs - this.tPrev) / 1000, 1e-6); // seconds
@@ -40,7 +49,7 @@ export class OneEuroFilter {
     const xHat = a * x + (1 - a) * this.xPrev;
     this.xPrev = xHat;
 
-    return xHat;
+    return { value: xHat, velocity: dxHat };
   }
 
   reset(): void {

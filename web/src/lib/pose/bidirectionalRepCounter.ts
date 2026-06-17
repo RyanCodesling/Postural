@@ -31,6 +31,17 @@ export type BidirectionalRepCounterDebugSnapshot = {
   emittedRepCount: number;
   thresholds: RepCounterThresholds;
   internalRepCompleteThreshold: number;
+  strategy?: "magnitude-settle" | "velocity-zero-crossing";
+  velocityDegPerSec?: number | null;
+  velocitySign?: 0 | 1 | -1;
+  armedForStroke?: boolean;
+  strokePhase?: string;
+  activeVelocityDegPerSec?: number;
+  restVelocityDegPerSec?: number;
+  restAngleThreshold?: number;
+  minStrokePeakDeg?: number;
+  minStrokeExcursionDeg?: number;
+  armedRestAbs?: number | null;
 };
 
 export type BidirectionalRepCounterOptions = RepCounterOptions & {
@@ -111,7 +122,12 @@ export class BidirectionalRepCounter {
     this.restSettleBand = resolvedRestSettleBand;
   }
 
-  update(signedValue: number, tMs: number): BidirectionalRepEvent | null {
+  update(
+    signedValue: number,
+    tMs: number,
+    _velocityDegPerSec?: number,
+  ): BidirectionalRepEvent | null {
+    void _velocityDegPerSec;
     const absValue = Math.abs(signedValue);
 
     if (this.awaitingRestSettle && !this.hasSettledAtRest(absValue, tMs)) {
@@ -233,6 +249,7 @@ export class BidirectionalRepCounter {
       emittedRepCount: this.emittedRepCount,
       thresholds: this.thresholds,
       internalRepCompleteThreshold: this.counterThresholds.repCompleteThreshold,
+      strategy: "magnitude-settle",
     };
   }
 

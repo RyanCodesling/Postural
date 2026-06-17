@@ -65,29 +65,70 @@ function bboxPx(lms: LM[], vw: number, vh: number): Rect | null {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * HEAD VERTICAL RANGE
+ * HEAD VERTICAL RANGE — MODE-DEPENDENT
  *
- * The nose should appear in the upper portion of the frame.
- * Why this range?
- *   - HEAD_Y_MIN (0.05): prevents the head from being cut off at the very top
- *   - HEAD_Y_MAX (0.25): keeps the head in the top quarter, which naturally
- *     centers the torso in the frame and leaves room for hips and knees below
+ * The acceptable head (nose) y-position differs by exercise type. Default
+ * mode is "ground-to-shoulder" exercises (lateral raises, shrugs, side
+ * neck flexion, T-pose) where the patient never reaches above head height —
+ * head sits in the top quarter so the body extends down to include knees +
+ * hips clearly. Side bends use lateral mode because the head can sweep far
+ * down and sideways during the rep. Overhead mode is for exercises that
+ * reach above head height (shoulder press, wall angels) — the head MUST
+ * sit lower in the frame so the patient can stand further from the
+ * camera and keep wrists in-frame at peak extension. Forcing head into
+ * the top quarter for overhead exercises causes the wrists to leave the
+ * frame at the top of the motion, which would otherwise pause metric
+ * computation mid-rep.
  *
- * With the nose at y ≈ 0.15–0.20, hips typically fall around y ≈ 0.55–0.65,
- * which is well within frame and clearly visible for the tilt reference.
+ * Default ("ground-to-shoulder"):
+ *   HEAD_Y_MIN = 0.05  — head not cut off at the very top
+ *   HEAD_Y_MAX = 0.25  — head in top quarter; body extends down to knees
+ *
+ * Overhead ("requires overhead room"):
+ *   HEAD_Y_MIN = 0.10  — leaves at least 10% frame above head as minimum
+ *                        clearance for hands at peak
+ *   HEAD_Y_MAX = 0.45  — head allowed in upper-middle area; patient is
+ *                        smaller in frame, further from camera, with
+ *                        substantial overhead room
+ *
+ * Added 2026-05-21 (live-tuning iter #2): the original single-zone rule
+ * forced overhead-exercise patients close to the camera and their wrists
+ * left the frame at the top of every press. Per-mode bounds let them
+ * back up while preserving the strict "in the top quarter" feel for
+ * exercises that don't need overhead clearance.
  */
-const HEAD_Y_MIN = 0.05;
-const HEAD_Y_MAX = 0.25;
+export type FramingMode = "default" | "overhead" | "lateral";
+
+function headYBounds(mode: FramingMode): { min: number; max: number } {
+  // "lateral" (side bends): a side bend drops the head as the torso tilts, so
+  // the head-y ceiling is relaxed far below the strict top-quarter cap. The
+  // ex_005 metric tracks the HEAD itself, so the head must stay accepted
+  // through the whole bend. The face/ear metric guards still reject truly
+  // off-frame heads, and the knee gate still ensures the body fits.
+  if (mode === "lateral")  return { min: 0.00, max: 0.92 };
+  return mode === "overhead"
+    ? { min: 0.10, max: 0.45 }
+    : { min: 0.05, max: 0.25 };
+}
 
 /**
- * HEAD HORIZONTAL TOLERANCE
+ * HEAD HORIZONTAL TOLERANCE — MODE-DEPENDENT
  *
- * Slightly more lenient than the previous center-gate (±0.07) because the
- * primary framing concern is now vertical, not horizontal. Minor horizontal
- * offset has a much smaller impact on metric quality than vertical miscutting.
+ * Default/overhead keep the tight ±0.12 center gate. "lateral" mode (side
+ * bends) widens it substantially: a side bend swings the head far off-center,
+ * and the ex_005 metric needs the HEAD tracked throughout, so the gate must not
+ * pause mid-bend. ±0.42 lets the nose range over almost the full width
+ * (x ∈ [0.08, 0.92]); only a head near the very edge fails. The overlay target
+ * uses this same width in lateral mode so the visible target matches the gate.
  */
+const HEAD_X_TOL_DEFAULT = 0.12;
+const HEAD_X_TOL_LATERAL = 0.42;
+
+function headXTol(mode: FramingMode): number {
+  return mode === "lateral" ? HEAD_X_TOL_LATERAL : HEAD_X_TOL_DEFAULT;
+}
+
 const HEAD_X_CENTER = 0.5;
-const HEAD_X_TOL    = 0.12;
 
 /**
  * KNEE VISIBILITY THRESHOLD
@@ -120,15 +161,22 @@ const HAND_VIS_MIN = 0.6;
 export function evaluateCaptureReadiness(
   landmarks: LM[] | undefined,
   videoW: number,
-  videoH: number
+  videoH: number,
+  mode: FramingMode = "default",
 ): ReadinessResult {
+  const { min: HEAD_Y_MIN, max: HEAD_Y_MAX } = headYBounds(mode);
+  const HEAD_X_TOL = headXTol(mode);
+  const isOverhead = mode === "overhead";
+  const isLateral = mode === "lateral";
+
   /**
-   * The target rect shown in the overlay now represents the head zone
-   * (top quarter of frame, centered) rather than a center window.
-   * This visually guides the patient to position themselves correctly.
+   * The target rect shown in the overlay represents the head zone for the
+   * active mode. Its height matches the actual valid y-span (HEAD_Y_MAX
+   * − HEAD_Y_MIN), and lateral mode also widens the visible target horizontally
+   * so side-bend users do not chase a narrower visual box than the real gate.
    */
-  const targetW = videoW * 0.20;
-  const targetH = videoH * 0.20;
+  const targetW = videoW * (isLateral ? HEAD_X_TOL * 2 : 0.20);
+  const targetH = videoH * (HEAD_Y_MAX - HEAD_Y_MIN);
   const target: Rect = {
     x: (videoW - targetW) / 2,
     y: videoH * HEAD_Y_MIN,
@@ -196,11 +244,16 @@ export function evaluateCaptureReadiness(
   }
 
   if (nose.y > HEAD_Y_MAX) {
-    // Head too low in frame — patient is too far or camera angled down
+    // Head too low in frame — patient is too far or camera angled down.
+    // In overhead mode the head is meant to sit in the upper-middle (not the
+    // top quarter), so "near the top" would contradict the framing the patient
+    // was told to adopt — phrase it as full-body framing instead.
     return {
       ok: false,
       status: "MOVE_CLOSER",
-      message: "Step closer or raise the camera so your head is near the top.",
+      message: isOverhead
+        ? "Step closer or raise the camera so your whole body is in frame."
+        : "Step closer or raise the camera so your head is near the top.",
       target,
       person,
       score01: vis(nose),
@@ -256,47 +309,82 @@ export function evaluateCaptureReadiness(
     };
   }
 
-  // ── Gate 5: wrist visibility ──────────────────────────────────────────────
+  // ── Gate 5: wrist visibility (SKIPPED in overhead/lateral modes) ─────────
   /**
-   * Kept from the previous implementation.
-   * Ensures both arms are in frame during exercises that involve arm movement.
-   * Wrists are checked after knees because the knee gate is the more critical
-   * one for metric quality — wrist occlusion only affects exercise tracking,
-   * not the tilt reference.
+   * Wrist visibility ensures both arms are in frame during exercises that
+   * involve arm movement. In DEFAULT mode this gate is strict — if a wrist
+   * leaves the frame, metric computation pauses.
+   *
+   * SKIPPED in OVERHEAD mode (added 2026-05-21, live-tuning iter #2):
+   * overhead-reach exercises (ex_007 Press, ex_008 Wall Angels) routinely
+   * push the wrists out of the visible frame at the top of the motion.
+   * Pausing metrics there would silently drop the peak — exactly the
+   * frames the rep counter needs. Instead, we trust the metric-level null
+   * handling: when a wrist landmark is missing, the per-side metric
+   * returns null, the rep counter sees a gap, and the in-progress rep's
+   * peak is frozen at the last visible value. The `RepCounter` continuity
+   * gate handles the resulting time gap correctly — it
+   * doesn't refuse a rep just because the peak was reached during a
+   * brief out-of-frame interval, as long as the ASCENDING phase had
+   * enough visible data to track the climb.
+   *
+   * The framing rule itself (head positioned lower in the frame for
+   * overhead mode) is calibrated so that the patient stands far enough
+   * from the camera that wrists DO stay in frame at peak — the wrist
+   * gate is skipped as a safety net for the off-nominal case, not a
+   * primary expectation.
+   *
+   * SKIPPED in LATERAL mode (side bends): ex_005 does not use wrists for its
+   * primary or compensation metrics. Requiring hands at the frame edge can
+   * pause a valid trunk bend even when the head/hips/shoulders are tracked.
    */
   const leftWrist  = landmarks[15];
   const rightWrist = landmarks[16];
 
-  const leftHandOk  = !!leftWrist  && inFrame01(leftWrist)  && vis(leftWrist)  >= HAND_VIS_MIN;
-  const rightHandOk = !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
+  if (!isOverhead && !isLateral) {
+    const leftHandOk  = !!leftWrist  && inFrame01(leftWrist)  && vis(leftWrist)  >= HAND_VIS_MIN;
+    const rightHandOk = !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
 
-  if (!leftHandOk || !rightHandOk) {
-    const msg = !leftHandOk && !rightHandOk
-      ? "Show both hands to the camera."
-      : !leftHandOk
-      ? "Show your left hand to the camera."
-      : "Show your right hand to the camera.";
+    if (!leftHandOk || !rightHandOk) {
+      const msg = !leftHandOk && !rightHandOk
+        ? "Show both hands to the camera."
+        : !leftHandOk
+        ? "Show your left hand to the camera."
+        : "Show your right hand to the camera.";
 
-    return {
-      ok: false,
-      status: "HANDS_NOT_VISIBLE",
-      message: msg,
-      target,
-      person,
-      score01: Math.min(
-        vis(leftWrist  ?? { x: 0, y: 0 }),
-        vis(rightWrist ?? { x: 0, y: 0 })
-      ),
-    };
+      return {
+        ok: false,
+        status: "HANDS_NOT_VISIBLE",
+        message: msg,
+        target,
+        person,
+        score01: Math.min(
+          vis(leftWrist  ?? { x: 0, y: 0 }),
+          vis(rightWrist ?? { x: 0, y: 0 })
+        ),
+      };
+    }
   }
 
   // ── All gates passed ──────────────────────────────────────────────────────
+  // Wrist visibility contributes to the score01 only when it's present and
+  // we required it (default mode). In overhead mode, missing wrists are
+  // acceptable and don't penalize confidence — the metric pipeline
+  // gracefully degrades. Use `??` fallbacks so we never call `vis(undefined)`.
+  const safeLeftWristVis  = leftWrist  ? vis(leftWrist)  : 1;
+  const safeRightWristVis = rightWrist ? vis(rightWrist) : 1;
   return {
     ok: true,
     status: "OK",
     message: "Captured",
     target,
     person,
-    score01: Math.min(vis(nose), vis(leftKnee!), vis(rightKnee!), vis(leftWrist!), vis(rightWrist!)),
+    score01: Math.min(
+      vis(nose),
+      vis(leftKnee!),
+      vis(rightKnee!),
+      safeLeftWristVis,
+      safeRightWristVis,
+    ),
   };
 }

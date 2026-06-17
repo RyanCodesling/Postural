@@ -1,9 +1,1210 @@
 # Sprint Updates 
 
-## 📌 New sprint update here (●'◡'●) | *author_name*
--
+## 📌 Update-6-8-26 | *RyanCodesling*
+- Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
+- Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
+- Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app
+- Added velocity-aware bidirectional rep segmentation for `ex_004` Neck Lateral Flexion to reduce passive return-stroke overshoot and near-neutral ghost counts while preserving deliberate reduced-ROM partial reps
+- Updated the live camera loop to pass smoothed metric velocity into bidirectional counters and to use smoothed camera tilt for display/warning compensation metrics while preserving raw metrics for logging and ML data discipline
+- Added n=1 at-rest noise measurement snapshots that explain why raw camera-tilt jitter can trigger false compensation warnings during still posture
+- Activated the live camera footer telemetry so the resolution and processing frame-rate readouts report real values from the camera loop instead of fixed placeholders
+
+### *ml\README.md*
+- Documents the offline ML layer, environment setup, layout, synthetic-only data scope, baselines, and feasibility framing
+- States that the current pipeline is proven end-to-end on `ex_001` first and can be replicated to other active exercises later
+- Separates the offline 0-100 calibrated quality score from the live rule-based browser feedback
+
+### *ml\LEARNING.md*
+- Adds a project-specific study guide for defending the ML pipeline: binary classification, calibrated probability, leave-one-subject-out evaluation, baselines, data leakage, feature engineering, smoothness metrics, and synthetic-data validity
+- Grounds each concept in concrete local files instead of generic ML theory
+- Includes a one-week learning plan, experiments to run against the code, and self-test questions for thesis defense preparation
+
+### *ml\generators\base.py*, *ml\generators\framings.py*, *ml\generators\ex_generator.py*, *ml\generators\registry.py*
+- Added registry-driven synthetic session generation for dynamic per-limb and bidirectional exercise framings
+- Samples subject latent factors such as strength, asymmetry, steadiness, fatigue susceptibility, and tempo so sessions are subject-correlated
+- Generates good-vs-compensated labels with overlapping severity distributions so the task is not a single obvious threshold
+- Emits long-format per-frame Parquet datasets plus set/session metadata under `ml\data\` for downstream feature extraction
+- Leaves isometric framing as a clear future extension point rather than forcing it into the rep-based generator
+
+### *ml\features\extract.py*
+- Added rep-level feature extraction from raw per-frame trajectories: peak value, timing, hold/descent duration, completion class, smoothness, submovement count, shape checkpoints, and compensation aggregates
+- Added session-level aggregation for completion rate, count/ROM asymmetry, ROM variability, tempo variability, fatigue drift, smoothness means, shape means, and per-compensation summaries
+- Keeps identifiers and labels out of the model feature list to reduce leakage risk
+- Maintains the raw-frame analytics path; the only internal smoothing is a short local moving average used for submovement counting
+
+### *ml\baselines.py*
+- Added majority-class and rule-based compensation-score baselines for model comparison
+- Reimplemented the app's banded compensation deductions for scored metrics such as trunk lean, shoulder symmetry, neck tilt, and scapular elevation
+- Aggregates rule scores per rep and then per session so long reps do not dominate the baseline
+
+### *ml\training\train.py* and *ml\run.py*
+- Added an end-to-end `generate -> extract -> train/evaluate` driver for one exercise
+- Trains a calibrated Random Forest and optional XGBoost secondary model on engineered session features
+- Evaluates with leave-one-subject-out cross-validation, ROC-AUC, PR-AUC, Brier score, accuracy, single-feature separability, and feature importances
+- Writes trained model and report artifacts under `ml\training\out\`
+- Frames the Random Forest result against the rule baseline instead of presenting standalone accuracy as clinical proof
+
+### *ml\config\registry.json* and *web\scripts\export-registry.ts*
+- Added a generated JSON copy of the web exercise registry for the Python ML layer
+- Added a web-side export script that serializes `EXERCISE_REGISTRY` and runs registry validation during export
+- Regenerated the JSON after the `ex_004` rep-strategy and smoothing changes so the offline config matches the current TypeScript registry
+
+### *ml\tests\test_extract.py*, *ml\conftest.py*, *ml\requirements.txt*, *ml\requirements.lock.txt*, *ml\notebooks\ex001_eda.ipynb*
+- Added deterministic tests for feature extraction, compensation-score baseline knots, registry-driven compensation columns, and bidirectional session generation
+- Added Python dependency manifests for NumPy, pandas, SciPy, scikit-learn, XGBoost, matplotlib, pyarrow, Jupyter, and pytest
+- Added an initial `ex_001` exploratory notebook placeholder/artifact for offline ML inspection
+
+### *web\src\lib\exercises\registry.ts*
+- Added `BidirectionalRepStrategy` with `"magnitude-settle"` and `"velocity-zero-crossing"` options
+- Added optional One Euro derivative cutoff support through `primaryMetric.smoothing.dCutoff`
+- Switched `ex_004` to `bidirectionalRepStrategy: "velocity-zero-crossing"`
+- Tuned `ex_004` smoothing to `{ minCutoff: 0.45, beta: 0.04, dCutoff: 0.8 }` so near-neutral derivative spikes are reduced without fully muting real reduced-ROM reps
+- Extended registry validation to reject bidirectional strategy metadata outside dynamic bidirectional-alternating exercises and to require positive `dCutoff`
+
+### *web\src\lib\pose\velocityBidirectionalRepCounter.ts* and *web\src\lib\pose\velocityBidirectionalRepCounter.test.ts*
+- Added a signed velocity-zero-crossing segmenter for small-range bidirectional motions such as neck lateral flexion
+- Arms strokes only from a low-angle, low-velocity rest band, then launches on directed velocity away from neutral
+- Suppresses passive opposite-side overshoot on return while still allowing deliberate loose-neutral alternation
+- Uses a minimum stroke excursion and duration to reject small posture adjustments around the live-observed 3-8° zone
+- Restored the live gate to honor the registry's 12° `minimumPeakThreshold` so 13° reduced-ROM partial reps count again
+- Added synthetic regression coverage for overshoot suppression, loose-neutral alternation, rapid alternation, slow drift rejection, near-neutral ghost-count rejection, and reduced-ROM partial counting
+
+### *web\src\lib\pose\bidirectionalRepCounter.ts* and *web\src\lib\pose\oneEuroFilter.ts*
+- Extended the shared bidirectional debug snapshot with optional strategy, velocity, rest-band, armed-state, and stroke-phase fields
+- Kept the existing magnitude-settle counter backward-compatible by accepting and ignoring an optional velocity argument
+- Added `filterWithDerivative()` to `OneEuroFilter` so callers can read both the smoothed value and smoothed derivative without duplicating filter state
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Dispatches bidirectional-alternating exercises to either the existing magnitude-settle counter or the new velocity-zero-crossing counter based on registry metadata
+- Passes optional `dCutoff` into primary and per-metric One Euro filters
+- Stores smoothed metric velocities during the metrics pass and provides the primary metric velocity to the bidirectional rep counter
+- Recomputes compensation metric inputs against the already-smoothed camera tilt before value-smoothing, warning checks, compensation scoring, and display
+- Leaves `raw.metrics` untouched so raw unsmoothed values remain available for logging and the ML/analytics path
+- Replaced the placeholder footer readouts with live telemetry: resolution now reflects the active video dimensions, and frame rate reports the number of pose-detection passes per second over a rolling one-second window (the realized pose-loop throughput, capped by the animation-frame/display refresh rate, not the webcam's native capture rate)
+- Drives both readouts from the camera loop through refs and commits resolution only when the dimensions change, avoiding per-frame React state updates; clears both when the camera stops so a stopped or switching camera does not show stale values
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added an optional `tiltOverride` argument to `computePoseMetricsForExercise`
+- Preserves the original raw per-frame tilt behavior for existing callers while allowing the camera loop to request smoothed-tilt compensation metrics for display
+- Cleaned narrow lint-only unused-parameter/exhaustiveness guard warnings without changing metric behavior
+
+### *ml\noise_measurement_inbrowser.json* and *ml\noise_measurement_realapp.json*
+- Added at-rest noise snapshots from a browser pipeline and the real app camera pipeline
+- Records measured jitter for shoulder symmetry, neck tilt, trunk lean, hip/ear lines, and camera tilt while the subject stands still
+- Supports the smoothed-tilt compensation change by showing that tilt correction contributes to false warning flicker and that smoothing helps modestly but does not eliminate all drift
+
+### *.gitignore*
+- Added Python ML ignores for virtual environments, generated data, training output folders, `__pycache__`, `.pyc`, and notebook checkpoints
+
+### Validation
+- `npx tsx scripts/export-registry.ts` passed from `web` and wrote 8 exercise definitions to `ml\config\registry.json`
+- `npx tsx src/lib/pose/velocityBidirectionalRepCounter.test.ts` passed — 7/7 velocity-profile checks
+- `npx tsx src/lib/pose/bidirectionalRepCounter.test.ts` passed — 12/12 existing bidirectional-counter checks
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Targeted ESLint passed for `registry.ts`, `CameraClient.tsx`, `oneEuroFilter.ts`, `bidirectionalRepCounter.ts`, `poseMetrics.ts`, `velocityBidirectionalRepCounter.ts`, and `velocityBidirectionalRepCounter.test.ts`
+- `git diff --check` exited clean with only Git CRLF normalization warnings
+- Python syntax parsing passed for 14 ML `.py` files with `python -B`
+- ML pytest was not run successfully in this local environment: the system Python did not have `pytest`, and the existing ML virtualenv points at a missing Python 3.10 launcher. Recreate the ML venv from `ml\requirements.txt` before treating the Python test suite as validated.
+- `npx tsc --noEmit` re-run clean from `web` after the footer telemetry change; on-screen retest of the live resolution and frame-rate readouts is still pending
+
+---
+
+## 📌 Update-6-7-26 | *RyanCodesling*
+- Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
+- Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged
+- Kept peak-only warnings, such as elbow extension cues near overhead ROM, gated to the relevant movement phase while adding temporal persistence to the final warning display state
+- Follow-up live check showed residual warnings can still be triggered near noisy threshold boundaries, but the flicker occurrence is reduced enough for the current proof-of-concept pass
+
+### *web\src\lib\pose\compensationWarningState.ts*
+- New display-layer warning latch for compensation metrics
+- Added dual-threshold hysteresis so warnings turn on at the configured threshold and turn off only after clearing a small margin
+- Added a 300 ms debounce window before warning state appears or disappears, matching the existing low-frequency metrics refresh cadence
+- Handles both `"above"` metrics, such as trunk lean and shoulder symmetry, and `"below"` metrics, such as elbow flexion
+- Uses unit-scaled margins for normalized metrics like scapular elevation so small-ratio signals are not given degree-sized deadbands
+- Removes stale warning state when an exercise changes its compensation metric list or when a metric becomes unavailable
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added per-metric compensation warning state that updates alongside the existing 150 ms frame-metrics cadence
+- Clinical metric cards now read from the latched warning state instead of directly comparing the current value to `warningThreshold` on every render
+- Resets compensation warning state on exercise changes, session start, session resume, set completion, no-exercise state, and sustained capture-readiness dropout so stale warnings do not carry into a new context
+- Preserves the existing `peakRelevant` suppression for warnings that are only meaningful near peak ROM
+- Shares the same latched warning decision with the canvas overlay so the left rail and camera overlay do not disagree during jitter
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- Added an optional active-warning set that lets the camera pass in the already-debounced warning decision
+- Keeps the previous instant-threshold fallback for existing callers and tests that do not pass a latched warning set
+- Continues drawing the same shoulder, trunk, neck, and generic compensation cues once a warning is active
+
+### *web\src\lib\pose\compensationWarningState.test.ts*
+- New focused no-framework regression tests for warning debounce, hysteresis deadband behavior, `"above"` and `"below"` threshold directions, suppressed or unavailable metrics, normalized margins, and stale-spec cleanup
+
+### Validation
+- `npx tsx web/src/lib/pose/compensationWarningState.test.ts` passed — 6/6 checks
+- `npx tsx web/src/lib/pose/drawCompensationOverlay.test.ts` passed — 6/6 checks
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Targeted ESLint passed for `CameraClient.tsx`, `drawCompensationOverlay.ts`, `compensationWarningState.ts`, and `compensationWarningState.test.ts`
+- `git diff --check` exited clean with only Git CRLF normalization warnings
+- Live follow-up confirmed the warning can still be triggered by residual landmark noise, but flicker occurrence is reduced and accepted for this sprint
+
+---
+
+## 📌 Update-6-7-26 | *Enah*
+- Added secure password hashing using `bcryptjs` for all newly registered accounts and password modifications, protecting user data from plaintext storage
+- Retained plaintext storage and verification for the three system demo credentials (`patient123`, `therapist123`, and `admin123`) to support non-disruptive testing
+- Replaced the "Delete" action in Manage Users with "Archive" — archived users are blocked from logging in, but their historical records are preserved and can be fully restored by the administrator
+- Added automated email notifications when user accounts are archived or restored (sent to the user and admin)
+- Added a permanent user deletion feature: archived users can be permanently deleted from the database. This triggers a 2-step confirmation modal on the admin page and sends permanent deletion confirmation emails to both user and admin
+- Added Email Notification feature using Nodemailer + Gmail SMTP (free, no paid API) — sends emails for account creation, password change confirmation, and forgot password OTP
+- Admin adding a user now auto-generates default password as `LastName + YearOfBirth` (e.g., `DelaCruz2004`), automatically stripping common suffixes (e.g., `Sr.`, `Jr.`, `I`, `II`, Roman numerals) and punctuation from last names, and sends a welcome email with login credentials to the user's email
+- Added a custom login warning for archived users: trying to log in with an archived account now returns `"Your account has been archived and you no longer have access."` instead of `"No account is registered with this email address."`
+- First-time login with default password now forces the user to change password before accessing the dashboard — sends confirmation email after password is changed
+- Added Forgot Password feature with 6-digit OTP email verification — user enters email → receives OTP (5-minute expiry) → verifies OTP → sets new password; wrong OTP blocks access
+- Added `must_change_password` column to users table and `password_reset_otps` table for OTP storage
+- Login page now shows "Forgot Password?" link and displays success message after password reset
+- Admin dashboard success modal now mentions activation email sent to user after account creation
+- Forgot Password now shows "No account found with this email address" error when email doesn't exist instead of silently succeeding
+- Fixed admin dashboard Add User / Edit User form text color — added `text-black` to form containers so all headings, labels, inputs, and buttons are readable on white background
+- Replaced emoji icons (👤, 👨‍⚕️) with inline SVG icons in admin Add User and Edit User forms, matching the sidebar navigation style
+- Enabled Change Password button under Account Actions on therapist and patient View Profile — opens a frosted-glass floating modal overlay (same glassmorphic green styling as Forgot Password page) with 3-step OTP-verified flow: email auto-filled → OTP input → new password; Cancel closes the modal and returns to profile
+- Refined Manage Patients page on therapist dashboard — replaced solid black card outlines with smooth `rounded-xl border-gray-200` borders with hover shadow; updated assigned exercises pills from plain gray/blue to green-themed colors matching the UI; added search icon SVG inside the search patients input with refined `rounded-xl` styling and green focus ring
+- Fixed security gap where `/api/auth/reset-password` accepted any email + new password without verifying OTP was actually completed — endpoint now requires a `resetToken` issued only after successful OTP verification; direct API calls without a valid token are rejected with 401
+- Added `scripts\reset_token_migration.sql` — adds `reset_token` and `reset_token_expires_at` columns to `password_reset_otps`; must be run after `email_features.sql`
+- Updated both SQL migration script headers to state `REQUIRES: PostgreSQL superuser (postural)`, explain why ownership is needed, and show the exact `psql` command so other developers can run them without additional guidance
+- When admin edits a user's email address, notifications are sent to the old email (informing it is no longer active), the new email (confirming it is now active for login), and the admin (audit trail) — all fire-and-forget
+- Login now shows "No account is registered with this email address." when the email does not exist, distinct from the "Invalid email or password." message shown when the password is wrong
+- Added duplicate email validation on the Add User and Edit User email fields — inline red error appears immediately when a typed email already belongs to another account; form submission is blocked until resolved; server-side 409 guard also added
+- When admin deletes a user, a deletion notification is sent to the deleted user's email and a confirmation is sent to the admin; both fire-and-forget
+- When admin adds a new user, a creation confirmation is sent to the admin listing the new user's name, email, and role
+- Removed Diagnosis, Prescription, and Condition fields from Add Patient and Edit Patient forms and from the database — `scripts\user_credentials_pg.sql` now drops those columns via `DROP COLUMN IF EXISTS`
+- Updated admin demo credential email from `admin@postural.com` to `accbpostural.noreply@gmail.com` — rerunning `scripts\user_credentials_pg.sql` will sync an existing admin row to the new address; all admin notification emails (email change, account deletion) go to this address since it is read from the admin's session cookie
+- "Add User" and "Save Changes" buttons are now visually disabled (gray, `cursor-not-allowed`) and unclickable when the email field has a duplicate-email error, replacing the previous submit-time block-only behavior
+- Edit success modal now conditionally appends "Email notifications have been sent to {oldEmail} and {newEmail} about the email address change." when the email was changed; shows plain "successfully updated." otherwise
+- Delete success modal now conditionally appends "An email notification has been sent to {email}." when the deleted user had an email address on file
+- Both Forgot Password and Change Password flows now block if the new password is identical to the current password — server returns 400 "New password must be different from your current password." and the Change Password page also catches this client-side before the API call
+- Fixed Change Password modal (OTP flow from patient/therapist dashboard) — was missing `resetToken` in the reset-password request causing "Email, newPassword, and resetToken are required" error; modal now stores the token returned by verify-OTP and sends it correctly
+- Added a real-time, in-app notification system across all dashboards (admin, therapist, patient) with continuous 3-second polling to ensure persistent updates
+- Excluded login and logout actions from the notification dropdown list, redirecting them instead to temporary top-floating notification popups (toasts) that are immediately marked as read on the backend
+- Built a custom audio chime using the browser Web Audio API to play a clean dual-tone melody (C5 -> E5) when new unread notifications are detected
+- Implemented soft-deletion for notifications (`is_deleted` flag) so user deletions (individual or bulk) hide the alerts from their dashboards while preserving records in the database for compliance and auditing
+- Added bulk deletion support via dropdown checkboxes and a trash bin icon in the notification bell layout, plus individual deletion within the notification details modal
+- Integrated the notification bell component into parent layouts and headers (admin, patient, therapist) to prevent unmounting and ensure uninterrupted audio alerts and polling across pages
+- Enabled automated triggers to create notifications for user log-ins/log-outs, therapist password changes on first login, therapist and exercise assignments, patient session start and completion, missed exercises, and upcoming exercises
+- Styled the "Create New Program" and "Add New Custom Exercise" action toggle buttons and form submission buttons on Therapist Exercise Program page to use exact fixed widths to prevent shifting/stretching
+- Streamlined patient details view under therapist's Manage Patients by removing the "View Exercise" button on Assigned Exercises and moving the status pill to the right side of the card, matching the Completed Exercises layout
+- Aligned Admin Dashboard exercises management with Therapist's exercises dashboard, including system/custom categorization, search bar filtering, play-only video details modal, description-only inline editing, and deletion controls restricted to custom exercises
+- Configured exercise creation flow from Admin page to automatically mark newly added exercises as Custom Exercises
+- Fixed a visual bug in the Admin "Add New Exercise" form heading by adding text-gray-900 to ensure readability on white backgrounds
+- Redesigned the previously empty Admin Dashboard page to be feature-rich, adding KPI metrics cards (active patients/therapists, active assignments, custom/system exercises, and total completed sessions), recent patient session logs, and quick action shortcuts to register users, assign patients, or add custom exercises
+- Added a 3-second live background polling mechanism to update all admin dashboard statistics, activity logs, and recent patient sessions seamlessly in the background
+- Moved login/logout popups out of floating popup toasts into a dedicated dashboard System Activity Feed, allowing admins to monitor therapist/patient login/logout logs in one place, and added a soft-deletion "Clear Feed" action that keeps raw SQL records intact for security compliance and audit logs
+- Removed the redundant `runMigration.ts` runner and updated notifications SQL schema comments to align with direct manual execution via `psql` or pgAdmin (consistent with all other 9 schema migrations)
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added `showTutorial` and `tutorialStep` state variables
+- Added `id` attributes to 8 key elements: `cam-tour-sidebar` (☰ button), `cam-tour-status` (status dots wrapper), `cam-tour-stop` (Stop button), `cam-tour-start` (Start camera button), `cam-tour-metrics` (left rail `<aside>`), `cam-tour-feed` (center camera `<main>`), `cam-tour-exercise` (exercise stepper div), `cam-tour-session` (session controls div)
+- Added **How to Use** button with inline info SVG icon, rendered as an outlined teal button to the right of Start camera
+- Added `TOUR_STEPS` constant array (7 entries) outside the component — each entry carries `targetId`, optional `anchorId`, `title`, `lines[]`, `placement`, and optional `cardH` / `aboveGap` overrides
+- Added `CameraTour` standalone function component: reads target and anchor bounding rects via `useEffect` + `useState`, computes card position per placement, renders an SVG dim-with-cutout overlay, a pulsing ring div, a backdrop click-to-close div, and the tooltip card with teal header strip, bullet list, animated step dots, and Back / Next / Got it navigation
+- Added `ReactNode` to the React named imports
+
+### *scripts\email_features.sql*
+- Added `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`
+- Added `CREATE TABLE IF NOT EXISTS password_reset_otps` with user_id FK, email, otp, expires_at, used, created_at
+- Added `CREATE INDEX IF NOT EXISTS idx_otp_email ON password_reset_otps(email, used)`
+- Added `GRANT CREATE ON SCHEMA public TO postural` and `GRANT ALL ON SCHEMA public TO postural`
+- Added `GRANT ALL ON TABLE password_reset_otps TO postural` and sequence grants for the `postural` application user
+- Header updated — now explicitly states `REQUIRES: PostgreSQL superuser (postural)` with reason and exact run command: `psql -U postural -d postural -f scripts/email_features.sql`
+
+### *scripts\reset_token_migration.sql*
+- New migration script — adds `reset_token VARCHAR(64)` and `reset_token_expires_at TIMESTAMP` columns to `password_reset_otps`
+- Added `CREATE INDEX IF NOT EXISTS idx_otp_reset_token ON password_reset_otps(email, reset_token) WHERE reset_token IS NOT NULL`
+- Must be run after `email_features.sql`; requires `postural` superuser: `psql -U postural -d postural -f scripts/reset_token_migration.sql`
+
+### *scripts\notifications_pg.sql*
+- New SQL schema script — creates `notifications` table structure, defines the `is_deleted` column, applies indexing and role grants, and includes `ALTER TABLE` safeguards for existing databases to support soft-deletion of alerts
+
+
+### *web\src\lib\email.ts*
+- New Nodemailer email utility with Gmail SMTP (smtp.gmail.com:587) using `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` env vars
+- `sendAccountCreationEmail()` — welcome email with login credentials (using password hint instead of plaintext), login link, ACC Bacoor green-themed branding
+- `sendPasswordChangedEmail()` — confirmation email with security warning
+- `sendOTPEmail()` — 6-digit OTP code with 5-minute expiry warning
+- Graceful fallback when SMTP is not configured (logs warning, does not crash)
+- `sendEmailChangedToOldAddress(oldEmail, name, newEmail)` — notifies old address that it is no longer active for login, shows old/new email side by side
+- `sendEmailChangedToNewAddress(newEmail, name, oldEmail)` — notifies new address it is now active, includes Log In button
+- `sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail)` — audit notification to admin with old/new email and user name
+- `sendAccountCreatedAdminEmail(adminEmail, newUserName, newUserEmail, newUserRole)` — notifies admin of new account creation with name, email, role, and a note that activation email was sent to the user
+- `sendAccountArchivedUserEmail(email, name, role)` — informs archived user their account has been archived
+- `sendAccountArchivedAdminEmail(adminEmail, archivedName, archivedEmail, archivedRole)` — archiving confirmation to admin
+- `sendAccountRestoredUserEmail(email, name)` — notifies user their account has been restored
+- `sendAccountRestoredAdminEmail(adminEmail, restoredName, restoredEmail, restoredRole)` — restoration confirmation to admin
+- `sendAccountDeletedUserEmail(email, name, role)` — informs permanently deleted user that their records have been removed
+- `sendAccountDeletedAdminEmail(adminEmail, deletedName, deletedEmail, deletedRole)` — permanent deletion confirmation to admin
+
+### *web\src\lib\db.ts*
+- Added `mustChangePassword: row.must_change_password ?? false`, `isArchived: row.is_archived ?? false`, and `archivedAt: row.archived_at ?? null` to `mapUser()`
+- Updated `createUser()` and `updateUserPassword()` to hash passwords via `hashPassword` before saving
+- Added `updateUserPassword(userId, newPassword)` — updates password and clears `must_change_password` flag
+- Added `setMustChangePassword(userId, value)` — sets the `must_change_password` flag
+- Added `getUserRawById(id)` — returns raw DB row including password for verification
+- Added `createOTP(userId, email, otp, expiresAt)` — inserts OTP record
+- Updated `verifyOTP(email, otp)` — now returns `string | null` (the reset token) instead of `boolean`; on success generates a 64-char hex `resetToken`, stores it with a 15-minute expiry in `reset_token` / `reset_token_expires_at`, marks OTP as used, and returns the token
+- Added `validateAndConsumeResetToken(email, token)` — checks token against DB (not expired), nulls it out on match so it is single-use, returns `boolean`
+- Added `invalidateOTPs(email)` — marks all unused OTPs for an email as used
+- Added `isEmailTaken(email, excludeId?)` — returns `true` if another account already uses this email; `excludeId` omits the current user during edits
+- Added `archiveUser(id)` — archives a user by setting `is_archived = TRUE` and `archived_at = NOW()`
+- Added `restoreUser(id)` — restores a user by setting `is_archived = FALSE` and `archived_at = NULL`
+- Added `getUserByEmailWithArchived(email)` helper to query users regardless of their archive status
+- Updated query filters to prevent archived users from logging in
+- Removed `diagnosis`, `prescription`, `condition` from `mapUser()`, `createUser()` signature and INSERT query, and `updateUser()` type and column map
+- Added notification helper functions: `createNotification()`, `createAdminNotification()`, `getNotifications()` (gated to ignore soft-deleted ones), `markNotificationAsRead()`, `markAllNotificationsAsRead()`, `deleteNotification()`, and `deleteMultipleNotifications()`
+- Added `syncTimeNotifications()` to query, format, and generate notifications for missed exercise occurrences or upcoming exercises starting tomorrow
+- Refactored `deleteNotification()` and `deleteMultipleNotifications()` to soft-delete notifications by updating `is_deleted = TRUE` instead of hard-deleting
+- Added automatic trigger hooks to `createSession()` (exercise started) and `endSession()` (session / exercise completed) to notify the assigned therapist
+- Added `getAdminDashboardData(adminId)` to query stats (KPI metrics), recent login/logout notifications (activity logs), and recent completed patient sessions
+
+### *scripts\user_credentials_pg.sql*
+- Added `is_archived` (boolean) and `archived_at` (timestamp) columns with index on `is_archived`
+- Removed `ADD COLUMN IF NOT EXISTS` lines for `diagnosis`, `prescription`, and `condition`
+- Added `DROP COLUMN IF EXISTS diagnosis`, `DROP COLUMN IF EXISTS prescription`, `DROP COLUMN IF EXISTS condition` — safe to re-run on existing databases
+- Changed admin demo credential email from `admin@postural.com` to `accbpostural.noreply@gmail.com` in the INSERT block
+- Added `UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001'` after the INSERT so rerunning the script syncs an existing admin row to the new address
+
+### *web\src\app\api\auth\login\route.ts*
+- Added `mustChangePassword: user.must_change_password ?? false` to the login JSON response body
+- Separated null-user and wrong-password cases: returns "No account is registered with this email address." (401) when email is not found, and "Invalid email or password." (401) when password is wrong
+- Updated password verification to use `comparePassword` to support both hashed and plaintext credentials
+- Replaced `getUserByEmail` with `getUserByEmailWithArchived` and added a check for `user.is_archived` to return a custom error message (`"Your account has been archived and you no longer have access."`) with a 403 Forbidden status
+- Triggers admin notification (`createAdminNotification`) on successful therapist or patient login
+
+### *web\src\app\api\auth\logout\route.ts*
+- Triggers admin notification when user logs out, capturing user's role and full name
+
+### *web\src\app\api\auth\change-password\route.ts*
+- New POST endpoint — validates userId, currentPassword, newPassword; verifies current password using `comparePassword`; updates password via `updateUserPassword()`; sends confirmation email; refreshes auth cookie
+- Added same-password guard — returns 400 "New password must be different from your current password." if newPassword equals the verified current password
+- Triggers admin notification when user changes their default password on first login
+
+### *web\src\app\api\auth\forgot-password\route.ts*
+- New POST endpoint — generates 6-digit OTP via `crypto.randomInt()`, stores with 5-minute expiry, sends OTP email
+- Returns 404 with "No account found with this email address" when the email doesn't match any account
+
+### *web\src\app\api\auth\verify-otp\route.ts*
+- New POST endpoint — verifies OTP against DB, returns 400 with "Invalid or expired OTP" if invalid
+- Now returns `{ success: true, resetToken }` on success — `resetToken` is a 64-char hex token with a 15-minute expiry, required to call `/api/auth/reset-password`
+
+### *web\src\app\api\auth\reset-password\route.ts*
+- New POST endpoint — requires `resetToken` validated via `validateAndConsumeResetToken()` (returns 401 if missing, invalid, or expired); blocks same-password with 400 "New password must be different from your current password." by checking via `comparePassword`; updates password via `updateUserPassword()` and sends confirmation email
+
+### *web\src\app\api\users\route.ts*
+- POST now sets `must_change_password = TRUE` on newly created users via `setMustChangePassword()`
+- Sends welcome email fire-and-forget after user creation (does not block response)
+- Sends `sendAccountCreatedAdminEmail` to the admin (email read from auth cookie) fire-and-forget after user creation
+- Returns `{ user, emailSent }` in response
+- POST now checks `isEmailTaken(email)` before creating — returns 409 "This email address is already registered to an account." if duplicate
+- Strips name suffixes (`Sr.`, `Jr.`, Roman numerals like `I`, `II`, `III`, `IV`, etc.) and punctuation from last names during default password generation
+- Removed `diagnosis`, `prescription`, `condition` from POST body destructuring and `createUser()` call
+
+### *web\src\app\api\users\[id]\route.ts*
+- PUT fetches the existing user before updating to detect email changes; if email changed, fires `sendEmailChangedToOldAddress`, `sendEmailChangedToNewAddress`, and `sendEmailChangedAdminNotification` (admin email read from auth cookie) — all fire-and-forget
+- PUT checks `isEmailTaken(email, id)` before updating — returns 409 if email already belongs to another account
+- Replaced the DELETE handler to archive users (`is_archived` and `archived_at`), OR permanently delete users from the database if `?permanent=true` query param is provided, sending archiving or permanent deletion notification emails to user and admin
+- Added PATCH handler supporting `{ action: "restore" }` to restore an archived user and send restoration emails to user and admin
+- Triggers therapist assignment change notification: notifies therapist (`Patient Assigned`) and patient (`Therapist Assigned`) if the therapist ID is updated
+
+### *web\src\app\api\notifications\route.ts*
+- New API route endpoint — handles GET (retrieving all notifications, filtering out login/logout events for standard bell list), PUT (marking single/all notifications as read), and DELETE (soft-deleting single or multiple notifications)
+- Disabled `realtimeLogs` popup triggers by returning an empty array to silence login/logout toast popups
+
+### *web\src\app\api\admin\dashboard\route.ts*
+- New API route endpoint — handles GET (retrieving stats counts, recent system activity notifications, and recent completed patient sessions) for authorized admins
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Triggers patient notification (`Exercises Assigned`) upon successful POST of exercise assignments
+
+### *web\src\app\(auth)\change-password\page.tsx*
+- New force-change-password page — same glassmorphic card design as login page (green theme, background image, floating labels)
+- Three password fields (Current, New, Confirm) each with show/hide toggles
+- Validates password match, POSTs to `/api/auth/change-password`, redirects to role-based dashboard on success
+- No back/skip button — user must change password to proceed
+- Added client-side same-password check before API call — shows error immediately if new password equals current password
+
+### *web\src\app\(auth)\forgot-password\page.tsx*
+- New 3-step forgot password page with visual step indicator (circles with connecting lines, checkmarks for completed steps)
+- Step 1: Email input → POSTs to `/api/auth/forgot-password`
+- Step 2: 6 individual OTP digit boxes with auto-focus, backspace navigation, paste support; 5-minute countdown timer; resend OTP link
+- Step 3: New Password + Confirm Password fields → POSTs to `/api/auth/reset-password` with `resetToken` stored from Step 2 → redirects to `/login?reset=success`
+
+### *web\src\app\(auth)\login\page.tsx*
+- Added "Forgot Password?" link below password field (green underlined text)
+- Added `mustChangePassword` check after login — redirects to `/change-password` if true
+- Added `?reset=success` query param detection — displays green success banner after password reset
+- Wrapped component in `<Suspense>` boundary for `useSearchParams()` Next.js compatibility
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Replaced the "Delete" button/action on active users with an amber "Archive" action, opening a confirmation modal explaining that the user will be blocked from accessing the system but their records remain intact
+- Added an "Archived Users" list under an "Archived Users" header, showing the archival date, a green "Restore" action button to reactivate accounts, and a red "Delete" action button to permanently delete the account
+- Implemented a 2-step permanent deletion confirmation modal warning flow for archived users to prevent accidental deletion
+- Updated `handleConfirmAdd` success message to conditionally include email notification text: "An activation email with login credentials has been sent to {email}"
+- Added `text-black` to Add User and Edit User form container divs so all headings, labels, inputs, and buttons are readable on the white modal background
+- Replaced emoji icons (👤 Patient, 👨‍⚕️ Therapist) with inline SVG icons — Patient uses a person silhouette (`M12 12c2.21...`), Therapist uses Material Design `medical_services` briefcase with cross icon — in role selection buttons, Add User heading, and Edit User heading
+- Removed Diagnosis, Prescription, and Condition from `User` interface, `newUser` initial state, patient validation, Add Patient form, Edit Patient form, Add preview modal, and Edit preview diff table
+- Added `emailError` and `editEmailError` states — email inputs in both Add and Edit forms check the already-loaded `users` list on every keystroke; a red inline error appears instantly if the email is already in use; form submission (`handleAddUser`, `handleSaveEditUser`) is blocked while an error is present
+- "Add User" button is disabled and grayed (`bg-gray-400 cursor-not-allowed`) when `emailError` is set; "Save Changes" button is disabled and grayed when `editEmailError` is set — both buttons restore green styling automatically once the error clears
+- Fixed "Assign to Therapist" dropdown text not readable — added `text-black bg-white` to the select element
+- Integrated global `<NotificationBell />` header component to display admin-specific notification chimes, details modal, and delete options
+
+### *web\src\lib\crypto.ts*
+- New password hashing and comparison utility using `bcryptjs`
+- Implemented smart password comparison fallback: checks if the hash begins with standard bcrypt signatures, falling back to plaintext comparison if not (for demo credentials)
+
+### *web\package.json*
+- Added `bcryptjs` and `@types/bcryptjs` dependencies
+
+### *web\src\app\(app)\dashboard\_components\ChangePasswordModal.tsx*
+- New frosted-glass modal component (`bg-green-800/55 backdrop-blur-sm border border-green-700/50`) for OTP-verified password change
+- 3-step flow: Step 1 email auto-filled (read-only) → Step 2 six OTP digit boxes with auto-focus, paste, backspace, countdown timer, resend → Step 3 new password + confirm with show/hide toggles
+- Cancel button on every step closes the modal; success auto-closes after 1.5 seconds
+- Shared by therapist profile and patient dashboard
+- Fixed missing `resetToken` — now stores the token from verify-OTP response in state and includes it in the reset-password request body
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+- New UI component for in-app notifications — features a bell icon with dynamic unread badge count, C5->E5 dual-tone audio chime alerts on new updates, w-[28rem] width, checkboxes for multi-selection, bulk deletion via a trash icon, and individual details viewing modal overlay with a single "Delete" option
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*
+- Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
+- Added `showChangePassword` state and `ChangePasswordModal` rendering with therapist email
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Enabled Change Password button — removed `disabled` and `cursor-not-allowed`, added `onClick` to open `ChangePasswordModal`
+- Added `showChangePassword` state and `ChangePasswordModal` rendering with patient email
+- Integrated global `<NotificationBell />` header component to check and display patient-specific notification alerts
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
+- Replaced solid black card borders with smooth `border border-gray-200 rounded-xl` and added `hover:shadow-sm` transition
+- Updated `statusColor()` from gray/blue pills to green-themed pills (`bg-green-100 text-green-700`, `bg-green-50 text-green-600`) with subtle green borders
+- Replaced plain search input with a search icon SVG (`Material Design search`) inside a relative wrapper, `rounded-xl border-gray-200` with `focus:ring-green-400`
+
+### *web\src\app\(app)\dashboard\therapist\layout.tsx*
+- Integrated global `<NotificationBell />` header component in the therapist layout wrapper, ensuring uninterrupted continuous polling and audio chime playback across views
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*
+- Aligned card styles to match the Manage Patients design
+- Added a green **View** button that displays a play-only video preview of `/sample-video.mp4` with the description
+- Updated the **Edit** action button to red, locking name modifications and allowing updates only to the description
+- Removed display of raw exercise IDs
+- Added a custom styled confirmation modal overlay for deleting custom exercises
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Styled "+ Create New Program" and "+ Add New Custom Exercise" buttons with an exact fixed width (`w-60`) and height (`h-10`) with centered alignment, preventing size changes when toggling cancel
+- Styled program form save/cancel buttons with exact width `w-40` and height `h-10`, and custom exercise form save/cancel buttons with exact width `w-48` and height `h-10`, ensuring visual alignment
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Removed the "View Exercise" button from Assigned Exercises cards
+- Relocated the exercise status pill ("In Progress" / "Not Started") to the right side of the card, styled to match the Completed Exercises pill layout
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Copied system/custom exercise lists, search filtering, and description editing logic from therapist's exercises page
+- Bound new state variables (`editingId`, `editDesc`, `saving`, `exerciseQuery`, `viewingExercise`, `showDeleteConfirm`, `deleteTargetId`, `deleteTargetName`) to support exercises list features
+- Added `isCustom: true` payload to added exercises in `handleAddExercise` so newly added admin exercises are custom by default
+- Declared helper subcomponents `AdminExerciseRow` and `VideoPlayer` at the bottom of the file
+- Rendered play-only `/sample-video.mp4` preview modal and styled trash-icon deletion confirmation dialog for custom exercises
+- Added `text-gray-900` class to the "Add New Exercise" form heading to ensure readability
+- Redesigned the previously empty Dashboard tab to include stats KPI cards, quick actions bar, recent sessions table, and recent system activity feed layout, with slide-in entry animations for new logs
+- Bound dashboard stats and activity feed data to fetch automatically on mount or tab select, and added background polling every 3 seconds for live dashboard updates
+- Linked clearing of system activity logs to calling the notifications DELETE API with a persistent database-wide clear action so they stay cleared across admin sessions
+- Handled loading states using the existing therapist/patient `Skeleton` loader components (`SkeletonKpiRow`, `SkeletonTable`) for design consistency
+
+### Validation
+- `npm run build` passed — 33/33 pages compiled successfully
+- `npx tsc --noEmit` checks passed cleanly
+- All new API routes registered: `/api/auth/change-password`, `/api/auth/forgot-password`, `/api/auth/verify-otp`, `/api/auth/reset-password`, `/api/notifications`, `/api/admin/dashboard`
+- All new pages registered: `/change-password`, `/forgot-password`
+- Existing databases must run `scripts\user_credentials_pg.sql`, `scripts\email_features.sql`, `scripts\reset_token_migration.sql`, and `scripts\notifications_pg.sql` (which includes the `ALTER TABLE` statement for existing tables) as the `postural` superuser (via pgAdmin Query Tool or psql) before using the email, forgot-password, and notification features
+- Gmail App Password must be configured in `web\.env.local` (`SMTP_PASS`) before emails will be sent
+
+### How to Use - Camera Module
+- Added a **How to Use** button in the camera header, positioned to the right of Start camera (button order: Stop → Start camera → How to Use)
+- Clicking How to Use launches a 7-step interactive spotlight tour that highlights and explains each part of the camera UI — no external library, pure inline React
+- The tour dims the screen without blurring it; a transparent SVG cutout spotlights the active element, and a pulsing teal ring (via `@keyframes tour-pulse`) draws attention to it
+- A floating tooltip card with a CSS triangle arrow appears near each highlighted element; the arrow points toward the target and the card repositions itself per step (below / above / left / right) using live `getBoundingClientRect()` measurements
+- Added `anchorId` field so a step can spotlight one element (e.g. the whole camera feed) while anchoring the card to a different element (e.g. the metrics panel) to keep the card on screen and readable
+- Added `cardH` and `aboveGap` overrides per step so tall cards and bottom-of-screen targets (session controls) do not overlap the highlighted buttons
+- Arrow is suppressed on steps with no spotlight target (step 6 — Clothing & Environment), which falls back to a centered card over the dimmed screen
+
+**Tour steps:**
+1. **Start Camera** — highlights the Start camera button; explains the camera permission flow
+2. **Status Indicators** — highlights the AI ready / Capture OK dots; explains green vs orange state
+3. **Your Assigned Exercise(s)** — highlights the exercise stepper card with left/right arrows; explains how to navigate between assigned exercises
+4. **Camera View** — spotlights the full camera feed; card anchors off the left metrics panel so it appears inside the camera area; explains positioning, distance, and lighting
+5. **Live Metrics Panel** — highlights the left rail; explains movement angle numbers and colour-coded warnings
+6. **Clothing & Environment** — no spotlight (centered card); explains that dark clothing on dark backgrounds, backlighting, busy walls, and low light reduce pose tracking accuracy; advises plain contrasting clothes and a clear well-lit space
+7. **Start Session & End** — highlights the Start session / End buttons in the session controls panel; explains the 3-2-1 countdown, early End, auto-save, and how to redo an exercise using Restart if not satisfied
+
+---
+
+## 📌 Update-6-6-26 | *RyanCodesling*
+
+- Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
+- Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
+- Hardened camera session-save feedback so "Session saved" appears only after the session-end PATCH succeeds, with separate pending/failure states for in-flight or failed persistence
+- Added therapist patient-detail reporting polish: print/PDF layout support, print-only report header/footer, and a visible "Print / Save as PDF" action
+- Added a therapist-facing Form Quality card that surfaces the current rule-based isometric compensation score as a labeled heuristic, plus a clearly reserved calibrated score slot for future integration
+- Hardened the patient-session query so malformed legacy `hold_quality.meanCompensationScore` JSON cannot crash the dashboard aggregate
+- Added therapist assignment cadence controls so prescriptions can repeat every day, every other day, every 3 days, twice weekly, three times weekly, or on custom weekdays across a bounded date range
+- Added a per-occurrence schedule model so recurring prescriptions expand into dated exercise occurrences with make-up windows, per-day completion status, and legacy backfill support
+- Rebuilt the patient Session tab and consistency calendar around scheduled occurrences, including due today, make-up available, missed, partial, complete, upcoming, and rest-day states
+- Enforced a strict scheduled-occurrence lock for patient camera starts so future, missed, or unscheduled exercises cannot create unsaved local-only sessions
+- Updated therapist roster progress and attention states to use scheduled occurrence due/completed/missed counts instead of assignment-level status alone
+- Deferred untested `ex_008` live-tuning trace expansion from this commit; the durable raw-trace path remains `ex_007`-only until `ex_008` can be tested live
+- Existing databases must rerun `scripts\patient_exercises_pg.sql` and `scripts\exercise_occurrences_pg.sql` before using the recurrence schedule, make-up window, or strict occurrence-lock behavior
+
+### *web\src\lib\ToastContext.tsx*, *web\src\app\layout.tsx*, and *web\src\app\globals.css*
+- Added a global `ToastProvider` around the authenticated app shell
+- Added success, info, and error toast variants with manual dismiss and timed auto-dismiss behavior
+- Added the shared toast entrance animation in global CSS
+
+### *scripts\patient_exercises_pg.sql*, *scripts\exercise_occurrences_pg.sql*, and *scripts\sessions_pg.sql*
+- Added recurrence fields to `patient_exercises`: recurrence kind, interval length, weekday set, start date, and inclusive end date
+- Added the `exercise_occurrences` table for one scheduled row per assigned exercise per due date
+- Added `makeup_until` so an overdue occurrence remains startable until the day before the next scheduled occurrence or the end of the assignment window
+- Added `sessions.occurrence_id` so persisted sessions link to the specific scheduled day they fulfilled
+- Backfilled legacy assignments into one occurrence on their assigned date, filled missing make-up deadlines defensively, and linked legacy sessions when the match is unambiguous
+
+### *web\src\lib\exercises\occurrences.ts*
+- Added shared day-key helpers for interval and weekly recurrence generation using pure `YYYY-MM-DD` calendar math
+- Added schedule expansion that derives each occurrence's make-up deadline from the next scheduled due date
+- Added occurrence and calendar rollup helpers for completed, in-progress, due, overdue, missed, partial, complete, and rest states
+- Added cadence display helpers and scheduling caps so a single assignment cannot materialize an unbounded schedule
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Changed session-ending persistence to return `saved`, `pending`, `skipped`, or `failed`
+- Shows "Session saved" only after the session-end request returns OK
+- Shows an info toast when a patient session is still finalizing and an error toast when the save request fails
+- Avoids showing a false saved-success toast for staff/debug sessions where no patient assignment is being persisted
+- Loads patient occurrences alongside assigned exercises and computes the exercises actionable today
+- Disables Start with a "Not scheduled today" state when the selected patient exercise is not due today or inside its make-up window
+- Waits for `/api/sessions` to create the persisted session before entering countdown, and stays idle with a visible notice if the server returns the strict-lock 409 or a save failure
+- Keeps staff/debug camera sessions outside the patient schedule lock
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Uses global toasts for successful assignment and delete operations
+- Removes the large success modals while keeping the existing preview, delete confirmation, and error modal paths
+- Replaced the single scheduled-date input with a Repeat dropdown plus start/end dates
+- Added interval presets and weekly weekday selection for recurring exercise assignments
+- Validates schedule windows, interval bounds, and weekly weekday selection before POSTing assignments
+- Shows recurrence details in the assignment preview and existing-assignment cards
+- Restores saved recurrence fields when loading existing assignments or cancelling edit mode, so a recurring assignment does not silently revert to a one-day schedule
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Patient GET now returns both assigned exercises and their scheduled occurrences
+- Assignment POST validates recurrence kind, interval days, weekday sets, start/end dates, and maximum recurrence span before persistence
+- Sends normalized recurrence data to the database helper so each assignment can materialize its occurrence rows consistently
+
+### *web\src\app\(app)\dashboard\_components\Skeleton.tsx*
+- Added reusable dashboard skeleton primitives: `SkeletonBar`, `SkeletonCard`, `SkeletonKpiRow`, and `SkeletonTable`
+- Replaced centered loading text with layout-matching skeleton states on the patient dashboard, therapist home dashboard, and therapist patient-detail page
+
+### *web\src\app\(app)\dashboard\therapist\layout.tsx*
+- Added print-specific layout classes so therapist reports hide navigation chrome and remove screen-only spacing while printing
+- Forces the therapist shell into the light color scheme so print/report screens keep the intended contrast even on dark-mode browsers
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added a print-only Patient Progress Report header with generated timestamp and patient name
+- Added a "Print / Save as PDF" action for therapist-facing patient reports
+- Added a print-only disclaimer footer that keeps the proof-of-concept, non-medical-device scope visible on exported reports
+- Added a Form Quality section with a rule-based 0-100 heuristic averaged from scored isometric hold sessions
+- Added a separate "Calibrated form-quality score — coming soon" slot so the future calibrated score is visible as planned work without presenting it as live
+- Added loading skeletons for the patient-detail view
+
+### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+- Changed the calendar from session-only coloring to scheduled-occurrence adherence coloring
+- Shows completed, partial, make-up available, missed, due/upcoming, and rest-day legend states
+- Keeps streak, active-day, and total routine counts based on outcome-bearing sessions so accidental starts still do not inflate progress
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Fetches scheduled occurrences from `/api/patient-exercises` alongside the existing exercise and session summaries
+- Rebuilds the Session tab as a due-date grouped schedule with progress-to-date counts
+- Enables Start only for due-today and make-up-available occurrences, disables future occurrences, and labels closed windows as missed
+- Passes occurrences into the consistency calendar so dashboard adherence matches the actionable schedule
+- Forces the patient shell into the light color scheme so dashboard contrast stays consistent on dark-mode browsers
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Changed roster progress to completed scheduled occurrences over due scheduled occurrences
+- Shows missed occurrence counts inline in the Progress column
+- Flags patients as needing attention when they have missed scheduled occurrences, even if the assignment itself still exists
+
+### *web\src\app\api\sessions\route.ts*
+- Maps unscheduled patient start attempts to HTTP 409 when the database helper finds no actionable occurrence for today
+
+### *web\src\lib\db.ts*
+- Added an Asia/Manila day-key helper so schedule locking and occurrence rollups match the patient-facing calendar day
+- Persists recurrence rules during assignment and materializes matching occurrence rows with make-up deadlines
+- Regenerates only future pending occurrences on assignment edits so past adherence and completed days are preserved
+- Derives assignment status from occurrence rows instead of relying on one sticky assignment-level status
+- Added `getPatientOccurrences()` for the patient schedule tab, consistency calendar, and camera start gate
+- Links new patient sessions to the actionable scheduled occurrence for today and marks that occurrence in progress
+- Completes the linked occurrence when a session finishes all prescribed work
+- Returns therapist roster due, completed, and missed occurrence counts, using a defensive make-up deadline fallback for legacy rows
+- Added guarded aggregation for `hold_quality.meanCompensationScore` in `getSessionsForPatient()`
+- Casts JSONB compensation scores only when the value is a JSON number, so malformed or legacy rows become `NULL` and are skipped by `AVG()`
+- Returns `avgCompensationScore` for dashboard consumers that can render the current rule-based heuristic
+
+### *web\scripts\seedDemo.ts*
+- Seeds interval cadence fields on demo assignments
+- Seeds matching occurrence rows for completed, in-progress, missed, make-up, due-today, and upcoming schedule states
+- Prints an occurrence tally so demo seeding confirms the schedule rows were populated
+
+### Validation
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Focused `npx eslint` over the modified camera, dashboard, helper, database, and layout files exited with 0 errors; remaining warnings are the existing patient-dashboard `loadData` hook dependency and therapist-assign ternary expression warning
+- Targeted schedule-lock validation passed for the camera, patient dashboard/calendar, therapist assignment/dashboard, patient-exercises API, sessions API, `db.ts`, and `occurrences.ts` with 0 errors and the same 2 known warnings
+- `git diff --check` exited 0, with only Git CRLF normalization warnings
+- DB migration, demo seed, and live browser verification for the recurrence schedule flow still need to be run against a development database
 
 --- 
+
+## 📌 Update-6-4-26 | *RyanCodesling*
+
+- Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
+- Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
+- Added session end-reason tracking so the dashboard can distinguish completed sessions, deliberate early endings, superseded open rows, and still-open in-progress attempts
+- Added open-session cleanup when a newer session starts for the same assigned exercise, preventing older abandoned rows from pinning dashboard status labels
+- Added a post-session camera recap so patients can review the exercise they just finished before redoing it, moving to the next exercise, or returning to their schedule
+- Added cross-session progress trend charts to the therapist patient-detail page and the patient-facing My Progress tab, including exercise-specific primary metrics, separate left/right completion series, and descriptive trend badges
+- Moved the trend-card and chart rendering into shared dashboard components so patient and therapist progress views use the same outcome-bearing session grouping and left/right display rules
+- Rebuilt the therapist home page into a dashboard with patient activity KPIs, setup/inactivity counts, and a linked patient roster
+- Refined the patient Dashboard tab so consistency and assigned-exercise summaries sit side by side on wide screens and stack cleanly on smaller screens
+- Added a deterministic demo-data command for populating dashboard KPIs, patient statuses, session history, and trend-chart states
+- Preserved the existing date-gated Session tab as the actionable scheduled-exercise surface while using the Dashboard tab as a read-only progress summary
+- Added a migration-safe `sessions.end_reason` column; existing local databases must rerun `scripts\sessions_pg.sql` or apply the `end_reason` ALTER before using this branch
+- Added a durable patient-only `ex_007` upper-body motion trace for live tuning of shoulder-press starting position and movement path, storing raw unsmoothed metrics plus selected pose landmarks without storing video
+- Added a body-relative wrist lateral-path metric so later analysis can distinguish a vertical press above the shoulder from inward or outward wrist drift
+- Added a dedicated raw-frame API surface for saving and retrieving motion traces without loading large per-frame payloads into ordinary session-detail reads
+- Tuned the `ex_007` partial-rep discard floor from `0.4` to `0.21` after controlled wrist-height traces separated low lifts from deliberate medium partial presses
+- Added directional yellow compensation-overlay cues for shoulder asymmetry, trunk lean, and neck tilt, including mirroring-safe helper coverage for the front-camera display
+- Clarified overhead capture-readiness feedback so the patient is asked to keep the whole body in frame instead of being told to place the head near the top
+- Existing databases must rerun `scripts\sessions_pg.sql` before using the new `ex_007` motion-trace recording path
+- Cleared the commit-blocking TypeScript ESLint errors in the camera/session persistence path, database helper typings, and One Euro profiling script while preserving the existing runtime behavior
+
+### *scripts\sessions_pg.sql*
+- Added `end_reason` to the `sessions` table definition
+- Added a safe `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason TEXT`
+- Documented the supported end reasons: `user`, `completed`, `superseded`, and `NULL` for still-open sessions
+- Added the metric-only `raw_frames` table with session/frame/set indexes, elapsed and wall-clock timestamps, a versioned trace kind, raw metrics JSON, and selected pose-landmark JSON
+- Added an explicit no-video schema contract, a session/frame uniqueness guard, a session lookup index, and grants for the `postural` database user
+
+### *web\package.json*
+- Added `npm run seed:demo` as the dashboard demo-data command
+
+### *web\scripts\seedDemo.ts*
+- Added a deterministic, transaction-based demo-data generator for the existing therapist and patient demo accounts plus additional `demo_*` patients
+- Resets only the known demo account content and `demo_*` rows before reseeding so repeated runs produce the same populated dashboard state
+- Populates patient assignments, therapist programs, sessions, set outcomes, rep outcomes, hold-quality summaries, activity states, and trend-chart examples
+- Reads `DATABASE_URL` from the environment or `web\.env.local`
+
+### *web\scripts\profileOneEuroFilter.ts*
+- Tightened the synthetic peak-index local from `let` to `const` so the profiling helper no longer blocks full ESLint
+
+### *web\src\lib\db.ts*
+- Updated `createSession()` to close older open sessions for the same assigned exercise as `superseded` when a new session starts
+- Updated `endSession()` to persist `end_reason`, with completed sessions recorded as `completed`
+- Updated `getSessionsForPatient()` to return `endReason`, `setCount`, and `totalReps` for dashboard summaries
+- Added `getTherapistRoster()` to return each assigned patient's outcome-bearing session activity, last active date, assigned-exercise count, and completion count
+- Counts therapist activity from sessions with at least one set or rep outcome so abandoned starts do not inflate the home dashboard
+- Added `RawFrameRow`, `insertRawFrames()`, and `getRawFramesForSession()` for durable metric-only trace batches
+- Replaced remaining broad `any` usage in user mapping, query parameters, and profile-update parameter access with safer typed records/unknown arrays
+
+### *web\src\app\api\sessions\[id]\route.ts*
+- PATCH now accepts `endReason` and forwards it to the session persistence helper
+- Empty PATCH bodies remain supported for stale-session cleanup paths
+
+### *web\src\app\api\sessions\[id]\raw-frames\route.ts*
+- Added an explicit raw-motion-trace endpoint kept separate from ordinary session detail responses
+- Patient POST writes require session ownership and validate bounded frame batches, indexes, timestamps, trace kind, metrics, and landmark payloads
+- GET allows patients to retrieve their own traces and therapists to retrieve traces only for assigned patients
+
+### *web\src\app\api\therapist\overview\route.ts*
+- Added a therapist-only overview endpoint for the home dashboard
+- Returns the signed-in therapist's patient roster rollups and exercise-program count
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Manual End now sends `endReason: "user"` so deliberate early endings can be labeled accurately
+- Stashes the End-button reason while session creation is still in flight so fast early endings on slow networks still persist as user-ended
+- Completed all-sets sessions continue to close through the completed path
+- Non-user exercise switches and stale session cleanup close sessions without marking them as user-ended
+- Added a post-session summary overlay for the camera's ended state
+- Dynamic exercise recaps show separate left/right completion totals, average peak versus target, an asymmetry label, and completed sets
+- Isometric exercise recaps show hold time versus target and completed sets without presenting rep counts
+- Added Redo, Next exercise, and patient schedule navigation actions using the existing camera flow handlers
+- Patient `ex_007` sessions now record valid active frames before smoothing or rep-state processing, including wrist vertical/lateral path, shoulder abduction, elbow flexion, scapular elevation, upper-arm distance, trunk lean, shoulder symmetry, tilt reference, and the minimal analysis landmarks needed for later recomputation
+- Raw-frame batches flush periodically, at set boundaries, and at session end; staff debug sessions remain non-persistent
+- Added a patient-facing notice that the motion trace stores raw metrics and pose landmarks only, not video
+- Preserves three-decimal precision for the normalized `ex_007` wrist-height signal before rep counting so low and medium partial motions are not collapsed into the same one-decimal bucket
+- Removed stale local exercise/patient types, replaced API-response `any` casts with `unknown`-based row parsing, removed MediaPipe landmark `any` casts, and fixed hook-dependency warnings through stable cleanup refs
+
+### *web\src\lib\exercises\registry.ts*
+- Updated `ex_007.minimumPeakThreshold` from `0.4` to `0.21`, between the observed smoothed low-lift maximum (`0.18`) and medium-partial minimum (`0.24`)
+- Kept the existing `startThreshold`, `repCompleteThreshold`, and `targetROM`; the controlled trace supported the current start/return behavior and the existing complete-versus-medium separation
+
+### *web\src\lib\pose\poseMetrics.ts* and *web\src\lib\pose\wristShoulderLateral.test.ts*
+- Added `computeWristShoulderLateral()` as a raw analysis metric for same-side wrist drift relative to the shoulder
+- Positive values mean outward drift from the body midline, negative values mean inward drift, and the body-relative axis keeps the metric camera-roll invariant
+- Added synthetic coverage for vertical alignment, inward/outward sign behavior on both sides, camera-roll invariance, and off-frame wrist rejection
+
+### *web\src\lib\pose\wristShoulderVertical.test.ts* and *web\src\lib\pose\peakRelevantGating.test.ts*
+- Added live-tuned `ex_007` boundary coverage for low wrist lifts, medium partial presses, and full presses after the `minimumPeakThreshold` adjustment
+- Updated peak-relevant compensation-gating cases so compensation warnings stay tied to clinically relevant motion ranges instead of low-amplitude setup noise
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Updated the overhead-mode `MOVE_CLOSER` readiness copy to ask for whole-body framing
+- Kept the non-overhead feedback unchanged, where asking for the head near the top remains the intended framing cue
+
+### *web\src\lib\pose\drawCompensationOverlay.ts* and *web\src\lib\pose\drawCompensationOverlay.test.ts*
+- Replaced the generic amber warning treatment with yellow correction cues for active compensation warnings
+- Draws paired shoulder boxes plus a downward `LOWER` arrow on the elevated shoulder for shoulder-asymmetry warnings
+- Draws `STRAIGHTEN` arrows for trunk lean and neck tilt, with anatomical left/right direction converted safely for the mirrored front-camera canvas
+- Added pure helper coverage for anatomical side-to-screen direction and elevated-shoulder selection so mirroring-sensitive overlay logic is regression-tested
+
+### *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+- New patient consistency calendar component
+- Marks active days only from sessions with at least one set or rep outcome
+- Shows current streak, active days this month, total outcome-bearing sessions, month navigation, today highlighting, and per-day session counts
+- Uses the same Asia/Manila day-key convention as the patient session schedule
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Fetches `/api/sessions` alongside patient profile and assigned exercises
+- Adds the consistency calendar to the Dashboard tab
+- Adds a read-only assigned-exercises summary with isometric-aware prescription text
+- Adds a My Progress tab that renders per-exercise trend cards from the patient's own outcome-bearing sessions
+- Extends the local session summary shape with exercise kind, average peak, left/right completed reps, and paired hold time so the shared trend component can render patient progress without another API surface
+- Uses the latest session per exercise to map `in_progress` assignments to either `In Progress` or `Ended Early`
+- Places the consistency calendar and assigned-exercises summary side by side on large screens while preserving a stacked mobile layout
+- Moves the general Start Session action into the assigned-exercises summary header
+
+### *web\src\app\(app)\dashboard\therapist\page.tsx*
+- Replaced the one-line therapist welcome screen with a dashboard home view
+- Added KPI cards for Patients, Sessions this week, Programs, No exercises yet, and Needs attention
+- Added a patient roster with Last active, This week, Progress, and Status columns
+- Links patient names to their therapist patient-detail pages
+- Added loading, empty, and error states plus horizontal table scrolling for narrow screens
+
+### *web\src\app\(app)\dashboard\_components\TrendChart.tsx*
+- New shared SVG line-chart component for one or two numeric series
+- Shows plotted points, connected lines, latest values, and min/max scale context without adding a charting dependency
+
+### *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*
+- New shared per-exercise trend grouping and card component used by both the therapist patient-detail page and the patient My Progress tab
+- Filters out zero-outcome started-then-abandoned sessions before charting so accidental starts do not create false trend points
+- Uses the exercise registry to classify dynamic versus isometric cards, keeps left and right completed reps separate, and labels the trend statistics as descriptive rather than diagnostic
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added a Progress Trends section above the existing Sessions Record
+- Groups outcome-bearing sessions by exercise and orders each group from oldest to newest
+- Uses average peak value for dynamic exercises and paired hold time for isometric exercises
+- Keeps completed left and right reps as separate chart series so the asymmetry signal is not hidden
+- Adds Improving, Plateau, Regressing, and low-data states using descriptive session-level statistics
+- Derives exercise kind from the registry first so legacy or abandoned sessions with no set row cannot mislabel isometric trend cards
+- Replaced the page-local trend chart and grouping helpers with the shared dashboard trend components
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- `npx tsx src/lib/pose/wristShoulderLateral.test.ts` passed 5/5
+- `npx tsx src/lib/pose/wristShoulderVertical.test.ts` passed 13/13, including the live-tuned ex_007 low/partial/complete boundary coverage
+- `npx tsx src/lib/pose/drawCompensationOverlay.test.ts` passed 6/6 for the mirroring-sensitive overlay helpers
+- `npx tsx src/lib/pose/peakRelevantGating.test.ts` passed 17/17 for the updated compensation-gating ranges
+- The full pose test sweep passed 116/116, including the new wrist lateral-path and ex_007 boundary coverage
+- Targeted ESLint passed for the new raw-frames API route, wrist lateral-path test, wrist vertical-path test, and exercise registry
+- Focused ESLint passed for the therapist dashboard page, therapist overview route, trend chart component, and demo-data script
+- Focused ESLint for the patient dashboard files and session id route passed with the existing `loadData` hook-dependency warning only
+- `npx eslint` now completes with 0 errors; 9 warning-level items remain in older admin/auth/dashboard/pose files
+- Targeted `npx eslint "src/app/(app)/camera/CameraClient.tsx"` is clean with 0 errors and 0 warnings
+- The demo-data command completed successfully and produced the same counts on a repeated run
+- Browser verification confirmed the patient dashboard, therapist home dashboard, and therapist patient-detail trend charts render with populated demo data
+- Responsive checks at desktop and narrow mobile widths showed no page-level horizontal overflow; the therapist roster table remains contained by its horizontal-scroll wrapper
+- `git diff --check` passed on the scoped tracked files, with line-ending warnings only
+- Live webcam validation is still required for the camera post-session recap, and the `end_reason` database migration is still required before deployment
+- Live patient `ex_007` validation recorded a completed 3 x 12 run with 3,722 raw metric frames across all three sets, 72 side-specific complete reps, and 99.6% capture-ready coverage
+- Two controlled wrist-height calibration traces separated low lifts (smoothed peak at or below `0.18`), deliberate medium partial presses (at or above `0.24`), and full presses (at or above `0.85`) across both sides
+- Offline replay with three-decimal rep-counter input and `minimumPeakThreshold: 0.21` discarded every observed low lift, recorded every observed medium press as partial, and kept every observed full press complete
+- Live patient confirmation in reverse order recorded the expected `6/6` result: three full presses per side were complete, three medium presses per side were partial, and three low wrist lifts produced no rep events
+- The good-form and controlled-partial traces supported keeping the existing `ex_007` start, completion, and target-ROM thresholds
+- The `raw_frames` migration was applied and verified with the restricted application database user able to select and insert trace rows; other existing databases must still rerun `scripts\sessions_pg.sql` with a migration account
+
+---
+
+## 📌 Update-5-31-26 | *RyanCodesling*
+
+- Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
+- Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
+- Added `scripts\sessions_pg.sql` for the session persistence schema, including `sessions`, `rep_events`, `set_events`, indexes, permissions, and safe re-run column additions for existing local databases
+- Added clinician-facing session history on the therapist patient detail page, showing recent sessions with duration, set count, left/right completion counts, average peak value, and total hold time
+- Added expandable session drill-down rows so therapists can inspect per-set hold outcomes for `ex_006` and reconstructed per-set rep summaries for older dynamic sessions that have reps but no set records
+- Updated `ex_006` persistence so completed timed holds save set-level results and hold-quality summaries instead of synthetic rep rows
+- Added capture-quality tracking during active camera sessions so analytics can distinguish poor tracking coverage from poor exercise performance
+- Updated assignment status lifecycle: starting a patient session moves a pending assignment to in-progress, completing all prescribed sets marks it completed, and re-prescribing the same exercise resets the assignment to pending with the refreshed prescription values
+- Cleaned up the patient-detail data-loading effect so the therapist session dashboard passes the targeted hook-dependency lint check
+
+### *scripts\sessions_pg.sql*
+- New schema file for the session analytics surface
+- Added `sessions` table for one row per camera run, including patient, assigned exercise, exercise id, start/end timestamps, optional device info, capture-quality summary, and notes
+- Added `set_events` table for completed or partial set outcomes, including dynamic rep counts, isometric hold totals, duration, termination reason, asymmetry index, and optional `hold_quality`
+- Added `rep_events` table for counted dynamic reps, including session/set indexes, side, peak value, target ROM, timing fields, classification, and timestamps
+- Added indexes for session, set, and rep lookups
+- Added safe `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements for optional metadata columns so existing local databases can rerun the script
+- Added grants for the `postural` database user and the new table sequences
+
+### *web\src\app\api\sessions\route.ts*
+- New `GET /api/sessions` route for session-history summaries
+- Patients can fetch their own session history
+- Therapists can fetch a patient's session history only when that patient is assigned to them
+- New `POST /api/sessions` route for starting a patient camera session
+- Session creation verifies the `patientExerciseId` belongs to the signed-in patient and matches the requested exercise before writing a session row
+
+### *web\src\app\api\sessions\[id]\route.ts*
+- New `GET /api/sessions/[id]` route for session drill-down details
+- Returns set and rep details for patients viewing their own sessions or therapists viewing assigned patients
+- New `PATCH /api/sessions/[id]` route for ending a session
+- Ending a session stamps `ended_at`, accepts capture-quality summary data, accepts optional notes, and can mark the linked assignment completed when all prescribed sets were finished
+
+### *web\src\app\api\sessions\[id]\rep-events\route.ts*
+- New patient-only batch insert route for counted dynamic rep rows
+- Validates session ownership before accepting writes
+- Validates positive indexes, finite peak and target values, non-negative timing values, allowed side/classification values, and parseable timestamps before insertion
+
+### *web\src\app\api\sessions\[id]\set-events\route.ts*
+- New patient-only batch insert route for set-level outcomes
+- Validates session ownership before accepting writes
+- Validates set indexes, exercise kind, target/count fields, hold totals, duration, termination reason, asymmetry index, and timestamps
+- Accepts `holdQuality` only when it is a plain object so malformed optional hold-quality data does not break an otherwise valid set row
+
+### *web\src\lib\db.ts*
+- Added session persistence types for `RepEventRow` and `SetEventRow`
+- Added `createSession()` for writing session starts and moving pending assignments to in-progress
+- Added `endSession()` for ending sessions, saving capture-quality summary data, and marking fully completed assignments completed
+- Added `getSessionOwner()` for route-level ownership checks
+- Added `insertRepEvents()` and `insertSetEvents()` batch helpers
+- Added `getSessionsForPatient()` for therapist/patient session summary cards
+- Added `getSessionDetail()` for drill-down set and rep details
+- Updated reassignment behavior so re-prescribing the same exercise refreshes prescription fields and resets the assignment status to pending
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added client-side session lifecycle persistence for patient camera sessions
+- Sends session-start data with the current `patientExerciseId` and exercise id
+- Persists dynamic counted reps to `rep_events`
+- Persists set-level outcomes to `set_events`, including isometric `ex_006` hold results
+- Sends `hold_quality` summaries for completed timed holds
+- Sends session-end data with capture-quality totals and completion status
+- Tracks total and acceptable capture frames during active sessions, including no-landmarks frames in the total denominator
+- Uses session-token guarding so stale async session-start responses are not adopted by a newer run
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Added session summary and session detail types for the therapist patient detail dashboard
+- Fetches patient session history from `/api/sessions?patientId=...`
+- Added the Sessions Record section with duration, set count, left/right completion counts, average peak value, and isometric hold totals
+- Added expandable session rows that lazily fetch `/api/sessions/[id]`
+- Shows per-set timed-hold details for `ex_006`
+- Reconstructs legacy dynamic session details from `rep_events` when set rows are not available
+- Shows a distinct empty state when a legacy session has neither set records nor rep records
+- Moved the initial data loader inside its `useEffect` so the page passes the hook-dependency lint check
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- Targeted ESLint for the therapist patient detail page and session API routes passed with `--max-warnings=0`
+- Full pose test sweep passed 108/108
+- Browser verification confirmed `ex_006` set details, reconstructed legacy rep details, and empty-session messaging
+- Direct DB-path verification confirmed re-prescribing resets assignment status to pending
+- `git diff --check` passed with line-ending warnings only
+
+---
+
+## 📌 Update-5-29-26 | *RyanCodesling*
+
+- Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
+- Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
+- Cleaned up countdown/session controls so the guided exercise flow stays locked and consistent during starting, active, rest, ended, and completed states
+- Kept `ex_006` isometric display consistent in the refreshed camera surface by showing timed holds instead of rep-only prescription text
+- Added tilt-reference regression coverage and updated validation notes for the camera UI refresh branch
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Reworked the camera page into a patient-facing clinical layout with a top status bar, left live-metrics rail, centered video/canvas surface, bottom posture/hold/time strip, progress strip, and right-side session/capture controls
+- Added responsive stacking so narrow viewports keep the camera, metrics, and controls readable instead of clipping the side rails
+- Restored the non-mirrored capture-readiness banner above the camera viewport so framing prompts remain readable when selfie mirroring is enabled
+- Moved patient-facing tilt warning logic to the missing-reference helper; visible hip/ear divergence remains low confidence internally without creating a persistent patient warning
+- Locked previous/next exercise navigation during countdown, active, and rest states
+- Made End cancel countdown directly while keeping active-session End behind the existing confirmation step
+- Preserved the final elapsed timer after ended sessions and added progress labels for ready, starting, active, rest, ended, and complete states
+- Made the right-rail prescription summary use timed-hold wording for isometric exercises such as `ex_006`
+- Fixed compensation row helper text so below-threshold compensation metrics say "Below threshold" instead of always saying "Above threshold"
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added `hasMissingTiltReferenceLine()` to centralize the patient-facing tilt-warning gate
+- The helper returns true only when tilt confidence is low because one reference line is missing (`divergenceDeg === null`), not when hips and ears are both visible but diverge
+
+### *web\src\lib\pose\tiltReference.test.ts*
+- Added regression coverage for the four tilt-reference display cases: single visible reference, visible hip/ear divergence, matching high-confidence references, and missing both references
+- Pins the intended behavior that visible divergence stays available as a low-confidence metric flag without showing the patient framing banner
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- Changed compensation overlay boxes and labels from red to amber
+- Increased overlay label font size for readability while exercising away from the screen
+
+### *web\src\app\layout.tsx* and *web\src\app\globals.css*
+- Added Inter and JetBrains Mono font variables
+- Exposed global `--sans` and `--mono` variables used by the refreshed camera UI while leaving the existing app font variables available
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web/`
+- `npx tsx src/lib/pose/tiltReference.test.ts` passed (4 tests)
+- `npx tsx src/lib/pose/scapularElevation.test.ts` passed (9 tests)
+- `npx tsx src/lib/pose/trunkSideAgreement.test.ts` passed (5 tests)
+- `npx tsx src/lib/pose/shoulderAbduction.test.ts` passed (15 tests)
+- Browser verification on `/camera?exerciseId=ex_006` confirmed the refreshed layout renders, `ex_006` shows `30s hold`, countdown disables previous/next, and End cancels countdown back to ended state
+- `git diff --check` passed with line-ending warnings only
+
+---
+
+## 📌 Update-5-28-26 | *RyanCodesling*
+
+- Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
+- Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
+- Added compensation warning boxes on the camera canvas — warning metrics now draw red bounding boxes around the affected joint area with readable text badges such as "Trunk lean", "Shoulder elevated", and directional neck-tilt labels
+- Added scapular-elevation baseline capture for compensation warnings on `ex_001`, `ex_005`, and `ex_006`; raw shoulder-to-ear distance is suppressed until baseline is ready, then converted to a baseline-relative shrug delta
+- Fixed baseline routing so compensation-only calibration cannot alter primary rep-counting inputs; `ex_001` arm-raise reps remain normal shoulder-abduction angles while the separate shoulder-shrug compensation baseline runs
+- `ex_005` Standing Side Bends now uses a neutral hip-to-head baseline for its primary metric instead of per-frame hip-line correction, preserving real side-bend signal that was previously cancelled by moving hip tilt
+- `ex_005` capture readiness now uses lateral framing mode: wider head x-tolerance, lower accepted head-y range, matching wider overlay target box, and no wrist/hand gate for side bends
+- `ex_006` Arm Abduction at 90° now runs as a true isometric time-in-target-band exercise in the camera loop; it accumulates paired hold time only while both arms are inside the 90° ± 10° band and does not run a rep counter
+- Added per-side hold-duration prescription support (`holdSeconds` / `hold_seconds`) for isometric exercises, defaulting to 30 seconds when older data does not provide a value
+- Patient and therapist read-only views now display `ex_006` as timed holds instead of misleading `1 reps` text
+- Therapist assignment and program flows now show a Hold (sec) field for isometric exercises, carry hold durations through previews, existing-assignment edit/cancel logic, program templates, and assignment payloads
+- Added `web/src/lib/exercises/prescriptionDisplay.ts` to centralize isometric-aware display text such as `30s hold`, `Hold`, and `30s`
+- Added `program_exercises.hold_seconds` and `patient_exercises.hold_seconds` SQL migration-safe columns, plus DB read/write plumbing for program and patient prescriptions
+- Added `/debug/pose-simulator` for local threshold visualization of `ex_005` side-bend counting and `ex_006` T-pose hold-band behavior
+- Added `trunkSideAgreement.test.ts` to pin `ex_005` side-tag direction, shoulder-tilt rejection, off-frame ear handling, and neutral-baseline preservation
+- Updated pose metric plumbing so bilateral isometric exercises compute per-side values, `shoulderHorizAbd` delegates to shoulder-abduction geometry, and `computePoseMetricsForExercise()` exposes per-side isometric metrics for the camera loop
+- Corrected shoulder-symmetry side documentation and preserved the existing front-camera left/right conventions used by the metric code
+- Added `dumpEx005Debug()` / `enableEx005Debug()` browser-console diagnostics for live side-bend traces, including raw signed angle, smoothed angle, neutral baseline, old per-frame-corrected comparison, capture status, and rep emissions
+- Validation completed from `web/`: full pose test suite passed (104 tests, 0 failed), `npx tsc --noEmit --pretty false` passed, and `git diff --check` passed with line-ending warnings only
+
+### *scripts\patient_exercises_pg.sql*
+- Added `hold_seconds INT NOT NULL DEFAULT 30` to `patient_exercises`
+- Added safe `ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30`
+- Documented that `hold_seconds` is used for isometric targets and ignored by dynamic rep-counted exercises
+
+### *scripts\exercise_programs_pg.sql*
+- Added `hold_seconds INT NOT NULL DEFAULT 30` to `program_exercises`
+- Added safe `ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30`
+
+### *web\src\lib\db.ts*
+- Added `DEFAULT_HOLD_SECONDS = 30`
+- Added `normalizeHoldSeconds()` with a minimum valid hold of 1 second
+- `assignExercisesToPatient()` now inserts and updates `hold_seconds`
+- `getPatientExercises()` now returns `hold_seconds`
+- Program read/write helpers now include `holdSeconds` in JSON output and `program_exercises` inserts
+
+### *web\src\app\api\patient-exercises\route.ts*
+- POST payload accepts `holdSeconds`
+- Invalid/missing hold values fall back to `DEFAULT_HOLD_SECONDS`
+- Assignment requests pass `holdSeconds` through to `assignExercisesToPatient()`
+
+### *web\src\lib\exercises\registry.ts*
+- Added `CompensationMetricSpec.requiresBaselineCapture`
+- Added `requiresLateralRoom` support for exercise definitions
+- Marked `ex_005` as requiring lateral room and neutral baseline capture
+- Marked `scapularElevation` compensation as baseline-required on `ex_001`, `ex_005`, and `ex_006`
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Added `FramingMode = "lateral"`
+- Lateral mode accepts wider head motion (`x` tolerance around 84% of frame width) and lower head positions during side bends
+- Lateral overlay target now matches the widened gate
+- Wrist visibility gate is skipped for lateral mode because `ex_005` does not use wrists for primary or compensation metrics
+
+### *web\src\lib\pose\poseMetrics.ts*
+- Added head-based `computeTrunkLateralFlexionSigned()` implementation for `ex_005`
+- Added `computeTrunkLateralFlexionUncorrectedSigned()`, `computeTrunkLateralFlexionWithCameraTiltSigned()`, and `computeTrunkLateralFlexionFromNeutralSigned()`
+- Added per-side isometric metric output for bilateral isometric exercises
+- Implemented `computeShoulderHorizAbduction()` by delegating to `computeShoulderAbduction()`
+- Refactored trunk-lean signed-angle math into a reusable helper
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added countdown session state and countdown overlay
+- Added `holdSeconds` prescription handling and paired hold accumulation for `ex_006`
+- Added baseline progress state and baseline countdown overlay
+- Added `ex_005` neutral-baseline capture and debug dump support
+- Added scapular-elevation compensation baseline capture and fixed baseline gating so primary rep metrics are not transformed unless the primary metric explicitly requires it
+- Added compensation overlay rendering with metric direction support for neck tilt
+- Rep counting and isometric hold accumulation now wait until required baseline capture completes
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+- New helper for compensation warning overlays
+- Draws red rounded boxes around relevant MediaPipe landmark groups
+- Draws mirrored-safe text badges so labels read correctly in selfie view
+- Supports `compareDirection: "above" | "below"` and optional directional label suffixes
+
+### *web\src\lib\exercises\prescriptionDisplay.ts*
+- New helper for isometric-aware prescription display
+- Provides `isIsometricExercise()`, `getDisplayHoldSeconds()`, `prescriptionTargetText()`, `prescriptionMetricLabel()`, and `prescriptionMetricValue()`
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Assigned exercise types now include `hold_seconds`
+- Session schedule and profile assigned-exercise cards show isometric targets as holds instead of reps
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
+- Patient exercise summaries now include `hold_seconds`
+- Assigned-exercise chips render isometric prescriptions as timed holds
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Patient detail assigned/completed exercise cards now render isometric prescriptions as timed holds
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Assignment state, previews, existing assignments, edit/cancel handling, and API payloads now include `holdSeconds`
+- Isometric rows show `Hold (sec)` instead of required reps
+- Preview/delete modals show Hold for isometric exercises and Reps for dynamic exercises
+- Program-based assignment carries `holdSeconds` from selected programs into patient assignment parameters
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Program exercise parameters now support `holdSeconds`
+- Isometric program rows show `Hold (sec)` instead of Reps
+- Program cards summarize isometric exercises as timed holds and persist hold duration through edit/save
+
+### *web\src\app\(app)\debug\pose-simulator\page.tsx*
+- New debug route for visualizing `ex_005` side-bend thresholds, signed side tags, shoulder-cheat rejection, and `ex_006` bilateral T-pose hold-band behavior
+
+### *web\src\lib\pose\trunkSideAgreement.test.ts*
+- New regression test covering `ex_005` side direction, shoulder-tilt rejection, off-frame ear nulling, and fixed-neutral baseline preservation
+
+--- 
+
+## 📌 Update-5-24-26 | *Enah*
+- Replaced all emoji sidebar nav icons with inline SVG components (w-4 h-4 shrink-0, Material Design paths) across admin, therapist, patient dashboards, and Camera page
+- Restyled ☰ Menu hamburger button to green-filled (bg-green-700 hover:bg-green-800 text-white) across all dashboards and Camera page
+- Removed role label ("Admin" / "Therapist" / "Patient") from the top of all sidebars — user's full name now sits directly at the top
+- Redesigned My Profile pages for therapist and patient — 2-column card layout with Personal Information, Account Information, and Account Actions panels; added color-coded status badges and formatMemberSince() helper sourced from createdAt in db.ts
+- Refactored Camera page — added slide-in sidebar with backdrop overlay replacing the "← Back to Dashboard" header link; added ?exerciseId query param support so camera pre-selects the exercise on load; wrapped in <Suspense> for Next.js compatibility
+- Overhauled Assign Exercise page — added Scheduled Date field (PH timezone, date-gated), Currently Assigned section, Delete modal, Assign Preview modal with new/updated/unchanged diff, locked-by-default assigned exercises with Edit/Cancel Edit, "Update Changes" vs "Assign Exercises" smart button, and delete success popup
+- Replaced all alert() and inline banners with consistent popup modals (rounded-2xl shadow-xl) across Therapist-side and Admin-side
+- "Exercise Programs" — separated Add New Custom Exercise into a standalone form, added Your Custom Exercises section, added Rest (sec) field with 60s default
+- Patient dashboard — added Session tab (inline, no route change), date-grouped exercise list, date-gated Start Session button, color-coded status badges; renamed "Ongoing Exercises" → "Assigned Exercises", "Weekly Exercise Schedule" → "Session Schedule"
+- Deleted /session route — all session content moved into the patient dashboard Session tab
+- Manage Patients page — removed Start Session button, restyled View button and Refresh button with SVG icon
+- Full Template → Program rename across all TypeScript files (db.ts, assign/page.tsx, programs/page.tsx); new /api/programs and /api/programs/[id] routes; deleted dead api/templates/ folder
+- DB: added assigned_date, rest_seconds columns; deletePatientExercises(); ProgramExerciseRow/Input with restSeconds; createdAt in mapUser
+
+### *scripts\patient_exercises_pg.sql*
+- Added `ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NULL DEFAULT CURRENT_DATE` — safe to re-run on existing tables that pre-date the column
+
+### *scripts\exercise_programs_pg.sql*
+- `rest_seconds INT NOT NULL DEFAULT 60` added to the `program_exercises` `CREATE TABLE` definition
+- `ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS rest_seconds INT NOT NULL DEFAULT 60` added — safe to re-run on existing tables that pre-date the column
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Added `sidebarOpen` state (`useState(false)`)
+- Return refactored from `<main>` root to a fragment (`<>`) — sidebar and backdrop rendered as fixed overlays outside `<main>` so they layer correctly over the full camera view
+- Hamburger `<button>` (`☰ Menu`) added to the header left side, always visible, replaces the removed back link; styled `bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition flex items-center gap-2` matching the dashboard hamburger buttons
+- Header left area restructured: hamburger button + nested `<div>` holding the "Camera" `<h1>` and status badges
+- Sidebar `<aside>` — `fixed inset-y-0 left-0 z-40 w-64 bg-green-900`, slides in/out via `translate-x-0` / `-translate-x-full` with `transition-transform duration-200`
+- Added `useSearchParams` import from `next/navigation`
+- Reads `?exerciseId` query parameter on mount; uses it as the initial `selectedExercise` state value
+- Exercise-loading effects prefer the query-param exercise if it exists in the loaded list, falling back to the first exercise otherwise
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*
+- Full rewrite — removed old flat `ProfileField` list and Assigned Patients section
+- Layout: `lg:grid-cols-3` grid; Personal Information `col-span-2` left, Account Information + Account Actions stacked on the right `col-span-1`
+- Account Actions card: Change Password (green, `disabled`, non-functional), Log Out (red outlined, calls `logout()` → redirects to `/`)
+- Added `logout` from `useAuth` and `useRouter` for the Log Out action; added `React` import for `React.ReactNode`
+- Added `formatMemberSince()` helper — formats ISO timestamp as `"Month YYYY"` locale string
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Added `createdAt: string | null` to `PatientProfile` interface
+- View Profile tab fully redesigned — replaced old `ProfileField` grid and exercise list with the new card layout
+- Layout: same `lg:grid-cols-3` grid; left column holds Personal Information + Ongoing Exercises (stacked), right column holds Account Information + Account Actions (stacked)
+- Account Information + Account Actions match the therapist layout; Log Out is functional, Change Password is non-functional
+- Replaced old `ProfileField` with `PatInfoField`, `PatAccountField`, `formatMemberSince`, and icon components; added `React` import
+
+### *web\src\lib\db.ts*
+- Added `createdAt: row.created_at ?? null` to `mapUser` — exposes the `users.created_at` timestamp to all API responses that use `mapUser`, enabling the "Member Since" display on both profile 
+- Added `deletePatientExercises(patientId, exerciseIds)` — issues a single `DELETE FROM patient_exercises WHERE patient_id = $1 AND exercise_id = ANY($2::varchar[])` query; no-ops safely when `exerciseIds` is empty
+- `TemplateExerciseRow` extended with `restSeconds: number | null`
+- `TemplateExerciseInput` extended with `restSeconds?: number`
+- `getTemplates` query updated — `json_build_object` now includes `'restSeconds', te.rest_seconds`
+- `insertTemplateExercises` INSERT updated to include `rest_seconds` column — defaults to `60` when the input value is null or negative
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+- Progress Status badge is now color-coded: red (`bg-red-100 text-red-700`) for "not started", blue (`bg-blue-100 text-blue-700`) for "in progress" / "progressing", green (`bg-green-100 text-green-700`) for "completed"
+- Assigned Exercises status badge is now color-coded: red for "pending" (shown as "Not Started"), blue for "in_progress" (shown as "In Progress")
+- `PatientExerciseAssignment` type extended with `scheduledDate?: string`
+- `assignExercisesToPatient` INSERT now includes `assigned_date` column, using the provided date (validated `YYYY-MM-DD`) or falling back to today; `ON CONFLICT DO UPDATE` also updates `assigned_date` so re-assigning an exercise can change its schedule
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Renamed "Ongoing Exercises" section to "Assigned Exercises" on the My Profile tab
+- Removed the `status !== "completed"` filter — all assigned exercises are now shown regardless of status
+- Empty state message updated to "No assigned exercises" / "You currently have no exercises assigned"
+- Exercise status badge is now color-coded: red (`bg-red-100 text-red-700`) for "pending" (shown as "Not Started"), blue (`bg-blue-100 text-blue-700`) for "in_progress" (shown as "In Progress"), green (`bg-green-100 text-green-700`) for "completed" (shown as "Completed"); replaces the previous gray "Active" static badge
+- Added `"session"` to `ActiveTab` union; "Session" sidebar item converted from `<Link href="/session">` to a tab `<button>` — clicking it now stays within the patient dashboard with the sidebar visible, matching "View Profile" behaviour
+- `AssignedExercise` interface extended with `rest_seconds: number` and `assigned_date: string` to support the session tab
+- Session tab content added inline: progress card (completed/total count + progress bar), exercise list with scheduled date, color-coded card backgrounds and status badges, date-gated "Start Session" button (green when `assigned_date ≤ today PH`, gray + disabled when future), green → `/camera?exerciseId=xxx` redirect
+- Added `sessionTodayPH()` helper (returns `YYYY-MM-DD` in `Asia/Manila` timezone) used for date-gating logic in the session tab
+
+### *web\src\app\(app)\session\page.tsx*
+- `getStatusBadgeColor` updated: "completed" → `bg-green-100 text-green-700`, "in_progress" → `bg-blue-100 text-blue-700`, default/pending → `bg-red-100 text-red-700`; replaces the previous green "Pending" badge
+- `getStatusColor` (card background) updated to match: green tint for completed, blue tint for in_progress, red tint for pending/not started
+- `getStatusText` updated: "pending" → "Not Started", "in_progress" → "In Progress", "completed" → "Completed"; removes "Skipped" label in favour of the unified not-started default
+- Each exercise card now shows **Scheduled date** (formatted "Month D, YYYY") sourced from `assigned_date` instead of the computed weekday/date label
+- "Start Session" button is **date-gated**: green + clickable when `assigned_date ≤ today` (Philippine time via `en-CA` locale), gray + `disabled` + tooltip showing the available date when the scheduled date is still in the future
+- Clicking an active "Start Session" redirects to `/camera?exerciseId=<exercise_id>` so the camera pre-selects that exercise
+- Added `todayPH()` helper — returns today's date as `YYYY-MM-DD` using `Asia/Manila` timezone
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Added **Scheduled Date** field (required) to each exercise row when checked — `<input type="date">` rendered below the Sets/Reps/Rest grid inside `AssignRow`
+- `assignParams` state extended to include `scheduledDate?: string` per exercise
+- `handleAssign` validates that `scheduledDate` is provided for every selected exercise before submitting
+- `AssignRow` receives new `onDate` prop; both system and custom exercise maps wire it to update `scheduledDate` in `assignParams`
+- Payload sent to `POST /api/patient-exercises` now includes `scheduledDate` per exercise
+- Added **Currently Assigned** section (between Step 1 patient selection and Step 2 exercise picker) — lists all exercises already assigned to the selected patient with checkboxes, exercise name, scheduled date, sets × reps × rest, and an "assigned" blue badge on matching `AssignRow` entries
+- **Delete Selected** button opens a Delete Confirmation Modal showing a red preview card of every checked exercise; confirming calls `DELETE /api/patient-exercises` and refreshes the assignment list
+- **Assign Preview Modal** added — before saving, `handleAssign` builds a diff (`PreviewItem[]`) classifying each selected exercise as "new" (green), "updated" (blue, shows Before/After sets/reps/rest/date), or "unchanged" (gray); the modal renders all three categories before the user confirms
+- `handleConfirmAssign` performs the actual `POST /api/patient-exercises` call after the preview is confirmed
+- **Scheduled Date** `<input type="date">` per exercise now has `min={minDate}` (today's date in `Asia/Manila` timezone) — calendar picker is restricted to present date onwards
+- `AssignRow` receives `isExisting` prop and renders a blue "assigned" badge when the exercise is already in the patient's current assignments
+- Added `todayStr()` helper (returns `YYYY-MM-DD` in `Asia/Manila` timezone) and `fmtDate()` helper (formats `YYYY-MM-DD` as `"Month D, YYYY"`)
+- Added `fmtDateFull()` helper — formats `YYYY-MM-DD` as `"Month D, YYYY Weekday"` (e.g. `"May 26, 2026 Tuesday"`) for use in confirmation modals
+- **Delete Confirmation Modal** updated — each exercise now renders a stacked full-detail card: exercise name (bold), then `Sets:`, `Reps:`, `Rest:`, `Scheduled Date:` on separate lines using `fmtDateFull`; replaces the previous single-line inline summary
+- **Assign Preview Modal — New** section updated — each new exercise renders the same stacked full-detail card (green border) instead of the previous condensed one-liner
+- **Assign Preview Modal — Updated** section updated — Before (red border) and After (green border) columns each show the full stacked `Sets` / `Reps` / `Rest` / `Scheduled Date` breakdown side by side instead of the previous abbreviated `sets×reps · Xs` line
+- **Assign Preview Modal — Unchanged** section updated — each exercise now shows the full stacked detail card (gray) instead of the previous "No changes" label
+- Assigned exercises in Step 3 are **locked by default** — all four fields (Sets, Reps, Rest, Scheduled Date) are disabled (`bg-gray-100 cursor-not-allowed`) until the therapist explicitly unlocks them; a red **Edit** pill button (pencil icon) appears beside the "assigned" badge for each locked exercise
+- Clicking **Edit** enters edit mode for that exercise: fields become interactive, an "editing" red badge appears, and a gray **✕ Cancel Edit** button appears beside it
+- Clicking **Cancel Edit** exits edit mode and restores all four field values to the original DB values — any mid-edit changes are fully discarded
+- **"Assign Exercises" / "Update Changes" button** logic: no existing assignments → always shows "Assign Exercises"; existing assignments present → shows "Update Changes" only when at least one change is detected (new exercise added, or an exercise in edit mode has values differing from the DB); shows nothing if no changes are detected (e.g. only deletions were made)
+- **Delete success popup modal** replaces the previous inline success banner — after a delete is confirmed, a green checkmark modal appears stating "Deleted Successfully" with the patient name; dismissed with an OK button
+- **`toggleAssign` fix** — unchecking an assigned exercise no longer wipes its `assignParams`; the filled-in values persist in state so re-checking the checkbox immediately restores all fields to their previous values, preventing accidental data loss from an unintended uncheck
+- Added `editingExercises: Set<string>` state to track which assigned exercises are currently in edit mode; reset to empty on patient change
+- Added `showDeleteSuccess: boolean` state to control the delete success popup
+- Added `hasAssignChanges` derived boolean — checks `assignSelected` for any exercise not in `existingAssignments` (new) or any exercise in `editingExercises` whose current params differ from the DB record
+- Added `PencilIcon` SVG function (Material Design edit path, `w-3 h-3 shrink-0`)
+
+### *web\src\app\api\patient-exercises\route.ts*
+- POST handler accepts `scheduledDate` per exercise — validated as a `YYYY-MM-DD` string; passed through to `assignExercisesToPatient`
+
+### *web\src\app\(app)\camera\page.tsx*
+- Wrapped `<CameraClient />` in `<Suspense>` — required by Next.js for components that call `useSearchParams`
+
+### *web\src\app\api\patient-exercises\route.ts*
+- Added `DELETE` handler — authenticates therapist, verifies patient ownership, accepts `{ patientId, exerciseIds: string[] }` body, calls `deletePatientExercises`, returns `{ success: true }`
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+- Session tab heading renamed **"Weekly Exercise Schedule" → "Session Schedule"**; subtitle updated to "Track your exercises by scheduled date"
+- Progress card heading renamed "Weekly Progress" → "Overall Progress"
+- Exercises are now sorted ascending by `assigned_date` before rendering
+- Exercise list is now grouped by date — each unique date renders a `Scheduled: Month D, YYYY` header with a green hairline rule, followed by all exercises assigned on that date as cards below it; the per-card "Scheduled: …" line was removed since the date is now the group header
+
+### *web\src\app\(app)\session\page.tsx* *(deleted)*
+- File deleted — the `/session` route is fully redundant; the "Session" sidebar button in `patient/page.tsx` was already converted to a tab button (sets `activeTab("session")`) and all content (progress card, exercise list, date-gating, Start Session) lives inside the patient dashboard session tab; no internal navigation linked to this route
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+- Removed `customError` inline banner state — validation errors for the custom exercise form now use the shared error modal instead
+- Added `showSuccessModal`, `successMsg`, `showErrorModal`, `errorMsg`, `errorTitle`, `showConfirmDelete`, `confirmDeleteId` states
+- `handleAddCustomExercise` validation failures open the error modal with title "Required Fields" instead of setting an inline banner
+- `handleSave`: all `alert()` calls replaced with modal; captures `wasEditing = !!editingId` before `resetForm()` so the correct success message is used — "Program updated successfully." vs "Program created successfully."
+- Delete flow split into `handleDelete` (sets `confirmDeleteId`, opens confirm modal) and `handleConfirmDeleteProgram` (performs DELETE API call, shows success modal on completion)
+- Three modals added at end of return: **Success** (green checkmark circle, dynamic `successMsg`, green OK button), **Error** (red X circle, dynamic `errorTitle` + `errorMsg`, red OK button), **Confirm Delete** (red trash icon circle, Cancel + red Delete buttons)
+- All modals use the consistent pattern: `fixed inset-0 z-40 bg-black/50` backdrop + `fixed inset-0 z-50 flex items-center justify-center p-4` + `bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center` + icon circle
+- "Add New Custom Exercise" block removed from inside the Create/Edit Program form — custom exercise creation is now a standalone flow separate from program authoring
+- `customSets` and `customReps` states removed — sets and reps are program-specific prescriptions, not properties of an exercise itself
+- `resetCustomForm()` call removed from `resetForm()` — the two forms are now fully independent
+- Added `showCustomForm` state to control the standalone custom exercise form visibility
+- Added **"+ Add New Custom Exercise"** button alongside **"+ Create New Program"** — both visible when no program form is open; the custom button toggles to **"✕ Cancel"** when the form is open; clicking **"+ Create New Program"** collapses the custom form if open
+- Standalone **Add New Custom Exercise** form — name and description fields only (no sets/reps); on save POSTs to `/api/exercises`, updates the exercises list, collapses the form, and shows the success modal with the new exercise name; validates both fields before submission
+- **Your Custom Exercises** section added below **Your Programs** — grid of cards (same 2-col layout) showing exercise name, "custom" green badge, exercise ID, and description; empty state directs to the add button
+- Renamed all remaining "Template" → "Program" terminology in TypeScript code (see full rename notes below)
+- Added **Rest (sec)** field to each exercise row in the Create/Edit Program form — sits in a 3-column grid alongside Sets and Reps; blank input defaults to 60 seconds when the program is saved; `placeholder="60"` communicates the default; `min={0}` allows 0 (no rest)
+- `exerciseParams` type extended with `restSeconds?: number`
+- `buildExercisePayload` now includes `restSeconds` — applies `60` default when the field is left blank or negative; the value is passed to the API on both create and update
+- `handleEdit` now populates `restSeconds` from the existing program exercise so the field is pre-filled when editing
+- Program exercise cards in **Your Programs** now show rest duration alongside sets×reps (e.g. `3×12 · 45s`)
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+- Replaced `statusMessage` / `statusType` / `statusVisible` states and their timer `useEffect` with `showStatusModal`, `statusModalMsg`, `statusModalType` — status feedback is now a popup modal instead of a fading inline banner
+- `handleConfirmAdd`, `handleFinalDelete`, `handleConfirmEdit`: all `setStatusType` / `setStatusMessage` calls replaced with `setStatusModalType` / `setStatusModalMsg` / `setShowStatusModal(true)` for both success and error paths
+- Removed inline status banner JSX (`{statusMessage && <div ...>}`)
+- **Confirm Delete modal** restyled: `rounded-2xl shadow-xl`, backdrop + centered container pattern, red trash icon circle (`bg-red-100`, Material Design delete path), centered text layout, full-width Cancel + Delete buttons with `rounded-lg` styling
+- **Final Confirmation modal** restyled: same pattern, red warning triangle icon (`bg-red-100`, Material Design warning path)
+- **Add User preview modal** restyled: `rounded-2xl shadow-xl`, backdrop overlay added, full-width Go Back + Confirm buttons with `rounded-lg`, "Confirm & Add User" button changed from `bg-green-600` to `bg-green-700`
+- **Edit User preview modal** restyled: same `rounded-2xl shadow-xl` container, backdrop overlay added, full-width Go Back + Confirm buttons with `rounded-lg`, "Confirm & Save Changes" button changed from `bg-blue-600` to `bg-green-700`
+- **Status modal** added after `</main>`: green checkmark for success, red X for error, `"Success"` / `"Something Went Wrong"` heading, dynamic message, color-matched OK button (`bg-green-700` / `bg-red-600`)
+
+### *Full "Template → Program" rename across all TypeScript files*
+- **`web\src\lib\db.ts`**: `getTemplates` → `getPrograms`, `createTemplate` → `createProgram`, `updateTemplate` → `updateProgram`, `deleteTemplate` → `deleteProgram`, `insertTemplateExercises` → `insertProgramExercises`, `TemplateExerciseRow` → `ProgramExerciseRow`, `TemplateExerciseInput` → `ProgramExerciseInput`; section comment updated to `// ── Exercise programs`
+- **`web\src\app\api\programs\route.ts`** *(new)*: new route at `/api/programs` — GET returns `{ programs }`, POST creates program; imports renamed db functions; all error messages use "program"
+- **`web\src\app\api\programs\[id]\route.ts`** *(new)*: new route at `/api/programs/[id]` — PUT updates, DELETE removes; imports renamed db functions
+- **`web\src\app\(app)\dashboard\therapist\assign\page.tsx`**: `interface Template` → `interface Program`; `templates`/`setTemplates` → `programs`/`setPrograms`; `assignTemplateId`/`setAssignTemplateId` → `assignProgramId`/`setAssignProgramId`; `handleTemplateSelect` → `handleProgramSelect`; fetch URL `/api/templates` → `/api/programs`; response key `templatesData.templates` → `programsData.programs`
+- **`web\src\app\(app)\dashboard\therapist\programs\page.tsx`**: all fetch URLs updated from `/api/templates` and `/api/templates/${id}` → `/api/programs` and `/api/programs/${id}`; response key `d.templates` → `d.programs`
+
+### *web\src\app\api\templates\* (deleted)*
+- Entire `api/templates/` folder deleted — `route.ts` and `[id]/route.ts` were dead code after all frontend fetch calls were migrated to `/api/programs`; no route in the app calls `/api/templates` anymore
+
+--- 
+
+## 📌 Update-5-22-26 | RyanCodesling
+
+- **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
+- **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
+- **Real session lifecycle** replaced the hardcoded SETS / progress / timer placeholders: idle→active→ended state machine, slower-side-gated set counter (`min(left,right) ≥ targetReps`), live session timer, progress bar, wired sidebar Start/End controls, per-side `reps/target` display with a green ✓ "done" cue
+- **Guided exercise flow** replaced the camera exercise dropdown with a Prev / Next stepper hero: current exercise is emphasized, navigation is disabled while a session is active/resting, completed non-final exercises auto-advance to the next exercise idle, and manually ended exercises show a "Next exercise →" prompt
+- **Rest periods between sets** were restored as a therapist-configurable prescription field (`rest_seconds`): camera sessions now enter a hard-block `resting` state between sets, show a countdown, pause rep counting, auto-resume the next set, and keep per-set duration separate from rest time
+- **End-early safety** added an inline confirmation before ending an active exercise; stale confirmations are cleared on set completion, rest transitions, exercise changes, and session end
+- Live-webcam tuning adjusted smoothing/framing and narrowed compensation scope; thresholds remain starting values that still need pilot/live-webcam calibration. Two compensation signals (shrug, elbow-off-wall) were deferred pending baseline-capture / stronger setup constraints
+
+### *web\src\lib\exercises\registry.ts*
+- Added `ex_007` (Overhead Shoulder Press, primary `wristShoulderVertical`) and `ex_008` (Wall Angels, primary `shoulderAbduction` reused)
+- `@deprecated` JSDoc on `ex_002` / `ex_003` (kept structurally so `scapularElevation.test.ts` still asserts against `ex_003`)
+- Extended `MetricName` (+`elbowFlexion`, `wristShoulderVertical`, `shoulderElbowDistance`); added `compareDirection?: "above" | "below"` and `requiresOverheadRoom?: boolean` to the relevant specs
+
+### *web\src\lib\pose\poseMetrics.ts*
+- New `computeElbowFlexion` (interior-angle, 180° = straight), `computeWristShoulderVertical` (trunk-up projection, camera-roll invariant — ex_007 primary), `computeShoulderElbowDistance` (foreshortening signal, retained for future use)
+- `inFrame01()` guards added to active wrist/elbow-dependent rep metrics (`shoulderAbduction`, `elbowFlexion`, `wristShoulderVertical`) — rejects MediaPipe landmarks extrapolated outside `[0,1]`, preventing phantom rep peaks during overhead reach
+- `computeCompensationScore` now skips stub-band (warning-only) metrics so they don't dilute the score; added per-side worst-value aggregation (`pickWorstSide`) for per-limb compensation metrics
+
+### *web\src\lib\pose\captureReadiness.ts*
+- Per-exercise framing mode: `requiresOverheadRoom` exercises (ex_007 / ex_008) get a relaxed head-y band (0.10–0.45 vs the default 0.05–0.25) and skip the readiness-level wrist gate; metric-level in-frame guards still reject extrapolated wrist/elbow readings
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+- Session lifecycle state + refs; rep counting gated on `active`; slower-side-gated set completion (resets per-set counts and counter state); true Start/Restart clears current-session logs and rebuilds rep counters so rep indices start fresh; session timer; derived progress; wired sidebar Start/End buttons; per-side target + green ✓ done cues on the stat panels
+- Guided-flow exercise stepper: current exercise hero, Prev / Next buttons, no wraparound, active/resting navigation lock, auto-advance after all prescribed sets complete, manual-End "Next exercise →" prompt
+- Rest countdown state: `resting` session state, `restEndsAtMsRef`, displayed countdown, hard rep-counting pause while resting, auto-resume to `active`, End support during rest, and temporary Skip Rest testing affordance marked for later removal
+- End-early confirmation panel prevents accidental partial-session termination and is reset during lifecycle transitions so it cannot carry into the next set
+- Fixed a stale-closure bug — `predictWebcam` now reads `activeDefinition` through a ref, so switching exercises mid-session works without a camera restart
+- `metricLabel` extended for the three new metrics
+
+### *web\src\app\api\patient-exercises\route.ts*
+- POST assignment payloads now validate `exerciseId`, `sets`, and `reps` server-side
+- Optional/missing `restSeconds` defaults to 60 seconds; malformed exercise entries return 400 instead of falling through to a server error
+
+### *web\src\app\api\exercises\route.ts* and *web\src\app\api\patient-exercises\route.ts*
+- Filters deprecated `ex_002` / `ex_003` from active catalog and patient-assignment responses by default, with `?includeDeprecated=true` retained for history/audit views
+
+### *web\src\lib\db.ts*
+- `assignExercisesToPatient()` writes `rest_seconds` and defensively defaults missing/invalid rest values to 60 seconds for older or direct callers
+- `getPatientExercises()` now selects `rest_seconds` so the camera, session page, and therapist patient detail page can display/enforce the prescription
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+- Assignment rows now include an optional Rest (sec) input per exercise; blank/negative values default to 60 seconds and `0` means no rest
+- Existing assigned exercises prefill their sets, reps, and rest seconds before resubmission
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx* and *web\src\app\(app)\session\page.tsx*
+- Patient exercise displays now include prescribed rest seconds alongside sets/reps
+- Patient session summary cards include a Rest value so the patient sees the planned break length before starting
+
+### *web\src\lib\pose\ (new test files)*
+- `elbowFlexion.test.ts`, `wristShoulderVertical.test.ts`, `shoulderElbowDistance.test.ts` — synthetic-landmark coverage for the new metrics; elbow/wrist active-metric tests include off-frame-extrapolation rejection
+
+### *scripts\exercises_pg.sql*
+- Seeds `ex_007` / `ex_008`; switched the EX_SWAP insert block to `ON CONFLICT (id) DO UPDATE` so re-running the script refreshes stale descriptions on already-seeded rows
+
+### *scripts\patient_exercises_pg.sql*
+- Added `rest_seconds INT NOT NULL DEFAULT 60` to patient exercise assignments, with an idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for existing local databases
+
+---
 
 ## 📌 Update-5-20-26 | *Enah*
 - Renamed `scripts\exercise_templates_pg.sql` → `scripts\exercise_programs_pg.sql` — table `exercise_templates` renamed to `exercise_programs`, `template_exercises` renamed to `program_exercises`

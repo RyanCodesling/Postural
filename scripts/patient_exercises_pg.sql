@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS patient_exercises (
                              CHECK (status IN ('pending', 'in_progress', 'completed')),
   sets          INT          NOT NULL DEFAULT 3,
   reps          INT          NOT NULL DEFAULT 12,
+  rest_seconds  INT          NOT NULL DEFAULT 60,
+  -- Per-side target hold duration (seconds) for isometric exercises (e.g.
+  -- ex_006 T-pose). Ignored by dynamic (rep-counted) exercises. Therapist sets
+  -- it when assigning; the camera page completes an isometric set when each
+  -- side accumulates this many seconds in the target band.
+  hold_seconds  INT          NOT NULL DEFAULT 30,
   created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (exercise_id, patient_id)
 );
@@ -20,6 +26,27 @@ CREATE INDEX IF NOT EXISTS idx_pe_exercise_id  ON patient_exercises (exercise_id
 -- Add sets and reps columns if table already exists (safe to re-run)
 ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS sets INT NOT NULL DEFAULT 3;
 ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS reps INT NOT NULL DEFAULT 12;
+-- Per-prescription rest between sets, in seconds. Therapist sets it when
+-- assigning; the camera page enforces it as a hard block between sets.
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS rest_seconds INT NOT NULL DEFAULT 60;
+-- Therapist-scheduled date for this exercise (shown in session page, gates Start Session).
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NULL DEFAULT CURRENT_DATE;
+-- Per-prescription target hold duration, in seconds, for isometric exercises.
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30;
+
+-- ── Recurrence rule ──────────────────────────────────────────────────────────
+-- How this assignment repeats. The rule lives on the assignment; the expanded
+-- per-day instances live in exercise_occurrences. A NULL recurrence (legacy
+-- rows) is treated as 'once'. weekdays uses JS Date.getDay() numbering
+-- (0=Sun … 6=Sat) so it lines up with the calendar UI with no conversion.
+-- assigned_date is retained as the "first scheduled day" for display/back-compat.
+-- recurrence: 'interval' (every N days) | 'weekly' (specific weekdays). A NULL
+-- recurrence (legacy rows) is treated as a single fixed occurrence.
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS recurrence    TEXT;        -- 'interval' | 'weekly'
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS interval_days INT;         -- 'interval' mode: every N days
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS weekdays      SMALLINT[];  -- 'weekly' mode: e.g. {1,3,5}
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS start_date    DATE;        -- recurrence window start (defaults to assigned_date)
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS end_date      DATE;        -- recurrence window end (inclusive)
 
 GRANT ALL PRIVILEGES ON TABLE patient_exercises TO postural;
 GRANT USAGE, SELECT ON SEQUENCE patient_exercises_id_seq TO postural;

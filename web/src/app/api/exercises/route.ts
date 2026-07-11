@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExercises, createExercise, getNextExerciseId } from "@/lib/db";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 
 /**
@@ -14,6 +15,11 @@ import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
  */
 export async function GET(request: NextRequest) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     // Special-case opt-in for callers that need the full catalog (e.g., a
     // future historical view that wants to render a patient's past
     // assignments including deprecated ones). Defaults to false so the
@@ -35,6 +41,14 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin" && authenticatedUser.role !== "therapist") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await request.json();
     const { name, description, isCustom } = body;
 
@@ -43,7 +57,12 @@ export async function POST(request: NextRequest) {
     }
 
     const id = await getNextExerciseId();
-    const exercise = await createExercise({ id, name: name.trim(), description: description.trim(), isCustom: isCustom ?? false });
+    const exercise = await createExercise({
+      id,
+      name: name.trim(),
+      description: description.trim(),
+      isCustom: authenticatedUser.role === "therapist" ? true : isCustom ?? false,
+    });
     return NextResponse.json({ exercise }, { status: 201 });
   } catch (error) {
     console.error("POST /api/exercises error:", error);

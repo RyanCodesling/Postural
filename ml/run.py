@@ -38,7 +38,7 @@ def main() -> None:
     sets = pd.read_parquet(DATA_DIR / f"{ex}_sets.parquet")
     sessions = pd.read_parquet(DATA_DIR / f"{ex}_sessions.parquet")
     rep = extract_rep_features(frames, ex)
-    sess = aggregate_session_features(rep, sets, sessions, ex)
+    sess = aggregate_session_features(rep, sets, sessions, ex, frames=frames)
     rep.to_parquet(DATA_DIR / f"{ex}_rep_features.parquet", index=False)
     sess.to_parquet(DATA_DIR / f"{ex}_session_features.parquet", index=False)
     print(f"      {len(rep):,} reps -> {len(sess)} sessions, "

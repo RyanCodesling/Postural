@@ -1,15 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import { getSessionOwner, insertSetEvents, type SetEventRow } from "@/lib/db";
-
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
 
 const EXERCISE_KINDS = new Set(["dynamic", "isometric"]);
 const TERMINATION_REASONS = new Set(["min_reached", "user", "capture_lost", "stall"]);
@@ -87,7 +78,7 @@ export async function POST(
   try {
     const { id } = await params;
     const sessionId = Number(id);
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "patient") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

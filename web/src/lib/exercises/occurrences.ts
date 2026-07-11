@@ -187,6 +187,35 @@ export function rollupDay(
   return anyOpen ? "overdue" : "missed";
 }
 
+// Collapse one prescription's dated occurrences into the assignment-level badge
+// used by the dashboard cards. Future pending dates should not pull a completed
+// current/due prescription back to "in_progress".
+export function deriveAssignmentStatus(
+  occurrences: OccurrenceLite[],
+  todayKey: string,
+  fallbackStatus: OccurrenceStatus = "pending"
+): OccurrenceStatus {
+  if (occurrences.length === 0) return fallbackStatus;
+
+  const currentWindow = occurrences.filter(
+    (occ) => occ.dueDate <= todayKey && occ.makeupUntil >= todayKey
+  );
+  if (currentWindow.length > 0) return rollupAssignmentWindow(currentWindow);
+
+  const dueToDate = occurrences.filter((occ) => occ.dueDate <= todayKey);
+  if (dueToDate.length > 0) return rollupAssignmentWindow(dueToDate);
+
+  return "pending";
+}
+
+function rollupAssignmentWindow(occurrences: OccurrenceLite[]): OccurrenceStatus {
+  if (occurrences.every((occ) => occ.status === "completed")) return "completed";
+  if (occurrences.some((occ) => occ.status === "completed" || occ.status === "in_progress")) {
+    return "in_progress";
+  }
+  return "pending";
+}
+
 // ── Display ──────────────────────────────────────────────────────────────────
 
 export function formatCadence(rule: {

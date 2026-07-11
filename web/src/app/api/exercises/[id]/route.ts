@@ -1,12 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateExercise, deleteExercise } from "@/lib/db";
+import { deleteExercise, getExercises, updateExercise } from "@/lib/db";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin" && authenticatedUser.role !== "therapist") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id } = await params;
+
+    if (authenticatedUser.role === "therapist") {
+      const existing = (await getExercises()).find((exercise) => exercise.id === id);
+      if (!existing) {
+        return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+      }
+      if (existing.is_custom !== true) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
+
     const body = await request.json();
     const { name, description } = body;
 
@@ -26,11 +46,30 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin" && authenticatedUser.role !== "therapist") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id } = await params;
+
+    if (authenticatedUser.role === "therapist") {
+      const existing = (await getExercises()).find((exercise) => exercise.id === id);
+      if (!existing) {
+        return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+      }
+      if (existing.is_custom !== true) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
+
     await deleteExercise(id);
     return NextResponse.json({ success: true });
   } catch (error) {

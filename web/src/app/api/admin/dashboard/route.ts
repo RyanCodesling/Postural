@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import { getAdminDashboardData } from "@/lib/db";
-
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user || user.role !== "admin") {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

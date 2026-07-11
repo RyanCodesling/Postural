@@ -9,9 +9,11 @@
 --   raw_frames — unsmoothed per-frame metrics + selected pose landmarks. This is
 --                NOT video; no image/frame bytes are stored.
 --
--- Scope note: raw_frames is intentionally metric-only. The current camera
--- writer records ex_007 upper-body tuning traces; additional exercises can add
--- their own trace_kind payloads later without changing this table.
+-- Scope note: raw_frames is intentionally metric-only. The camera writer
+-- records upper-body tuning traces for any active exercise (trace_kind
+-- upper_body_v2), gated behind an opt-in "Record tuning trace" toggle in the
+-- patient camera UI. Earlier rows use the ex_007-only ex_007_upper_body_v1
+-- payload; both kinds coexist — trace_kind versioning is this table's design.
 
 CREATE TABLE IF NOT EXISTS sessions (
   id                       SERIAL       PRIMARY KEY,

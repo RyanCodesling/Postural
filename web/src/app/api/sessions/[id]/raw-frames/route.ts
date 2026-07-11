@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   getRawFramesForSession,
   getSessionOwner,
@@ -6,16 +7,6 @@ import {
   insertRawFrames,
   type RawFrameRow,
 } from "@/lib/db";
-
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
 
 const MAX_BATCH_ROWS = 300;
 
@@ -81,7 +72,7 @@ export async function GET(
   try {
     const { id } = await params;
     const sessionId = Number(id);
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!Number.isInteger(sessionId)) {
       return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
@@ -112,7 +103,7 @@ export async function POST(
   try {
     const { id } = await params;
     const sessionId = Number(id);
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "patient") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

@@ -93,7 +93,7 @@ function composedShouldWarn(
   return dir === "below" ? value < spec.warningThreshold : Math.abs(value) >= spec.warningThreshold;
 }
 
-const ex007 = EXERCISE_REGISTRY.ex_007; // primary wristShoulderVertical, targetROM 0.6
+const ex007 = EXERCISE_REGISTRY.ex_007; // primary wristShoulderVertical, targetROM 0.85
 const ex008 = EXERCISE_REGISTRY.ex_008; // primary shoulderAbduction,     targetROM 150
 const ex001 = EXERCISE_REGISTRY.ex_001; // control: no peakRelevant comps
 
@@ -122,11 +122,11 @@ test("ex_001 compensations are all non-peakRelevant (control)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TESTS — isNearPeak (ex_007, gate = 0.9 × 0.6 = 0.54 trunk-lengths)
+// TESTS — isNearPeak (ex_007, gate = 0.9 × 0.85 = 0.765 trunk-lengths)
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("ex_007: both arms above gate → near peak", () => {
-  assertEq(isNearPeak(ex007, { left: 0.55, right: 0.55 }, null), true, "0.55/0.55");
+  assertEq(isNearPeak(ex007, { left: 0.8, right: 0.8 }, null), true, "0.8/0.8");
 });
 
 test("ex_007: both arms below gate → not near peak", () => {
@@ -134,11 +134,11 @@ test("ex_007: both arms below gate → not near peak", () => {
 });
 
 test("ex_007: one lagging arm, better arm above gate → near peak (max-of-sides)", () => {
-  assertEq(isNearPeak(ex007, { left: 0.1, right: 0.55 }, null), true, "0.1/0.55");
+  assertEq(isNearPeak(ex007, { left: 0.1, right: 0.8 }, null), true, "0.1/0.8");
 });
 
 test("ex_007: one side null, other above gate → near peak", () => {
-  assertEq(isNearPeak(ex007, { left: null, right: 0.55 }, null), true, "null/0.55");
+  assertEq(isNearPeak(ex007, { left: null, right: 0.8 }, null), true, "null/0.8");
 });
 
 test("ex_007: both sides null → not near peak", () => {
@@ -146,7 +146,7 @@ test("ex_007: both sides null → not near peak", () => {
 });
 
 test("ex_007: gate is exactly PEAK_GATE_FRACTION × targetROM (inclusive)", () => {
-  const gate = PEAK_GATE_FRACTION * 0.6;
+  const gate = PEAK_GATE_FRACTION * 0.85;
   assertEq(isNearPeak(ex007, { left: gate, right: 0 }, null), true, "exactly at gate");
 });
 
@@ -168,20 +168,20 @@ test("ex_008: mid-slide (90°/100°) → not near peak", () => {
 
 test("ex_007: bent elbow at the BOTTOM of the press → no 'Straighten arms'", () => {
   const elbow = comp(ex007, "elbowFlexion");
-  // arms low (max 0.2 < 0.54 gate), elbow bent 90° (< 150 threshold)
+  // arms low (max 0.2 < 0.765 gate), elbow bent 90° (< 150 threshold)
   assertEq(composedShouldWarn(ex007, elbow, { left: 0.2, right: 0.2 }, 90), false, "bent + low");
 });
 
 test("ex_007: bent elbow at the TOP of the press → warns (incomplete extension)", () => {
   const elbow = comp(ex007, "elbowFlexion");
-  // arms high (0.55 >= 0.54 gate), elbow still bent 90° → flag
-  assertEq(composedShouldWarn(ex007, elbow, { left: 0.55, right: 0.55 }, 90), true, "bent + high");
+  // arms high (0.8 >= 0.765 gate), elbow still bent 90° → flag
+  assertEq(composedShouldWarn(ex007, elbow, { left: 0.8, right: 0.8 }, 90), true, "bent + high");
 });
 
 test("ex_007: straight elbow at the TOP → no warning", () => {
   const elbow = comp(ex007, "elbowFlexion");
-  // arms high (0.55 >= 0.54 gate), elbow straight 175° (>= 150) → no flag
-  assertEq(composedShouldWarn(ex007, elbow, { left: 0.55, right: 0.55 }, 175), false, "straight + high");
+  // arms high (0.8 >= 0.765 gate), elbow straight 175° (>= 150) → no flag
+  assertEq(composedShouldWarn(ex007, elbow, { left: 0.8, right: 0.8 }, 175), false, "straight + high");
 });
 
 test("ex_008: bent elbow in the W-position → no warning; bent at Y-position → warns", () => {

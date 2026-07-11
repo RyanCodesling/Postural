@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   createSession,
   getPatientExercises,
@@ -7,22 +8,12 @@ import {
   SessionNotScheduledError,
 } from "@/lib/db";
 
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
-
 // GET /api/sessions — session history summaries.
 //   patient   → own sessions.
 //   therapist → ?patientId= (must be one of their assigned patients).
 export async function GET(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     if (user.role === "patient") {
@@ -58,7 +49,7 @@ export async function GET(request: NextRequest) {
 // debug catalog has no patient_exercises row, so it never calls this.
 export async function POST(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "patient") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

@@ -1,6 +1,100 @@
 # Sprint Updates 
 
-## 📌 Update-6-8-26 | *RyanCodesling*
+## 📌 Update-7-11-26 | *Scoring, six-exercise ML, occurrence status, and secure sessions*
+
+- Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline
+- Extended the offline synthetic-feasibility pipeline across all six active exercises while keeping the browser's rule-based feedback as the live coaching layer
+- Corrected recurring-assignment status rollups so future pending dates no longer hide completed current or due work
+- Replaced editable JSON authentication cookies with signed sessions and database-backed role, ownership, and therapist-assignment authorization
+- Retained the pose-backend comparison harness as an exploratory archive rather than evidence for a live backend replacement
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+- Converted `ex_004` Neck Lateral Flexion from the historical velocity-counter configuration to an assisted, side-split isometric hold; the sign determines the held side and the slower side gates set completion
+- Kept the current `ex_004` target band at 50° ± 38° (`[12°, 88°]`) as an engineering placeholder pending a clinician-approved hold angle and duration
+- Propagated the pilot retunes: `ex_007 targetROM` 0.60→0.85 and `ex_008` start/complete/minimum-peak 20/10/100→85/70/110; researcher session 174 recorded 20/20 repetitions per side for `ex_008` without phantom repetitions
+- Added movement-coupled compensation scoring for scapular elevation (`ex_001`/`ex_006`) and neck/scapular motion (`ex_005`), per-exercise band overrides, and per-side worst-score aggregation for per-limb exercises
+- Kept the known `ex_005` candidates deferred: `targetROM` 25→~21 and `minimumPeakThreshold` 15→12; the current pilot recording reached 24.2° maximum and classified 0/40 repetitions complete under the 25° boundary
+
+### *web\scripts\export-tuning-traces.ts*, *ml\analysis\real_frames.py*, *ml\analysis\deduction_report.py*, and *scripts\sessions_pg.sql*
+- Added an opt-in `upper_body_v2` tuning-trace path across active exercises while keeping raw unsmoothed metrics separate from smoothed display and rep-boundary signals
+- Added mapping, threshold-fitting, and coupled-scoring diagnostics for the researcher recordings; these are calibration and realism tools, not a real held-out model evaluator
+- Documented trace-kind versioning so existing `ex_007_upper_body_v1` rows can coexist with the cross-exercise `upper_body_v2` payload
+- Kept sessions 168–174 classified as researcher tuning evidence because they influenced thresholds, coupling constants, and generator realism; they cannot be reused as an untouched evaluation set
+
+### *ml\generators\base.py*, *ml\generators\framings.py*, *ml\generators\registry.py*, and *ml\generators\ex_generator.py*
+- Extended synthetic generation across all six active exercises and all three structural framings: dynamic per-limb, bidirectional alternating, and isometric holds
+- Added isometric hold synthesis for time in band, settling, longest streak, exits, deviation, steadiness, drift, and side asymmetry
+- Added normalized-unit generator support for `ex_007` without changing the deterministic degree-based exercise outputs
+- Excluded warning-only `scoring:off` metrics from generated compensation channels and downstream model features
+
+### *ml\features\extract.py*, *ml\baselines.py*, *ml\run.py*, and *ml\tests\test_extract.py*
+- Added isometric session features and expanded rule/model evaluation across the complete active-exercise registry
+- Preserved the thesis boundary: the Random Forest remains an offline session-level synthetic-feasibility scorer, not a live browser model, real-data result, medical device, or clinical validation
+- Recorded the canonical synthetic ROC-AUC comparisons after the scoring retune: `ex_001` 0.841 vs rule 0.735; `ex_004` 0.780 vs 0.583; `ex_005` 0.764 vs 0.722; `ex_006` 0.782 vs 0.728; `ex_007` 0.826 vs 0.745; and `ex_008` 0.844 vs 0.744, with the majority baseline at 0.50
+- Kept `ml\data\`, `ml\training\out\`, and `ml\analysis\out\` gitignored; reproduction of generated results requires recorded metrics or artifact hashes rather than Git status alone
+
+### *web\src\lib\exercises\occurrences.ts*, *web\src\lib\exercises\occurrences.test.ts*, and *web\src\lib\db.ts*
+- Added `deriveAssignmentStatus()` so a completed current or due occurrence is not reported as `In Progress` solely because the recurrence contains future pending dates
+- Updated `getPatientExercises()` to derive each assignment badge from the current make-up window and due-to-date occurrence history, with the stored legacy status used only as a fallback
+- Added six regression cases covering completed current occurrences, in-progress work, future-only assignments, completed due history, mixed due history, and the legacy fallback
+
+### *web\src\lib\session-token.ts*, *web\src\lib\session-token.test.ts*, *web\src\lib\auth-server.ts*, and *web\src\proxy.ts*
+- Replaced editable JSON `auth_token` cookies with HS256 `jose` tokens that pin the algorithm, issuer, audience, issued-at time, and seven-day expiry
+- Added centralized server authentication that verifies the token, reloads the current PostgreSQL user, and rejects archived, missing, or invalid users before authorization decisions
+- Enforced the first-login password-change requirement in the Next.js page proxy and protected API access; invalid legacy cookies are cleared and require one new login after deployment
+- Replaced the deprecated `web\src\middleware.ts` convention with the Next.js 16 `web\src\proxy.ts` entrypoint
+- Added regression coverage for signing, tampering, expiry, issuer/audience/algorithm checks, secret strength, cookie flags, proxy redirects, and protected-route use of the centralized helper
+
+### *web\src\app\api\auth\login\route.ts*, *web\src\app\api\auth\logout\route.ts*, *web\src\app\api\auth\me\route.ts*, and *web\src\app\api\auth\change-password\route.ts*
+- Issued and verified signed sessions from the current database user instead of trusting editable cookie data
+- Made password changes authenticated-self only and refreshed the signed session after a successful change
+- Kept logout stateless by clearing the browser cookie; central early revocation of a copied token remains future work
+
+### *web\src\app\api\users\route.ts*, *web\src\app\api\users\[id]\route.ts*, *web\src\app\api\exercises\route.ts*, and *web\src\app\api\exercises\[id]\route.ts*
+- Made user mutations admin-only and scoped therapist user lists to patients assigned to the verified therapist
+- Required authentication for exercise reads and restricted therapists to modifying or deleting custom exercises
+- Removed trust in caller-supplied role or user identity when the current database-backed session already provides the authoritative identity
+
+### *web\src\app\api\sessions\*, *web\src\app\api\programs\*, *web\src\app\api\notifications\route.ts*, and *web\src\app\api\therapist\overview\route.ts*
+- Added current-user authorization to session, raw-frame, rep-event, set-event, program, notification, patient-exercise, therapist-overview, and admin-dashboard access
+- Enforced patient ownership and current therapist-assignment relationships for sensitive reads and writes
+- Kept API authorization authoritative even when page-level redirects also protect the user experience
+
+### *web\.env.example*, *web\package.json*, *web\.gitignore*, and *AUTHENTICATION_SETUP.md*
+- Added the `jose` dependency and a tracked environment template while keeping real `.env` files ignored
+- Required `SESSION_SECRET` to contain at least 32 random bytes and documented separate local and deployment secrets
+- Removed the concrete database password from the current setup guide and documented password rotation because the old value remains in Git history
+- Replaced blind `npm audit fix` guidance with an audit-and-review step that requires regression testing before breaking upgrades
+
+### *ml\comparison\README.md*, *ml\comparison\requirements-comparison.txt*, *ml\comparison\requirements-comparison.lock.txt*, and *ml\comparison\tests\*
+- Retained the June 9 pose-backend comparison as an archived exploratory harness, not an active backend migration plan
+- Marked its `ex_003` clip as deprecated and its `ex_004` protocol as predating the assisted-isometric conversion, so neither can serve as current validation evidence
+- Clarified that the harness measures metric noise and offline Python CPU throughput, not ground-truth pose accuracy or live browser frame rate
+- Added the missing `pytest` dependency and a Python 3.12 lock file so the archived harness can be reproduced without a machine-specific saved environment
+
+### *ml\README.md*, *ml\LEARNING.md*, and *web\README.md*
+- Updated the project documentation for six-exercise synthetic coverage, the separation between live rules and offline ML, and the calibration-only use of sessions 168–174
+- Documented the project-specific web setup, validation commands, registry export, privacy boundary, and proxy-versus-API authorization responsibilities
+- Kept all fitted thresholds and coupling constants framed as single-subject pilot values pending multi-subject confirmation
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web`
+- ESLint passed across all **33** changed and new TypeScript/TSX files
+- All 19 framework-free TypeScript regression suites passed: **192 assertions, 0 failures**
+- `npm run build` passed under Next.js 16.2.6; the remaining non-blocking warning is workspace-root inference because both the repository root and `web\` contain lockfiles
+- `npx tsx scripts\export-registry.ts` wrote all 8 registry definitions; `ml\config\registry.json` matched the exported registry at SHA-256 `FCB4B4B597B57580197A377FEC739EE3F3F59E6D139931B4B7D2CB884D654C50`
+- Both Python 3.12 environments passed `pip check`; the main ML suite passed **22/22** and the archived comparison suite passed **16/16**
+- Applied the four documented authentication migrations in order and verified through the restricted application role that the archive fields, reset-token fields, `notifications` table, and required DML privileges are present
+- `npm audit` reports 6 advisories (2 low, 3 moderate, 1 high, 0 critical); no unreviewed breaking fix was applied
+- `git diff --check` and the committed-file self-containment scan passed with line-ending normalization warnings only
+
+### *Remaining follow-up*
+- Run the live HTTP login/logout, forced-password-change, role-authorization, archive-invalidation, and representative patient-session matrix before an exposed release
+- Decide the clinical `ex_004` hold angle and duration; keep the current band labeled as a placeholder until then
+- Collect future model evaluation data only after the protocol is frozen; do not reuse sessions 168–174 as held-out evidence
+- Review and disposition the dependency-audit findings before deployment rather than applying a blind breaking upgrade
+
+## 📌 Update-6-8-26 | *Offline ML + ex_004 live tuning*
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
 - Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
 - Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app
@@ -109,7 +203,7 @@
 
 ---
 
-## 📌 Update-6-7-26 | *RyanCodesling*
+## 📌 Update-6-7-26
 - Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
 - Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged
 - Kept peak-only warnings, such as elbow extension cues near overhead ROM, gated to the relevant movement phase while adding temporal persistence to the final warning display state
@@ -443,7 +537,7 @@
 
 ---
 
-## 📌 Update-6-6-26 | *RyanCodesling*
+## 📌 Update-6-6-26
 
 - Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
 - Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
@@ -564,7 +658,7 @@
 
 --- 
 
-## 📌 Update-6-4-26 | *RyanCodesling*
+## 📌 Update-6-4-26
 
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
 - Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
@@ -733,7 +827,7 @@
 
 ---
 
-## 📌 Update-5-31-26 | *RyanCodesling*
+## 📌 Update-5-31-26
 
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
 - Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
@@ -818,7 +912,7 @@
 
 ---
 
-## 📌 Update-5-29-26 | *RyanCodesling*
+## 📌 Update-5-29-26
 
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
 - Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
@@ -864,7 +958,7 @@
 
 ---
 
-## 📌 Update-5-28-26 | *RyanCodesling*
+## 📌 Update-5-28-26
 
 - Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
 - Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
@@ -1145,7 +1239,7 @@
 
 --- 
 
-## 📌 Update-5-22-26 | RyanCodesling
+## 📌 Update-5-22-26
 
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
 - **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
@@ -1365,7 +1459,7 @@
 
 --- 
 
-## 📌 Update-5-19-26 | *RyanCodesling*
+## 📌 Update-5-19-26
 Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_004` bidirectional rep counting was iterated heavily and is now **frozen** as a proof-of-concept-adequate mitigation (see Current Status).
 
 - Implemented shoulder flexion (`ex_002`) and scapular elevation + baseline capture (`ex_003`) — both now code-complete
@@ -1683,7 +1777,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-11-26 | *RyanCodesling*
+## 📌 Update-5-11-26
 - Implemented the real shoulder abduction metric for Lateral Arm Raises (`ex_001`)
 - Added per-side shoulder abduction calculation for left and right arms
 - Fixed cross-body arm movement being mistaken as valid lateral arm raise motion
@@ -1905,7 +1999,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-4-26 | *RyanCodesling*
+## 📌 Update-5-4-26
 
 ### *web\src\lib\exercises\registry.ts*
 - Added exercise registry as the source of truth for the six thesis exercises (`ex_001` to `ex_006`)
@@ -1964,7 +2058,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-30-26 | *RyanCodesling*
+## 📌 Update-4-30-26
 ### *web\src\lib\pose\poseMetrics.ts*
 - Added trunkLean as a third metric
 - Added a wrapper to handle the left-right convention, instead of having to swap out every left-right to right-left
@@ -2007,7 +2101,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-24-26 | *RyanCodesling*
+## 📌 Update-4-24-26
 ### *web\src\lib\pose*
 - Added oneEuroFilter.ts for landmarker smoothing
 
@@ -2081,7 +2175,7 @@ Added 2 new database tables: therapist, patients
 
 ---
 
-## 📌 Update-4-09-26 | *RyanCodesling*
+## 📌 Update-4-09-26
 
 ### *web/source/lib/pose*
 - Added poseMetrics.tsx for math engine

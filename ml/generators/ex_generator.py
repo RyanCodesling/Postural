@@ -8,6 +8,9 @@ per-frame capture logs later):
   <ex>_sets.parquet      one row per set:   session_id, set_index, target_reps
   <ex>_sessions.parquet  one row per session: session_id, subject_id, label
 
+For isometric exercises target_reps carries the prescribed hold SECONDS per side
+(there are no counted reps), and every hold row has rep_index = 1.
+
 Labels are drawn per session (not per subject), so subject identity does not
 predict the label and leave-one-subject-out evaluation is meaningful.
 
@@ -42,7 +45,9 @@ def generate_dataset(
     out_dir: Path = DATA_DIR,
 ) -> dict[str, Path]:
     params = get_exercise(exercise_id)
-    comp_metrics = tuple(c.name for c in params.compensations)
+    # Warning-only (scoring:off) metrics are not synthesized — see
+    # ExerciseParams.scored_compensations.
+    comp_metrics = tuple(c.name for c in params.scored_compensations)
     rng = np.random.default_rng(seed)
 
     fixed_cols = ("session_id", "subject_id", "label", "set_index", "side",

@@ -1,0 +1,22 @@
+# Dependencies for the pose-backend comparison harness.
+# Installed into an ISOLATED venv (comparison/.venv) so the validated ml/.venv
+# is never touched. Use requirements-comparison.lock.txt for reproduction;
+# resolve this file only when intentionally refreshing the pinned environment.
+#
+# numpy pinned <2 for broad backend-wheel compatibility (mediapipe/tensorflow).
+
+numpy<2
+scipy
+pandas
+pyarrow
+pytest
+
+# Video frame I/O.
+opencv-python
+
+# Backends.
+mediapipe        # MediaPipe Pose Landmarker (full + heavy), 33 keypoints
+onnxruntime      # runtime for RTMPose-m / RTMW via rtmlib
+rtmlib           # RTMPose-m (COCO-17) and RTMW whole-body (133 keypoints)
+tensorflow-cpu   # MoveNet Thunder via TF-Hub
+tensorflow-hub

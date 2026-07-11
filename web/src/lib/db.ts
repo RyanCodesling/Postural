@@ -1,8 +1,10 @@
 import { Pool, PoolClient, types } from "pg";
 import { hashPassword } from "./crypto";
 import {
+  deriveAssignmentStatus,
   generateSchedule,
   MAX_INTERVAL_DAYS,
+  type OccurrenceLite,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
 
@@ -496,29 +498,54 @@ export async function deletePatientExercises(patientId: string, exerciseIds: str
 }
 
 export async function getPatientExercises(patientId: string) {
-  const result = await pool.query(
-    `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
-            pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
-            pe.recurrence, pe.interval_days, pe.weekdays, pe.start_date, pe.end_date,
-            e.name, e.description,
-            -- At-a-glance status derived from the schedule rather than a sticky
-            -- flag: all occurrences done => completed; any activity => in_progress;
-            -- otherwise pending. Falls back to pe.status only if (unexpectedly) the
-            -- assignment has no occurrences yet.
-            (SELECT CASE
-               WHEN COUNT(*) = 0 THEN pe.status
-               WHEN COUNT(*) FILTER (WHERE eo.status <> 'completed') = 0 THEN 'completed'
-               WHEN COUNT(*) FILTER (WHERE eo.status IN ('completed','in_progress')) > 0 THEN 'in_progress'
-               ELSE 'pending'
-             END
-             FROM exercise_occurrences eo WHERE eo.patient_exercise_id = pe.id) AS status
-     FROM patient_exercises pe
-     JOIN exercises e ON e.id = pe.exercise_id
-     WHERE pe.patient_id = $1
-     ORDER BY pe.id ASC`,
-    [patientId]
-  );
-  return result.rows;
+  const [exerciseResult, occurrenceResult] = await Promise.all([
+    pool.query(
+      `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
+              pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+              pe.recurrence, pe.interval_days, pe.weekdays, pe.start_date, pe.end_date,
+              pe.status AS stored_status,
+              e.name, e.description
+       FROM patient_exercises pe
+       JOIN exercises e ON e.id = pe.exercise_id
+       WHERE pe.patient_id = $1
+       ORDER BY pe.id ASC`,
+      [patientId]
+    ),
+    pool.query(
+      `SELECT eo.patient_exercise_id,
+              eo.due_date AS "dueDate",
+              COALESCE(eo.makeup_until, eo.due_date) AS "makeupUntil",
+              eo.status
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       WHERE pe.patient_id = $1
+       ORDER BY eo.due_date ASC`,
+      [patientId]
+    ),
+  ]);
+
+  const occurrencesByAssignment = new Map<number, OccurrenceLite[]>();
+  for (const row of occurrenceResult.rows) {
+    const patientExerciseId = Number(row.patient_exercise_id);
+    const occurrences = occurrencesByAssignment.get(patientExerciseId) ?? [];
+    occurrences.push({
+      dueDate: row.dueDate as string,
+      makeupUntil: row.makeupUntil as string,
+      status: row.status as OccurrenceLite["status"],
+    });
+    occurrencesByAssignment.set(patientExerciseId, occurrences);
+  }
+
+  const today = todayKeyPH();
+  return exerciseResult.rows.map((row) => {
+    const { stored_status: storedStatus, ...exercise } = row;
+    const status = deriveAssignmentStatus(
+      occurrencesByAssignment.get(Number(row.id)) ?? [],
+      today,
+      storedStatus as OccurrenceLite["status"]
+    );
+    return { ...exercise, status };
+  });
 }
 
 // Dated schedule instances for a patient, newest-relevant first by due_date,

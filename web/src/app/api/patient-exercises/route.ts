@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   DEFAULT_REST_SECONDS,
   DEFAULT_HOLD_SECONDS,
@@ -33,12 +34,10 @@ type PatientExerciseAssignmentRequest = {
 
 export async function GET(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth_token");
-    if (!authToken) {
+    const user = await getAuthenticatedUser(request);
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const user = JSON.parse(authToken.value);
     const includeDeprecated =
       request.nextUrl.searchParams.get("includeDeprecated") === "true";
     const filterDeprecated = <T extends { exercise_id: string }>(exercises: T[]) =>
@@ -85,10 +84,8 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth_token");
-    if (!authToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    const user = JSON.parse(authToken.value);
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -117,10 +114,8 @@ export async function DELETE(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const authToken = request.cookies.get("auth_token");
-    if (!authToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    const user = JSON.parse(authToken.value);
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

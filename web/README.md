@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Postural web application
 
-## Getting Started
+Next.js 16 and React 19 application for Postural's patient camera workflow, therapist dashboard, and administrator surfaces. Webcam frames are processed in the browser; the application stores derived metrics rather than video.
 
-First, run the development server:
+## Local setup
+
+1. Install Node.js and PostgreSQL.
+2. Follow [`../AUTHENTICATION_SETUP.md`](../AUTHENTICATION_SETUP.md) to create the database, run the SQL scripts, and configure `DATABASE_URL`, `SESSION_SECRET`, and optional email settings.
+3. Install dependencies and start the development server:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). The seeded credentials in the authentication guide are for local demonstration only.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`SESSION_SECRET` must contain at least 32 random bytes and must not be committed. Changing it invalidates existing `auth_token` cookies.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Common checks
 
-## Learn More
+```bash
+npx tsc --noEmit --pretty false
+npm run lint
+npm run build
+```
 
-To learn more about Next.js, take a look at the following resources:
+The project also keeps framework-free TypeScript regression files beside the modules they cover. Run an individual suite with `npx tsx path/to/file.test.ts`; the current release-readiness procedure runs every tracked `*.test.ts` file.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+To synchronize the offline ML registry after an exercise-definition change:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npx tsx scripts/export-registry.ts
+```
 
-## Deploy on Vercel
+The generated `../ml/config/registry.json` must be reviewed and committed with the registry change. Raw tuning traces are opt-in and are not a substitute for a newly collected untouched validation set.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Architecture boundaries
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Smoothed pose metrics drive display and repetition boundaries.
+- Raw unsmoothed metrics feed persisted analytics and offline ML features.
+- Dynamic bilateral exercises preserve per-side counts; isometric exercises use time in target band.
+- `src/proxy.ts` performs optimistic page gating only. Protected API handlers use the DB-backed authentication helper and enforce current role, ownership, or therapist assignment.
+- The offline Random Forest is a synthetic-data feasibility model, not a live clinical model.
+
+This is an undergraduate proof-of-concept, not a medical device or clinically validated system.

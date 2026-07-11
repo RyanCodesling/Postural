@@ -1,6 +1,6 @@
 # Sprint Updates 
 
-## 📌 Update-7-11-26 | *Scoring, six-exercise ML, occurrence status, and secure sessions*
+## 📌 Update-7-11-26
 
 - Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline
 - Extended the offline synthetic-feasibility pipeline across all six active exercises while keeping the browser's rule-based feedback as the live coaching layer
@@ -94,7 +94,7 @@
 - Collect future model evaluation data only after the protocol is frozen; do not reuse sessions 168–174 as held-out evidence
 - Review and disposition the dependency-audit findings before deployment rather than applying a blind breaking upgrade
 
-## 📌 Update-6-8-26 | *Offline ML + ex_004 live tuning*
+## 📌 Update-6-8-26
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
 - Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
 - Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app

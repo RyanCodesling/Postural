@@ -29,7 +29,7 @@ Name the Database **`postural`** → Click Save
 Expand Login/Group Roles
 Right-click → Create → Login/Group Role
 General tab → Name: postural
-Definition tab → Password: nasa sprint updates gdocs yung pass (copy paste mo nalang)
+Definition tab → Password: choose a unique local password and keep it out of Git
 Privileges tab → Enable Can login?
 Click Save
 

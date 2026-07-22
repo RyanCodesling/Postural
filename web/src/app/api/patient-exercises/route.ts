@@ -3,8 +3,9 @@ import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   DEFAULT_REST_SECONDS,
   DEFAULT_HOLD_SECONDS,
+  ExerciseAssignmentNotAllowedError,
   assignExercisesToPatient,
-  deletePatientExercises,
+  archivePatientExercises,
   getPatientExercises,
   getPatientOccurrences,
   getUsers,
@@ -59,7 +60,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Patient not found or not assigned to you" }, { status: 403 });
       }
 
-      const exercises = filterDeprecated(await getPatientExercises(patientId));
+      const includeArchived = request.nextUrl.searchParams.get("includeArchived") === "true";
+      const exercises = filterDeprecated(
+        await getPatientExercises(patientId, { includeArchived }),
+      );
       return NextResponse.json({ exercises });
     }
 
@@ -104,7 +108,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
-    await deletePatientExercises(patientId, exerciseIds as string[]);
+    await archivePatientExercises(patientId, exerciseIds as string[], user.id);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/patient-exercises error:", error);
@@ -251,6 +255,7 @@ export async function POST(request: NextRequest) {
         weekdays:    exercise.weekdays,
         endDate:     exercise.endDate as string | undefined,
       })),
+      user.id,
     );
 
     // Notify patient about assigned exercises
@@ -267,6 +272,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ExerciseAssignmentNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("POST /api/patient-exercises error:", error);
     return NextResponse.json({ error: "Failed to assign exercises" }, { status: 500 });
   }

@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     let emailSent = false;
     if (email) {
       emailSent = true;
-      sendAccountCreationEmail(email, fullName, password).catch((err) =>
+      sendAccountCreationEmail(email, fullName).catch((err) =>
         console.error("Failed to send account creation email:", err)
       );
     }

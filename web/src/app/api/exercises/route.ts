@@ -27,7 +27,9 @@ export async function GET(request: NextRequest) {
     const includeDeprecated =
       request.nextUrl.searchParams.get("includeDeprecated") === "true";
 
-    const all = await getExercises();
+    const all = await getExercises({
+      therapistId: authenticatedUser.role === "therapist" ? authenticatedUser.id : undefined,
+    });
     const exercises = includeDeprecated
       ? all
       : all.filter((e) => !DEPRECATED_EXERCISE_IDS.has(e.id));
@@ -62,6 +64,9 @@ export async function POST(request: NextRequest) {
       name: name.trim(),
       description: description.trim(),
       isCustom: authenticatedUser.role === "therapist" ? true : isCustom ?? false,
+      ownerTherapistId: authenticatedUser.role === "therapist" ? authenticatedUser.id : null,
+      monitoringMode:
+        authenticatedUser.role === "therapist" || isCustom === true ? "manual" : "camera",
     });
     return NextResponse.json({ exercise }, { status: 201 });
   } catch (error) {

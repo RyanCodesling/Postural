@@ -18,7 +18,6 @@ import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
-  worstSideCompensationScore,
   isNearPeak,
   computeElbowFlexion,
   computeLateralNeckTilt,
@@ -41,6 +40,7 @@ import {
   type CompensationWarningLatch,
 } from "@/lib/pose/compensationWarningState";
 import {
+  getCompensationScoring,
   getExerciseDefinition,
   type ExerciseDefinition,
   type MetricName,
@@ -54,6 +54,11 @@ import {
   type BidirectionalSide,
 } from "@/lib/pose/bidirectionalRepCounter";
 import { VelocityBidirectionalRepCounter } from "@/lib/pose/velocityBidirectionalRepCounter";
+import {
+  DynamicRepQualityBuffer,
+  type DynamicRepQualityV1,
+  type RepQualityChannel,
+} from "@/lib/pose/repQuality";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -318,6 +323,7 @@ type RepEventPayload = {
   descentMs: number;
   totalMs: number;
   classification: RepEvent["classification"];
+  compensations: DynamicRepQualityV1;
   startTs: string;
   endTs: string;
 };
@@ -933,6 +939,10 @@ export default function CameraClient() {
   // the side from the sign at peak while suppressing immediate opposite-side
   // return-stroke overshoot.
   const bidirectionalRepCounterRef = useRef<BidirectionalCounter | null>(null);
+  // Raw/unsmoothed metric samples are buffered independently from the
+  // smoothed RepCounter streams. A completed RepEvent supplies the boundaries
+  // used to finalize and persist one versioned quality summary.
+  const dynamicRepQualityBufferRef = useRef(new DynamicRepQualityBuffer());
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
@@ -1325,6 +1335,7 @@ export default function CameraClient() {
     pendingRepEventsRef.current = [];
     rawFrameIndexRef.current = 0;
     pendingRawFramesRef.current = [];
+    dynamicRepQualityBufferRef.current.reset();
   };
 
   /**
@@ -1492,10 +1503,25 @@ export default function CameraClient() {
   /** Buffer a counted rep for persistence. Pure aside from the ref push. */
   const bufferRepEvent = (event: RepEvent, side: RepEventPayload["side"]) => {
     if (prescriptionRef.current.patientExerciseId === undefined) return;
+    const definition = activeDefinitionRef.current;
     const targetRom =
-      activeDefinitionRef.current?.kind === "dynamic"
-        ? activeDefinitionRef.current.primaryMetric.thresholds.targetROM
+      definition?.kind === "dynamic"
+        ? definition.primaryMetric.thresholds.targetROM
         : 0;
+    const qualityChannel: RepQualityChannel =
+      definition?.bilateralMode === "per-limb" &&
+      (side === "left" || side === "right")
+        ? side
+        : "single";
+    const scoredCompensations =
+      definition?.compensationMetrics.filter(
+        (spec) => getCompensationScoring(spec).mode !== "off",
+      ) ?? [];
+    const compensations = dynamicRepQualityBufferRef.current.finalize(
+      qualityChannel,
+      event,
+      scoredCompensations,
+    );
     pendingRepEventsRef.current.push({
       repIndex: ++globalRepIndexRef.current,
       setIndex: completedSetsRef.current + 1,
@@ -1507,6 +1533,7 @@ export default function CameraClient() {
       descentMs: event.descentDurationMs,
       totalMs: event.totalDurationMs,
       classification: event.classification,
+      compensations,
       startTs: perfToIso(event.startTimeMs),
       endTs: perfToIso(event.endTimeMs),
     });
@@ -2021,6 +2048,7 @@ export default function CameraClient() {
       leftRepCounterRef.current?.reset();
       rightRepCounterRef.current?.reset();
       bidirectionalRepCounterRef.current?.reset();
+      dynamicRepQualityBufferRef.current.reset();
     } else {
       pairedHoldMsRef.current = 0;
       leftHoldMsRef.current = 0;
@@ -3014,6 +3042,7 @@ export default function CameraClient() {
       leftRepCounterRef.current = null;
       rightRepCounterRef.current = null;
       bidirectionalRepCounterRef.current = null;
+      dynamicRepQualityBufferRef.current.reset();
       repLogRef.current = { left: [], right: [] };
       neckRepDebugRef.current = [];
       neckRepDebugStartMsRef.current = null;
@@ -3084,6 +3113,7 @@ export default function CameraClient() {
     leftRepCounterRef.current = null;
     rightRepCounterRef.current = null;
     bidirectionalRepCounterRef.current = null;
+    dynamicRepQualityBufferRef.current.reset();
     repLogRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
@@ -3575,15 +3605,29 @@ export default function CameraClient() {
               const scoreIsPerLimb =
                 activeDefinition.bilateral &&
                 activeDefinition.bilateralMode === "per-limb";
+              let leftFrameCompensationScore: number | null = null;
+              let rightFrameCompensationScore: number | null = null;
               let frameCompensationScore: number | null;
               if (scoreIsPerLimb) {
-                frameCompensationScore = worstSideCompensationScore(
+                leftFrameCompensationScore = computeCompensationScore(
                   activeDefinition,
                   { ...smoothedMetrics, scapularElevation: scapDeltaLeft },
                   raw.perSideMetrics?.left ?? null,
+                );
+                rightFrameCompensationScore = computeCompensationScore(
+                  activeDefinition,
                   { ...smoothedMetrics, scapularElevation: scapDeltaRight },
                   raw.perSideMetrics?.right ?? null,
                 );
+                frameCompensationScore =
+                  leftFrameCompensationScore === null
+                    ? rightFrameCompensationScore
+                    : rightFrameCompensationScore === null
+                      ? leftFrameCompensationScore
+                      : Math.min(
+                          leftFrameCompensationScore,
+                          rightFrameCompensationScore,
+                        );
               } else {
                 const scorePrimaryName =
                   activeDefinition.kind === "dynamic"
@@ -3594,6 +3638,31 @@ export default function CameraClient() {
                   smoothedMetrics,
                   smoothedMetrics[scorePrimaryName] ?? null,
                 );
+              }
+
+              // Raw feature channels remain separate from the smoothed live
+              // score above. `computePoseMetricsForExercise` exposes per-side
+              // compensation values before worst-side collapsing; the only
+              // transform applied here is the same captured scapular baseline
+              // already used by the live rule path.
+              const rawSingleCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...raw.metrics };
+              const rawLeftCompensations: Partial<
+                Record<MetricName, number | null>
+              > = {
+                ...(raw.perSideCompensationMetrics?.left ?? raw.metrics),
+              };
+              const rawRightCompensations: Partial<
+                Record<MetricName, number | null>
+              > = {
+                ...(raw.perSideCompensationMetrics?.right ?? raw.metrics),
+              };
+              if (needsScapCompBaseline) {
+                rawSingleCompensations.scapularElevation =
+                  metricInputs.scapularElevation ?? null;
+                rawLeftCompensations.scapularElevation = scapDeltaLeft;
+                rawRightCompensations.scapularElevation = scapDeltaRight;
               }
 
               // Near-peak gate for `peakRelevant` compensation warnings
@@ -3727,6 +3796,33 @@ export default function CameraClient() {
                         sessionStateRef.current === "active" &&
                         baselineReadyForExercise;
 
+                      if (sessionIsActive && typeof inputLeft === "number") {
+                        dynamicRepQualityBufferRef.current.add("left", {
+                          tMs: tNow,
+                          rawPrimary: inputLeft,
+                          liveScore: leftFrameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawLeftCompensations,
+                            inputLeft,
+                          ),
+                          rawCompensations: rawLeftCompensations,
+                        });
+                      }
+                      if (sessionIsActive && typeof inputRight === "number") {
+                        dynamicRepQualityBufferRef.current.add("right", {
+                          tMs: tNow,
+                          rawPrimary: inputRight,
+                          liveScore: rightFrameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawRightCompensations,
+                            inputRight,
+                          ),
+                          rawCompensations: rawRightCompensations,
+                        });
+                      }
+
                       if (
                         sessionIsActive &&
                         typeof smoothedLeft === "number" &&
@@ -3830,6 +3926,24 @@ export default function CameraClient() {
                       const sessionIsActive =
                         sessionStateRef.current === "active" &&
                         baselineReadyForExercise;
+                      if (
+                        sessionIsActive &&
+                        typeof rawMetricValue === "number"
+                      ) {
+                        dynamicRepQualityBufferRef.current.add("single", {
+                          tMs: tNow,
+                          // The bidirectional counter operates on magnitude and
+                          // assigns anatomical side from the sign at peak.
+                          rawPrimary: Math.abs(rawMetricValue),
+                          liveScore: frameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawSingleCompensations,
+                            rawMetricValue,
+                          ),
+                          rawCompensations: rawSingleCompensations,
+                        });
+                      }
                       if (counter) {
                         const before = counter.getDebugSnapshot(tNow, rawValue);
                         const rep = sessionIsActive
@@ -3940,6 +4054,23 @@ export default function CameraClient() {
                     } else {
                       // Unilateral. Gate on active session and completed baseline.
                       const counter = leftRepCounterRef.current;
+                      if (
+                        sessionStateRef.current === "active" &&
+                        baselineReadyForExercise &&
+                        typeof rawMetricValue === "number"
+                      ) {
+                        dynamicRepQualityBufferRef.current.add("single", {
+                          tMs: tNow,
+                          rawPrimary: rawMetricValue,
+                          liveScore: frameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawSingleCompensations,
+                            rawMetricValue,
+                          ),
+                          rawCompensations: rawSingleCompensations,
+                        });
+                      }
                       if (
                         counter &&
                         sessionStateRef.current === "active" &&
@@ -4197,6 +4328,7 @@ export default function CameraClient() {
               leftRepCounterRef.current?.reset();
               rightRepCounterRef.current?.reset();
               bidirectionalRepCounterRef.current?.reset();
+              dynamicRepQualityBufferRef.current.reset();
               // Discard any in-progress isometric hold — a sustained dropout
               // means we couldn't verify the band, so the partial accumulation
               // is stale (matches the rep-counter reset philosophy).
@@ -5447,22 +5579,17 @@ export default function CameraClient() {
               )}
             </div>
 
-            {/* Reference video */}
+            {/* Reference guidance */}
             <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
               <div style={{ marginBottom: 10 }}>
                 <span style={{
                   fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
                   textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                }}>Reference</span>
+                }}>Reference guidance</span>
               </div>
-              <div style={{ aspectRatio: "16/10", borderRadius: 6, overflow: "hidden", background: "oklch(0.93 0.003 240)", border: "1px solid oklch(0.92 0.003 240)" }}>
-                <video
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  controls
-                  controlsList="nodownload"
-                >
-                  <source src="/sample-video.mp4" type="video/mp4" />
-                </video>
+              <div style={{ borderRadius: 6, padding: "12px", background: "oklch(0.97 0.003 240)", border: "1px solid oklch(0.92 0.003 240)", color: "oklch(0.42 0.01 240)", fontSize: 11.5, lineHeight: 1.5 }}>
+                No verified demonstration video is published for this exercise yet.
+                Follow the written exercise description and your therapist&apos;s instructions.
               </div>
             </div>
 

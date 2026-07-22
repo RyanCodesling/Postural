@@ -1787,6 +1787,17 @@ export type ExerciseFrameMetrics = {
     left: number | null;
     right: number | null;
   };
+  /**
+   * Raw compensation channels before worst-side collapsing. Populated for
+   * per-limb exercises so each completed rep can aggregate the compensation
+   * values from its own anatomical side instead of inheriting the other arm's
+   * worst value. Whole-body metrics naturally have the same value on both
+   * sides; limb-specific metrics remain independent.
+   */
+  perSideCompensationMetrics?: {
+    left: Partial<Record<MetricName, number | null>>;
+    right: Partial<Record<MetricName, number | null>>;
+  };
   /** 0–100 compensation-quality score, or null if no compensation data. */
   compensationScore: number | null;
 };
@@ -1817,6 +1828,12 @@ export function computePoseMetricsForExercise(
   const tiltReference = tiltOverride ?? computeTiltReference(landmarks);
   const metrics: Partial<Record<MetricName, number | null>> = {};
   let perSideMetrics: { left: number | null; right: number | null } | undefined;
+  let perSideCompensationMetrics:
+    | {
+        left: Partial<Record<MetricName, number | null>>;
+        right: Partial<Record<MetricName, number | null>>;
+      }
+    | undefined;
 
   // ── Primary metric ──────────────────────────────────────────────────────
   if (definition.kind === "dynamic") {
@@ -1885,6 +1902,9 @@ export function computePoseMetricsForExercise(
     if (definition.bilateral && definition.bilateralMode === "per-limb") {
       const left  = computeMetricByName(landmarks, tiltReference, comp.name, "left");
       const right = computeMetricByName(landmarks, tiltReference, comp.name, "right");
+      perSideCompensationMetrics ??= { left: {}, right: {} };
+      perSideCompensationMetrics.left[comp.name] = left;
+      perSideCompensationMetrics.right[comp.name] = right;
       const direction = comp.compareDirection ?? "above";
       metrics[comp.name] = pickWorstSide(left, right, direction);
     } else {
@@ -1894,7 +1914,13 @@ export function computePoseMetricsForExercise(
 
   const compensationScore = computeCompensationScore(definition, metrics);
 
-  return { tiltReference, metrics, perSideMetrics, compensationScore };
+  return {
+    tiltReference,
+    metrics,
+    perSideMetrics,
+    perSideCompensationMetrics,
+    compensationScore,
+  };
 }
 
 /**

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/AuthContext";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
@@ -27,7 +27,7 @@ export default function ManagePatientsPage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
     try {
@@ -52,11 +52,14 @@ export default function ManagePatientsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
 
   useEffect(() => {
-    loadData();
-  }, [user?.id]);
+    const initialTimeout = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+    return () => clearTimeout(initialTimeout);
+  }, [loadData]);
 
   const statusColor = (s: string) =>
     s === "completed" ? "bg-green-100 text-green-700 border border-green-200"

@@ -7,6 +7,15 @@ import {
   type OccurrenceLite,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
+import {
+  summarizePrescription,
+  type PrescriptionOccurrenceLite,
+} from "@/lib/exercises/prescriptionStatus";
+import type { DynamicRepQualityV1 } from "@/lib/pose/repQuality";
+import {
+  parseCaptureQualitySummary,
+  summarizeDeviceInfo,
+} from "@/lib/sessionReadModels";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -310,9 +319,30 @@ export async function invalidateOTPs(email: string) {
 
 // ── Exercises ─────────────────────────────────────────────────────────────────
 
-export async function getExercises() {
-  const result = await pool.query("SELECT * FROM exercises ORDER BY id");
+export async function getExercises(options: {
+  includeArchived?: boolean;
+  therapistId?: string;
+} = {}) {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (!options.includeArchived) conditions.push("archived_at IS NULL");
+  if (options.therapistId) {
+    params.push(options.therapistId);
+    conditions.push(`(is_custom = FALSE OR owner_therapist_id = $${params.length})`);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await pool.query(`SELECT * FROM exercises ${where} ORDER BY id`, params);
   return result.rows;
+}
+
+export async function getExerciseById(id: string, includeArchived = false) {
+  const result = await pool.query(
+    `SELECT * FROM exercises
+      WHERE id = $1 ${includeArchived ? "" : "AND archived_at IS NULL"}
+      LIMIT 1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function getNextExerciseId(): Promise<string> {
@@ -331,10 +361,22 @@ export async function createExercise(data: {
   name: string;
   description: string;
   isCustom?: boolean;
+  ownerTherapistId?: string | null;
+  monitoringMode?: "camera" | "manual";
 }) {
   const result = await pool.query(
-    "INSERT INTO exercises (id, name, description, is_custom) VALUES ($1, $2, $3, $4) RETURNING *",
-    [data.id, data.name, data.description, data.isCustom ?? false]
+    `INSERT INTO exercises
+       (id, name, description, is_custom, owner_therapist_id, monitoring_mode)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      data.id,
+      data.name,
+      data.description,
+      data.isCustom ?? false,
+      data.ownerTherapistId ?? null,
+      data.monitoringMode ?? (data.isCustom ? "manual" : "camera"),
+    ],
   );
   return result.rows[0];
 }
@@ -347,14 +389,64 @@ export async function updateExercise(id: string, data: { name?: string; descript
   if (fields.length === 0) return null;
   params.push(id);
   const result = await pool.query(
-    `UPDATE exercises SET ${fields.join(", ")} WHERE id = $${params.length} RETURNING *`,
+    `UPDATE exercises SET ${fields.join(", ")}
+      WHERE id = $${params.length} AND archived_at IS NULL
+      RETURNING *`,
     params
   );
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
-export async function deleteExercise(id: string) {
-  await pool.query("DELETE FROM exercises WHERE id = $1", [id]);
+export async function archiveExercise(id: string, archivedBy: string): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exercise = await client.query(
+      `UPDATE exercises
+          SET archived_at = NOW(), archived_by = $2
+        WHERE id = $1 AND archived_at IS NULL
+        RETURNING id`,
+      [id, archivedBy],
+    );
+    if (exercise.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    const assignments = await client.query(
+      `UPDATE patient_exercises
+          SET archived_at = NOW(), archived_by = $2
+        WHERE exercise_id = $1 AND archived_at IS NULL
+        RETURNING id`,
+      [id, archivedBy],
+    );
+    const assignmentIds = assignments.rows.map((row) => Number(row.id));
+    if (assignmentIds.length > 0) {
+      await client.query(
+        `UPDATE exercise_occurrences
+            SET cancelled_at = NOW(), cancelled_by = $2
+          WHERE patient_exercise_id = ANY($1::int[])
+            AND status = 'pending'
+            AND cancelled_at IS NULL
+            AND COALESCE(makeup_until, due_date) >= $3::date`,
+        [assignmentIds, archivedBy, todayKeyPH()],
+      );
+    }
+
+    // Program entries keep their copied name/description as history, but an
+    // archived catalog row is no longer assignable through the program.
+    await client.query(
+      "UPDATE program_exercises SET exercise_id = NULL WHERE exercise_id = $1",
+      [id],
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Patient exercises ─────────────────────────────────────────────────────────
@@ -377,6 +469,13 @@ type PatientExerciseAssignment = {
   weekdays?: number[];   // weekly mode; JS getDay() numbering 0=Sun..6=Sat
   endDate?: string;      // inclusive window end (YYYY-MM-DD)
 };
+
+export class ExerciseAssignmentNotAllowedError extends Error {
+  constructor(message = "One or more exercises are unavailable for assignment.") {
+    super(message);
+    this.name = "ExerciseAssignmentNotAllowedError";
+  }
+}
 
 function normalizeRestSeconds(restSeconds: unknown): number {
   if (
@@ -404,11 +503,25 @@ function normalizeHoldSeconds(holdSeconds: unknown): number {
 
 export async function assignExercisesToPatient(
   patientId: string,
-  exercises: PatientExerciseAssignment[]
+  exercises: PatientExerciseAssignment[],
+  therapistId: string,
 ) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const requestedExerciseIds = Array.from(new Set(exercises.map((exercise) => exercise.exerciseId)));
+    const allowedExercises = await client.query(
+      `SELECT id
+         FROM exercises
+        WHERE id = ANY($1::varchar[])
+          AND archived_at IS NULL
+          AND (is_custom = FALSE OR owner_therapist_id = $2)`,
+      [requestedExerciseIds, therapistId],
+    );
+    if (allowedExercises.rows.length !== requestedExerciseIds.length) {
+      throw new ExerciseAssignmentNotAllowedError();
+    }
+
     for (const ex of exercises) {
       const restSeconds = normalizeRestSeconds(ex.restSeconds);
       const holdSeconds = normalizeHoldSeconds(ex.holdSeconds);
@@ -441,7 +554,7 @@ export async function assignExercisesToPatient(
            (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date, hold_seconds,
             recurrence, interval_days, weekdays, start_date, end_date)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::smallint[], $11, $12)
-         ON CONFLICT (exercise_id, patient_id) DO UPDATE
+         ON CONFLICT (exercise_id, patient_id) WHERE archived_at IS NULL DO UPDATE
          SET sets          = EXCLUDED.sets,
              reps          = EXCLUDED.reps,
              rest_seconds  = EXCLUDED.rest_seconds,
@@ -458,16 +571,17 @@ export async function assignExercisesToPatient(
       );
       const patientExerciseId = upsert.rows[0].id as number;
 
-      // Regenerate the schedule. Drop only future, un-started occurrences so past
-      // days and any in-progress/completed day (the adherence record) survive an
-      // edit; then materialize the rule's due dates + make-up deadlines (refreshing
-      // makeup_until on any day that still exists, e.g. today, in case the cadence changed).
+      // Regenerate the schedule without deleting occurrence history. Future
+      // pending rows are cancelled first; dates still present in the new rule are
+      // reactivated by the upsert below.
       await client.query(
-        `DELETE FROM exercise_occurrences
+        `UPDATE exercise_occurrences
+            SET cancelled_at = NOW(), cancelled_by = $3
           WHERE patient_exercise_id = $1
             AND status = 'pending'
-            AND due_date > $2::date`,
-        [patientExerciseId, todayKeyPH()]
+            AND due_date > $2::date
+            AND cancelled_at IS NULL`,
+        [patientExerciseId, todayKeyPH(), therapistId]
       );
       const schedule = generateSchedule({ recurrence, intervalDays, weekdays, startDate, endDate });
       for (const occ of schedule) {
@@ -475,7 +589,9 @@ export async function assignExercisesToPatient(
           `INSERT INTO exercise_occurrences (patient_exercise_id, due_date, makeup_until)
            VALUES ($1, $2, $3)
            ON CONFLICT (patient_exercise_id, due_date) DO UPDATE
-             SET makeup_until = EXCLUDED.makeup_until`,
+             SET makeup_until = EXCLUDED.makeup_until,
+                 cancelled_at = NULL,
+                 cancelled_by = NULL`,
           [patientExerciseId, occ.dueDate, occ.makeupUntil]
         );
       }
@@ -489,25 +605,62 @@ export async function assignExercisesToPatient(
   }
 }
 
-export async function deletePatientExercises(patientId: string, exerciseIds: string[]) {
+export async function archivePatientExercises(
+  patientId: string,
+  exerciseIds: string[],
+  archivedBy: string,
+) {
   if (exerciseIds.length === 0) return;
-  await pool.query(
-    `DELETE FROM patient_exercises WHERE patient_id = $1 AND exercise_id = ANY($2::varchar[])`,
-    [patientId, exerciseIds]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const archived = await client.query(
+      `UPDATE patient_exercises
+          SET archived_at = NOW(), archived_by = $3
+        WHERE patient_id = $1
+          AND exercise_id = ANY($2::varchar[])
+          AND archived_at IS NULL
+        RETURNING id`,
+      [patientId, exerciseIds, archivedBy],
+    );
+    const assignmentIds = archived.rows.map((row) => Number(row.id));
+    if (assignmentIds.length > 0) {
+      await client.query(
+        `UPDATE exercise_occurrences
+            SET cancelled_at = NOW(), cancelled_by = $2
+          WHERE patient_exercise_id = ANY($1::int[])
+            AND status = 'pending'
+            AND cancelled_at IS NULL
+            AND COALESCE(makeup_until, due_date) >= $3::date`,
+        [assignmentIds, archivedBy, todayKeyPH()],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-export async function getPatientExercises(patientId: string) {
+export async function getPatientExercises(
+  patientId: string,
+  options: { includeArchived?: boolean } = {},
+) {
+  const activeOnly = options.includeArchived
+    ? ""
+    : "AND pe.archived_at IS NULL AND e.archived_at IS NULL";
   const [exerciseResult, occurrenceResult] = await Promise.all([
     pool.query(
       `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
               pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
               pe.recurrence, pe.interval_days, pe.weekdays, pe.start_date, pe.end_date,
-              pe.status AS stored_status,
-              e.name, e.description
+              pe.status AS stored_status, pe.archived_at,
+              e.name, e.description, e.monitoring_mode
        FROM patient_exercises pe
        JOIN exercises e ON e.id = pe.exercise_id
-       WHERE pe.patient_id = $1
+       WHERE pe.patient_id = $1 ${activeOnly}
        ORDER BY pe.id ASC`,
       [patientId]
     ),
@@ -515,16 +668,18 @@ export async function getPatientExercises(patientId: string) {
       `SELECT eo.patient_exercise_id,
               eo.due_date AS "dueDate",
               COALESCE(eo.makeup_until, eo.due_date) AS "makeupUntil",
-              eo.status
+              eo.status,
+              eo.cancelled_at AS "cancelledAt"
        FROM exercise_occurrences eo
        JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
-       WHERE pe.patient_id = $1
+       JOIN exercises e ON e.id = pe.exercise_id
+       WHERE pe.patient_id = $1 ${activeOnly}
        ORDER BY eo.due_date ASC`,
       [patientId]
     ),
   ]);
 
-  const occurrencesByAssignment = new Map<number, OccurrenceLite[]>();
+  const occurrencesByAssignment = new Map<number, PrescriptionOccurrenceLite[]>();
   for (const row of occurrenceResult.rows) {
     const patientExerciseId = Number(row.patient_exercise_id);
     const occurrences = occurrencesByAssignment.get(patientExerciseId) ?? [];
@@ -532,6 +687,7 @@ export async function getPatientExercises(patientId: string) {
       dueDate: row.dueDate as string,
       makeupUntil: row.makeupUntil as string,
       status: row.status as OccurrenceLite["status"],
+      cancelledAt: (row.cancelledAt as string | null) ?? null,
     });
     occurrencesByAssignment.set(patientExerciseId, occurrences);
   }
@@ -539,12 +695,34 @@ export async function getPatientExercises(patientId: string) {
   const today = todayKeyPH();
   return exerciseResult.rows.map((row) => {
     const { stored_status: storedStatus, ...exercise } = row;
+    const occurrences = occurrencesByAssignment.get(Number(row.id)) ?? [];
+    const activeOccurrences = occurrences.filter((occ) => !occ.cancelledAt);
     const status = deriveAssignmentStatus(
-      occurrencesByAssignment.get(Number(row.id)) ?? [],
+      activeOccurrences,
       today,
       storedStatus as OccurrenceLite["status"]
     );
-    return { ...exercise, status };
+    const summary = summarizePrescription({
+      occurrences,
+      todayKey: today,
+      startDate: (row.start_date as string | null) ?? (row.assigned_date as string),
+      endDate: (row.end_date as string | null) ?? (row.assigned_date as string),
+      archivedAt: (row.archived_at as string | null) ?? null,
+    });
+    return {
+      ...exercise,
+      status,
+      prescription_state: summary.prescriptionState,
+      adherence_state: summary.adherenceState,
+      occurrence_summary: {
+        scheduled: summary.scheduledCount,
+        completed: summary.completedCount,
+        missed: summary.missedCount,
+        inProgress: summary.inProgressCount,
+        remaining: summary.remainingCount,
+        cancelled: summary.cancelledCount,
+      },
+    };
   });
 }
 
@@ -557,11 +735,14 @@ export async function getPatientOccurrences(patientId: string) {
     `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
             COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
             pe.exercise_id, pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
-            e.name, e.description
+            e.name, e.description, e.monitoring_mode
      FROM exercise_occurrences eo
      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
      JOIN exercises e ON e.id = pe.exercise_id
      WHERE pe.patient_id = $1
+       AND pe.archived_at IS NULL
+       AND e.archived_at IS NULL
+       AND eo.cancelled_at IS NULL
      ORDER BY eo.due_date ASC, e.name ASC`,
     [patientId]
   );
@@ -628,6 +809,35 @@ interface ProgramExerciseInput {
   holdSeconds?: number;
 }
 
+export class ProgramExerciseNotAllowedError extends Error {
+  constructor(message = "One or more program exercises are unavailable.") {
+    super(message);
+    this.name = "ProgramExerciseNotAllowedError";
+  }
+}
+
+async function validateProgramExerciseAccess(
+  client: PoolClient,
+  therapistId: string,
+  exercises: ProgramExerciseInput[],
+) {
+  const exerciseIds = Array.from(
+    new Set(exercises.flatMap((exercise) => exercise.exerciseId ? [exercise.exerciseId] : [])),
+  );
+  if (exerciseIds.length === 0) return;
+  const allowed = await client.query(
+    `SELECT id
+       FROM exercises
+      WHERE id = ANY($1::varchar[])
+        AND archived_at IS NULL
+        AND (is_custom = FALSE OR owner_therapist_id = $2)`,
+    [exerciseIds, therapistId],
+  );
+  if (allowed.rows.length !== exerciseIds.length) {
+    throw new ProgramExerciseNotAllowedError();
+  }
+}
+
 async function insertProgramExercises(
   client: PoolClient,
   programId: string,
@@ -663,6 +873,7 @@ export async function createProgram(data: {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await validateProgramExerciseAccess(client, data.therapistId, data.exercises);
     await client.query(
       "INSERT INTO exercise_programs (id, therapist_id, name) VALUES ($1, $2, $3)",
       [id, data.therapistId, data.name]
@@ -691,6 +902,7 @@ export async function updateProgram(
       [id, therapistId]
     );
     if (check.rows.length === 0) throw new Error("Not found or forbidden");
+    await validateProgramExerciseAccess(client, therapistId, data.exercises);
     await client.query(
       "UPDATE exercise_programs SET name = $1, updated_at = NOW() WHERE id = $2",
       [data.name, id]
@@ -731,6 +943,8 @@ export type RepEventRow = {
   descentMs: number;
   totalMs: number;
   classification: "complete" | "partial";
+  /** Versioned dynamic-rep quality summary stored in the JSONB column. */
+  compensations?: DynamicRepQualityV1 | null;
   /** ISO-8601 wall-clock timestamps. */
   startTs: string;
   endTs: string;
@@ -788,6 +1002,43 @@ export class SessionNotScheduledError extends Error {
   }
 }
 
+export class ManualOccurrenceNotCompletableError extends Error {
+  constructor(message = "This manual exercise is not available to complete today.") {
+    super(message);
+    this.name = "ManualOccurrenceNotCompletableError";
+  }
+}
+
+export async function completeManualOccurrence(
+  occurrenceId: number,
+  patientId: string,
+): Promise<{ exerciseName: string; therapistId: string | null }> {
+  const result = await pool.query(
+    `UPDATE exercise_occurrences eo
+        SET status = 'completed', completed_at = NOW()
+       FROM patient_exercises pe
+       JOIN exercises e ON e.id = pe.exercise_id
+       JOIN users u ON u.id = pe.patient_id
+      WHERE eo.id = $1
+        AND eo.patient_exercise_id = pe.id
+        AND pe.patient_id = $2
+        AND pe.archived_at IS NULL
+        AND e.archived_at IS NULL
+        AND e.monitoring_mode = 'manual'
+        AND eo.cancelled_at IS NULL
+        AND eo.status <> 'completed'
+        AND eo.due_date <= $3::date
+        AND COALESCE(eo.makeup_until, eo.due_date) >= $3::date
+      RETURNING e.name AS exercise_name, u.therapist_id`,
+    [occurrenceId, patientId, todayKeyPH()],
+  );
+  if (result.rows.length === 0) throw new ManualOccurrenceNotCompletableError();
+  return {
+    exerciseName: result.rows[0].exercise_name as string,
+    therapistId: (result.rows[0].therapist_id as string | null) ?? null,
+  };
+}
+
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
@@ -800,11 +1051,19 @@ export async function createSession(data: {
   // windows are disjoint and contiguous, so at most one can match.
   const today = todayKeyPH();
   const occ = await pool.query(
-    `SELECT id FROM exercise_occurrences
-      WHERE patient_exercise_id = $1
-        AND due_date <= $2::date AND COALESCE(makeup_until, due_date) >= $2::date
-        AND status <> 'completed'
-      ORDER BY due_date ASC
+    `SELECT eo.id
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
+      WHERE eo.patient_exercise_id = $1
+        AND pe.archived_at IS NULL
+        AND e.archived_at IS NULL
+        AND e.monitoring_mode = 'camera'
+        AND eo.cancelled_at IS NULL
+        AND eo.due_date <= $2::date
+        AND COALESCE(eo.makeup_until, eo.due_date) >= $2::date
+        AND eo.status <> 'completed'
+      ORDER BY eo.due_date ASC
       LIMIT 1`,
     [data.patientExerciseId, today]
   );
@@ -906,7 +1165,7 @@ export async function endSession(
   // time and is intentionally not written here.
   if (data.completed) {
     await pool.query(
-      `UPDATE exercise_occurrences SET status = 'completed'
+      `UPDATE exercise_occurrences SET status = 'completed', completed_at = NOW()
         WHERE id = (SELECT occurrence_id FROM sessions WHERE id = $1)`,
       [sessionId]
     );
@@ -959,9 +1218,9 @@ export async function insertRepEvents(
       await client.query(
         `INSERT INTO rep_events
            (session_id, rep_index, set_index, side, peak_value, target_rom,
-            time_to_peak_ms, hold_ms, descent_ms, total_ms, classification,
-            start_ts, end_ts)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+             time_to_peak_ms, hold_ms, descent_ms, total_ms, classification,
+             compensations, start_ts, end_ts)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           sessionId,
           r.repIndex,
@@ -974,6 +1233,7 @@ export async function insertRepEvents(
           Math.round(r.descentMs),
           Math.round(r.totalMs),
           r.classification,
+          r.compensations ? JSON.stringify(r.compensations) : null,
           r.startTs,
           r.endTs,
         ]
@@ -1100,6 +1360,7 @@ export async function getSessionsForPatient(patientId: string) {
     `SELECT
         s.id,
         s.exercise_id,
+        s.occurrence_id,
         e.name AS exercise_name,
         s.started_at,
         s.ended_at,
@@ -1116,7 +1377,8 @@ export async function getSessionsForPatient(patientId: string) {
         st.total_paired_hold_ms,
         st.total_target_hold_ms,
         st.total_duration_ms,
-        st.avg_asymmetry_index
+        st.avg_asymmetry_index,
+        st.avg_compensation_score
      FROM sessions s
      JOIN exercises e ON e.id = s.exercise_id
      LEFT JOIN (
@@ -1166,6 +1428,7 @@ export async function getSessionsForPatient(patientId: string) {
     return {
       id:                row.id,
       exerciseId:        row.exercise_id,
+      occurrenceId:      row.occurrence_id != null ? Number(row.occurrence_id) : null,
       exerciseName:      row.exercise_name,
       exerciseKind:      row.exercise_kind ?? null,   // 'dynamic' | 'isometric' | null
       startedAt:         row.started_at,
@@ -1222,11 +1485,14 @@ export async function getTherapistRoster(therapistId: string) {
         -- distinct prescriptions (drives "No exercises"); due/completed/missed are
         -- over occurrences up to today, so progress reads as work-done / work-due.
         SELECT pe.patient_id,
-               COUNT(DISTINCT pe.id)                                              AS assigned_count,
-               COUNT(eo.id) FILTER (WHERE eo.due_date <= $2::date)                AS due_count,
-               COUNT(eo.id) FILTER (WHERE eo.status = 'completed')                AS completed_count,
+               COUNT(DISTINCT pe.id) FILTER (WHERE pe.archived_at IS NULL)         AS assigned_count,
+               COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
+                                      AND eo.due_date <= $2::date)                  AS due_count,
+               COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
+                                      AND eo.status = 'completed')                  AS completed_count,
                COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $2::date
-                                      AND eo.status <> 'completed')               AS missed_count
+                                      AND eo.status <> 'completed'
+                                      AND eo.cancelled_at IS NULL)                  AS missed_count
         FROM patient_exercises pe
         LEFT JOIN exercise_occurrences eo ON eo.patient_exercise_id = pe.id
         GROUP BY pe.patient_id
@@ -1274,7 +1540,8 @@ export async function getSessionDetail(sessionId: number) {
   );
   const repsRes = await pool.query(
     `SELECT rep_index, set_index, side, peak_value, target_rom, time_to_peak_ms,
-            hold_ms, descent_ms, total_ms, classification, start_ts, end_ts
+             hold_ms, descent_ms, total_ms, classification, compensations,
+             start_ts, end_ts
      FROM rep_events WHERE session_id = $1 ORDER BY rep_index ASC`,
     [sessionId]
   );
@@ -1287,6 +1554,8 @@ export async function getSessionDetail(sessionId: number) {
     startedAt:        s.started_at,
     endedAt:          s.ended_at ?? null,
     notes:            s.notes ?? null,
+    captureQuality:   parseCaptureQualitySummary(s.capture_quality_summary),
+    deviceContext:    summarizeDeviceInfo(s.device_info),
     sets: setsRes.rows.map((r) => ({
       setIndex:       r.set_index,
       exerciseKind:   r.exercise_kind,
@@ -1312,6 +1581,7 @@ export async function getSessionDetail(sessionId: number) {
       descentMs:      r.descent_ms,
       totalMs:        r.total_ms,
       classification: r.classification,
+      compensations:  r.compensations ?? null,
     })),
   };
 }
@@ -1382,7 +1652,12 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
      JOIN exercises e ON e.id = pe.exercise_id
      JOIN users u ON u.id = pe.patient_id
-     WHERE pe.patient_id = $1 AND eo.status <> 'completed' AND eo.makeup_until < $2::date`,
+     WHERE pe.patient_id = $1
+       AND pe.archived_at IS NULL
+       AND e.archived_at IS NULL
+       AND eo.cancelled_at IS NULL
+       AND eo.status <> 'completed'
+       AND eo.makeup_until < $2::date`,
     [patientId, today]
   );
 
@@ -1436,7 +1711,12 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
      FROM exercise_occurrences eo
      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
      JOIN exercises e ON e.id = pe.exercise_id
-     WHERE pe.patient_id = $1 AND eo.status = 'pending' AND eo.due_date = $2::date`,
+     WHERE pe.patient_id = $1
+       AND pe.archived_at IS NULL
+       AND e.archived_at IS NULL
+       AND eo.cancelled_at IS NULL
+       AND eo.status = 'pending'
+       AND eo.due_date = $2::date`,
     [patientId, tomorrowStr]
   );
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteExercise, getExercises, updateExercise } from "@/lib/db";
+import { archiveExercise, getExerciseById, updateExercise } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 
 export async function PUT(
@@ -17,13 +17,16 @@ export async function PUT(
 
     const { id } = await params;
 
+    const existing = await getExerciseById(id);
+    if (!existing) {
+      return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+    }
     if (authenticatedUser.role === "therapist") {
-      const existing = (await getExercises()).find((exercise) => exercise.id === id);
-      if (!existing) {
-        return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
-      }
-      if (existing.is_custom !== true) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      if (existing.is_custom !== true || existing.owner_therapist_id !== authenticatedUser.id) {
+        return NextResponse.json(
+          { error: "Only your own custom exercises can be edited." },
+          { status: 403 },
+        );
       }
     }
 
@@ -60,17 +63,30 @@ export async function DELETE(
 
     const { id } = await params;
 
-    if (authenticatedUser.role === "therapist") {
-      const existing = (await getExercises()).find((exercise) => exercise.id === id);
-      if (!existing) {
-        return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
-      }
-      if (existing.is_custom !== true) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
+    const existing = await getExerciseById(id);
+    if (!existing) {
+      return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+    }
+    if (existing.is_custom !== true) {
+      return NextResponse.json(
+        { error: "Built-in exercises cannot be archived." },
+        { status: 403 },
+      );
+    }
+    if (
+      authenticatedUser.role === "therapist" &&
+      existing.owner_therapist_id !== authenticatedUser.id
+    ) {
+      return NextResponse.json(
+        { error: "Only your own custom exercises can be archived." },
+        { status: 403 },
+      );
     }
 
-    await deleteExercise(id);
+    const archived = await archiveExercise(id, authenticatedUser.id);
+    if (!archived) {
+      return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/exercises/[id] error:", error);

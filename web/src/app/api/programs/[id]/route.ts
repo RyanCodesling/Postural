@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import { updateProgram, deleteProgram } from "@/lib/db";
+import { updateProgram, deleteProgram, ProgramExerciseNotAllowedError } from "@/lib/db";
 
 export async function PUT(
   request: NextRequest,
@@ -25,6 +25,9 @@ export async function PUT(
     await updateProgram(id, user.id, { name, exercises });
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ProgramExerciseNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const msg = error instanceof Error ? error.message : "";
     if (msg === "Not found or forbidden") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });

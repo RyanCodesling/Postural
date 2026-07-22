@@ -1,5 +1,71 @@
 # Sprint Updates 
 
+## 📌 Update-7-22-26
+
+- Preserved prescription, occurrence, session, set, repetition, and raw-trace history by replacing exercise and assignment hard deletion with archival and cancellation workflows
+- Reworked patient and therapist read models so prescription lifecycle, adherence, schedule status, completed outcomes, capture quality, and form quality remain separate and auditable
+- Added therapist-owned manual custom exercises and a patient acknowledgement path without treating unregistered movements as camera-monitored exercises
+- Completed versioned dynamic per-repetition quality persistence while keeping raw analytics separate from smoothed live coaching
+- Hardened protected-page rendering, custom-exercise authorization, notification polling, and reference-media fallbacks
+- Applied the data-preservation migrations to PostgreSQL and verified the complete web change set through automated, authenticated, and live-camera checks
+
+### *scripts\exercises_pg.sql*, *scripts\patient_exercises_pg.sql*, *scripts\sessions_pg.sql*, and *scripts\exercise_occurrences_pg.sql*
+- Added therapist ownership, `camera`/`manual` monitoring mode, and archive metadata for exercises; custom exercises default to manual monitoring until a validated registry definition exists
+- Added prescription archive metadata plus occurrence completion/cancellation metadata so ended work remains distinguishable from deleted or still-actionable work
+- Replaced the table-wide patient/exercise uniqueness constraint with an active-row partial unique index, allowing later reassignment without overwriting an archived prescription snapshot
+- Changed the four history-bearing exercise, prescription, occurrence, and session foreign keys from cascading deletion to `ON DELETE RESTRICT`
+- Kept the scripts idempotent, applied them as the PostgreSQL table owner, and verified the new columns, constraints, and partial index on the live schema
+
+### *web\src\lib\db.ts*, *web\src\lib\exercises\prescriptionStatus.ts*, *web\src\lib\exercises\prescriptionStatus.test.ts*, and *web\src\lib\dataPreservation.test.ts*
+- Replaced assignment removal with archival and cancellation of only future/open pending occurrences; completed occurrences and all recorded session evidence remain intact
+- Replaced custom-exercise deletion with archival, ended active prescriptions safely, and retained copied program history after the catalog link is removed
+- Enforced custom-exercise therapist ownership across catalog, update, archive, assignment, and program writes; camera sessions accept only active, uncancelled, registry-supported prescriptions
+- Separated prescription lifecycle (`Upcoming`, `Active`, `Ended`, and `Ended early`) from adherence (`Not started`, `In progress`, `Partially completed`, and `Completed`)
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\lib\exercises\occurrences.ts*, *web\src\lib\exercises\scheduleSessionSummary.ts*, and *web\src\app\api\exercise-occurrences\[id]\route.ts*
+- Limited the patient dashboard's primary exercise action to work that is due today or still inside its make-up window, instead of presenting expired mixed history as currently in progress
+- Replaced the long schedule list with `Today`, `Next session`, and schedule-end summaries; current work remains visible while later and past dates use independently collapsible date groups
+- Added compact completed-session outcomes linked by the exact occurrence ID, selecting the latest completed outcome-bearing attempt without summing retries or guessing links for legacy sessions
+- Added a patient-only `Mark Complete` action for manual custom tasks; camera-monitored occurrences still complete only through recorded sessions
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\sessionReadModels.test.ts*
+- Split current and ended prescription sections from `Completed Exercise Outcomes`, allowing an ended prescription to show its actual completed-versus-scheduled adherence result
+- Restored the session-level average compensation projection used by therapist form-quality summaries
+- Added capture-ready frame coverage and coarse browser/platform context to session drill-downs without exposing the stored full user-agent string
+- Added set-level dynamic form quality using only authoritative raw repetition scores with sufficient coverage; smoothed live scores remain audit-only
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*, *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\app\api\exercises\route.ts*, *web\src\app\api\exercises\[id]\route.ts*, and the patient-exercise/program API routes
+- Kept built-in exercises read-only for therapists while allowing them to edit or archive only their own manual custom tasks
+- Surfaced assignment, save, and archive API failures instead of treating rejected writes as successful UI updates
+- Enforced ownership and monitoring-mode rules when custom exercises are listed, changed, assigned, or added to programs
+
+### *web\src\lib\pose\repQuality.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\app\(app)\camera\CameraClient.tsx*, and *web\src\app\api\sessions\[id]\rep-events\route.ts*
+- Added independent per-side raw-sample buffers finalized by the existing smoothed repetition boundaries, without feeding smoothed display values into analytics or future ML features
+- Persisted a strict version-1 payload with `rawRule`, `liveRule`, and `rawFeatures` branches plus coverage and `mlEligible`; low-coverage repetitions remain visible but are excluded from model-ready data
+- Added payload size, structure, range, and version validation at the API boundary and wired the existing `rep_events.compensations` JSONB field through database insert and therapist readback
+- Removed the placeholder exercise video and replaced it with an explicit written-guidance fallback; no camera frames or video are stored or transmitted
+
+### *web\src\app\(app)\layout.tsx*, *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, and *web\src\app\(app)\dashboard\therapist\patients\page.tsx*
+- Added a protected application layout that waits for the database-backed current-user check before rendering camera or role-specific dashboard content
+- Redirected signed-out or archived users to login and redirected authenticated users away from dashboards for the wrong role
+- Reworked notification audio compatibility, callbacks, and initial polling so the component remains typed and does not synchronously update state from its mounting effect
+- Removed the hardcoded sample-video player from administrative and therapist surfaces and cleared the remaining full-project ESLint warnings
+
+### *Validation*
+- `npx tsc --noEmit --pretty false` passed from `web`
+- Full `npm run lint` passed with **0 errors and 0 warnings**
+- All **24** framework-free TypeScript regression suites passed with **0 failures**, including data-preservation, prescription-status, session-read-model, schedule-summary, occurrence, and dynamic repetition-quality coverage
+- `npm run build` passed under Next.js 16.2.6 and generated all **34** routes; the existing multiple-lockfile workspace-root warning remains non-blocking
+- Applied and read back the four live PostgreSQL migrations, confirming all archival/ownership/monitoring/cancellation/completion fields, four restrictive history foreign keys, and the active-prescription partial unique index
+- Authenticated patient and therapist checks confirmed ended-prescription adherence, exact occurrence-linked outcomes, compensation averages, capture coverage, sanitized device context, manual-task behavior, and archive authorization
+- A live 1280 × 720 camera session persisted six repetition events (three per side) and one L3/R3 set at 98% capture readiness; every repetition contained the three versioned quality branches, and therapist drill-down reported 0% count asymmetry and a 98/100 raw-rule form score
+- `git diff --check` passed with line-ending normalization warnings only; source scans found no exercise/prescription hard-delete SQL, placeholder sample-video reference, ML model change, or temporary verification artifact
+
+### *Remaining follow-up*
+- Keep calibrated ML inference and dashboard writeback deferred until a frozen real-data collection protocol and untouched evaluation cohort exist
+- Add the before-collection schema fields for load, pain/stop-pain, frequency/adherence, prescription side, registry version, and therapist review labels
+- Obtain clinician-approved decisions for the `ex_004` assisted-hold target and the deferred `ex_005` threshold retune
+
 ## 📌 Update-7-11-26
 
 - Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline

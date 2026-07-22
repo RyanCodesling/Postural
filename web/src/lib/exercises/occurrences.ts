@@ -33,6 +33,10 @@ export type OccurrenceState =
   | "overdue"
   | "missed";
 
+// Patient schedule-page sections. "current" includes anything due today plus
+// unfinished earlier work whose make-up window remains open.
+export type ScheduleBucket = "current" | "upcoming" | "history";
+
 // Per-calendar-day rollup across every occurrence due that day.
 export type DayState = "rest" | "due" | "overdue" | "partial" | "missed" | "complete";
 
@@ -164,6 +168,31 @@ export function deriveOccurrenceState(
   if (occ.dueDate === todayKey) return "due";
   // past due, not completed: still make-up-able until the window closes.
   return occ.makeupUntil >= todayKey ? "overdue" : "missed";
+}
+
+// Mirrors the server-side session-start gate: only unfinished work whose due
+// date has arrived and whose make-up window is still open is actionable today.
+// Keeping this separate from assignment-level rollups prevents old, mixed
+// completion history from looking like a currently startable prescription.
+export function isOccurrenceActionable(
+  occ: OccurrenceLite,
+  todayKey: string
+): boolean {
+  return (
+    occ.status !== "completed" &&
+    occ.dueDate <= todayKey &&
+    occ.makeupUntil >= todayKey
+  );
+}
+
+export function classifyScheduleOccurrence(
+  occ: OccurrenceLite,
+  todayKey: string
+): ScheduleBucket {
+  if (occ.dueDate === todayKey || isOccurrenceActionable(occ, todayKey)) {
+    return "current";
+  }
+  return occ.dueDate > todayKey ? "upcoming" : "history";
 }
 
 // Collapse all occurrences due on one calendar day into a single calendar state.

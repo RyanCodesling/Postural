@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS patient_exercises (
   id            SERIAL       PRIMARY KEY,
-  exercise_id   VARCHAR(50)  NOT NULL REFERENCES exercises(id)  ON DELETE CASCADE,
+  exercise_id   VARCHAR(50)  NOT NULL REFERENCES exercises(id)  ON DELETE RESTRICT,
   patient_id    VARCHAR(50)  NOT NULL REFERENCES users(id)      ON DELETE CASCADE,
   assigned_date DATE         NOT NULL DEFAULT CURRENT_DATE,
   status        VARCHAR(20)  NOT NULL DEFAULT 'pending'
@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS patient_exercises (
   -- side accumulates this many seconds in the target band.
   hold_seconds  INT          NOT NULL DEFAULT 30,
   created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (exercise_id, patient_id)
+  archived_at   TIMESTAMPTZ,
+  archived_by   VARCHAR(50)  REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_pe_patient_id   ON patient_exercises (patient_id);
@@ -33,6 +34,25 @@ ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS rest_seconds INT NOT NULL
 ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS assigned_date DATE NOT NULL DEFAULT CURRENT_DATE;
 -- Per-prescription target hold duration, in seconds, for isometric exercises.
 ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS hold_seconds INT NOT NULL DEFAULT 30;
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE patient_exercises ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50)
+  REFERENCES users(id) ON DELETE SET NULL;
+
+-- Older installations used a table-wide UNIQUE constraint. Replacing it with
+-- an active-row partial index preserves archived prescription snapshots while
+-- still preventing duplicate active prescriptions for the same exercise.
+ALTER TABLE patient_exercises
+  DROP CONSTRAINT IF EXISTS patient_exercises_exercise_id_patient_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pe_active_exercise_patient
+  ON patient_exercises (exercise_id, patient_id)
+  WHERE archived_at IS NULL;
+
+-- Defense in depth: ordinary exercise removal must never cascade through a
+-- patient's prescription/session history.
+ALTER TABLE patient_exercises DROP CONSTRAINT IF EXISTS patient_exercises_exercise_id_fkey;
+ALTER TABLE patient_exercises
+  ADD CONSTRAINT patient_exercises_exercise_id_fkey
+  FOREIGN KEY (exercise_id) REFERENCES exercises(id) ON DELETE RESTRICT;
 
 -- ── Recurrence rule ──────────────────────────────────────────────────────────
 -- How this assignment repeats. The rule lives on the assignment; the expanded

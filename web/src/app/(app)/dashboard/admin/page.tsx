@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
-import { SkeletonBar, SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
+import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
@@ -36,7 +36,7 @@ interface Exercise {
 }
 
 export default function AdminDashboard() {
-  const { user, loading, logout } = useAuth();
+  const { user, logout } = useAuth();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -2126,9 +2126,11 @@ export default function AdminDashboard() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              {/* Video Player */}
-              <div className="w-full">
-                <VideoPlayer src="/sample-video.mp4" />
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <p className="text-sm font-semibold text-gray-700">Reference video unavailable</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Use the written instructions below. No verified demonstration video is published yet.
+                </p>
               </div>
 
               {/* Description */}
@@ -2156,9 +2158,9 @@ export default function AdminDashboard() {
                   <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                 </svg>
               </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{deleteTargetName}</span>? This action cannot be undone.
+                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? Existing prescriptions and session history will remain, while future pending tasks are ended.
               </p>
               <div className="flex gap-3">
                 <button
@@ -2173,7 +2175,7 @@ export default function AdminDashboard() {
                   onClick={confirmDeleteExercise}
                   className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
                 >
-                  Delete
+                  Archive
                 </button>
               </div>
             </div>
@@ -2256,50 +2258,6 @@ function AdminExerciseRow({
             )}
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-function VideoPlayer({ src }: { src: string }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  const togglePlay = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!videoRef.current) return;
-    if (isPlaying) {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      videoRef.current.play()
-        .then(() => setIsPlaying(true))
-        .catch((err) => console.error("Video play error:", err));
-    }
-  };
-
-  return (
-    <div
-      className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center cursor-pointer group"
-      onClick={togglePlay}
-    >
-      <video
-        ref={videoRef}
-        src={src}
-        className="w-full h-full object-cover"
-        playsInline
-        onEnded={() => setIsPlaying(false)}
-      />
-      {!isPlaying && (
-        <button
-          onClick={togglePlay}
-          className="absolute p-4 rounded-full bg-white/90 shadow-lg hover:bg-white text-green-700 hover:scale-105 transition flex items-center justify-center z-10"
-          aria-label="Play video"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 fill-current" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        </button>
       )}
     </div>
   );

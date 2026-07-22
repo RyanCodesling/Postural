@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import { getPrograms, createProgram } from "@/lib/db";
+import { getPrograms, createProgram, ProgramExerciseNotAllowedError } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -35,6 +35,9 @@ export async function POST(request: NextRequest) {
     const id = await createProgram({ therapistId: user.id, name, exercises });
     return NextResponse.json({ id }, { status: 201 });
   } catch (error) {
+    if (error instanceof ProgramExerciseNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("POST /api/programs error:", error);
     return NextResponse.json({ error: "Failed to create program" }, { status: 500 });
   }

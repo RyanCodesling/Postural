@@ -101,7 +101,6 @@ function wrapTemplate(title: string, body: string): string {
 export async function sendAccountCreationEmail(
   email: string,
   name: string,
-  _defaultPassword: string
 ): Promise<boolean> {
   const subject = "Welcome to ACC Bacoor Postural Monitoring System";
   const body = `

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 interface Notification {
   id: number;
@@ -25,11 +25,15 @@ export default function NotificationBell() {
   const processedRealtimeIdsRef = useRef<Set<number>>(new Set());
 
   // Synthesize a premium dual-tone bell chime using browser Web Audio API
-  const playChime = () => {
+  const playChime = useCallback(() => {
     try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
+      const AudioContextCtor =
+        window.AudioContext ||
+        (window as Window & typeof globalThis & {
+          webkitAudioContext?: typeof AudioContext;
+        }).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      const ctx = new AudioContextCtor();
 
       // Note 1 (C5)
       const osc1 = ctx.createOscillator();
@@ -59,9 +63,9 @@ export default function NotificationBell() {
     } catch (e) {
       console.warn("Failed to play notification audio alert:", e);
     }
-  };
+  }, []);
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
     try {
       const res = await fetch("/api/notifications");
       if (!res.ok) return;
@@ -113,11 +117,14 @@ export default function NotificationBell() {
     } catch (err) {
       console.error("Failed to load notifications:", err);
     }
-  };
+  }, [playChime]);
 
   useEffect(() => {
-    // Initial fetch
-    fetchNotifications();
+    // Schedule the initial fetch as an external callback so the effect itself
+    // only installs/cleans subscriptions and never synchronously sets state.
+    const initialTimeout = window.setTimeout(() => {
+      void fetchNotifications();
+    }, 0);
 
     // Poll every 3 seconds
     const interval = setInterval(fetchNotifications, 3000);
@@ -131,10 +138,11 @@ export default function NotificationBell() {
     document.addEventListener("mousedown", handleClickOutside);
 
     return () => {
+      clearTimeout(initialTimeout);
       clearInterval(interval);
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, []);
+  }, [fetchNotifications]);
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 

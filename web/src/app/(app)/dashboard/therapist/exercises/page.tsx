@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 interface Exercise {
   id: string;
   name: string;
   description: string;
   is_custom: boolean;
+  monitoring_mode: "camera" | "manual";
 }
 
 export default function ManageExercisesPage() {
@@ -17,6 +18,7 @@ export default function ManageExercisesPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
+  const [actionError, setActionError] = useState("");
 
   // Styled modal states for custom exercise deletion
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -43,6 +45,7 @@ export default function ManageExercisesPage() {
   }, []);
 
   const startEdit = (ex: Exercise) => {
+    setActionError("");
     setEditingId(ex.id);
     setEditDesc(ex.description);
   };
@@ -57,6 +60,7 @@ export default function ManageExercisesPage() {
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
     setSaving(true);
+    setActionError("");
     try {
       const res = await fetch(`/api/exercises/${id}`, {
         method: "PUT",
@@ -67,15 +71,20 @@ export default function ManageExercisesPage() {
         const { exercise } = await res.json();
         setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...exercise } : e)));
         cancelEdit();
+      } else {
+        const body = await res.json().catch(() => null);
+        setActionError(body?.error ?? "Failed to save the exercise.");
       }
     } catch (err) {
       console.error("Error saving exercise:", err);
+      setActionError("Failed to save the exercise.");
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeleteClick = (id: string, name: string) => {
+    setActionError("");
     setDeleteTargetId(id);
     setDeleteTargetName(name);
     setShowDeleteModal(true);
@@ -91,10 +100,14 @@ export default function ManageExercisesPage() {
         setExercises((prev) => prev.filter((e) => e.id !== deleteTargetId));
         setShowDeleteModal(false);
       } else {
-        console.error("Failed to delete exercise");
+        const body = await res.json().catch(() => null);
+        setActionError(body?.error ?? "Failed to archive the exercise.");
+        setShowDeleteModal(false);
       }
     } catch (err) {
       console.error("Error deleting exercise:", err);
+      setActionError("Failed to archive the exercise.");
+      setShowDeleteModal(false);
     } finally {
       setDeleteTargetId(null);
       setDeleteTargetName(null);
@@ -122,7 +135,7 @@ export default function ManageExercisesPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Manage Exercises</h1>
-          <p className="text-gray-600 mt-1">View and edit system and custom exercises.</p>
+          <p className="text-gray-600 mt-1">View built-in exercises and manage your manual custom tasks.</p>
         </div>
         <button
           onClick={loadData}
@@ -132,6 +145,12 @@ export default function ManageExercisesPage() {
           Refresh
         </button>
       </div>
+
+      {actionError && (
+        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {actionError}
+        </div>
+      )}
 
       <div className="mb-6">
         <div className="relative w-full max-w-sm">
@@ -239,9 +258,11 @@ export default function ManageExercisesPage() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              {/* Video Player */}
-              <div className="w-full">
-                <VideoPlayer src="/sample-video.mp4" />
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <p className="text-sm font-semibold text-gray-700">Reference video unavailable</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Use the written instructions below. No demonstration video is published for this exercise yet.
+                </p>
               </div>
 
               {/* Description */}
@@ -268,9 +289,9 @@ export default function ManageExercisesPage() {
                   <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                 </svg>
               </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{deleteTargetName}</span>? This action cannot be undone.
+                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? Existing prescriptions and session history will remain, while future pending tasks are ended.
               </p>
               <div className="flex gap-3">
                 <button
@@ -285,7 +306,7 @@ export default function ManageExercisesPage() {
                   onClick={confirmDeleteExercise}
                   className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
                 >
-                  Delete
+                  Archive
                 </button>
               </div>
             </div>
@@ -342,7 +363,18 @@ function ExerciseRow({
       ) : (
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
-            <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
+              {exercise.is_custom ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                  Manual · no camera
+                </span>
+              ) : (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                  Built-in · view only
+                </span>
+              )}
+            </div>
             <p className="text-xs text-gray-500 mt-1">{exercise.description}</p>
           </div>
           <div className="flex gap-2 ml-4 shrink-0">
@@ -352,18 +384,20 @@ function ExerciseRow({
             >
               View
             </button>
-            <button
-              onClick={onEdit}
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
-            >
-              Edit
-            </button>
+            {exercise.is_custom && (
+              <button
+                onClick={onEdit}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
+              >
+                Edit
+              </button>
+            )}
             {exercise.is_custom && onDelete && (
               <button
                 onClick={onDelete}
                 className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 transition"
               >
-                Delete
+                Archive
               </button>
             )}
           </div>
@@ -378,49 +412,5 @@ function RefreshIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
     </svg>
-  );
-}
-
-function VideoPlayer({ src }: { src: string }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  const togglePlay = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!videoRef.current) return;
-    if (isPlaying) {
-      videoRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      videoRef.current.play()
-        .then(() => setIsPlaying(true))
-        .catch((err) => console.error("Video play error:", err));
-    }
-  };
-
-  return (
-    <div
-      className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center cursor-pointer group"
-      onClick={togglePlay}
-    >
-      <video
-        ref={videoRef}
-        src={src}
-        className="w-full h-full object-cover"
-        playsInline
-        onEnded={() => setIsPlaying(false)}
-      />
-      {!isPlaying && (
-        <button
-          onClick={togglePlay}
-          className="absolute p-4 rounded-full bg-white/90 shadow-lg hover:bg-white text-green-700 hover:scale-105 transition flex items-center justify-center z-10"
-          aria-label="Play video"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 fill-current" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        </button>
-      )}
-    </div>
   );
 }

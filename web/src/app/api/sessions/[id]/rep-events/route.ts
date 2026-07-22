@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { insertRepEvents, getSessionOwner, type RepEventRow } from "@/lib/db";
+import { isDynamicRepQualityV1 } from "@/lib/pose/repQuality";
 
 const SIDES = new Set(["left", "right", "both", "bidirectional"]);
 const CLASSIFICATIONS = new Set(["complete", "partial"]);
@@ -19,6 +20,12 @@ function normalizeRows(raw: unknown): RepEventRow[] | null {
   for (const item of raw) {
     if (item === null || typeof item !== "object") return null;
     const r = item as Record<string, unknown>;
+    const compensations =
+      r.compensations === undefined || r.compensations === null
+        ? null
+        : isDynamicRepQualityV1(r.compensations)
+          ? r.compensations
+          : undefined;
     if (
       !isPositiveInt(r.repIndex) ||
       !isPositiveInt(r.setIndex) ||
@@ -33,7 +40,8 @@ function normalizeRows(raw: unknown): RepEventRow[] | null {
       typeof r.classification !== "string" ||
       !CLASSIFICATIONS.has(r.classification) ||
       !isParseableTs(r.startTs) ||
-      !isParseableTs(r.endTs)
+      !isParseableTs(r.endTs) ||
+      compensations === undefined
     ) {
       return null;
     }
@@ -48,6 +56,7 @@ function normalizeRows(raw: unknown): RepEventRow[] | null {
       descentMs: r.descentMs as number,
       totalMs: r.totalMs as number,
       classification: r.classification as RepEventRow["classification"],
+      compensations,
       startTs: r.startTs as string,
       endTs: r.endTs as string,
     });

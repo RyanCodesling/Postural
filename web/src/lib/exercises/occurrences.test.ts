@@ -4,7 +4,12 @@
  *   npx tsx src/lib/exercises/occurrences.test.ts
  */
 
-import { deriveAssignmentStatus, type OccurrenceLite } from "./occurrences";
+import {
+  classifyScheduleOccurrence,
+  deriveAssignmentStatus,
+  isOccurrenceActionable,
+  type OccurrenceLite,
+} from "./occurrences";
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -105,6 +110,66 @@ test("empty occurrence list falls back to stored assignment status", () => {
   const status = deriveAssignmentStatus([], "2026-06-12", "completed");
 
   assertEqual(status, "completed", "assignment status");
+});
+
+test("expired mixed history is not actionable today", () => {
+  const occurrences = [
+    occ("2026-06-12", "2026-06-12", "completed"),
+    occ("2026-06-13", "2026-06-13", "pending"),
+    occ("2026-06-14", "2026-06-14", "pending"),
+    occ("2026-06-15", "2026-06-15", "pending"),
+    occ("2026-06-16", "2026-06-16", "pending"),
+    occ("2026-06-17", "2026-06-17", "pending"),
+    occ("2026-06-18", "2026-06-18", "pending"),
+    occ("2026-06-19", "2026-06-19", "pending"),
+  ];
+
+  const actionable = occurrences.filter((item) =>
+    isOccurrenceActionable(item, "2026-07-16")
+  );
+
+  assertEqual(actionable.length, 0, "actionable occurrence count");
+});
+
+test("due and open make-up occurrences remain actionable", () => {
+  assertEqual(
+    isOccurrenceActionable(occ("2026-07-16", "2026-07-16", "pending"), "2026-07-16"),
+    true,
+    "due-today occurrence"
+  );
+  assertEqual(
+    isOccurrenceActionable(occ("2026-07-14", "2026-07-17", "pending"), "2026-07-16"),
+    true,
+    "open make-up occurrence"
+  );
+  assertEqual(
+    isOccurrenceActionable(occ("2026-07-16", "2026-07-16", "completed"), "2026-07-16"),
+    false,
+    "completed occurrence"
+  );
+});
+
+test("schedule buckets keep only current work expanded", () => {
+  assertEqual(
+    classifyScheduleOccurrence(occ("2026-07-16", "2026-07-16", "completed"), "2026-07-16"),
+    "current",
+    "completed-today occurrence"
+  );
+  assertEqual(
+    classifyScheduleOccurrence(occ("2026-07-14", "2026-07-17", "pending"), "2026-07-16"),
+    "current",
+    "open make-up occurrence"
+  );
+  assertEqual(
+    classifyScheduleOccurrence(occ("2026-07-20", "2026-07-20", "pending"), "2026-07-16"),
+    "upcoming",
+    "future occurrence"
+  );
+  assertEqual(
+    classifyScheduleOccurrence(occ("2026-07-10", "2026-07-12", "pending"), "2026-07-16"),
+    "history",
+    "expired occurrence"
+  );
 });
 
 console.log(`\n${testsPassed} passed, ${testsFailed} failed`);

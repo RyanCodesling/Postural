@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
@@ -14,7 +14,17 @@ import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
-import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
+import {
+  classifyScheduleOccurrence,
+  isOccurrenceActionable,
+  type OccurrenceStatus,
+} from "@/lib/exercises/occurrences";
+import {
+  groupSessionsByOccurrence,
+  selectCompletedOccurrenceResult,
+  type CompletedOccurrenceResult,
+  type ScheduleSessionRecord,
+} from "@/lib/exercises/scheduleSessionSummary";
 
 interface PatientProfile {
   id: string;
@@ -60,25 +70,16 @@ interface PatientOccurrence {
   reps: number;
   rest_seconds: number;
   hold_seconds: number;
+  monitoring_mode: "camera" | "manual";
 }
 
 // Per-session summary from /api/sessions. Carries the fields the calendar, the
 // exercise tags, and the My Progress trend charts all need (this shape
 // structurally satisfies the shared TrendSession type).
-interface SessionLite {
-  id: number;
+interface SessionLite extends ScheduleSessionRecord {
   exerciseId: string;
   exerciseName: string;
-  exerciseKind: "dynamic" | "isometric" | null;
-  startedAt: string;
-  endedAt: string | null;
-  endReason: string | null;
-  setCount: number;
-  totalReps: number;
   avgPeakValue: number | null;
-  completeLeftReps: number;
-  completeRightReps: number;
-  totalPairedHoldMs: number | null;
 }
 
 type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
@@ -95,6 +96,7 @@ export default function PatientDashboardPage() {
   const [sessions, setSessions] = useState<SessionLite[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [scheduleActionError, setScheduleActionError] = useState("");
 
   useEffect(() => {
     if (loading) return;
@@ -102,7 +104,7 @@ export default function PatientDashboardPage() {
     setPageLoading(false);
   }, [user, loading, router]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id) return;
     try {
       const [profileRes, exercisesRes, sessionsRes] = await Promise.all([
@@ -131,11 +133,29 @@ export default function PatientDashboardPage() {
     } finally {
       setPageLoading(false);
     }
+  }, [user?.id]);
+
+  const handleOccurrenceStart = async (occurrence: PatientOccurrence) => {
+    setScheduleActionError("");
+    if (occurrence.monitoring_mode === "camera") {
+      router.push(`/camera?exerciseId=${occurrence.exercise_id}`);
+      return;
+    }
+
+    const response = await fetch(`/api/exercise-occurrences/${occurrence.id}`, {
+      method: "PATCH",
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      setScheduleActionError(body?.error ?? "Could not complete the manual exercise.");
+      return;
+    }
+    await loadData();
   };
 
   useEffect(() => {
-    if (!loading && user?.id) loadData();
-  }, [user?.id, loading]);
+    if (!loading && user?.id) void loadData();
+  }, [user?.id, loading, loadData]);
 
   const NAV_TABS: { key: ActiveTab; label: string; Icon: () => React.ReactElement }[] = [
     { key: "dashboard",    label: "Dashboard",    Icon: PatHomeIcon     },
@@ -169,6 +189,19 @@ export default function PatientDashboardPage() {
       latestSessionByExercise.set(s.exerciseId, s);
     }
   }
+  const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
+
+  const today = sessionTodayPH();
+  const actionableOccurrences = occurrences.filter((occurrence) =>
+    isOccurrenceActionable(
+      {
+        dueDate: occurrence.due_date,
+        makeupUntil: occurrence.makeup_until,
+        status: occurrence.status,
+      },
+      today
+    )
+  );
 
   return (
     <div
@@ -279,38 +312,54 @@ export default function PatientDashboardPage() {
               <div className="bg-white border border-green-200 rounded-2xl p-6">
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <h2 className="text-base font-semibold text-green-700">Your Exercises</h2>
-                  <Link
-                    href="/camera"
-                    className="shrink-0 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
-                  >
-                    Start Session
-                  </Link>
+                  {actionableOccurrences.length > 0 ? (
+                    <Link
+                      href={`/camera?exerciseId=${encodeURIComponent(actionableOccurrences[0].exercise_id)}`}
+                      className="shrink-0 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
+                    >
+                      Start Session
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("session")}
+                      className="shrink-0 px-4 py-2 border border-green-200 text-green-700 hover:bg-green-50 rounded-lg text-sm font-medium transition"
+                    >
+                      View Schedule
+                    </button>
+                  )}
                 </div>
-                {exercises.length === 0 ? (
-                  <p className="text-gray-400 text-sm text-center py-6">
-                    No exercises assigned yet. Your therapist will assign exercises to you.
-                  </p>
+                {actionableOccurrences.length === 0 ? (
+                  <div className="text-center py-6">
+                    <p className="text-gray-600 text-sm font-medium">
+                      No exercises scheduled for today.
+                    </p>
+                    <p className="text-gray-400 text-xs mt-1">
+                      View your schedule for upcoming or previous prescriptions.
+                    </p>
+                  </div>
                 ) : (
                   <div className="space-y-3">
-                    {exercises.map((ex) => {
-                      const latest = latestSessionByExercise.get(ex.exercise_id);
-                      const tag = exerciseStatusTag(
-                        ex.status,
+                    {actionableOccurrences.map((occurrence) => {
+                      const latest = latestSessionByExercise.get(occurrence.exercise_id);
+                      const tag = dashboardOccurrenceStatusTag(
+                        occurrence,
+                        today,
                         latest?.endReason === "user"
                       );
                       return (
                         <div
-                          key={ex.exercise_id}
+                          key={occurrence.id}
                           className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
                         >
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-green-700">{ex.name}</p>
+                            <p className="text-sm font-semibold text-green-700">{occurrence.name}</p>
                             <p className="text-xs text-gray-500 mt-0.5">
-                              {ex.sets} sets ×{" "}
+                              {occurrence.sets} sets ×{" "}
                               {prescriptionTargetText({
-                                exerciseId: ex.exercise_id,
-                                reps: ex.reps,
-                                holdSeconds: ex.hold_seconds,
+                                exerciseId: occurrence.exercise_id,
+                                reps: occurrence.reps,
+                                holdSeconds: occurrence.hold_seconds,
                               })}
                             </p>
                           </div>
@@ -353,141 +402,180 @@ export default function PatientDashboardPage() {
 
         {/* ── Session ── */}
         {activeTab === "session" && (() => {
-          const today = sessionTodayPH();
-          // Group scheduled occurrences by due date (ascending). Each occurrence
-          // is one exercise due on one day; a recurring exercise appears as a
-          // separate row on each of its scheduled days.
-          const sorted = [...occurrences].sort((a, b) =>
-            a.due_date.localeCompare(b.due_date)
+          const bucketFor = (occurrence: PatientOccurrence) =>
+            classifyScheduleOccurrence(
+              {
+                dueDate: occurrence.due_date,
+                makeupUntil: occurrence.makeup_until,
+                status: occurrence.status,
+              },
+              today
+            );
+          const current = occurrences.filter((occurrence) => bucketFor(occurrence) === "current");
+          const upcoming = occurrences.filter((occurrence) => bucketFor(occurrence) === "upcoming");
+          const history = occurrences.filter((occurrence) => bucketFor(occurrence) === "history");
+          const currentGroups = groupScheduleOccurrences(current, "asc");
+          const upcomingGroups = groupScheduleOccurrences(upcoming, "asc");
+          const historyGroups = groupScheduleOccurrences(history, "desc");
+          const nextGroup = upcomingGroups[0] ?? null;
+          const laterGroups = upcomingGroups.slice(1);
+          const startableNow = current.filter((occurrence) =>
+            isOccurrenceActionable(
+              {
+                dueDate: occurrence.due_date,
+                makeupUntil: occurrence.makeup_until,
+                status: occurrence.status,
+              },
+              today
+            )
           );
-          const groups: { date: string; label: string; items: PatientOccurrence[] }[] = [];
-          for (const occ of sorted) {
-            const date = occ.due_date ?? "";
-            const label = date
-              ? new Date(date + "T00:00:00").toLocaleDateString("en-US", {
-                  month: "long", day: "numeric", year: "numeric",
-                })
-              : "No Date";
-            const last = groups[groups.length - 1];
-            if (last && last.date === date) last.items.push(occ);
-            else groups.push({ date, label, items: [occ] });
-          }
-
-          // Adherence to date: completed vs everything scheduled on or before today.
           const dueToDate = occurrences.filter((o) => o.due_date <= today);
-          const completed = dueToDate.filter((o) => o.status === "completed").length;
-          const due = dueToDate.length;
-          const pct = due > 0 ? Math.round((completed / due) * 100) : 0;
-          const total = occurrences.length;
+          const completedToDate = dueToDate.filter((o) => o.status === "completed").length;
+          const completedHistory = history.filter((o) => o.status === "completed").length;
+          const scheduleEndKey = occurrences.reduce<string | null>(
+            (latest, occurrence) => !latest || occurrence.due_date > latest ? occurrence.due_date : latest,
+            null
+          );
+          const scheduleHasEnded = scheduleEndKey !== null && scheduleEndKey < today;
+          const laterCount = laterGroups.reduce((sum, group) => sum + group.items.length, 0);
 
           return (
-            <div>
+            <div className="max-w-5xl">
               <h1 className="text-2xl font-bold text-green-800 mb-1">Session Schedule</h1>
-              <p className="text-gray-500 mb-6">Track your exercises by scheduled date</p>
+              <p className="text-gray-500 mb-6">
+                See what is due now, what comes next, and when the prescription ends.
+              </p>
 
-              {/* Progress card — adherence to date */}
-              {due > 0 && (
-                <div className="bg-white border border-green-200 rounded-2xl p-6 mb-6">
-                  <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-base font-semibold text-green-700">Progress to date</h2>
-                    <span className="text-xl font-bold text-green-700">{completed}/{due}</span>
-                  </div>
-                  <div className="w-full bg-green-100 rounded-full h-3 overflow-hidden">
-                    <div className="bg-green-700 h-full rounded-full transition-all" style={{ width: `${pct}%` }} />
-                  </div>
-                  <p className="text-xs text-green-700 mt-2">{pct}% of scheduled sessions done</p>
+              {scheduleActionError && (
+                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {scheduleActionError}
                 </div>
               )}
 
-              {/* Scheduled groups */}
-              {total === 0 ? (
+              {occurrences.length === 0 ? (
                 <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">
                   No exercises assigned yet. Your therapist will assign exercises to you.
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {groups.map((group) => {
-                    const isToday = group.date === today;
-                    return (
-                      <div key={group.date}>
-                        {/* Date header */}
-                        <div className="flex items-center gap-3 mb-3">
-                          <span className="text-sm font-semibold text-green-800">
-                            Scheduled: {group.label}{isToday && " · Today"}
-                          </span>
-                          <div className="flex-1 h-px bg-green-200" />
-                        </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <ScheduleSummaryCard
+                      label="Today"
+                      value={
+                        startableNow.length > 0
+                          ? `${startableNow.length} ready`
+                          : current.length > 0
+                            ? "All done"
+                            : "Nothing due"
+                      }
+                      detail={
+                        startableNow.some((occurrence) => occurrence.due_date < today)
+                          ? "Includes available make-up work"
+                          : "Only current work appears below"
+                      }
+                    />
+                    <ScheduleSummaryCard
+                      label="Next session"
+                      value={nextGroup ? nextGroup.label : "None scheduled"}
+                      detail={
+                        nextGroup
+                          ? `${nextGroup.items.length} exercise${nextGroup.items.length === 1 ? "" : "s"}`
+                          : "No future prescription dates"
+                      }
+                    />
+                    <ScheduleSummaryCard
+                      label={scheduleHasEnded ? "Schedule ended" : "Schedule ends"}
+                      value={scheduleEndKey ? formatScheduleDate(scheduleEndKey) : "No schedule"}
+                      detail={
+                        dueToDate.length > 0
+                          ? `${completedToDate} of ${dueToDate.length} completed to date`
+                          : "No sessions due yet"
+                      }
+                    />
+                  </div>
 
-                        {/* Occurrences under this date */}
-                        <div className="space-y-3">
-                          {group.items.map((occ) => {
-                            const s = occurrenceCardStyle(occ.status, occ.due_date, occ.makeup_until, today);
-                            return (
-                              <div
-                                key={occ.id}
-                                className={`rounded-2xl border p-5 transition-all ${s.card}`}
-                              >
-                                <div className="flex items-start justify-between mb-3">
-                                  <h3 className="text-base font-semibold text-gray-900">{occ.name}</h3>
-                                  <span className={`text-xs px-3 py-1 rounded-full font-medium ${s.badge}`}>
-                                    {s.label}
-                                  </span>
-                                </div>
-
-                                <div className="flex items-center gap-6">
-                                  <div>
-                                    <p className="text-xs text-gray-500 mb-1">Sets</p>
-                                    <p className="text-lg font-bold text-gray-900">{occ.sets}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-xs text-gray-500 mb-1">
-                                      {prescriptionMetricLabel(occ.exercise_id)}
-                                    </p>
-                                    <p className="text-lg font-bold text-gray-900">
-                                      {prescriptionMetricValue({
-                                        exerciseId: occ.exercise_id,
-                                        reps: occ.reps,
-                                        holdSeconds: occ.hold_seconds,
-                                      })}
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-xs text-gray-500 mb-1">Rest</p>
-                                    <p className="text-lg font-bold text-gray-900">{occ.rest_seconds}s</p>
-                                  </div>
-                                  {s.action === "done" ? (
-                                    <div className="ml-auto flex items-center gap-2">
-                                      <svg className="w-5 h-5 text-green-700" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                      </svg>
-                                      <span className="text-green-700 text-sm font-medium">Done</span>
-                                    </div>
-                                  ) : s.action === "start" ? (
-                                    <button
-                                      onClick={() => router.push(`/camera?exerciseId=${occ.exercise_id}`)}
-                                      className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
-                                    >
-                                      Start Session
-                                    </button>
-                                  ) : s.action === "upcoming" ? (
-                                    <button
-                                      disabled
-                                      title={`Available on ${occ.due_date}`}
-                                      className="ml-auto px-4 py-2 bg-gray-200 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed"
-                                    >
-                                      Start Session
-                                    </button>
-                                  ) : (
-                                    <span className="ml-auto text-sm font-medium text-red-600">Missed</span>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                  <section aria-labelledby="current-schedule-heading">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <h2 id="current-schedule-heading" className="text-base font-semibold text-green-800">
+                        Today & available make-ups
+                      </h2>
+                      <span className="text-xs text-gray-500">
+                        {current.length} item{current.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {currentGroups.length > 0 ? (
+                      <ScheduleDateGroups
+                        groups={currentGroups}
+                        today={today}
+                        initiallyOpen
+                        sessionsByOccurrenceId={sessionsByOccurrenceId}
+                        onStart={handleOccurrenceStart}
+                      />
+                    ) : (
+                      <div className="bg-white border border-green-200 rounded-2xl px-5 py-6">
+                        <p className="text-sm font-semibold text-gray-800">Nothing is due today.</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {nextGroup
+                            ? `Your next scheduled date is ${nextGroup.label}.`
+                            : scheduleHasEnded
+                              ? `This prescription ended on ${formatScheduleDate(scheduleEndKey)}.`
+                              : "No future sessions have been assigned."}
+                        </p>
                       </div>
-                    );
-                  })}
+                    )}
+                  </section>
+
+                  {nextGroup && (
+                    <section aria-labelledby="next-schedule-heading">
+                      <h2 id="next-schedule-heading" className="text-base font-semibold text-green-800 mb-3">
+                        Next scheduled date
+                      </h2>
+                      <ScheduleDateGroups
+                        groups={[nextGroup]}
+                        today={today}
+                        sessionsByOccurrenceId={sessionsByOccurrenceId}
+                        onStart={handleOccurrenceStart}
+                      />
+                    </section>
+                  )}
+
+                  {laterGroups.length > 0 && (
+                    <details className="bg-white border border-green-200 rounded-2xl overflow-hidden">
+                      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-green-800 hover:bg-green-50">
+                        Later schedule
+                        <span className="ml-2 text-xs font-normal text-gray-500">
+                          {laterCount} exercise entries across {laterGroups.length} dates
+                        </span>
+                      </summary>
+                      <div className="border-t border-green-100 p-5">
+                        <ScheduleDateGroups
+                          groups={laterGroups}
+                          today={today}
+                          sessionsByOccurrenceId={sessionsByOccurrenceId}
+                          onStart={handleOccurrenceStart}
+                        />
+                      </div>
+                    </details>
+                  )}
+
+                  {historyGroups.length > 0 && (
+                    <details className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+                      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-gray-800 hover:bg-gray-50">
+                        Past schedule
+                        <span className="ml-2 text-xs font-normal text-gray-500">
+                          {history.length} exercise entries across {historyGroups.length} dates · {completedHistory} completed
+                        </span>
+                      </summary>
+                      <div className="border-t border-gray-100 p-5">
+                        <ScheduleDateGroups
+                          groups={historyGroups}
+                          today={today}
+                          sessionsByOccurrenceId={sessionsByOccurrenceId}
+                          onStart={handleOccurrenceStart}
+                        />
+                      </div>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
@@ -642,26 +730,306 @@ function sessionTodayPH(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
 }
 
-// Maps a patient-exercise status to a dashboard tag. For in_progress we look at
-// the patient's MOST RECENT session and its end_reason: 'user' means the camera
-// End button was pressed → "Ended Early"; anything else (still open = a tab
-// close / navigation / exit, or ended by an exercise-switch / supersession) →
-// "In Progress". Keying on the latest session keeps an old superseded or open
-// row from mislabeling a later End.
-function exerciseStatusTag(
-  status: string,
+interface ScheduleDateGroup {
+  date: string;
+  label: string;
+  items: PatientOccurrence[];
+}
+
+function formatScheduleDate(dateKey: string | null): string {
+  if (!dateKey) return "No schedule";
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function groupScheduleOccurrences(
+  items: PatientOccurrence[],
+  order: "asc" | "desc"
+): ScheduleDateGroup[] {
+  const sorted = [...items].sort((a, b) =>
+    order === "asc"
+      ? a.due_date.localeCompare(b.due_date)
+      : b.due_date.localeCompare(a.due_date)
+  );
+  const groups: ScheduleDateGroup[] = [];
+  for (const occurrence of sorted) {
+    const date = occurrence.due_date ?? "";
+    const last = groups[groups.length - 1];
+    if (last?.date === date) {
+      last.items.push(occurrence);
+    } else {
+      groups.push({ date, label: formatScheduleDate(date), items: [occurrence] });
+    }
+  }
+  return groups;
+}
+
+function ScheduleSummaryCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="bg-white border border-green-200 rounded-xl px-4 py-3 min-w-0">
+      <p className="text-xs font-medium text-gray-500">{label}</p>
+      <p className="text-base font-bold text-green-800 mt-1 truncate" title={value}>{value}</p>
+      <p className="text-xs text-gray-500 mt-1">{detail}</p>
+    </div>
+  );
+}
+
+function ScheduleDateGroups({
+  groups,
+  today,
+  onStart,
+  sessionsByOccurrenceId,
+  initiallyOpen = false,
+}: {
+  groups: ScheduleDateGroup[];
+  today: string;
+  onStart: (occurrence: PatientOccurrence) => Promise<void>;
+  sessionsByOccurrenceId: Map<number, ScheduleSessionRecord[]>;
+  initiallyOpen?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      {groups.map((group) => {
+        const isMakeup = group.date < today && group.items.some((occurrence) =>
+          isOccurrenceActionable(
+            {
+              dueDate: occurrence.due_date,
+              makeupUntil: occurrence.makeup_until,
+              status: occurrence.status,
+            },
+            today
+          )
+        );
+        const heading = group.date === today
+          ? `Today · ${group.label}`
+          : isMakeup
+            ? `Make-up from ${group.label}`
+            : group.label;
+        const completedCount = group.items.filter(
+          (occurrence) => occurrence.status === "completed"
+        ).length;
+
+        return (
+          <details
+            key={group.date}
+            open={initiallyOpen}
+            className="bg-white border border-gray-200 rounded-xl overflow-hidden"
+          >
+            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-green-800 hover:bg-green-50">
+              <span>{heading}</span>
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                {group.items.length} exercise{group.items.length === 1 ? "" : "s"}
+                {completedCount > 0 && ` · ${completedCount} completed`}
+              </span>
+            </summary>
+            <div className="border-t border-gray-100 p-3">
+              <div className="space-y-2">
+                {group.items.map((occurrence) => (
+                  <ScheduleOccurrenceCard
+                    key={occurrence.id}
+                  occurrence={occurrence}
+                  today={today}
+                  onStart={onStart}
+                  sessionsByOccurrenceId={sessionsByOccurrenceId}
+                />
+                ))}
+              </div>
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+function ScheduleOccurrenceCard({
+  occurrence,
+  today,
+  onStart,
+  sessionsByOccurrenceId,
+}: {
+  occurrence: PatientOccurrence;
+  today: string;
+  onStart: (occurrence: PatientOccurrence) => Promise<void>;
+  sessionsByOccurrenceId: Map<number, ScheduleSessionRecord[]>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const style = occurrenceCardStyle(
+    occurrence.status,
+    occurrence.due_date,
+    occurrence.makeup_until,
+    today
+  );
+  const completedResult = occurrence.status === "completed"
+    ? selectCompletedOccurrenceResult(sessionsByOccurrenceId.get(occurrence.id) ?? [])
+    : null;
+
+  return (
+    <div className={`rounded-xl border px-4 py-4 transition-colors ${style.card}`}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h4 className="text-sm font-semibold text-gray-900 min-w-0">{occurrence.name}</h4>
+          {occurrence.monitoring_mode === "manual" && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+              Manual · no camera
+            </span>
+          )}
+        </div>
+        <span className={`shrink-0 text-xs px-2.5 py-1 rounded-full font-medium ${style.badge}`}>
+          {style.label}
+        </span>
+      </div>
+
+      <div className="mt-3 pt-3 border-t border-black/5 flex flex-wrap items-center gap-x-5 gap-y-3">
+        <p className="text-xs text-gray-500">
+          Sets <strong className="ml-1 text-gray-900">{occurrence.sets}</strong>
+        </p>
+        <p className="text-xs text-gray-500">
+          {prescriptionMetricLabel(occurrence.exercise_id)}
+          <strong className="ml-1 text-gray-900">
+            {prescriptionMetricValue({
+              exerciseId: occurrence.exercise_id,
+              reps: occurrence.reps,
+              holdSeconds: occurrence.hold_seconds,
+            })}
+          </strong>
+        </p>
+        <p className="text-xs text-gray-500">
+          Rest <strong className="ml-1 text-gray-900">{occurrence.rest_seconds}s</strong>
+        </p>
+
+        {style.action === "done" ? (
+          <span className="ml-auto text-xs font-semibold text-green-700">✓ Done</span>
+        ) : style.action === "start" ? (
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitting(true);
+              try {
+                await onStart(occurrence);
+              } finally {
+                setSubmitting(false);
+              }
+            }}
+            className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white rounded-lg text-sm font-medium transition"
+          >
+            {submitting
+              ? "Saving..."
+              : occurrence.monitoring_mode === "manual"
+                ? "Mark Complete"
+                : "Start Session"}
+          </button>
+        ) : style.action === "upcoming" ? (
+          <span className="ml-auto text-xs font-medium text-gray-500">
+            Available {formatScheduleDate(occurrence.due_date)}
+          </span>
+        ) : (
+          <span className="ml-auto text-xs font-medium text-red-600">Window closed</span>
+        )}
+      </div>
+
+      {completedResult && (
+        <CompletedSessionSummary
+          occurrence={occurrence}
+          result={completedResult}
+        />
+      )}
+    </div>
+  );
+}
+
+function CompletedSessionSummary({
+  occurrence,
+  result,
+}: {
+  occurrence: PatientOccurrence;
+  result: CompletedOccurrenceResult;
+}) {
+  const session = result.primary;
+  const completedAt = formatSessionTime(session.endedAt ?? session.startedAt);
+  const dose = completedSessionDoseText(session);
+  const duration = formatSessionDuration(session.durationMs);
+
+  return (
+    <div className="mt-3 rounded-lg border border-green-200 bg-white/70 px-3 py-2.5">
+      <p className="text-xs font-semibold text-green-800">
+        Completed {completedAt}
+      </p>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
+        {session.setCount > 0 && (
+          <span>{session.setCount}/{occurrence.sets} sets</span>
+        )}
+        {dose && <span>{dose}</span>}
+        {duration && <span>{duration}</span>}
+        {result.attemptCount > 1 && (
+          <span>{result.attemptCount} attempts</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function completedSessionDoseText(session: ScheduleSessionRecord): string | null {
+  if (session.exerciseKind === "isometric" && (session.totalPairedHoldMs ?? 0) > 0) {
+    return `${formatSessionDuration(session.totalPairedHoldMs)} paired hold`;
+  }
+  if (session.completeLeftReps > 0 || session.completeRightReps > 0) {
+    return `L ${session.completeLeftReps} / R ${session.completeRightReps} complete`;
+  }
+  if (session.completeReps > 0) return `${session.completeReps} complete reps`;
+  if (session.totalReps > 0) return `${session.totalReps} recorded reps`;
+  return null;
+}
+
+function formatSessionTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "Asia/Manila",
+  });
+}
+
+function formatSessionDuration(durationMs: number | null): string | null {
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs <= 0) return null;
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+// Maps one currently actionable occurrence to its dashboard tag. Only an
+// occurrence explicitly stored as in_progress may receive an active-looking
+// label; old assignment history never reaches this helper. For in_progress we
+// still distinguish a user-ended latest attempt from an open/disrupted one.
+function dashboardOccurrenceStatusTag(
+  occurrence: PatientOccurrence,
+  today: string,
   latestEndedByUser: boolean
 ): { label: string; classes: string } {
-  switch (status) {
-    case "completed":
-      return { label: "Completed", classes: "bg-green-100 text-green-700" };
-    case "in_progress":
-      return latestEndedByUser
-        ? { label: "Ended Early", classes: "bg-amber-100 text-amber-700" }
-        : { label: "In Progress", classes: "bg-blue-100 text-blue-700" };
-    default:
-      return { label: "Not Started", classes: "bg-gray-100 text-gray-600" };
+  if (occurrence.status === "in_progress") {
+    return latestEndedByUser
+      ? { label: "Ended Early", classes: "bg-amber-100 text-amber-700" }
+      : { label: "In Progress", classes: "bg-blue-100 text-blue-700" };
   }
+  if (occurrence.due_date < today) {
+    return { label: "Make-up", classes: "bg-amber-100 text-amber-700" };
+  }
+  return { label: "Due today", classes: "bg-blue-100 text-blue-700" };
 }
 
 // Card/badge styling + the action affordance for one scheduled occurrence.

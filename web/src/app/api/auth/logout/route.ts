@@ -1,27 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminNotification } from "@/lib/db";
+import { getAuthenticatedUser } from "@/lib/auth-server";
+import {
+  AUTH_COOKIE_NAME,
+  SESSION_COOKIE_CLEAR_OPTIONS,
+} from "@/lib/session-token";
 
 export async function POST(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  let userName = "";
-  let userRole = "";
-
-  if (authToken) {
-    try {
-      const user = JSON.parse(authToken.value);
-      userName = user.name || "";
-      userRole = user.role || "";
-    } catch (e) {
-      console.error("Failed to parse auth_token on logout", e);
-    }
+  let user = null;
+  try {
+    user = await getAuthenticatedUser(request);
+  } catch (error) {
+    // Logout remains idempotent: even a DB/configuration failure must not stop
+    // the browser from discarding its cookie.
+    console.error("Failed to verify user during logout", error);
   }
 
   // Log logout event for admins if the user is a patient or therapist
-  if (userName && (userRole === "patient" || userRole === "therapist")) {
+  if (user && (user.role === "patient" || user.role === "therapist")) {
     try {
       await createAdminNotification(
         "User Logged Out",
-        `${userName} has logged out.`,
+        `${user.name} has logged out.`,
         "user_logout"
       );
     } catch (err) {
@@ -34,12 +34,11 @@ export async function POST(request: NextRequest) {
     { status: 200 }
   );
 
-  response.cookies.delete({
-    name: "auth_token",
-    path: "/",
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-  });
+  response.cookies.set(
+    AUTH_COOKIE_NAME,
+    "",
+    SESSION_COOKIE_CLEAR_OPTIONS,
+  );
 
   return response;
 }

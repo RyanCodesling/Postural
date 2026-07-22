@@ -1,9 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, createUser, getNextUserId, setMustChangePassword, isEmailTaken } from "@/lib/db";
 import { sendAccountCreationEmail, sendAccountCreatedAdminEmail } from "@/lib/email";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 
 export async function GET(request: NextRequest) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (authenticatedUser.role === "patient") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (authenticatedUser.role === "therapist") {
+      const users = await getUsers({
+        role: "patient",
+        therapistId: authenticatedUser.id,
+      });
+      return NextResponse.json({ users });
+    }
+
     const { searchParams } = request.nextUrl;
     const role = searchParams.get("role") ?? undefined;
     const therapistId = searchParams.get("therapistId") ?? undefined;
@@ -18,12 +36,23 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await request.json();
     const { firstName, middleName, lastName, email, role, dateOfBirth, age, gender,
             therapistIDNum, specialty } = body;
 
     if (!firstName || !lastName || !role) {
       return NextResponse.json({ error: "firstName, lastName, and role are required" }, { status: 400 });
+    }
+    if (role !== "patient" && role !== "therapist") {
+      return NextResponse.json({ error: "role must be patient or therapist" }, { status: 400 });
     }
 
     if (email && await isEmailTaken(email)) {
@@ -72,15 +101,12 @@ export async function POST(request: NextRequest) {
     let emailSent = false;
     if (email) {
       emailSent = true;
-      sendAccountCreationEmail(email, fullName, password).catch((err) =>
+      sendAccountCreationEmail(email, fullName).catch((err) =>
         console.error("Failed to send account creation email:", err)
       );
     }
 
-    const authToken = request.cookies.get("auth_token");
-    const adminEmail = authToken
-      ? (JSON.parse(authToken.value) as { email?: string }).email
-      : undefined;
+    const adminEmail = authenticatedUser.email as string | undefined;
     if (adminEmail) {
       sendAccountCreatedAdminEmail(adminEmail, fullName, email ?? "", role).catch((err) =>
         console.error("Failed to send admin creation notification:", err)

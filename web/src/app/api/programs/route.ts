@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPrograms, createProgram } from "@/lib/db";
-
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
+import { getAuthenticatedUser } from "@/lib/auth-server";
+import { getPrograms, createProgram, ProgramExerciseNotAllowedError } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -27,7 +18,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -44,6 +35,9 @@ export async function POST(request: NextRequest) {
     const id = await createProgram({ therapistId: user.id, name, exercises });
     return NextResponse.json({ id }, { status: 201 });
   } catch (error) {
+    if (error instanceof ProgramExerciseNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("POST /api/programs error:", error);
     return NextResponse.json({ error: "Failed to create program" }, { status: 500 });
   }

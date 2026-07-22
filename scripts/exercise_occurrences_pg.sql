@@ -14,10 +14,13 @@
 
 CREATE TABLE IF NOT EXISTS exercise_occurrences (
   id                  SERIAL       PRIMARY KEY,
-  patient_exercise_id INTEGER      NOT NULL REFERENCES patient_exercises(id) ON DELETE CASCADE,
+  patient_exercise_id INTEGER      NOT NULL REFERENCES patient_exercises(id) ON DELETE RESTRICT,
   due_date            DATE         NOT NULL,
   status              VARCHAR(20)  NOT NULL DEFAULT 'pending'
                                    CHECK (status IN ('pending', 'in_progress', 'completed')),
+  completed_at        TIMESTAMPTZ,
+  cancelled_at        TIMESTAMPTZ,
+  cancelled_by        VARCHAR(50)  REFERENCES users(id) ON DELETE SET NULL,
   created_at          TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (patient_exercise_id, due_date)
 );
@@ -30,6 +33,18 @@ CREATE INDEX IF NOT EXISTS idx_occ_due ON exercise_occurrences (due_date);
 -- once today passes makeup_until; for daily/consecutive schedules makeup_until
 -- equals due_date (no make-up). Legacy single occurrences get due_date (no window).
 ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS makeup_until DATE;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(50)
+  REFERENCES users(id) ON DELETE SET NULL;
+
+-- Defense in depth: prescriptions with schedule/session history cannot be
+-- hard-deleted accidentally. Application removal uses archive/cancel fields.
+ALTER TABLE exercise_occurrences
+  DROP CONSTRAINT IF EXISTS exercise_occurrences_patient_exercise_id_fkey;
+ALTER TABLE exercise_occurrences
+  ADD CONSTRAINT exercise_occurrences_patient_exercise_id_fkey
+  FOREIGN KEY (patient_exercise_id) REFERENCES patient_exercises(id) ON DELETE RESTRICT;
 
 -- Link a session to the specific scheduled day it fulfilled. Kept NULL when a
 -- patient trains on a day nothing was due (an extra/unscheduled session — extra

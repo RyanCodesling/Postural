@@ -46,6 +46,17 @@ def deviation_channels(comp_metrics: tuple[str, ...]) -> tuple[str, ...]:
     return ("rom",) + tuple(comp_metrics) + BASE_PRIMARY_CHANNELS
 
 
+# Isometric counterpart: a hold has no ROM/tempo axis, so the budget lands on
+# band placement ("band" = holding low/off-center), tremor, sag (drifting down
+# through the hold), plus the shared asym/fatigue axes. Same layout discipline:
+# the structural channel first, comp channels next, shared axes last.
+ISO_PRIMARY_CHANNELS = ("tremor", "sag", "asym", "fatigue")
+
+
+def iso_deviation_channels(comp_metrics: tuple[str, ...]) -> tuple[str, ...]:
+    return ("band",) + tuple(comp_metrics) + ISO_PRIMARY_CHANNELS
+
+
 @dataclass(frozen=True)
 class CompProfile:
     """How a compensation metric reads at rest vs. under severity (its own units)."""
@@ -117,6 +128,24 @@ def sample_session_severity(
     return {c: float(delta * w) for c, w in zip(channels, mix)}
 
 
+def sample_hold_severity(
+    label: int, comp_metrics: tuple[str, ...], rng: np.random.Generator
+) -> dict[str, float]:
+    """
+    Isometric sibling of sample_session_severity: identical class-conditional
+    overlapping delta draws and Dirichlet split, over the isometric deviation
+    channels (band/tremor/sag instead of rom/tempo/jerk). Kept as a separate
+    function so the dynamic framings' RNG draw order is untouched.
+    """
+    channels = iso_deviation_channels(comp_metrics)
+    if label == 0:
+        delta = float(rng.beta(1.5, 6.0))
+    else:
+        delta = float(0.22 + 0.60 * rng.beta(2.0, 2.2))
+    mix = rng.dirichlet(np.full(len(channels), 0.8))
+    return {c: float(delta * w) for c, w in zip(channels, mix)}
+
+
 @dataclass
 class RepResult:
     """One synthesized repetition: raw channels plus identifying metadata."""
@@ -170,7 +199,15 @@ def synthesize_rep(
     rep_pos_in_set: float,        # 0..1 position within the set (drives fatigue)
     side_sign: float,             # +1 right, -1 left (applies subject asymmetry)
     rng: np.random.Generator,
-    meas_noise_deg: float = 1.2,  # per-frame measurement noise (MediaPipe ~3 deg p2p)
+    # Primary-trajectory scale, in the PRIMARY metric's own units. Defaults are
+    # degree-scale (abduction/flexion exercises); an exercise whose primary is
+    # body-normalized (e.g. ex_007's wristShoulderVertical) overrides them via
+    # framings._primary_scale. Keeping the degree defaults makes this a byte-
+    # identical no-op for every degree-scale exercise (same rng draws).
+    meas_noise: float = 1.2,                        # per-frame measurement noise (deg: MediaPipe ~3deg p2p)
+    rest_range: tuple[float, float] = (3.0, 8.0),   # apparent resting primary level
+    jerk_tremor_gain: float = 1.5,                  # absolute tremor added per unit of jerk severity
+    coupled: dict[str, tuple[float, float]] | None = None,  # metric -> (intercept, slope)
 ) -> RepResult:
     """Render one rep's primary + compensation channels from its target spec."""
     total_sev = float(sum(severity.values()))
@@ -200,7 +237,7 @@ def synthesize_rep(
     n_hold = max(int(round(hold_s * FPS)), 1)
     n_desc = max(int(round(descent_s * FPS)), 2)
 
-    rest = float(rng.uniform(3.0, 8.0))  # apparent resting abduction from landmark noise
+    rest = float(rng.uniform(*rest_range))  # apparent resting primary level from landmark noise
     asc = rest + (peak - rest) * _ease(n_asc)
     hold = np.full(n_hold, peak)
     desc = peak + (rest - peak) * _ease(n_desc)
@@ -218,20 +255,30 @@ def synthesize_rep(
         primary = primary + amp * _bump(n, center, rng.uniform(0.03, 0.08))
 
     # --- Tremor + measurement noise ----------------------------------------
-    tremor_sd = meas_noise_deg * (0.6 + 1.2 * (1.0 - subject.steadiness)) + 1.5 * severity["jerk"]
+    tremor_sd = meas_noise * (0.6 + 1.2 * (1.0 - subject.steadiness)) + jerk_tremor_gain * severity["jerk"]
     primary = primary + rng.normal(0.0, tremor_sd, size=n)
-    primary = primary + rng.normal(0.0, meas_noise_deg, size=n)
+    primary = primary + rng.normal(0.0, meas_noise, size=n)
 
     # --- Compensation channels (peak near the top of the movement) ----------
     # One channel per metric the exercise tracks. Magnitudes overlap the
     # resting/natural range so the rule's warning bands catch strong cases but
     # miss mild ones -- where the learned model can win.
+    #
+    # For `primary-coupled` metrics, CLEAN form is not flat: the channel rides
+    # the primary-driven expectation (e.g. scapular elevation rises with arm
+    # abduction). We add that expectation as the channel's baseline so the
+    # rule's coupled residual sits ~0 on clean reps and only the severity bump
+    # (excess over the expectation) deducts -- otherwise the synthetic clean
+    # class would contradict the coupled rule and invert the baseline.
     bump = _bump(n, center_frac=n_asc / max(n, 1), width_frac=0.22)
     channels: dict[str, np.ndarray] = {}
     for metric in comp_metrics:
         prof = COMP_PROFILES[metric]
         peak_c = abs(rng.normal(0.0, prof.resting_sd)) + severity[metric] * prof.gain
         chan = peak_c * bump + rng.normal(0.0, prof.frame_noise, size=n)
+        if coupled and metric in coupled:
+            intercept, slope = coupled[metric]
+            chan = chan + (intercept + slope * np.abs(primary))
         channels[metric] = chan.astype(np.float32)
 
     return RepResult(
@@ -241,6 +288,130 @@ def synthesize_rep(
         session_label=session_label,
         set_index=set_index,
         rep_index=rep_index,
+        side=side,
+        severity=total_sev,
+        fps=FPS,
+        primary=primary.astype(np.float32),
+        channels=channels,
+    )
+
+
+def synthesize_hold(
+    *,
+    exercise_id: str,
+    subject_id: int,
+    session_id: int,
+    session_label: int,
+    set_index: int,
+    side: str,
+    subject: SubjectLatents,
+    severity: dict[str, float],     # from sample_hold_severity
+    comp_metrics: tuple[str, ...],
+    band_center: float,             # target band, degrees (registry isometric.targetBand)
+    band_tolerance: float,
+    plateau_s: float,               # intended hold duration at the plateau (seconds)
+    set_pos: float,                 # 0..1 position of this set in the session (drives fatigue)
+    side_sign: float,               # +1 right, -1 left (applies subject asymmetry)
+    rest_range: tuple[float, float],  # resting angle the settle ramp starts from
+    rng: np.random.Generator,
+    meas_noise_deg: float = 1.2,
+    n_frames: int | None = None,    # force total length (shared per-set timeline)
+    coupled: dict[str, tuple[float, float]] | None = None,  # metric -> (intercept, slope)
+) -> RepResult:
+    """
+    Render one isometric hold: settle ramp into the band, a plateau with
+    tremor/wobble, severity-driven low placement, downward sag, and occasional
+    band-exit dips. Magnitudes scale with the band tolerance so the same model
+    serves narrow (neck) and wide (shoulder) bands. rep_index is always 1: the
+    live system runs no rep counter for isometrics; a hold is grouped by
+    (session, set, side).
+    """
+    total_sev = float(sum(severity.values()))
+    tol = float(band_tolerance)
+    # Weak (left) side holds lower under the asymmetry budget, mirroring the
+    # dynamic framing's weak-side ROM loss -- invisible to the rule score.
+    sev_band_eff = severity["band"] + 0.7 * severity["asym"] * max(0.0, -side_sign)
+
+    # --- Frame layout: settle ramp + plateau --------------------------------
+    settle_s = float(np.clip(rng.normal(1.3 * subject.tempo_base, 0.25), 0.6, 3.5))
+    settle_s *= 1.0 + 1.0 * sev_band_eff   # struggling sessions take longer to get up
+    n_settle = max(int(round(settle_s * FPS)), 2)
+    if n_frames is None:
+        n_plateau = max(int(round(plateau_s * FPS)), FPS)
+        n = n_settle + n_plateau
+    else:
+        # Shared timeline: keep the requested total, give the rest to the plateau.
+        n = max(int(n_frames), 4)
+        n_settle = min(n_settle, max(int(0.6 * n), 2))
+        n_plateau = n - n_settle
+
+    # --- Plateau placement (degrees) ----------------------------------------
+    # Good holds sit near center with per-hold variation; severity pushes the
+    # hold low (toward / below the lower band edge), gradedly.
+    offset = rng.normal(0.0, 0.25 * tol)
+    offset += side_sign * 0.5 * subject.asymmetry * band_center  # baseline L/R difference
+    offset -= sev_band_eff * tol * rng.uniform(1.2, 2.2)
+    plateau_target = band_center + offset
+
+    rest = float(rng.uniform(*rest_range))
+    asc = rest + (plateau_target - rest) * _ease(n_settle)
+    plateau = np.full(n_plateau, plateau_target)
+    # Sag: linear downward drift across the plateau (fatigued holds fade).
+    sag_total = tol * (1.1 * severity["sag"]
+                       + 1.4 * severity["fatigue"] * subject.fatigue_suscept * set_pos)
+    plateau = plateau - sag_total * np.linspace(0.0, 1.0, max(n_plateau, 1))
+    primary = np.concatenate([asc, plateau])
+
+    # --- Band-exit dips ------------------------------------------------------
+    # Poisson count of brief drops out of the band; more when tremulous,
+    # sagging, or unsteady. Width 0.5-1.5 s, centered in the plateau region.
+    lam = 0.4 + 9.0 * severity["tremor"] + 4.5 * severity["sag"] + 1.0 * (1.0 - subject.steadiness)
+    n_dips = int(rng.poisson(lam))
+    plateau_start_frac = n_settle / max(n, 1)
+    for _ in range(n_dips):
+        amp = rng.uniform(0.9, 2.0) * tol
+        center_frac = rng.uniform(plateau_start_frac, 1.0)
+        width_frac = rng.uniform(0.5, 1.5) * FPS / max(n, 1)
+        primary = primary - amp * _bump(n, center_frac, width_frac)
+
+    # --- Tremor + wobble + measurement noise --------------------------------
+    tremor_sd = meas_noise_deg * (0.6 + 1.2 * (1.0 - subject.steadiness)) + 0.35 * tol * severity["tremor"]
+    primary = primary + rng.normal(0.0, tremor_sd, size=n)
+    # Slow postural wobble so unsteadiness is graded, not just white noise.
+    wobble_amp = 0.2 * tol * (severity["tremor"] + 0.3 * (1.0 - subject.steadiness))
+    wobble_hz = rng.uniform(0.2, 0.6)
+    phase = rng.uniform(0.0, 2.0 * np.pi)
+    t = np.arange(n) / FPS
+    primary = primary + wobble_amp * np.sin(2.0 * np.pi * wobble_hz * t + phase)
+    primary = primary + rng.normal(0.0, meas_noise_deg, size=n)
+
+    # --- Compensation channels (sustained through the hold) ------------------
+    # Unlike a dynamic rep's mid-movement bump, hold compensation is a level
+    # held for the duration, easing in with the settle and creeping up as the
+    # hold tires. Magnitudes overlap the rule's warning bands as in the
+    # dynamic framing.
+    ease_in = np.concatenate([_ease(n_settle), np.ones(n - n_settle)])
+    creep = 1.0 + 0.35 * severity["fatigue"] * np.linspace(0.0, 1.0, n)
+    channels: dict[str, np.ndarray] = {}
+    for metric in comp_metrics:
+        prof = COMP_PROFILES[metric]
+        level = abs(rng.normal(0.0, prof.resting_sd)) + severity[metric] * prof.gain
+        chan = level * ease_in * creep + rng.normal(0.0, prof.frame_noise, size=n)
+        # `primary-coupled` metrics ride the primary-driven expectation on clean
+        # form (e.g. a 90 deg hold already carries baseline scapular elevation);
+        # the severity level then deducts as excess over it. See synthesize_rep.
+        if coupled and metric in coupled:
+            intercept, slope = coupled[metric]
+            chan = chan + (intercept + slope * np.abs(primary))
+        channels[metric] = chan.astype(np.float32)
+
+    return RepResult(
+        exercise_id=exercise_id,
+        subject_id=subject_id,
+        session_id=session_id,
+        session_label=session_label,
+        set_index=set_index,
+        rep_index=1,
         side=side,
         severity=total_sev,
         fps=FPS,

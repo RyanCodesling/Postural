@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserByEmailWithArchived, createAdminNotification } from "@/lib/db";
 import { comparePassword } from "@/lib/crypto";
+import {
+  AUTH_COOKIE_NAME,
+  SESSION_COOKIE_OPTIONS,
+  signSessionToken,
+} from "@/lib/session-token";
 
 export async function POST(request: NextRequest) {
   try {
@@ -46,6 +51,12 @@ export async function POST(request: NextRequest) {
         clinicId: user.clinicId,
       }),
     };
+    const mustChangePassword = user.must_change_password === true;
+    const sessionToken = await signSessionToken({
+      sub: user.id,
+      role: user.role,
+      mustChangePassword,
+    });
 
     // Log admin notification on login (for therapists and patients)
     if (user.role !== "admin") {
@@ -61,20 +72,18 @@ export async function POST(request: NextRequest) {
     }
 
     const response = NextResponse.json(
-      { success: true, user: sessionUser, mustChangePassword: user.must_change_password ?? false },
+      { success: true, user: sessionUser, mustChangePassword },
       { status: 200 }
     );
 
-    response.cookies.set("auth_token", JSON.stringify(sessionUser), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-    });
+    response.cookies.set(
+      AUTH_COOKIE_NAME,
+      sessionToken,
+      SESSION_COOKIE_OPTIONS,
+    );
 
     return response;
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

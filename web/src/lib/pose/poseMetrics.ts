@@ -18,7 +18,13 @@
  * and affects how we interpret angle signs throughout this file.
  */
 
-import type { ExerciseDefinition, MetricName } from "@/lib/exercises/registry";
+import {
+  getCompensationBands,
+  getCompensationScoring,
+  type Band,
+  type ExerciseDefinition,
+  type MetricName,
+} from "@/lib/exercises/registry";
 
 type LM = { x: number; y: number; visibility?: number };
 
@@ -675,76 +681,11 @@ export function computeTrunkLateralLean(
 // many compensation metrics the registry lists.
 
 
-/**
- * Per-metric deduction bands. Each band defines a continuous interpolation
- * range — entering a band scales linearly from `deductionMin` to `deductionMax`.
- * Same banded-with-interpolation approach as the previous scoring code; only
- * the per-metric tables and the weighting changed.
- *
- * Units match the metric:
- *   - angle metrics (neck, shoulder symmetry, trunk lean):    degrees
- *   - displacement metrics (scapular elevation):              torso-length fraction
- *
- * The deduction values below assume each band's full deduction would represent
- * a "saturated" metric. They get scaled by 1/N at score-computation time, where
- * N is the number of compensation metrics for the active exercise.
- */
-type Band = { max: number; deductionMin: number; deductionMax: number };
-
-const COMPENSATION_BANDS: Record<MetricName, Band[]> = {
-  // Neck tilt: 5° normal floor (matches existing severity classifier)
-  neckTilt: [
-    { max: 5,  deductionMin: 0,   deductionMax: 0   },
-    { max: 10, deductionMin: 0,   deductionMax: 35  },
-    { max: 20, deductionMin: 35,  deductionMax: 75  },
-    { max: 30, deductionMin: 75,  deductionMax: 100 },
-  ],
-  // Shoulder symmetry: 3° noise floor
-  shoulderSymmetry: [
-    { max: 3,  deductionMin: 0,   deductionMax: 0   },
-    { max: 7,  deductionMin: 0,   deductionMax: 35  },
-    { max: 12, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
-  ],
-  // Trunk lean: 2° standing-sway floor
-  trunkLean: [
-    { max: 2,  deductionMin: 0,   deductionMax: 0   },
-    { max: 5,  deductionMin: 0,   deductionMax: 35  },
-    { max: 10, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
-  ],
-  // Scapular elevation as compensation: thresholds in normalized torso-length
-  // CHANGE from baseline. Below 0.02 = within noise floor.
-  scapularElevation: [
-    { max: 0.02, deductionMin: 0,   deductionMax: 0   },
-    { max: 0.04, deductionMin: 0,   deductionMax: 35  },
-    { max: 0.06, deductionMin: 35,  deductionMax: 75  },
-    { max: 0.10, deductionMin: 75,  deductionMax: 100 },
-  ],
-
-  // Stubs for compatibility — these metrics exist as MetricName values but
-  // are not currently used as compensation metrics in the registry. If they
-  // ever appear as a compensation entry, replace these placeholder bands.
-  shoulderAbduction:        [{ max: 0, deductionMin: 0, deductionMax: 0 }],
-  shoulderFlexion:          [{ max: 0, deductionMin: 0, deductionMax: 0 }],
-  neckLateralFlexion:       [{ max: 0, deductionMin: 0, deductionMax: 0 }],
-  trunkLateralFlexion:      [{ max: 0, deductionMin: 0, deductionMax: 0 }],
-  shoulderHorizAbd:         [{ max: 0, deductionMin: 0, deductionMax: 0 }],
-
-  // V1 stubs (2026-05-21) — these are compensation metrics on ex_007/ex_008
-  // and contribute via the `warningThreshold` UI flag, but are NOT scored
-  // by `bandedDeduction` in v1. Reason: `elbowFlexion` (interior-angle
-  // convention: lower = worse) and `shoulderElbowDistance` (lower = worse)
-  // would need inverted-bandedDeduction logic to score correctly. Deferred
-  // until live-tuning produces empirical data on what the thresholds should
-  // be. The `warningThreshold` mechanism already provides the per-card UI
-  // flag; the score is the marginal feature for these two.
-  // `wristShoulderVertical` is a primary metric and never scored — stub is
-  // here for type completeness only.
-  elbowFlexion:             [{ max: 180, deductionMin: 0, deductionMax: 0 }],
-  wristShoulderVertical:    [{ max:   1, deductionMin: 0, deductionMax: 0 }],
-  shoulderElbowDistance:    [{ max:   1, deductionMin: 0, deductionMax: 0 }],
-};
+// The deduction bands and the per-metric scoring modes live in the exercise
+// registry (`COMPENSATION_BANDS` / `CompensationMetricSpec.scoring`) so that
+// scoring policy is explicit registry data — PT-reviewable, exported with the
+// rest of the registry, and validated at startup. This module only implements
+// the math over them.
 
 /**
  * bandedDeduction
@@ -772,16 +713,35 @@ function bandedDeduction(absValue: number, bands: Band[]): number {
  * computeCompensationScore
  *
  * Computes a 0–100 score reflecting compensation-pattern quality for the
- * currently active exercise.
+ * currently active exercise. Which metrics score, and how, is declared per
+ * metric in the registry (`CompensationMetricSpec.scoring`):
+ *
+ *   - "off"             → warning-only; excluded from the score AND from the
+ *                         weighting (never dilutes scored metrics).
+ *   - "static" (default)→ banded deduction on `|value|`.
+ *   - "primary-coupled" → banded deduction on the residual
+ *                         `|value − (intercept + slope·|primary|)|`, so
+ *                         movement that is an intrinsic consequence of
+ *                         correct execution is not punished.
  *
  * @param definition  The active exercise from the registry.
- * @param metricValues  A partial map from metric name to its CURRENT absolute
- *                      value. Pass null/undefined for metrics that couldn't
- *                      be computed this frame (e.g. occlusion).
+ * @param metricValues  A partial map from metric name to its CURRENT value.
+ *                      Pass null/undefined for metrics that couldn't be
+ *                      computed this frame (e.g. occlusion).
+ * @param primaryValue  The current primary-metric reading for this frame
+ *                      (same units as the primary). Only consulted by
+ *                      "primary-coupled" metrics; when absent/null they fall
+ *                      back to the static `|value|` deduction. NOTE for
+ *                      per-limb bilateral exercises: `metricValues` carries
+ *                      worst-side compensation values, and which side's
+ *                      primary a coupled metric should pair with is a
+ *                      deliberate open design decision — this parameter
+ *                      exists so coupled constants can land as registry data
+ *                      without an API change.
  *
- * Returns null if NO compensation metrics could be evaluated this frame —
- * this is distinct from "100" (perfect form) and signals to the UI that the
- * score is unavailable rather than perfect.
+ * Returns null if NO scored compensation metrics could be evaluated this
+ * frame — this is distinct from "100" (perfect form) and signals to the UI
+ * that the score is unavailable rather than perfect.
  *
  * If only some compensation metrics are unavailable, the score is computed
  * from those that ARE available, with weighting redistributed equally among
@@ -789,7 +749,8 @@ function bandedDeduction(absValue: number, bands: Band[]): number {
  */
 export function computeCompensationScore(
   definition: ExerciseDefinition,
-  metricValues: Partial<Record<MetricName, number | null>>
+  metricValues: Partial<Record<MetricName, number | null>>,
+  primaryValue?: number | null
 ): number | null {
   const compensations = definition.compensationMetrics;
   if (compensations.length === 0) {
@@ -798,19 +759,17 @@ export function computeCompensationScore(
     return null;
   }
 
-  // Stub-band filter (added 2026-05-21): a
-  // compensation metric whose `COMPENSATION_BANDS` entry has no band with a
-  // positive `deductionMax` is intentionally WARNING-ONLY — visible on the
-  // metric card via its `warningThreshold` flag, but with no contribution
-  // to the 0–100 score. Including it in the equal-weighting would dilute
-  // every real metric's share (e.g., on ex_008 with 4 compensations of which
-  // 2 are stubs, real metrics would only contribute 1/4 each instead of 1/2,
-  // capping the maximum penalty at 50 instead of 100). Filter stubs out
-  // BEFORE computing weights.
-  const isScoredBand = (bands: Band[]): boolean =>
-    bands.some((b) => b.deductionMax > 0);
-  const scored = compensations.filter((c) =>
-    isScoredBand(COMPENSATION_BANDS[c.name]),
+  // Warning-only metrics (`scoring: { mode: "off" }`) are excluded BEFORE
+  // computing weights. Including them in the equal-weighting would dilute
+  // every scored metric's share (e.g., with 2 of 4 compensations warning-only,
+  // scored metrics would only contribute 1/4 each instead of 1/2, capping the
+  // maximum penalty at 50 instead of 100). The bands lookup doubles as a
+  // belt-and-braces guard: `validateRegistry()` already rejects a scored
+  // metric without deduction bands at startup.
+  const scored = compensations.filter(
+    (c) =>
+      getCompensationScoring(c).mode !== "off" &&
+      getCompensationBands(c) !== undefined,
   );
   if (scored.length === 0) return null;
 
@@ -829,13 +788,64 @@ export function computeCompensationScore(
   let totalDeduction = 0;
   for (const c of active) {
     const value = metricValues[c.name] as number;
-    const bands = COMPENSATION_BANDS[c.name];
-    const rawDeduction = bandedDeduction(Math.abs(value), bands);
+    const bands = getCompensationBands(c) as Band[];
+    const scoring = getCompensationScoring(c);
+    // "primary-coupled": deduct on the residual from the expected value at
+    // the current primary reading. Without a primary reading this frame,
+    // fall back to the static |value| deduction rather than skipping the
+    // metric (skipping would inflate the score exactly when tracking is
+    // poorest).
+    const deductionInput =
+      scoring.mode === "primary-coupled" && typeof primaryValue === "number"
+        ? Math.abs(
+            value -
+              (scoring.intercept +
+                scoring.slopePerPrimaryUnit * Math.abs(primaryValue)),
+          )
+        : Math.abs(value);
+    const rawDeduction = bandedDeduction(deductionInput, bands);
     // rawDeduction is on a 0–100 per-metric scale; scale to its weight share.
     totalDeduction += (rawDeduction / 100) * weightPerMetric;
   }
 
   return Math.max(0, Math.min(100, Math.round(100 - totalDeduction)));
+}
+
+/**
+ * worstSideCompensationScore
+ *
+ * Per-limb compensation score for bilateral exercises tracked side-by-side
+ * (ex_001, ex_006). Each side is scored independently with
+ * `computeCompensationScore` — crucially, each side's OWN primary reading
+ * drives any `primary-coupled` metric's expected baseline — and the WORSE
+ * (lower) of the two side scores is surfaced.
+ *
+ * Why per side then min, rather than collapsing to one worst-side metric map
+ * and one primary: a `primary-coupled` metric's expected value depends on
+ * THAT side's primary. Pairing one side's compensation value with the other
+ * side's primary would misattribute intrinsic, primary-driven movement (a
+ * shrug that is correct at 90° abduction would read as compensation when
+ * judged against a barely-raised arm). Scoring each side against its own
+ * primary and taking the minimum keeps the asymmetry signal — a clean arm
+ * cannot mask a compensating one — consistent with the project rule that
+ * bilateral sides are never averaged into a single number.
+ *
+ * Null handling mirrors the single-side contract: a side that yields null (no
+ * scorable metric this frame) is ignored; returns null only when BOTH sides
+ * are null.
+ */
+export function worstSideCompensationScore(
+  definition: ExerciseDefinition,
+  leftMetrics: Partial<Record<MetricName, number | null>>,
+  leftPrimary: number | null | undefined,
+  rightMetrics: Partial<Record<MetricName, number | null>>,
+  rightPrimary: number | null | undefined,
+): number | null {
+  const left = computeCompensationScore(definition, leftMetrics, leftPrimary);
+  const right = computeCompensationScore(definition, rightMetrics, rightPrimary);
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
 }
 
 /**
@@ -1211,7 +1221,8 @@ export function computeScapularElevation(
  * a single bidirectional metric, not a per-side measurement. The
  * parameter exists for signature compatibility with other per-side metrics
  * routed through `computeMetricByName`. The bidirectional-alternating
- * routing in CameraClient takes care of side attribution per rep.
+ * routing in CameraClient attributes sides from the sign (per-side
+ * time-in-band attribution for the ex_004 isometric hold).
  */
 export function computeNeckLateralFlexionSigned(
   landmarks: LM[],
@@ -1776,6 +1787,17 @@ export type ExerciseFrameMetrics = {
     left: number | null;
     right: number | null;
   };
+  /**
+   * Raw compensation channels before worst-side collapsing. Populated for
+   * per-limb exercises so each completed rep can aggregate the compensation
+   * values from its own anatomical side instead of inheriting the other arm's
+   * worst value. Whole-body metrics naturally have the same value on both
+   * sides; limb-specific metrics remain independent.
+   */
+  perSideCompensationMetrics?: {
+    left: Partial<Record<MetricName, number | null>>;
+    right: Partial<Record<MetricName, number | null>>;
+  };
   /** 0–100 compensation-quality score, or null if no compensation data. */
   compensationScore: number | null;
 };
@@ -1806,6 +1828,12 @@ export function computePoseMetricsForExercise(
   const tiltReference = tiltOverride ?? computeTiltReference(landmarks);
   const metrics: Partial<Record<MetricName, number | null>> = {};
   let perSideMetrics: { left: number | null; right: number | null } | undefined;
+  let perSideCompensationMetrics:
+    | {
+        left: Partial<Record<MetricName, number | null>>;
+        right: Partial<Record<MetricName, number | null>>;
+      }
+    | undefined;
 
   // ── Primary metric ──────────────────────────────────────────────────────
   if (definition.kind === "dynamic") {
@@ -1874,6 +1902,9 @@ export function computePoseMetricsForExercise(
     if (definition.bilateral && definition.bilateralMode === "per-limb") {
       const left  = computeMetricByName(landmarks, tiltReference, comp.name, "left");
       const right = computeMetricByName(landmarks, tiltReference, comp.name, "right");
+      perSideCompensationMetrics ??= { left: {}, right: {} };
+      perSideCompensationMetrics.left[comp.name] = left;
+      perSideCompensationMetrics.right[comp.name] = right;
       const direction = comp.compareDirection ?? "above";
       metrics[comp.name] = pickWorstSide(left, right, direction);
     } else {
@@ -1883,7 +1914,13 @@ export function computePoseMetricsForExercise(
 
   const compensationScore = computeCompensationScore(definition, metrics);
 
-  return { tiltReference, metrics, perSideMetrics, compensationScore };
+  return {
+    tiltReference,
+    metrics,
+    perSideMetrics,
+    perSideCompensationMetrics,
+    compensationScore,
+  };
 }
 
 /**

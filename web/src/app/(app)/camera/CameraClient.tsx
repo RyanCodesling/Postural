@@ -29,6 +29,8 @@ import {
   hasMissingTiltReferenceLine,
   computeTrunkLateralFlexionFromNeutralSigned,
   computeTrunkLateralFlexionUncorrectedSigned,
+  computeNeckLateralFlexionSigned,
+  computeShoulderHorizAbduction,
   computeWristShoulderLateral,
   computeWristShoulderVertical,
   type ExerciseFrameMetrics,
@@ -38,10 +40,12 @@ import {
   type CompensationWarningLatch,
 } from "@/lib/pose/compensationWarningState";
 import {
+  getCompensationScoring,
   getExerciseDefinition,
   type ExerciseDefinition,
   type MetricName,
 } from "@/lib/exercises/registry";
+import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
 import { RepCounter, type RepCounterOptions, type RepEvent } from "@/lib/pose/repCounter";
 import {
@@ -50,6 +54,11 @@ import {
   type BidirectionalSide,
 } from "@/lib/pose/bidirectionalRepCounter";
 import { VelocityBidirectionalRepCounter } from "@/lib/pose/velocityBidirectionalRepCounter";
+import {
+  DynamicRepQualityBuffer,
+  type DynamicRepQualityV1,
+  type RepQualityChannel,
+} from "@/lib/pose/repQuality";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -181,6 +190,12 @@ type ResumeSnapshot = {
   completedSets: number;
   currentSetReps: { left: number; right: number };
   pairedHoldMs: number;
+  /**
+   * Per-side hold totals for the current set of a side-split isometric
+   * (ex_004). Optional so snapshots written before the field existed still
+   * parse; absent/zero for per-limb isometrics (which use pairedHoldMs).
+   */
+  sideHoldMs?: { left: number; right: number };
   // Session elapsed (ms) at write time — excludes any away-time, so the timer
   // resumes from where it stopped rather than from wall-clock-since-start.
   elapsedMs: number;
@@ -260,13 +275,26 @@ type CompletedSetRecord = {
   terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
   asymmetryIndex: number;
   /**
-   * Isometric-only (ex_006): milliseconds the patient held a valid T-pose (BOTH
-   * arms in the target band simultaneously) for this set, plus the target.
+   * Isometric-only: milliseconds of credited hold for this set, plus the
+   * target. For a per-limb isometric (ex_006 T-pose) this is the time BOTH
+   * arms were in the target band simultaneously. For a side-split isometric
+   * (ex_004 — per-side holds attributed from the sign of one bidirectional
+   * signal) this is min(leftHoldMs, rightHoldMs): the slower side gates
+   * completion, so the min is the per-side hold credited toward the target.
    * Absent for dynamic (rep-counted) sets, where reps/pairedReps carry the
    * equivalent information.
    */
   pairedHoldMs?: number;
   targetHoldMs?: number;
+  /**
+   * Side-split isometric only (ex_004): the per-side hold totals behind the
+   * `pairedHoldMs` min. Kept separate — NEVER summed — so the live recap can
+   * surface the left/right asymmetry the min alone would hide. (The persisted
+   * set event carries the same per-side detail via holdQuality left/right
+   * inBandMs.)
+   */
+  leftHoldMs?: number;
+  rightHoldMs?: number;
 };
 
 type Prescription = {
@@ -295,6 +323,7 @@ type RepEventPayload = {
   descentMs: number;
   totalMs: number;
   classification: RepEvent["classification"];
+  compensations: DynamicRepQualityV1;
   startTs: string;
   endTs: string;
 };
@@ -306,17 +335,50 @@ type RawTraceLandmark = {
   visibility: number | null;
 };
 
-type Ex007UpperBodyTraceMetrics = {
+/**
+ * Raw per-frame metric payload for the tuning trace (`upper_body_v2`).
+ * Extends the original ex_007-only `ex_007_upper_body_v1` payload with the
+ * metrics the other active exercises need (neck/trunk signed flexion,
+ * horizontal abduction) plus a snapshot of the in-session baselines, so the
+ * offline analysis can reproduce the values the live score sees:
+ *   - scapularElevation as scored = baseline − raw (per side)
+ *   - ex_005 primary as counted   = |uncorrected signed − bidirectional baseline|
+ * All metric values are RAW/unsmoothed (pre One Euro), captured only on
+ * capture-ready frames. No image/video data, ever.
+ */
+type UpperBodyTraceMetrics = {
+  exerciseId: string;
   wristShoulderVertical: { left: number | null; right: number | null };
   wristShoulderLateral: { left: number | null; right: number | null };
   shoulderAbductionDeg: { left: number | null; right: number | null };
   elbowFlexionDeg: { left: number | null; right: number | null };
   scapularElevationRaw: { left: number | null; right: number | null };
   shoulderElbowDistance: { left: number | null; right: number | null };
+  shoulderHorizAbdDeg: { left: number | null; right: number | null };
   trunkLeanDeg: number | null;
   trunkLeanDirection: "left" | "right" | "center" | null;
   shoulderSymmetryDeg: number | null;
   elevatedShoulder: "left" | "right" | "level" | null;
+  /** Abs ear-line tilt (deg) + side, as the neckTilt compensation reads it. */
+  neckTiltDeg: number | null;
+  neckTiltDirection: "left" | "right" | "center" | null;
+  /** Signed ear-line angle (positive = patient's LEFT), pre-abs. */
+  neckLateralFlexionSignedDeg: number | null;
+  /** ex_005 signed head-lean, NOT camera-roll corrected (baseline domain). */
+  trunkLateralFlexionUncorrectedSignedDeg: number | null;
+  /** ex_005 signed head-lean relative to the captured neutral; null until captured. */
+  trunkLateralFlexionFromNeutralSignedDeg: number | null;
+  /**
+   * In-session baseline snapshot (null until captured). `scap*` are the raw
+   * resting projections (scored value = baseline − raw); `bidirectionalPrimary`
+   * is ex_005's neutral hip-to-head lean in the uncorrected-signed domain.
+   */
+  baselines: {
+    scapLeft: number | null;
+    scapRight: number | null;
+    bidirectionalPrimary: number | null;
+  };
+  baselinePhase: "not-needed" | "capturing" | "captured";
   tiltReference: {
     cameraTiltDeg: number;
     confidence: ExerciseFrameMetrics["tiltReference"]["confidence"];
@@ -328,14 +390,16 @@ type Ex007UpperBodyTraceMetrics = {
  * One raw metric-only frame shaped for the `/raw-frames` write API. The
  * landmark payload is deliberately limited to upper-body analysis points plus
  * hips (needed for the trunk-relative coordinate frame); no image/video data.
+ * `ex_007_upper_body_v1` rows (the original ex_007-only trace) remain in the
+ * table; this client only writes `upper_body_v2`.
  */
 type RawFramePayload = {
   frameIndex: number;
   setIndex: number;
   elapsedMs: number;
   capturedAt: string;
-  traceKind: "ex_007_upper_body_v1";
-  metrics: Ex007UpperBodyTraceMetrics;
+  traceKind: "upper_body_v2";
+  metrics: UpperBodyTraceMetrics;
   landmarks: Record<string, RawTraceLandmark | null>;
 };
 
@@ -410,6 +474,24 @@ type RepCounterSet = {
 type BidirectionalCounter =
   | BidirectionalRepCounter
   | VelocityBidirectionalRepCounter;
+
+/**
+ * An isometric exercise whose hold is split by the SIGN of one bidirectional
+ * primary signal (ex_004 neck lateral flexion: positive = patient's LEFT per
+ * the pinned sign convention) rather than by per-limb landmarks (ex_006).
+ * Hold time accrues per side — left while the signed angle sits inside
+ * [center−tol, center+tol], right while inside [−center−tol, −center+tol] —
+ * and a set completes only when BOTH sides reach the prescribed hold (the
+ * slower side gates, preserving the asymmetry signal).
+ */
+function isSideSplitIsometric(def: ExerciseDefinition | null): boolean {
+  return (
+    def !== null &&
+    def.kind === "isometric" &&
+    def.bilateral &&
+    def.bilateralMode === "bidirectional-alternating"
+  );
+}
 
 function createRepCountersForDefinition(
   def: ExerciseDefinition | null,
@@ -590,7 +672,7 @@ function traceLandmark(
   };
 }
 
-function ex007TraceLandmarks(landmarks: NormalizedLandmark[]) {
+function upperBodyTraceLandmarks(landmarks: NormalizedLandmark[]) {
   return {
     leftEar:       traceLandmark(landmarks[7]),
     rightEar:      traceLandmark(landmarks[8]),
@@ -605,14 +687,19 @@ function ex007TraceLandmarks(landmarks: NormalizedLandmark[]) {
   };
 }
 
-function ex007TraceMetrics(
+function upperBodyTraceMetrics(
   landmarks: NormalizedLandmark[],
   raw: ExerciseFrameMetrics,
-): Ex007UpperBodyTraceMetrics {
+  exerciseId: string,
+  baselines: UpperBodyTraceMetrics["baselines"],
+  baselinePhase: UpperBodyTraceMetrics["baselinePhase"],
+): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
   const trunkLean = computeTrunkLateralLean(landmarks, tilt);
   const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt);
+  const neckTilt = computeLateralNeckTilt(landmarks, tilt);
   return {
+    exerciseId,
     wristShoulderVertical: {
       left: finiteNumberOrNull(
         raw.perSideMetrics?.left ??
@@ -663,10 +750,39 @@ function ex007TraceMetrics(
         computeShoulderElbowDistance(landmarks, tilt, "right"),
       ),
     },
+    shoulderHorizAbdDeg: {
+      left: finiteNumberOrNull(
+        computeShoulderHorizAbduction(landmarks, tilt, "left"),
+      ),
+      right: finiteNumberOrNull(
+        computeShoulderHorizAbduction(landmarks, tilt, "right"),
+      ),
+    },
     trunkLeanDeg: finiteNumberOrNull(trunkLean?.angleDeg),
     trunkLeanDirection: trunkLean?.direction ?? null,
     shoulderSymmetryDeg: finiteNumberOrNull(shoulderSymmetry?.angleDeg),
     elevatedShoulder: shoulderSymmetry?.elevatedSide ?? null,
+    neckTiltDeg: finiteNumberOrNull(neckTilt?.angleDeg),
+    neckTiltDirection: neckTilt?.direction ?? null,
+    // Side parameter is ignored by the signed neck metric (single
+    // bidirectional signal); "left" is passed for signature compatibility.
+    neckLateralFlexionSignedDeg: finiteNumberOrNull(
+      computeNeckLateralFlexionSigned(landmarks, tilt, "left"),
+    ),
+    trunkLateralFlexionUncorrectedSignedDeg: finiteNumberOrNull(
+      computeTrunkLateralFlexionUncorrectedSigned(landmarks),
+    ),
+    trunkLateralFlexionFromNeutralSignedDeg:
+      baselines.bidirectionalPrimary !== null
+        ? finiteNumberOrNull(
+            computeTrunkLateralFlexionFromNeutralSigned(
+              landmarks,
+              baselines.bidirectionalPrimary,
+            ),
+          )
+        : null,
+    baselines,
+    baselinePhase,
     tiltReference: {
       cameraTiltDeg: tilt.cameraTiltDeg,
       confidence: tilt.confidence,
@@ -763,6 +879,15 @@ export default function CameraClient() {
   const [fps, setFps] = useState<number | null>(null);
   const fpsFrameCountRef = useRef(0);
   const fpsWindowStartMsRef = useRef(0);
+  // Diagnostic timing split, averaged over the same ~1 s window as FPS:
+  // `infer` is time spent in detectForVideo, `frame` is the whole per-frame
+  // pipeline (detect + readiness + metrics + drawing). The gap is JS/draw
+  // overhead — if infer ≈ frame the loop is inference-bound. Sums are tallied
+  // per frame and flushed to state when the FPS window closes.
+  const [perfMs, setPerfMs] = useState<{ infer: number; frame: number } | null>(null);
+  const inferMsSumRef = useRef(0);
+  const frameMsSumRef = useRef(0);
+  const perfSampleCountRef = useRef(0);
 
   const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
@@ -814,6 +939,10 @@ export default function CameraClient() {
   // the side from the sign at peak while suppressing immediate opposite-side
   // return-stroke overshoot.
   const bidirectionalRepCounterRef = useRef<BidirectionalCounter | null>(null);
+  // Raw/unsmoothed metric samples are buffered independently from the
+  // smoothed RepCounter streams. A completed RepEvent supplies the boundaries
+  // used to finalize and persist one versioned quality summary.
+  const dynamicRepQualityBufferRef = useRef(new DynamicRepQualityBuffer());
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
@@ -834,14 +963,21 @@ export default function CameraClient() {
     right: [],
   });
 
-  // ── Isometric (ex_006 T-pose) time-in-band accumulation ──────────────────
-  // ex_006 is a held T-pose: time accrues only while BOTH arms are in the target
-  // band simultaneously (a real T-pose), so we track ONE paired accumulator
-  // rather than per-side. `left/rightInBandRef` carry the current per-arm in-band
-  // status for the live panel. Reset on set completion, exercise change, session
-  // start, and sustained capture dropout. `holdState` mirrors these for the UI
-  // at the throttled metrics cadence.
+  // ── Isometric time-in-band accumulation ──────────────────────────────────
+  // Two isometric modes share this machinery:
+  //  - per-limb (ex_006 T-pose): time accrues only while BOTH arms are in the
+  //    target band simultaneously (a real T-pose) → ONE paired accumulator
+  //    (`pairedHoldMsRef`); the per-side hold refs stay 0.
+  //  - side-split (ex_004 neck hold): one signed signal, side attributed from
+  //    its sign → per-side accumulators (`left/rightHoldMsRef`); the paired
+  //    accumulator stays 0. Sides are surfaced separately (never merged).
+  // `left/rightInBandRef` carry the current per-side in-band status for the
+  // live panel. Reset on set completion, exercise change, session start, and
+  // sustained capture dropout. `holdState` mirrors these for the UI at the
+  // throttled metrics cadence.
   const pairedHoldMsRef = useRef(0);
+  const leftHoldMsRef = useRef(0);
+  const rightHoldMsRef = useRef(0);
   const leftInBandRef = useRef(false);
   const rightInBandRef = useRef(false);
   // Timestamp of the previous accumulation tick, or null to (re)start the dt
@@ -850,16 +986,21 @@ export default function CameraClient() {
   const lastIsometricTickMsRef = useRef<number | null>(null);
   const [holdState, setHoldState] = useState<{
     pairedSec: number;
+    leftSec: number;
+    rightSec: number;
     leftInBand: boolean;
     rightInBand: boolean;
-  }>({ pairedSec: 0, leftInBand: false, rightInBand: false });
+  }>({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
 
-  // ── Isometric hold-quality accumulators (ex_006) ─────────────────────────────
-  // Running, time-weighted (by frame dt) sums per arm over the CURRENT set, plus
-  // paired in-band bookkeeping and a compensation-score aggregate. Folded into a
+  // ── Isometric hold-quality accumulators ──────────────────────────────────────
+  // Running, time-weighted (by frame dt) sums per side over the CURRENT set, plus
+  // in-band bookkeeping and a compensation-score aggregate. Folded into a
   // HoldQuality summary at set boundary (finalizeHoldQuality) and reset alongside
-  // pairedHoldMsRef. All inputs are RAW per-side angles (smoothing would erase
-  // the steadiness signal). `t` is ms since the set started.
+  // the hold accumulators. All inputs are RAW angles (smoothing would erase the
+  // steadiness signal): per-arm angles for ex_006; for the side-split ex_004 each
+  // side's stream is the |signed angle| while the sign points at that side (so
+  // left-tilt frames feed only the left stats). The "paired" fields read as
+  // "holding either side" for side-split sets. `t` is ms since the set started.
   type HoldSideAccum = {
     w: number;   // Σ dt
     wa: number;  // Σ dt·a
@@ -1143,6 +1284,16 @@ export default function CameraClient() {
   const pendingRepEventsRef = useRef<RepEventPayload[]>([]);
   const rawFrameIndexRef = useRef<number>(0);
   const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
+  // Opt-in tuning-trace recording (patient mode only, default OFF). The ref
+  // mirrors the state for the rAF loop — same stale-closure pattern as
+  // lastCaptureOkRef. Flipping mid-session simply starts/stops buffering;
+  // frame_index stays monotonic, and gaps are an expected trace property.
+  const [tuningTraceEnabled, setTuningTraceEnabledState] = useState(false);
+  const tuningTraceEnabledRef = useRef(false);
+  const setTuningTraceEnabled = useCallback((on: boolean) => {
+    tuningTraceEnabledRef.current = on;
+    setTuningTraceEnabledState(on);
+  }, []);
   // Serial upload chain for raw-frame batches. Each queued request captures its
   // session id + rows, so an end/auto-advance reset cannot redirect an in-flight
   // batch into the next session.
@@ -1184,6 +1335,7 @@ export default function CameraClient() {
     pendingRepEventsRef.current = [];
     rawFrameIndexRef.current = 0;
     pendingRawFramesRef.current = [];
+    dynamicRepQualityBufferRef.current.reset();
   };
 
   /**
@@ -1275,16 +1427,22 @@ export default function CameraClient() {
     ).toISOString();
 
   /**
-   * Buffer one valid active ex_007 frame for patient-session tuning. Inputs are
-   * raw/unsmoothed metric values and selected normalized landmarks only.
+   * Buffer one valid active frame for patient-session threshold/scoring
+   * tuning. Inputs are raw/unsmoothed metric values and selected normalized
+   * landmarks only — never image data. Opt-in: gated on the "Record tuning
+   * trace" toggle (default OFF), so ordinary patient sessions write nothing.
+   * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
+   * now covers every active exercise with the `upper_body_v2` payload.
    */
-  const bufferEx007RawFrame = (
+  const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
     raw: ExerciseFrameMetrics,
     tNow: number,
   ) => {
+    if (!tuningTraceEnabledRef.current) return;
     if (prescriptionRef.current.patientExerciseId === undefined) return;
-    if (activeDefinitionRef.current?.id !== "ex_007") return;
+    const def = activeDefinitionRef.current;
+    if (!def || DEPRECATED_EXERCISE_IDS.has(def.id)) return;
     if (sessionStateRef.current !== "active") return;
 
     pendingRawFramesRef.current.push({
@@ -1292,9 +1450,19 @@ export default function CameraClient() {
       setIndex: completedSetsRef.current + 1,
       elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
       capturedAt: perfToIso(tNow),
-      traceKind: "ex_007_upper_body_v1",
-      metrics: ex007TraceMetrics(landmarks, raw),
-      landmarks: ex007TraceLandmarks(landmarks),
+      traceKind: "upper_body_v2",
+      metrics: upperBodyTraceMetrics(
+        landmarks,
+        raw,
+        def.id,
+        {
+          scapLeft: leftScapBaselineRef.current.value,
+          scapRight: rightScapBaselineRef.current.value,
+          bidirectionalPrimary: bidirectionalBaselineRef.current.value,
+        },
+        baselinePhaseRef.current,
+      ),
+      landmarks: upperBodyTraceLandmarks(landmarks),
     });
 
     if (pendingRawFramesRef.current.length >= RAW_FRAME_UPLOAD_BATCH_SIZE) {
@@ -1335,10 +1503,25 @@ export default function CameraClient() {
   /** Buffer a counted rep for persistence. Pure aside from the ref push. */
   const bufferRepEvent = (event: RepEvent, side: RepEventPayload["side"]) => {
     if (prescriptionRef.current.patientExerciseId === undefined) return;
+    const definition = activeDefinitionRef.current;
     const targetRom =
-      activeDefinitionRef.current?.kind === "dynamic"
-        ? activeDefinitionRef.current.primaryMetric.thresholds.targetROM
+      definition?.kind === "dynamic"
+        ? definition.primaryMetric.thresholds.targetROM
         : 0;
+    const qualityChannel: RepQualityChannel =
+      definition?.bilateralMode === "per-limb" &&
+      (side === "left" || side === "right")
+        ? side
+        : "single";
+    const scoredCompensations =
+      definition?.compensationMetrics.filter(
+        (spec) => getCompensationScoring(spec).mode !== "off",
+      ) ?? [];
+    const compensations = dynamicRepQualityBufferRef.current.finalize(
+      qualityChannel,
+      event,
+      scoredCompensations,
+    );
     pendingRepEventsRef.current.push({
       repIndex: ++globalRepIndexRef.current,
       setIndex: completedSetsRef.current + 1,
@@ -1350,6 +1533,7 @@ export default function CameraClient() {
       descentMs: event.descentDurationMs,
       totalMs: event.totalDurationMs,
       classification: event.classification,
+      compensations,
       startTs: perfToIso(event.startTimeMs),
       endTs: perfToIso(event.endTimeMs),
     });
@@ -1576,6 +1760,10 @@ export default function CameraClient() {
         right: repCountsRef.current.right,
       },
       pairedHoldMs: pairedHoldMsRef.current,
+      sideHoldMs: {
+        left: leftHoldMsRef.current,
+        right: rightHoldMsRef.current,
+      },
       elapsedMs: Math.max(0, performance.now() - sessionStartMsRef.current),
       globalRepIndex: globalRepIndexRef.current,
       rawFrameIndex: rawFrameIndexRef.current,
@@ -1791,11 +1979,40 @@ export default function CameraClient() {
         terminatedBy: "min_reached",
         asymmetryIndex: computeAsymmetryIndex(left, right),
       };
+    } else if (isSideSplitIsometric(def)) {
+      // Side-split isometric (ex_004): each side accrues hold time on its own
+      // (sign-attributed), so the set completes only when BOTH sides reach the
+      // prescribed per-side hold — Model C, the slower side gates. The credited
+      // `pairedHoldMs` is the min; the per-side totals ride along so the recap
+      // (and holdQuality) keep the asymmetry visible.
+      const targetMs = prescriptionRef.current.holdSeconds * 1000;
+      const leftMs = leftHoldMsRef.current;
+      const rightMs = rightHoldMsRef.current;
+      setComplete = Math.min(leftMs, rightMs) >= targetMs;
+      if (!setComplete) return;
+      setRecord = {
+        setIndex: completedSetsRef.current + 1,
+        targetReps: 0,
+        leftReps: 0,
+        rightReps: 0,
+        pairedReps: 0,
+        durationMs:
+          currentSetStartMsRef.current !== null
+            ? tNow - currentSetStartMsRef.current
+            : 0,
+        terminatedBy: "min_reached",
+        asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
+        pairedHoldMs: Math.min(leftMs, rightMs),
+        targetHoldMs: targetMs,
+        leftHoldMs: leftMs,
+        rightHoldMs: rightMs,
+      };
     } else {
-      // Isometric: a set completes when the patient has held a valid T-pose
-      // (BOTH arms in the band simultaneously) for the prescribed duration. The
-      // paired accumulator only advanced on both-in-band frames, so this is a
-      // single threshold — no per-side min() needed.
+      // Per-limb isometric (ex_006): a set completes when the patient has held
+      // a valid T-pose (BOTH arms in the band simultaneously) for the
+      // prescribed duration. The paired accumulator only advanced on
+      // both-in-band frames, so this is a single threshold — no per-side
+      // min() needed.
       const targetMs = prescriptionRef.current.holdSeconds * 1000;
       const pairedMs = pairedHoldMsRef.current;
       setComplete = pairedMs >= targetMs;
@@ -1831,13 +2048,16 @@ export default function CameraClient() {
       leftRepCounterRef.current?.reset();
       rightRepCounterRef.current?.reset();
       bidirectionalRepCounterRef.current?.reset();
+      dynamicRepQualityBufferRef.current.reset();
     } else {
       pairedHoldMsRef.current = 0;
+      leftHoldMsRef.current = 0;
+      rightHoldMsRef.current = 0;
       leftInBandRef.current = false;
       rightInBandRef.current = false;
       lastIsometricTickMsRef.current = null;
       resetHoldQualityAccum();
-      setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+      setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
     }
     resetCompensationWarnings();
     currentSetStartMsRef.current = tNow;
@@ -1941,11 +2161,13 @@ export default function CameraClient() {
       setBaselineSampleProgress(0);
     }
     pairedHoldMsRef.current = 0;
+    leftHoldMsRef.current = 0;
+    rightHoldMsRef.current = 0;
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
     resetHoldQualityAccum();
-    setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+    setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
@@ -1989,8 +2211,10 @@ export default function CameraClient() {
     resetCompensationWarnings();
 
     // Restore the current set's progress (fresh state machines; the counts live
-    // in repCountsRef / pairedHoldMsRef, so detection continues from there).
+    // in repCountsRef / the hold accumulators, so detection continues from there).
     pairedHoldMsRef.current = 0;
+    leftHoldMsRef.current = 0;
+    rightHoldMsRef.current = 0;
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
@@ -2001,13 +2225,19 @@ export default function CameraClient() {
         right: snap.currentSetReps.right,
       };
       setRepCounts({ ...repCountsRef.current });
-      setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+      setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
     } else {
       repCountsRef.current = { left: 0, right: 0 };
       setRepCounts({ left: 0, right: 0 });
       pairedHoldMsRef.current = snap.pairedHoldMs;
+      // Per-side holds for a side-split isometric (ex_004). `sideHoldMs` is
+      // optional (older snapshots predate it) — missing means 0/0.
+      leftHoldMsRef.current = snap.sideHoldMs?.left ?? 0;
+      rightHoldMsRef.current = snap.sideHoldMs?.right ?? 0;
       setHoldState({
         pairedSec: snap.pairedHoldMs / 1000,
+        leftSec: leftHoldMsRef.current / 1000,
+        rightSec: rightHoldMsRef.current / 1000,
         leftInBand: false,
         rightInBand: false,
       });
@@ -2082,10 +2312,19 @@ export default function CameraClient() {
     const def = activeDefinitionRef.current;
     const endedAtMs = performance.now();
     if (def?.kind === "isometric") {
-      // Isometric partial: log the valid-T-pose (both-arms-in-band) hold time
-      // accumulated this set.
-      const pairedMs = pairedHoldMsRef.current;
-      if (pairedMs > 0) {
+      // Isometric partial: log the hold time accumulated this set. Per-limb
+      // (ex_006): the valid-T-pose (both-arms-in-band) paired accumulator.
+      // Side-split (ex_004): per-side accumulators; credited pairedHoldMs is
+      // the min (slower side gates), which can legitimately be 0 when only
+      // one side was held — the per-side fields keep that partial visible.
+      const sideSplit = isSideSplitIsometric(def);
+      const leftMs = leftHoldMsRef.current;
+      const rightMs = rightHoldMsRef.current;
+      const pairedMs = sideSplit
+        ? Math.min(leftMs, rightMs)
+        : pairedHoldMsRef.current;
+      const anyHold = sideSplit ? leftMs > 0 || rightMs > 0 : pairedMs > 0;
+      if (anyHold) {
         const setRecord: CompletedSetRecord = {
           setIndex: completedSetsRef.current + 1,
           targetReps: 0,
@@ -2097,9 +2336,10 @@ export default function CameraClient() {
               ? endedAtMs - currentSetStartMsRef.current
               : 0,
           terminatedBy: "user",
-          asymmetryIndex: 0,
+          asymmetryIndex: sideSplit ? computeAsymmetryIndex(leftMs, rightMs) : 0,
           pairedHoldMs: pairedMs,
           targetHoldMs: prescriptionRef.current.holdSeconds * 1000,
+          ...(sideSplit ? { leftHoldMs: leftMs, rightHoldMs: rightMs } : {}),
         };
         completedSetsLogRef.current.push(setRecord);
         bufferSetEvent(setRecord, def.kind, endedAtMs);
@@ -2565,9 +2805,16 @@ export default function CameraClient() {
       : activeDefinition?.kind === "isometric"
         ? (() => {
             // Hold analogue of the rep formula: each completed set contributes
-            // a full hold; the current set contributes the paired (both-arms-in-
-            // band) hold seconds, capped at the per-set target.
-            const cappedSec = Math.min(holdState.pairedSec, prescription.holdSeconds);
+            // a full hold; the current set contributes its credited hold
+            // seconds, capped at the per-set target. Per-limb (ex_006): the
+            // paired (both-arms-in-band) accumulator. Side-split (ex_004):
+            // each side owes the full hold, so the set is the average of the
+            // two capped per-side holds — finishing one side reads as half
+            // the set, and the faster side's surplus can't advance it further.
+            const cappedSec = isSideSplitIsometric(activeDefinition)
+              ? (Math.min(holdState.leftSec, prescription.holdSeconds) +
+                  Math.min(holdState.rightSec, prescription.holdSeconds)) / 2
+              : Math.min(holdState.pairedSec, prescription.holdSeconds);
             const targetTotalSec = Math.max(
               1,
               prescription.sets * prescription.holdSeconds,
@@ -2795,6 +3042,7 @@ export default function CameraClient() {
       leftRepCounterRef.current = null;
       rightRepCounterRef.current = null;
       bidirectionalRepCounterRef.current = null;
+      dynamicRepQualityBufferRef.current.reset();
       repLogRef.current = { left: [], right: [] };
       neckRepDebugRef.current = [];
       neckRepDebugStartMsRef.current = null;
@@ -2829,11 +3077,13 @@ export default function CameraClient() {
     repCountsRef.current = { left: 0, right: 0 };
     currentSetStartMsRef.current = null;
     pairedHoldMsRef.current = 0;
+    leftHoldMsRef.current = 0;
+    rightHoldMsRef.current = 0;
     leftInBandRef.current = false;
     rightInBandRef.current = false;
     lastIsometricTickMsRef.current = null;
     resetHoldQualityAccumRef.current();
-    setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+    setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
     resetCompensationWarnings();
 
     // Reset filters whenever the exercise changes — old filter history would
@@ -2863,6 +3113,7 @@ export default function CameraClient() {
     leftRepCounterRef.current = null;
     rightRepCounterRef.current = null;
     bidirectionalRepCounterRef.current = null;
+    dynamicRepQualityBufferRef.current.reset();
     repLogRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
@@ -2959,13 +3210,33 @@ export default function CameraClient() {
         setFps(
           Math.round((fpsFrameCountRef.current * 1000) / (nowFrame - fpsWindowStartMsRef.current)),
         );
+        // Flush the timing split accumulated over this window. Sums come from
+        // prior frames (this frame accumulates at the end of the loop), so they
+        // stay matched to perfSampleCountRef.
+        if (perfSampleCountRef.current > 0) {
+          const n = perfSampleCountRef.current;
+          setPerfMs({
+            infer: inferMsSumRef.current / n,
+            frame: frameMsSumRef.current / n,
+          });
+        }
         fpsFrameCountRef.current = 0;
         fpsWindowStartMsRef.current = nowFrame;
+        inferMsSumRef.current = 0;
+        frameMsSumRef.current = 0;
+        perfSampleCountRef.current = 0;
       }
 
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        const results = landmarker.detectForVideo(video, performance.now());
+        // Diagnostic timing: `frameStart` brackets the whole per-frame pipeline
+        // (detect + readiness + metrics + drawing); `inferMs` isolates the
+        // detectForVideo cost. `inferStart` doubles as the detect timestamp,
+        // which must be monotonically increasing.
+        const frameStart = performance.now();
+        const inferStart = frameStart;
+        const results = landmarker.detectForVideo(video, inferStart);
+        const inferMs = performance.now() - inferStart;
 
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -3062,11 +3333,13 @@ export default function CameraClient() {
               };
               let ex005PerFrameCorrectedSignedDeg: number | null = null;
 
-              // Durable ex_007 tuning trace: record RAW/unsmoothed values before
-              // any One Euro filtering or rep-state-machine processing. This
-              // block is already inside capture-readiness `r.ok`, so unreliable
-              // frames remain excluded per the logging discipline.
-              bufferEx007RawFrame(landmarks, raw, tNow);
+              // Durable tuning trace (opt-in, any active exercise): record
+              // RAW/unsmoothed values before any One Euro filtering or
+              // rep-state-machine processing. This block is already inside
+              // capture-readiness `r.ok`, so unreliable frames remain
+              // excluded per the logging discipline. Baseline values read
+              // from the refs are the medians captured in earlier frames.
+              bufferTuningRawFrame(landmarks, raw, tNow);
 
               // Direction strings for compensation overlay labels.
               // computePoseMetricsForExercise only surfaces absolute values in
@@ -3163,6 +3436,15 @@ export default function CameraClient() {
                     : null;
               }
 
+              // Per-side scapular-elevation deltas (baseline − raw), kept
+              // alongside the collapsed worst-side value below so the per-limb
+              // compensation score can evaluate each side against its OWN
+              // primary (see the worst-side score step after smoothing). Null
+              // until the scap baseline is ready, exactly like the collapsed
+              // metricInputs["scapularElevation"].
+              let scapDeltaLeft: number | null = null;
+              let scapDeltaRight: number | null = null;
+
               // ── Scapular elevation compensation baseline ─────────────────
               // For any exercise whose scapularElevation compensation metric
               // carries requiresBaselineCapture, capture 90 resting frames
@@ -3243,6 +3525,8 @@ export default function CameraClient() {
                 if (lb !== null && rb !== null) {
                   const dL = rawScapLeft  !== null ? lb - rawScapLeft  : null;
                   const dR = rawScapRight !== null ? rb - rawScapRight : null;
+                  scapDeltaLeft = dL;
+                  scapDeltaRight = dR;
                   metricInputs["scapularElevation"] =
                     dL === null && dR === null ? null :
                     dL === null               ? dR   :
@@ -3298,6 +3582,87 @@ export default function CameraClient() {
                 smoothedMetrics[metricName] =
                   Math.round(filtered.value * 10) / 10;
                 smoothedMetricVelocities[metricName] = filtered.velocity;
+              }
+
+              // ── Per-frame compensation score ─────────────────────────────
+              // Computed once and reused by the isometric hold-quality
+              // accumulator and the frame-metrics UI update below.
+              //
+              // For per-limb exercises (ex_001 dynamic, ex_006 isometric) each
+              // side is scored against its OWN primary so a `primary-coupled`
+              // metric's expected baseline (scapular elevation rising with
+              // abduction) is anatomically paired, then the WORSE side is
+              // surfaced — a clean arm cannot mask a compensating one. We reuse
+              // the smoothed whole-body metrics for both sides and override
+              // only scapularElevation with that side's raw per-side delta
+              // (trunkLean / shoulderSymmetry are single whole-body measures;
+              // any future scored metric flows through unchanged). Per-side
+              // scap/primary are read raw: their frame jitter (~0.006 scap,
+              // ~1° primary → ~0.0015 expected) sits well below the coupled
+              // residual's 0.02 noise floor, so smoothing would not move the
+              // rounded score. Bidirectional/unilateral exercises pass the
+              // single smoothed primary.
+              const scoreIsPerLimb =
+                activeDefinition.bilateral &&
+                activeDefinition.bilateralMode === "per-limb";
+              let leftFrameCompensationScore: number | null = null;
+              let rightFrameCompensationScore: number | null = null;
+              let frameCompensationScore: number | null;
+              if (scoreIsPerLimb) {
+                leftFrameCompensationScore = computeCompensationScore(
+                  activeDefinition,
+                  { ...smoothedMetrics, scapularElevation: scapDeltaLeft },
+                  raw.perSideMetrics?.left ?? null,
+                );
+                rightFrameCompensationScore = computeCompensationScore(
+                  activeDefinition,
+                  { ...smoothedMetrics, scapularElevation: scapDeltaRight },
+                  raw.perSideMetrics?.right ?? null,
+                );
+                frameCompensationScore =
+                  leftFrameCompensationScore === null
+                    ? rightFrameCompensationScore
+                    : rightFrameCompensationScore === null
+                      ? leftFrameCompensationScore
+                      : Math.min(
+                          leftFrameCompensationScore,
+                          rightFrameCompensationScore,
+                        );
+              } else {
+                const scorePrimaryName =
+                  activeDefinition.kind === "dynamic"
+                    ? activeDefinition.primaryMetric.name
+                    : activeDefinition.isometric.metric;
+                frameCompensationScore = computeCompensationScore(
+                  activeDefinition,
+                  smoothedMetrics,
+                  smoothedMetrics[scorePrimaryName] ?? null,
+                );
+              }
+
+              // Raw feature channels remain separate from the smoothed live
+              // score above. `computePoseMetricsForExercise` exposes per-side
+              // compensation values before worst-side collapsing; the only
+              // transform applied here is the same captured scapular baseline
+              // already used by the live rule path.
+              const rawSingleCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...raw.metrics };
+              const rawLeftCompensations: Partial<
+                Record<MetricName, number | null>
+              > = {
+                ...(raw.perSideCompensationMetrics?.left ?? raw.metrics),
+              };
+              const rawRightCompensations: Partial<
+                Record<MetricName, number | null>
+              > = {
+                ...(raw.perSideCompensationMetrics?.right ?? raw.metrics),
+              };
+              if (needsScapCompBaseline) {
+                rawSingleCompensations.scapularElevation =
+                  metricInputs.scapularElevation ?? null;
+                rawLeftCompensations.scapularElevation = scapDeltaLeft;
+                rawRightCompensations.scapularElevation = scapDeltaRight;
               }
 
               // Near-peak gate for `peakRelevant` compensation warnings
@@ -3431,6 +3796,33 @@ export default function CameraClient() {
                         sessionStateRef.current === "active" &&
                         baselineReadyForExercise;
 
+                      if (sessionIsActive && typeof inputLeft === "number") {
+                        dynamicRepQualityBufferRef.current.add("left", {
+                          tMs: tNow,
+                          rawPrimary: inputLeft,
+                          liveScore: leftFrameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawLeftCompensations,
+                            inputLeft,
+                          ),
+                          rawCompensations: rawLeftCompensations,
+                        });
+                      }
+                      if (sessionIsActive && typeof inputRight === "number") {
+                        dynamicRepQualityBufferRef.current.add("right", {
+                          tMs: tNow,
+                          rawPrimary: inputRight,
+                          liveScore: rightFrameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawRightCompensations,
+                            inputRight,
+                          ),
+                          rawCompensations: rawRightCompensations,
+                        });
+                      }
+
                       if (
                         sessionIsActive &&
                         typeof smoothedLeft === "number" &&
@@ -3534,6 +3926,24 @@ export default function CameraClient() {
                       const sessionIsActive =
                         sessionStateRef.current === "active" &&
                         baselineReadyForExercise;
+                      if (
+                        sessionIsActive &&
+                        typeof rawMetricValue === "number"
+                      ) {
+                        dynamicRepQualityBufferRef.current.add("single", {
+                          tMs: tNow,
+                          // The bidirectional counter operates on magnitude and
+                          // assigns anatomical side from the sign at peak.
+                          rawPrimary: Math.abs(rawMetricValue),
+                          liveScore: frameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawSingleCompensations,
+                            rawMetricValue,
+                          ),
+                          rawCompensations: rawSingleCompensations,
+                        });
+                      }
                       if (counter) {
                         const before = counter.getDebugSnapshot(tNow, rawValue);
                         const rep = sessionIsActive
@@ -3645,6 +4055,23 @@ export default function CameraClient() {
                       // Unilateral. Gate on active session and completed baseline.
                       const counter = leftRepCounterRef.current;
                       if (
+                        sessionStateRef.current === "active" &&
+                        baselineReadyForExercise &&
+                        typeof rawMetricValue === "number"
+                      ) {
+                        dynamicRepQualityBufferRef.current.add("single", {
+                          tMs: tNow,
+                          rawPrimary: rawMetricValue,
+                          liveScore: frameCompensationScore,
+                          rawRuleScore: computeCompensationScore(
+                            activeDefinition,
+                            rawSingleCompensations,
+                            rawMetricValue,
+                          ),
+                          rawCompensations: rawSingleCompensations,
+                        });
+                      }
+                      if (
                         counter &&
                         sessionStateRef.current === "active" &&
                         baselineReadyForExercise
@@ -3667,26 +4094,54 @@ export default function CameraClient() {
                   }
                 }
               } else if (activeDefinition.kind === "isometric") {
-                // ── Isometric time-in-band accumulation (ex_006 T-pose) ──
-                // A valid T-pose requires BOTH arms in the target band at the
-                // same time, so the paired hold accrues only on both-in-band
-                // frames. Per-arm in-band status is computed EVERY frame (even
-                // when idle) so the panel can guide the patient into position;
+                // ── Isometric time-in-band accumulation ──────────────────
+                // Two modes, dispatched on bilateralMode:
+                //  - per-limb (ex_006 T-pose): a valid T-pose requires BOTH
+                //    arms in the target band at the same time, so the paired
+                //    hold accrues only on both-in-band frames.
+                //  - side-split (ex_004 neck hold): ONE signed bidirectional
+                //    signal (positive = patient's LEFT, the pinned sign
+                //    convention); each side accrues its own hold time while
+                //    the signed angle sits inside that side's band. At most
+                //    one side can be in band per frame (the registry enforces
+                //    center − tolerance > 0), so the sides never double-count.
+                // Per-side in-band status is computed EVERY frame (even when
+                // idle) so the panel can guide the patient into position;
                 // accrual + completion only run while the session is active
                 // and any required baseline capture has completed.
-                // Uses RAW perSideMetrics, not smoothed — the ±tolerance band
-                // plus the cumulative nature make per-frame jitter negligible.
+                // Uses RAW values, not smoothed — the ±tolerance band plus
+                // the cumulative nature make per-frame jitter negligible.
                 // The dt clock restarts (null anchor) whenever the session is
                 // not active so a paused/idle gap is never credited; a single
                 // frame is capped at MAX_ISO_TICK_MS to absorb brief flickers.
                 const band = activeDefinition.isometric.targetBand;
                 const lo = band.center - band.tolerance;
                 const hi = band.center + band.tolerance;
-                const inBand = (v: number | null) =>
-                  typeof v === "number" && v >= lo && v <= hi;
-                const perSide = raw.perSideMetrics;
-                const lInBand = !!perSide && inBand(perSide.left);
-                const rInBand = !!perSide && inBand(perSide.right);
+                const sideSplit = isSideSplitIsometric(activeDefinition);
+                let lInBand: boolean;
+                let rInBand: boolean;
+                // Per-side RAW angle streams for the hold-quality stats.
+                let leftAngle: number | null;
+                let rightAngle: number | null;
+                if (sideSplit) {
+                  const signedRaw = raw.metrics[activeDefinition.isometric.metric];
+                  const signed = typeof signedRaw === "number" ? signedRaw : null;
+                  lInBand = signed !== null && signed >= lo && signed <= hi;
+                  rInBand = signed !== null && -signed >= lo && -signed <= hi;
+                  // Each side's quality stream is the |signed angle| while the
+                  // sign points at that side (left-tilt frames feed only the
+                  // left stats); null otherwise so no sample accrues.
+                  leftAngle = signed !== null && signed > 0 ? signed : null;
+                  rightAngle = signed !== null && signed < 0 ? -signed : null;
+                } else {
+                  const inBand = (v: number | null) =>
+                    typeof v === "number" && v >= lo && v <= hi;
+                  const perSide = raw.perSideMetrics;
+                  lInBand = !!perSide && inBand(perSide.left);
+                  rInBand = !!perSide && inBand(perSide.right);
+                  leftAngle = perSide?.left ?? null;
+                  rightAngle = perSide?.right ?? null;
+                }
                 leftInBandRef.current = lInBand;
                 rightInBandRef.current = rInBand;
 
@@ -3707,8 +4162,10 @@ export default function CameraClient() {
                     const t = tNow - acc.setStartMs; // ms since hold started
                     acc.sampleCount += 1;
 
-                    // Per-arm RAW-angle stats. Accumulated even when out of band
-                    // so a sagging arm's angle/error is still captured.
+                    // Per-side RAW-angle stats. For per-limb sets these are
+                    // accumulated even when out of band so a sagging arm's
+                    // angle/error is still captured; for side-split sets each
+                    // side only samples while the sign points at it.
                     const accumSide = (
                       s: HoldSideAccum,
                       v: number | null,
@@ -3724,33 +4181,57 @@ export default function CameraClient() {
                       }
                       if (isIn) s.inBandMs += dt;
                     };
-                    accumSide(acc.left, perSide?.left ?? null, lInBand);
-                    accumSide(acc.right, perSide?.right ?? null, rInBand);
+                    accumSide(acc.left, leftAngle, lInBand);
+                    accumSide(acc.right, rightAngle, rInBand);
 
-                    // Paired (true T-pose) bookkeeping: hold accrual, streak,
-                    // drops, settle time, out-of-position time.
-                    const pairedIn = lInBand && rInBand;
-                    if (pairedIn) {
-                      pairedHoldMsRef.current += dt;
-                      acc.curStreakMs += dt;
-                      if (acc.curStreakMs > acc.longestStreakMs) {
-                        acc.longestStreakMs = acc.curStreakMs;
+                    if (sideSplit) {
+                      // Side-split hold accrual: each side's accumulator
+                      // advances only while ITS band is occupied. Sides stay
+                      // separate (never merged) — the asymmetry between them
+                      // is the clinical signal. The "paired" bookkeeping
+                      // fields read as "holding either side" here: streaks,
+                      // drops, settle, and out-of-position time describe
+                      // whether the patient was holding at all.
+                      if (lInBand) leftHoldMsRef.current += dt;
+                      if (rInBand) rightHoldMsRef.current += dt;
+                      const anyIn = lInBand || rInBand;
+                      if (anyIn) {
+                        acc.curStreakMs += dt;
+                        if (acc.curStreakMs > acc.longestStreakMs) {
+                          acc.longestStreakMs = acc.curStreakMs;
+                        }
+                        if (acc.settleMs === null) acc.settleMs = t;
+                      } else {
+                        acc.outOfPositionMs += dt;
+                        if (acc.prevPairedInBand) acc.dropCount += 1;
+                        acc.curStreakMs = 0;
                       }
-                      if (acc.settleMs === null) acc.settleMs = t;
+                      acc.prevPairedInBand = anyIn;
                     } else {
-                      acc.outOfPositionMs += dt;
-                      if (acc.prevPairedInBand) acc.dropCount += 1;
-                      acc.curStreakMs = 0;
+                      // Paired (true T-pose) bookkeeping: hold accrual, streak,
+                      // drops, settle time, out-of-position time.
+                      const pairedIn = lInBand && rInBand;
+                      if (pairedIn) {
+                        pairedHoldMsRef.current += dt;
+                        acc.curStreakMs += dt;
+                        if (acc.curStreakMs > acc.longestStreakMs) {
+                          acc.longestStreakMs = acc.curStreakMs;
+                        }
+                        if (acc.settleMs === null) acc.settleMs = t;
+                      } else {
+                        acc.outOfPositionMs += dt;
+                        if (acc.prevPairedInBand) acc.dropCount += 1;
+                        acc.curStreakMs = 0;
+                      }
+                      acc.prevPairedInBand = pairedIn;
                     }
-                    acc.prevPairedInBand = pairedIn;
 
-                    // Compensation aggregate. Uses the SAME smoothed metrics the
-                    // UI scores (per the score-from-smoothed decision), which
-                    // also sidesteps the scapularElevation baseline wrinkle.
-                    const score = computeCompensationScore(
-                      activeDefinition,
-                      smoothedMetrics,
-                    );
+                    // Compensation aggregate. Reuses the single per-frame
+                    // score computed above (per-side worst for per-limb holds
+                    // like ex_006, single-primary for side-split ex_004), so
+                    // the hold-quality accumulator and the UI card never
+                    // disagree.
+                    const score = frameCompensationScore;
                     if (typeof score === "number") {
                       // Time-weighted (by dt), consistent with the per-arm
                       // angle stats — answers "what fraction of HOLD TIME was
@@ -3784,21 +4265,19 @@ export default function CameraClient() {
                 setFrameMetrics({
                   tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
                   metrics: smoothedMetrics,
-                  // Recompute the score from the SAME smoothed values the
-                  // metric cards render, not from raw.
-                  // Otherwise a card sitting just under a warning threshold
-                  // can pair with a score that just penalized it. raw.metrics
-                  // is still available separately for the ML/log pipeline.
-                  compensationScore: computeCompensationScore(
-                    activeDefinition,
-                    smoothedMetrics
-                  ),
+                  // Single per-frame score computed above from the SAME
+                  // smoothed values the metric cards render (with per-side
+                  // primaries for per-limb exercises). raw.metrics is still
+                  // available separately for the ML/log pipeline.
+                  compensationScore: frameCompensationScore,
                 });
                 setNearPeak(nearPeakNow);
                 setActiveCompensationWarnings(activeWarningNames);
                 if (activeDefinition.kind === "isometric") {
                   setHoldState({
                     pairedSec: pairedHoldMsRef.current / 1000,
+                    leftSec: leftHoldMsRef.current / 1000,
+                    rightSec: rightHoldMsRef.current / 1000,
                     leftInBand: leftInBandRef.current,
                     rightInBand: rightInBandRef.current,
                   });
@@ -3849,15 +4328,18 @@ export default function CameraClient() {
               leftRepCounterRef.current?.reset();
               rightRepCounterRef.current?.reset();
               bidirectionalRepCounterRef.current?.reset();
+              dynamicRepQualityBufferRef.current.reset();
               // Discard any in-progress isometric hold — a sustained dropout
               // means we couldn't verify the band, so the partial accumulation
               // is stale (matches the rep-counter reset philosophy).
               pairedHoldMsRef.current = 0;
+              leftHoldMsRef.current = 0;
+              rightHoldMsRef.current = 0;
               leftInBandRef.current = false;
               rightInBandRef.current = false;
               lastIsometricTickMsRef.current = null;
               resetHoldQualityAccum();
-              setHoldState({ pairedSec: 0, leftInBand: false, rightInBand: false });
+              setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
               resetCompensationWarnings();
               captureDropoutResetDoneRef.current = true;
             }
@@ -3881,6 +4363,12 @@ export default function CameraClient() {
         }
 
         ctx.restore();
+
+        // Tally this frame's timing for the rolling average (flushed when the
+        // FPS window closes above).
+        inferMsSumRef.current += inferMs;
+        frameMsSumRef.current += performance.now() - frameStart;
+        perfSampleCountRef.current += 1;
       }
     }
 
@@ -3911,6 +4399,10 @@ export default function CameraClient() {
       fpsFrameCountRef.current = 0;
       fpsWindowStartMsRef.current = 0;
       setFps(null);
+      inferMsSumRef.current = 0;
+      frameMsSumRef.current = 0;
+      perfSampleCountRef.current = 0;
+      setPerfMs(null);
     } catch {
       // ignore
     }
@@ -4068,7 +4560,9 @@ export default function CameraClient() {
   const tightLayout = viewportWidth < 720;
   const prescriptionTargetText =
     activeDefinition?.kind === "isometric"
-      ? `${prescription.holdSeconds}s hold`
+      ? isSideSplitIsometric(activeDefinition)
+        ? `${prescription.holdSeconds}s hold/side`
+        : `${prescription.holdSeconds}s hold`
       : activeDefinition?.bilateral
         ? `${prescription.reps} reps/side`
         : `${prescription.reps} reps`;
@@ -4327,7 +4821,37 @@ export default function CameraClient() {
 
             <div style={{ flex: 1 }} />
 
-            {/* Footer: resolution + fps */}
+            {/* Opt-in tuning-trace recording (patient sessions only persist) */}
+            {user?.role === "patient" && (
+              <div style={{
+                padding: "10px 16px",
+                borderTop: "1px solid oklch(0.93 0.003 240)",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+              }}>
+                <input
+                  type="checkbox"
+                  id="tuning-trace-toggle"
+                  checked={tuningTraceEnabled}
+                  onChange={(e) => setTuningTraceEnabled(e.target.checked)}
+                  style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                />
+                <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
+                  <div style={{
+                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                    textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
+                  }}>
+                    Record tuning trace
+                  </div>
+                  <div style={{ fontSize: 11, color: "oklch(0.50 0.01 240)", marginTop: 2 }}>
+                    Saves raw movement metrics (no video) for threshold tuning.
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {/* Footer: resolution + fps + inference/frame-total timing split */}
             <div style={{
               padding: "12px 16px",
               borderTop: "1px solid oklch(0.93 0.003 240)",
@@ -4345,6 +4869,14 @@ export default function CameraClient() {
               <div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame rate</div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{fps !== null ? `${fps} fps` : "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Inference</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame total</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.frame.toFixed(1)} ms` : "—"}</div>
               </div>
             </div>
           </aside>
@@ -4594,6 +5126,11 @@ export default function CameraClient() {
                 const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
                 const heldMs = setsLog.reduce((s, r) => s + (r.pairedHoldMs ?? 0), 0);
                 const targetMs = setsLog.reduce((s, r) => s + (r.targetHoldMs ?? 0), 0);
+                // Side-split isometric (ex_004): per-side hold totals, shown
+                // as separate rows — never merged into one number.
+                const sideSplitIso = isIso && isSideSplitIsometric(def);
+                const leftHeldMs = setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0);
+                const rightHeldMs = setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0);
                 const isPatient = prescription.patientExerciseId !== undefined;
 
                 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
@@ -4619,7 +5156,14 @@ export default function CameraClient() {
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {isIso ? (
+                        {sideSplitIso ? (
+                          <>
+                            <div style={rowStyle}><span style={labelStyle}>Left hold</span><span style={valStyle}>{Math.round(leftHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Right hold</span><span style={valStyle}>{Math.round(rightHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
+                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
+                          </>
+                        ) : isIso ? (
                           <>
                             <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{Math.round(heldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
                             <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
@@ -4798,6 +5342,13 @@ export default function CameraClient() {
                 if (!snap) return null;
                 const isIso = snap.kind === "isometric";
                 const heldSec = Math.round(snap.pairedHoldMs / 1000);
+                // Side-split isometric snapshots carry per-side holds instead
+                // of a paired hold; surface them separately (never merged).
+                // (The prompt only renders when the snapshot matches the
+                // selected exercise, so the active definition is authoritative.)
+                const sideSplitIso = isIso && isSideSplitIsometric(activeDefinition);
+                const leftHeldSec = Math.round((snap.sideHoldMs?.left ?? 0) / 1000);
+                const rightHeldSec = Math.round((snap.sideHoldMs?.right ?? 0) / 1000);
                 const elapsed = formatElapsedTime(Math.round(snap.elapsedMs / 1000));
 
                 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
@@ -4839,7 +5390,9 @@ export default function CameraClient() {
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
                         <div style={rowStyle}><span style={labelStyle}>Set</span><span style={valStyle}>{snap.completedSets + 1} of {prescription.sets}</span></div>
-                        {isIso ? (
+                        {sideSplitIso ? (
+                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>L {leftHeldSec}s · R {rightHeldSec}s</span></div>
+                        ) : isIso ? (
                           <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>{heldSec}s</span></div>
                         ) : (
                           <div style={rowStyle}><span style={labelStyle}>Reps</span><span style={valStyle}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
@@ -5026,22 +5579,17 @@ export default function CameraClient() {
               )}
             </div>
 
-            {/* Reference video */}
+            {/* Reference guidance */}
             <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
               <div style={{ marginBottom: 10 }}>
                 <span style={{
                   fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
                   textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                }}>Reference</span>
+                }}>Reference guidance</span>
               </div>
-              <div style={{ aspectRatio: "16/10", borderRadius: 6, overflow: "hidden", background: "oklch(0.93 0.003 240)", border: "1px solid oklch(0.92 0.003 240)" }}>
-                <video
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  controls
-                  controlsList="nodownload"
-                >
-                  <source src="/sample-video.mp4" type="video/mp4" />
-                </video>
+              <div style={{ borderRadius: 6, padding: "12px", background: "oklch(0.97 0.003 240)", border: "1px solid oklch(0.92 0.003 240)", color: "oklch(0.42 0.01 240)", fontSize: 11.5, lineHeight: 1.5 }}>
+                No verified demonstration video is published for this exercise yet.
+                Follow the written exercise description and your therapist&apos;s instructions.
               </div>
             </div>
 
@@ -5855,7 +6403,13 @@ function ClinicalStatStrip({
   tier: ScoreTier;
   activeDefinition: ExerciseDefinition | null;
   repCounts: { left: number; right: number };
-  holdState: { pairedSec: number; leftInBand: boolean; rightInBand: boolean };
+  holdState: {
+    pairedSec: number;
+    leftSec: number;
+    rightSec: number;
+    leftInBand: boolean;
+    rightInBand: boolean;
+  };
   timer: string;
   prescription: Prescription;
   sessionState: SessionState;
@@ -5881,7 +6435,46 @@ function ClinicalStatStrip({
   );
 
   let repsContent: React.ReactNode;
-  if (activeDefinition?.kind === "isometric") {
+  if (activeDefinition?.kind === "isometric" && isSideSplitIsometric(activeDefinition)) {
+    // Side-split isometric (ex_004): per-side hold times, split-panel style —
+    // the same L/R convention as bilateral rep counting, never merged into
+    // one number (the asymmetry between sides is the clinical signal).
+    const leftSec = Math.floor(holdState.leftSec);
+    const rightSec = Math.floor(holdState.rightSec);
+    const leftDone = leftSec >= prescription.holdSeconds;
+    const rightDone = rightSec >= prescription.holdSeconds;
+    repsContent = (
+      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
+        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Hold</span>
+          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.holdSeconds}s side</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
+              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
+            }}>L</span>
+            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+              {leftSec}
+              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
+            </span>
+          </div>
+          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
+              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
+            }}>R</span>
+            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
+              {rightSec}
+              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  } else if (activeDefinition?.kind === "isometric") {
     const holdSec = Math.floor(holdState.pairedSec);
     const done = holdSec >= prescription.holdSeconds;
     repsContent = (

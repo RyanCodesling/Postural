@@ -1,235 +1,433 @@
 {
-  "ex_001": {
-    "id": "ex_001",
-    "name": "Lateral Arm Raises",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "primaryMetric": {
-      "name": "shoulderAbduction",
-      "thresholds": {
-        "startThreshold": 20,
-        "repCompleteThreshold": 10,
-        "minimumPeakThreshold": 45,
-        "targetROM": 90
-      }
-    },
-    "compensationMetrics": [
-      {
-        "name": "trunkLean",
-        "warningThreshold": 5
+  "exercises": {
+    "ex_001": {
+      "id": "ex_001",
+      "name": "Lateral Arm Raises",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "primaryMetric": {
+        "name": "shoulderAbduction",
+        "thresholds": {
+          "startThreshold": 20,
+          "repCompleteThreshold": 10,
+          "minimumPeakThreshold": 45,
+          "targetROM": 90
+        }
       },
-      {
+      "compensationMetrics": [
+        {
+          "name": "trunkLean",
+          "warningThreshold": 5,
+          "bandsOverride": [
+            {
+              "max": 6,
+              "deductionMin": 0,
+              "deductionMax": 0
+            },
+            {
+              "max": 10,
+              "deductionMin": 0,
+              "deductionMax": 35
+            },
+            {
+              "max": 15,
+              "deductionMin": 35,
+              "deductionMax": 75
+            },
+            {
+              "max": 25,
+              "deductionMin": 75,
+              "deductionMax": 100
+            }
+          ]
+        },
+        {
+          "name": "scapularElevation",
+          "warningThreshold": 0.04,
+          "requiresBaselineCapture": true,
+          "scoring": {
+            "mode": "primary-coupled",
+            "intercept": -0.0077,
+            "slopePerPrimaryUnit": 0.00124,
+            "source": "pilot-fit"
+          }
+        },
+        {
+          "name": "shoulderSymmetry",
+          "warningThreshold": 5,
+          "bandsOverride": [
+            {
+              "max": 7,
+              "deductionMin": 0,
+              "deductionMax": 0
+            },
+            {
+              "max": 12,
+              "deductionMin": 0,
+              "deductionMax": 35
+            },
+            {
+              "max": 17,
+              "deductionMin": 35,
+              "deductionMax": 75
+            },
+            {
+              "max": 25,
+              "deductionMin": 75,
+              "deductionMax": 100
+            }
+          ]
+        }
+      ]
+    },
+    "ex_002": {
+      "id": "ex_002",
+      "name": "Overhead Arm Raises",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "primaryMetric": {
+        "name": "shoulderFlexion",
+        "thresholds": {
+          "startThreshold": 20,
+          "repCompleteThreshold": 10,
+          "minimumPeakThreshold": 90,
+          "targetROM": 150
+        }
+      },
+      "compensationMetrics": [
+        {
+          "name": "trunkLean",
+          "warningThreshold": 5
+        },
+        {
+          "name": "scapularElevation",
+          "warningThreshold": 0.04
+        }
+      ]
+    },
+    "ex_003": {
+      "id": "ex_003",
+      "name": "Shoulder Shrugs",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "primaryMetric": {
         "name": "scapularElevation",
-        "warningThreshold": 0.04,
-        "requiresBaselineCapture": true
+        "thresholds": {
+          "startThreshold": 0.025,
+          "repCompleteThreshold": 0.01,
+          "minimumPeakThreshold": 0.05,
+          "targetROM": 0.06
+        },
+        "descentEpsilon": 0.005,
+        "requiresBaselineCapture": true,
+        "smoothing": {
+          "minCutoff": 0.3,
+          "beta": 0.01
+        }
       },
-      {
-        "name": "shoulderSymmetry",
-        "warningThreshold": 5
-      }
-    ]
-  },
-  "ex_002": {
-    "id": "ex_002",
-    "name": "Overhead Arm Raises",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "primaryMetric": {
-      "name": "shoulderFlexion",
-      "thresholds": {
-        "startThreshold": 20,
-        "repCompleteThreshold": 10,
-        "minimumPeakThreshold": 90,
-        "targetROM": 150
-      }
+      "compensationMetrics": [
+        {
+          "name": "shoulderSymmetry",
+          "warningThreshold": 5
+        }
+      ]
     },
-    "compensationMetrics": [
-      {
-        "name": "trunkLean",
-        "warningThreshold": 5
+    "ex_004": {
+      "id": "ex_004",
+      "name": "Neck Lateral Flexion",
+      "kind": "isometric",
+      "bilateral": true,
+      "bilateralMode": "bidirectional-alternating",
+      "isometric": {
+        "metric": "neckLateralFlexion",
+        "targetBand": {
+          "center": 50,
+          "tolerance": 38
+        }
       },
-      {
-        "name": "scapularElevation",
-        "warningThreshold": 0.04
-      }
-    ]
-  },
-  "ex_003": {
-    "id": "ex_003",
-    "name": "Shoulder Shrugs",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "primaryMetric": {
-      "name": "scapularElevation",
-      "thresholds": {
-        "startThreshold": 0.025,
-        "repCompleteThreshold": 0.01,
-        "minimumPeakThreshold": 0.05,
-        "targetROM": 0.06
-      },
-      "descentEpsilon": 0.005,
-      "requiresBaselineCapture": true,
-      "smoothing": {
-        "minCutoff": 0.3,
-        "beta": 0.01
-      }
+      "compensationMetrics": [
+        {
+          "name": "trunkLean",
+          "warningThreshold": 3,
+          "bandsOverride": [
+            {
+              "max": 6,
+              "deductionMin": 0,
+              "deductionMax": 0
+            },
+            {
+              "max": 10,
+              "deductionMin": 0,
+              "deductionMax": 35
+            },
+            {
+              "max": 15,
+              "deductionMin": 35,
+              "deductionMax": 75
+            },
+            {
+              "max": 25,
+              "deductionMin": 75,
+              "deductionMax": 100
+            }
+          ]
+        }
+      ]
     },
-    "compensationMetrics": [
-      {
-        "name": "shoulderSymmetry",
-        "warningThreshold": 5
-      }
-    ]
-  },
-  "ex_004": {
-    "id": "ex_004",
-    "name": "Neck Lateral Flexion",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "bidirectional-alternating",
-    "bidirectionalRepStrategy": "velocity-zero-crossing",
-    "primaryMetric": {
-      "name": "neckLateralFlexion",
-      "thresholds": {
-        "startThreshold": 5,
-        "repCompleteThreshold": 2,
-        "minimumPeakThreshold": 12,
-        "targetROM": 30
+    "ex_005": {
+      "id": "ex_005",
+      "name": "Standing Side Bends",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "bidirectional-alternating",
+      "requiresLateralRoom": true,
+      "primaryMetric": {
+        "name": "trunkLateralFlexion",
+        "requiresBaselineCapture": true,
+        "thresholds": {
+          "startThreshold": 5,
+          "repCompleteThreshold": 2,
+          "minimumPeakThreshold": 15,
+          "targetROM": 25
+        }
       },
-      "smoothing": {
-        "minCutoff": 0.45,
-        "beta": 0.04,
-        "dCutoff": 0.8
-      }
+      "compensationMetrics": [
+        {
+          "name": "neckTilt",
+          "warningThreshold": 5,
+          "scoring": {
+            "mode": "primary-coupled",
+            "intercept": 11.7093,
+            "slopePerPrimaryUnit": 1.50466,
+            "source": "pilot-fit"
+          }
+        },
+        {
+          "name": "scapularElevation",
+          "warningThreshold": 0.04,
+          "requiresBaselineCapture": true,
+          "scoring": {
+            "mode": "primary-coupled",
+            "intercept": -0.023,
+            "slopePerPrimaryUnit": 0.01306,
+            "source": "pilot-fit"
+          }
+        }
+      ]
     },
-    "compensationMetrics": [
-      {
-        "name": "trunkLean",
-        "warningThreshold": 3
+    "ex_006": {
+      "id": "ex_006",
+      "name": "Arm Abduction at 90°",
+      "kind": "isometric",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "isometric": {
+        "metric": "shoulderHorizAbd",
+        "targetBand": {
+          "center": 90,
+          "tolerance": 10
+        }
       },
-      {
-        "name": "shoulderSymmetry",
-        "warningThreshold": 5
-      }
-    ]
-  },
-  "ex_005": {
-    "id": "ex_005",
-    "name": "Standing Side Bends",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "bidirectional-alternating",
-    "requiresLateralRoom": true,
-    "primaryMetric": {
-      "name": "trunkLateralFlexion",
-      "requiresBaselineCapture": true,
-      "thresholds": {
-        "startThreshold": 5,
-        "repCompleteThreshold": 2,
-        "minimumPeakThreshold": 15,
-        "targetROM": 25
-      }
+      "compensationMetrics": [
+        {
+          "name": "scapularElevation",
+          "warningThreshold": 0.04,
+          "requiresBaselineCapture": true,
+          "scoring": {
+            "mode": "primary-coupled",
+            "intercept": -0.0142,
+            "slopePerPrimaryUnit": 0.00093,
+            "source": "pilot-fit"
+          }
+        },
+        {
+          "name": "trunkLean",
+          "warningThreshold": 5
+        },
+        {
+          "name": "shoulderSymmetry",
+          "warningThreshold": 5,
+          "bandsOverride": [
+            {
+              "max": 7,
+              "deductionMin": 0,
+              "deductionMax": 0
+            },
+            {
+              "max": 12,
+              "deductionMin": 0,
+              "deductionMax": 35
+            },
+            {
+              "max": 17,
+              "deductionMin": 35,
+              "deductionMax": 75
+            },
+            {
+              "max": 25,
+              "deductionMin": 75,
+              "deductionMax": 100
+            }
+          ]
+        }
+      ]
     },
-    "compensationMetrics": [
-      {
-        "name": "neckTilt",
-        "warningThreshold": 5
+    "ex_007": {
+      "id": "ex_007",
+      "name": "Overhead Shoulder Press",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "requiresOverheadRoom": true,
+      "primaryMetric": {
+        "name": "wristShoulderVertical",
+        "thresholds": {
+          "startThreshold": 0.1,
+          "repCompleteThreshold": 0.05,
+          "minimumPeakThreshold": 0.21,
+          "targetROM": 0.85
+        },
+        "descentEpsilon": 0.025
       },
-      {
-        "name": "scapularElevation",
-        "warningThreshold": 0.04,
-        "requiresBaselineCapture": true
-      }
-    ]
-  },
-  "ex_006": {
-    "id": "ex_006",
-    "name": "Arm Abduction at 90°",
-    "kind": "isometric",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "isometric": {
-      "metric": "shoulderHorizAbd",
-      "targetBand": {
-        "center": 90,
-        "tolerance": 10
-      }
+      "compensationMetrics": [
+        {
+          "name": "trunkLean",
+          "warningThreshold": 5
+        },
+        {
+          "name": "elbowFlexion",
+          "warningThreshold": 150,
+          "compareDirection": "below",
+          "peakRelevant": true,
+          "scoring": {
+            "mode": "off"
+          }
+        }
+      ]
     },
-    "compensationMetrics": [
-      {
-        "name": "scapularElevation",
-        "warningThreshold": 0.04,
-        "requiresBaselineCapture": true
+    "ex_008": {
+      "id": "ex_008",
+      "name": "Wall Angels",
+      "kind": "dynamic",
+      "bilateral": true,
+      "bilateralMode": "per-limb",
+      "requiresOverheadRoom": true,
+      "primaryMetric": {
+        "name": "shoulderAbduction",
+        "thresholds": {
+          "startThreshold": 85,
+          "repCompleteThreshold": 70,
+          "minimumPeakThreshold": 110,
+          "targetROM": 150
+        }
       },
-      {
-        "name": "trunkLean",
-        "warningThreshold": 5
-      },
-      {
-        "name": "shoulderSymmetry",
-        "warningThreshold": 5
-      }
-    ]
+      "compensationMetrics": [
+        {
+          "name": "trunkLean",
+          "warningThreshold": 5
+        },
+        {
+          "name": "elbowFlexion",
+          "warningThreshold": 150,
+          "compareDirection": "below",
+          "peakRelevant": true,
+          "scoring": {
+            "mode": "off"
+          }
+        }
+      ]
+    }
   },
-  "ex_007": {
-    "id": "ex_007",
-    "name": "Overhead Shoulder Press",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "requiresOverheadRoom": true,
-    "primaryMetric": {
-      "name": "wristShoulderVertical",
-      "thresholds": {
-        "startThreshold": 0.1,
-        "repCompleteThreshold": 0.05,
-        "minimumPeakThreshold": 0.21,
-        "targetROM": 0.6
-      },
-      "descentEpsilon": 0.025
-    },
-    "compensationMetrics": [
+  "compensationBands": {
+    "neckTilt": [
       {
-        "name": "trunkLean",
-        "warningThreshold": 5
+        "max": 5,
+        "deductionMin": 0,
+        "deductionMax": 0
       },
       {
-        "name": "elbowFlexion",
-        "warningThreshold": 150,
-        "compareDirection": "below",
-        "peakRelevant": true
+        "max": 10,
+        "deductionMin": 0,
+        "deductionMax": 35
+      },
+      {
+        "max": 20,
+        "deductionMin": 35,
+        "deductionMax": 75
+      },
+      {
+        "max": 30,
+        "deductionMin": 75,
+        "deductionMax": 100
       }
-    ]
-  },
-  "ex_008": {
-    "id": "ex_008",
-    "name": "Wall Angels",
-    "kind": "dynamic",
-    "bilateral": true,
-    "bilateralMode": "per-limb",
-    "requiresOverheadRoom": true,
-    "primaryMetric": {
-      "name": "shoulderAbduction",
-      "thresholds": {
-        "startThreshold": 20,
-        "repCompleteThreshold": 10,
-        "minimumPeakThreshold": 100,
-        "targetROM": 150
-      }
-    },
-    "compensationMetrics": [
+    ],
+    "shoulderSymmetry": [
       {
-        "name": "trunkLean",
-        "warningThreshold": 5
+        "max": 3,
+        "deductionMin": 0,
+        "deductionMax": 0
       },
       {
-        "name": "elbowFlexion",
-        "warningThreshold": 150,
-        "compareDirection": "below",
-        "peakRelevant": true
+        "max": 7,
+        "deductionMin": 0,
+        "deductionMax": 35
+      },
+      {
+        "max": 12,
+        "deductionMin": 35,
+        "deductionMax": 75
+      },
+      {
+        "max": 20,
+        "deductionMin": 75,
+        "deductionMax": 100
+      }
+    ],
+    "trunkLean": [
+      {
+        "max": 2,
+        "deductionMin": 0,
+        "deductionMax": 0
+      },
+      {
+        "max": 5,
+        "deductionMin": 0,
+        "deductionMax": 35
+      },
+      {
+        "max": 10,
+        "deductionMin": 35,
+        "deductionMax": 75
+      },
+      {
+        "max": 20,
+        "deductionMin": 75,
+        "deductionMax": 100
+      }
+    ],
+    "scapularElevation": [
+      {
+        "max": 0.02,
+        "deductionMin": 0,
+        "deductionMax": 0
+      },
+      {
+        "max": 0.04,
+        "deductionMin": 0,
+        "deductionMax": 35
+      },
+      {
+        "max": 0.06,
+        "deductionMin": 35,
+        "deductionMax": 75
+      },
+      {
+        "max": 0.1,
+        "deductionMin": 75,
+        "deductionMax": 100
       }
     ]
   }

@@ -9,17 +9,19 @@
 --   raw_frames — unsmoothed per-frame metrics + selected pose landmarks. This is
 --                NOT video; no image/frame bytes are stored.
 --
--- Scope note: raw_frames is intentionally metric-only. The current camera
--- writer records ex_007 upper-body tuning traces; additional exercises can add
--- their own trace_kind payloads later without changing this table.
+-- Scope note: raw_frames is intentionally metric-only. The camera writer
+-- records upper-body tuning traces for any active exercise (trace_kind
+-- upper_body_v2), gated behind an opt-in "Record tuning trace" toggle in the
+-- patient camera UI. Earlier rows use the ex_007-only ex_007_upper_body_v1
+-- payload; both kinds coexist — trace_kind versioning is this table's design.
 
 CREATE TABLE IF NOT EXISTS sessions (
   id                       SERIAL       PRIMARY KEY,
   patient_id               VARCHAR(50)  NOT NULL REFERENCES users(id)              ON DELETE CASCADE,
-  patient_exercise_id      INTEGER      NOT NULL REFERENCES patient_exercises(id)  ON DELETE CASCADE,
+  patient_exercise_id      INTEGER      NOT NULL REFERENCES patient_exercises(id)  ON DELETE RESTRICT,
   -- Stored directly (in addition to being reachable via patient_exercise_id)
   -- so per-exercise queries don't need the join.
-  exercise_id              VARCHAR(50)  NOT NULL REFERENCES exercises(id)          ON DELETE CASCADE,
+  exercise_id              VARCHAR(50)  NOT NULL REFERENCES exercises(id)          ON DELETE RESTRICT,
   started_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   ended_at                 TIMESTAMPTZ,
   device_info              JSONB,
@@ -41,6 +43,18 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS notes                   TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason              TEXT;
 -- occurrence_id (the scheduled day this session fulfilled) is added by
 -- exercise_occurrences_pg.sql, so the FK target table exists before the column.
+
+-- Defense in depth: prescription/catalog maintenance must never erase stored
+-- session evidence. Set/rep/raw rows still cascade only when a session itself is
+-- deliberately purged through a separate administrative operation.
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_patient_exercise_id_fkey;
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_patient_exercise_id_fkey
+  FOREIGN KEY (patient_exercise_id) REFERENCES patient_exercises(id) ON DELETE RESTRICT;
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_exercise_id_fkey;
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_exercise_id_fkey
+  FOREIGN KEY (exercise_id) REFERENCES exercises(id) ON DELETE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS set_events (
   id              SERIAL            PRIMARY KEY,
@@ -87,7 +101,8 @@ CREATE TABLE IF NOT EXISTS rep_events (
   descent_ms      INT               NOT NULL,
   total_ms        INT               NOT NULL,
   classification  TEXT              NOT NULL CHECK (classification IN ('complete', 'partial')),
-  -- Reserved for a per-rep compensation snapshot; left null for now.
+  -- Dynamic reps persist a versioned quality payload with explicitly separated
+  -- smoothed live-score audit, raw/dt-weighted rule aggregate, and raw ML features.
   compensations   JSONB,
   start_ts        TIMESTAMPTZ       NOT NULL,
   end_ts          TIMESTAMPTZ       NOT NULL

@@ -1,15 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateProgram, deleteProgram } from "@/lib/db";
-
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
+import { getAuthenticatedUser } from "@/lib/auth-server";
+import { updateProgram, deleteProgram, ProgramExerciseNotAllowedError } from "@/lib/db";
 
 export async function PUT(
   request: NextRequest,
@@ -17,7 +8,7 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -34,6 +25,9 @@ export async function PUT(
     await updateProgram(id, user.id, { name, exercises });
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ProgramExerciseNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     const msg = error instanceof Error ? error.message : "";
     if (msg === "Not found or forbidden") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -49,7 +43,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (user.role !== "therapist") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 

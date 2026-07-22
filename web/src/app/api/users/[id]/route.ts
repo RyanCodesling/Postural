@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken, createNotification } from "@/lib/db";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   sendEmailChangedToOldAddress,
   sendEmailChangedToNewAddress,
@@ -17,27 +18,28 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const authToken = request.cookies.get("auth_token");
-    if (!authToken) {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const sessionUser = JSON.parse(authToken.value);
+
+    const { id } = await params;
 
     const user = await getUserById(id);
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Patients may only view their own profile
-    if (sessionUser.role === "patient" && id !== sessionUser.id) {
+    // Patients may only view their own profile.
+    if (authenticatedUser.role === "patient" && id !== authenticatedUser.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // Therapist can view their own profile or their assigned patients
-    if (sessionUser.role === "therapist") {
-      const isSelf = id === sessionUser.id;
-      const isAssignedPatient = user.role === "patient" && user.therapistId === sessionUser.id;
+    // Therapists can view their own profile or one of their assigned patients.
+    if (authenticatedUser.role === "therapist") {
+      const isSelf = id === authenticatedUser.id;
+      const isAssignedPatient =
+        user.role === "patient" && user.therapistId === authenticatedUser.id;
       if (!isSelf && !isAssignedPatient) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
@@ -55,6 +57,14 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id } = await params;
     const body = await request.json();
 
@@ -112,8 +122,7 @@ export async function PUT(
     const oldEmail = oldUser?.email as string | undefined;
     const newEmail = updated.email as string | undefined;
     if (oldEmail && newEmail && oldEmail !== newEmail) {
-      const authToken = request.cookies.get("auth_token");
-      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+      const adminEmail = authenticatedUser.email as string | undefined;
       const userName = updated.name as string;
 
       sendEmailChangedToOldAddress(oldEmail, userName, newEmail).catch(console.error);
@@ -136,6 +145,14 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id } = await params;
     const body = await request.json();
 
@@ -153,8 +170,7 @@ export async function PATCH(
 
     // Send restore notifications fire-and-forget
     if (userToRestore.email) {
-      const authToken = request.cookies.get("auth_token");
-      const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+      const adminEmail = authenticatedUser.email as string | undefined;
 
       sendAccountRestoredUserEmail(
         userToRestore.email as string,
@@ -185,6 +201,14 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (authenticatedUser.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id } = await params;
     const { searchParams } = request.nextUrl;
     const isPermanent = searchParams.get("permanent") === "true";
@@ -200,8 +224,7 @@ export async function DELETE(
 
       // Send delete notifications fire-and-forget
       if (userToProcess.email) {
-        const authToken = request.cookies.get("auth_token");
-        const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+        const adminEmail = authenticatedUser.email as string | undefined;
 
         sendAccountDeletedUserEmail(
           userToProcess.email as string,
@@ -225,8 +248,7 @@ export async function DELETE(
 
       // Send archive notifications fire-and-forget
       if (userToProcess.email) {
-        const authToken = request.cookies.get("auth_token");
-        const adminEmail = authToken ? (JSON.parse(authToken.value) as { email?: string }).email : undefined;
+        const adminEmail = authenticatedUser.email as string | undefined;
 
         sendAccountArchivedUserEmail(
           userToProcess.email as string,

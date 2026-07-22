@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import type { DynamicRepQualityV1 } from "@/lib/pose/repQuality";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
 
@@ -22,6 +23,7 @@ interface Patient {
 }
 
 interface PatientExercise {
+  id: number;
   exercise_id: string;
   name: string;
   description: string;
@@ -31,6 +33,20 @@ interface PatientExercise {
   rest_seconds: number;
   hold_seconds: number;
   assigned_date: string;
+  start_date: string | null;
+  end_date: string | null;
+  archived_at: string | null;
+  monitoring_mode: "camera" | "manual";
+  prescription_state: "upcoming" | "active" | "ended" | "archived";
+  adherence_state: "not_started" | "in_progress" | "partially_completed" | "completed";
+  occurrence_summary: {
+    scheduled: number;
+    completed: number;
+    missed: number;
+    inProgress: number;
+    remaining: number;
+    cancelled: number;
+  };
 }
 
 // Per-session summary row from GET /api/sessions.
@@ -99,6 +115,7 @@ interface SessionRepDetail {
   peakValue: number | null;
   targetRom: number | null;
   classification: "complete" | "partial";
+  compensations: DynamicRepQualityV1 | null;
 }
 interface SessionDetail {
   id: number;
@@ -106,8 +123,29 @@ interface SessionDetail {
   exerciseName: string;
   startedAt: string;
   endedAt: string | null;
+  captureQuality: { framesTotal: number; framesOk: number; pctOk: number } | null;
+  deviceContext: { browser: string; platform: string } | null;
   sets: SessionSetDetail[];
   reps: SessionRepDetail[];
+}
+
+function formatDateKey(value: string | null): string {
+  if (!value) return "—";
+  return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function adherenceSummaryText(exercise: PatientExercise): string {
+  const summary = exercise.occurrence_summary;
+  if (summary.scheduled === 0) return "No scheduled occurrences";
+  const parts = [`${summary.completed} of ${summary.scheduled} completed`];
+  if (summary.missed > 0) parts.push(`${summary.missed} missed`);
+  if (summary.remaining > 0) parts.push(`${summary.remaining} remaining`);
+  if (summary.cancelled > 0) parts.push(`${summary.cancelled} cancelled when ended`);
+  return parts.join(" · ");
 }
 
 export default function PatientDetailPage() {
@@ -133,7 +171,7 @@ export default function PatientDetailPage() {
       try {
         const [patientRes, exercisesRes, sessionsRes] = await Promise.all([
           fetch(`/api/users/${patientId}`),
-          fetch(`/api/patient-exercises?patientId=${patientId}`),
+          fetch(`/api/patient-exercises?patientId=${patientId}&includeArchived=true`),
           fetch(`/api/sessions?patientId=${patientId}`),
         ]);
 
@@ -190,10 +228,15 @@ export default function PatientDetailPage() {
     sessionsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const assignedExercises = exercises.filter(
-    (e) => e.status === "pending" || e.status === "in_progress"
+  const currentPrescriptions = exercises.filter(
+    (exercise) => exercise.prescription_state === "active" || exercise.prescription_state === "upcoming",
   );
-const completedExercises = exercises.filter((e) => e.status === "completed");
+  const endedPrescriptions = exercises.filter(
+    (exercise) => exercise.prescription_state === "ended" || exercise.prescription_state === "archived",
+  );
+  const completedExercises = exercises.filter(
+    (exercise) => exercise.occurrence_summary.completed > 0,
+  );
 
   // Per-exercise session groups (oldest→newest) backing the Progress Trends
   // charts (the shared helper keeps only outcome-bearing sessions).
@@ -212,9 +255,11 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
 
   const progressStatus = () => {
     if (exercises.length === 0) return "not started";
-    if (completedExercises.length === exercises.length) return "completed";
-    if (exercises.some((e) => e.status === "in_progress")) return "in progress";
-    if (completedExercises.length > 0) return "progressing";
+    if (currentPrescriptions.some((exercise) => exercise.adherence_state === "in_progress")) {
+      return "in progress";
+    }
+    if (currentPrescriptions.length > 0) return "scheduled";
+    if (completedExercises.length > 0) return "history recorded";
     return "not started";
   };
 
@@ -315,7 +360,7 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Progress Status</p>
               <span className={`inline-block mt-1 px-3 py-1 text-xs rounded-full font-medium ${
-                progressStatus() === "completed"
+                progressStatus() === "history recorded"
                   ? "bg-green-100 text-green-700"
                   : progressStatus() === "not started"
                   ? "bg-red-100 text-red-700"
@@ -339,10 +384,10 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
         </div>
       </div>
 
-      {/* Assigned Exercises */}
+      {/* Current prescription lifecycle */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-green-700 font-semibold text-lg">Assigned Exercises</h2>
+          <h2 className="text-green-700 font-semibold text-lg">Current Prescriptions</h2>
           <button
             onClick={scrollToSessions}
             className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition print:hidden"
@@ -351,17 +396,24 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
           </button>
         </div>
 
-        {assignedExercises.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No assigned exercises.</p>
+        {currentPrescriptions.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-6">No active or upcoming prescriptions.</p>
         ) : (
           <div className="space-y-4">
-            {assignedExercises.map((ex) => (
+            {currentPrescriptions.map((ex) => (
               <div
-                key={ex.exercise_id}
+                key={ex.id}
                 className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
               >
                 <div>
-                  <h3 className="font-semibold text-green-700">{ex.name}</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold text-green-700">{ex.name}</h3>
+                    {ex.monitoring_mode === "manual" && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                        Manual · no camera
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500 mt-1">
                     {ex.sets} sets ×{" "}
                     {prescriptionTargetText({
@@ -370,13 +422,17 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
                       holdSeconds: ex.hold_seconds,
                     })} · {ex.rest_seconds}s rest
                   </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {formatDateKey(ex.start_date ?? ex.assigned_date)} to {formatDateKey(ex.end_date ?? ex.assigned_date)}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">{adherenceSummaryText(ex)}</p>
                 </div>
                 <span className={`px-3 py-1 text-sm rounded-full font-medium shrink-0 ${
-                  ex.status === "in_progress"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-red-100 text-red-700"
+                  ex.prescription_state === "upcoming"
+                    ? "bg-gray-100 text-gray-700"
+                    : "bg-blue-100 text-blue-700"
                 }`}>
-                  {ex.status === "in_progress" ? "In Progress" : "Not Started"}
+                  {ex.prescription_state === "upcoming" ? "Upcoming" : "Active"}
                 </span>
               </div>
             ))}
@@ -384,32 +440,59 @@ const completedExercises = exercises.filter((e) => e.status === "completed");
         )}
       </div>
 
-      {/* Completed Exercises */}
+      {/* Ended prescription lifecycle */}
+      {endedPrescriptions.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
+          <h2 className="text-gray-800 font-semibold text-lg mb-2">Ended Prescriptions</h2>
+          <p className="mb-5 text-xs text-gray-500">
+            Prescription state is shown separately from the completed and missed occurrence outcomes below.
+          </p>
+          <div className="space-y-4">
+            {endedPrescriptions.map((ex) => (
+              <div
+                key={ex.id}
+                className="rounded-xl border border-gray-100 p-4 flex justify-between items-center gap-4"
+              >
+                <div>
+                  <h3 className="font-semibold text-gray-800">{ex.name}</h3>
+                  <p className="mt-1 text-sm text-gray-500">{adherenceSummaryText(ex)}</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Scheduled through {formatDateKey(ex.end_date ?? ex.assigned_date)}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700">
+                  {ex.prescription_state === "archived" ? "Ended early" : "Ended"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Completed occurrence outcomes */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">Completed Exercises</h2>
+        <h2 className="text-green-700 font-semibold text-lg mb-2">Completed Exercise Outcomes</h2>
+        <p className="mb-5 text-xs text-gray-500">
+          Populated from completed scheduled occurrences, even when the overall prescription later ended with missed work.
+        </p>
 
         {completedExercises.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No completed exercises yet.</p>
+          <p className="text-gray-400 text-sm text-center py-6">No completed occurrences yet.</p>
         ) : (
           <div className="space-y-4">
             {completedExercises.map((ex) => (
               <div
-                key={ex.exercise_id}
+                key={ex.id}
                 className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    {ex.sets} sets ×{" "}
-                    {prescriptionTargetText({
-                      exerciseId: ex.exercise_id,
-                      reps: ex.reps,
-                      holdSeconds: ex.hold_seconds,
-                    })} · {ex.rest_seconds}s rest
+                    {adherenceSummaryText(ex)}
                   </p>
                 </div>
                 <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
-                  Completed
+                  {ex.occurrence_summary.completed} completed
                 </span>
               </div>
             ))}
@@ -642,15 +725,59 @@ function SessionCard({
 }
 
 function SessionDetailBody({ detail }: { detail: SessionDetail }) {
-  if (detail.sets.length === 0) {
-    // Legacy/edge sessions (e.g. rows persisted before set_events existed) may
-    // have rep records but no set records — reconstruct a grouping from reps.
-    if (detail.reps.length > 0) return <RepFallbackList reps={detail.reps} />;
-    return <p className="text-sm text-gray-400">No set or rep records for this session.</p>;
-  }
+  const outcomeRows = detail.sets.length > 0 ? (
+    detail.sets.map((set) => (
+      <SetRow
+        key={set.setIndex}
+        set={set}
+        reps={detail.reps.filter((rep) => rep.setIndex === set.setIndex)}
+      />
+    ))
+  ) : detail.reps.length > 0 ? (
+    // Legacy/edge sessions may have rep records but no set records.
+    <RepFallbackList reps={detail.reps} />
+  ) : (
+    <p className="text-sm text-gray-400">No set or rep records for this session.</p>
+  );
+
   return (
     <div className="space-y-3">
-      {detail.sets.map((set) => <SetRow key={set.setIndex} set={set} />)}
+      <SessionCaptureContext detail={detail} />
+      {outcomeRows}
+    </div>
+  );
+}
+
+function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
+  const quality = detail.captureQuality;
+  const device = detail.deviceContext;
+  if (!quality && !device) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+        Capture context is unavailable for this legacy session.
+      </div>
+    );
+  }
+  const captureClass =
+    quality && quality.pctOk < 80 ? "text-amber-700" : "text-gray-700";
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs">
+      <span className="font-semibold text-gray-800">Capture context</span>
+      {quality && (
+        <span className={`ml-3 ${captureClass}`}>
+          {quality.pctOk}% ready frames ({quality.framesOk}/{quality.framesTotal})
+        </span>
+      )}
+      {device && (
+        <span className="ml-3 text-gray-500">
+          {device.browser} · {device.platform}
+        </span>
+      )}
+      {quality && quality.pctOk < 80 && (
+        <p className="mt-1 text-amber-700">
+          Reduced capture coverage may limit interpretation of this session.
+        </p>
+      )}
     </div>
   );
 }
@@ -673,11 +800,13 @@ function RepFallbackList({ reps }: { reps: SessionRepDetail[] }) {
         const left = group.filter((r) => r.side === "left").length;
         const right = group.filter((r) => r.side === "right").length;
         const complete = group.filter((r) => r.classification === "complete").length;
+        const formScore = meanRawRuleScore(group);
         return (
           <div key={idx} className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
             <span className="font-semibold text-gray-800">Set {idx}</span>{" "}
             <span className="text-gray-600">
               {group.length} rep{group.length === 1 ? "" : "s"} · L {left} / R {right} · {complete} complete
+              {formScore !== null ? ` · avg form ${formScore}/100` : ""}
             </span>
           </div>
         );
@@ -686,8 +815,28 @@ function RepFallbackList({ reps }: { reps: SessionRepDetail[] }) {
   );
 }
 
-function SetRow({ set }: { set: SessionSetDetail }) {
+function meanRawRuleScore(reps: SessionRepDetail[]): number | null {
+  const scores = reps
+    .map((rep) => {
+      const rawRule = rep.compensations?.rawRule;
+      return rawRule && rawRule.coveragePct >= 80 ? rawRule.meanScore : null;
+    })
+    .filter((score): score is number => typeof score === "number");
+  if (scores.length === 0) return null;
+  return Math.round(
+    scores.reduce((sum, score) => sum + score, 0) / scores.length,
+  );
+}
+
+function SetRow({
+  set,
+  reps,
+}: {
+  set: SessionSetDetail;
+  reps: SessionRepDetail[];
+}) {
   const isIso = set.exerciseKind === "isometric";
+  const formScore = isIso ? null : meanRawRuleScore(reps);
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -704,6 +853,9 @@ function SetRow({ set }: { set: SessionSetDetail }) {
               <span className="text-gray-500">
                 asymmetry {Math.round(set.asymmetryIndex * 100)}%
               </span>
+            )}
+            {formScore !== null && (
+              <span className="text-gray-500">avg form {formScore}/100</span>
             )}
           </>
         )}

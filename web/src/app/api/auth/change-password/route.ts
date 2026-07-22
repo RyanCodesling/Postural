@@ -2,21 +2,36 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUserById, getUserRawById, updateUserPassword, createAdminNotification } from "@/lib/db";
 import { sendPasswordChangedEmail } from "@/lib/email";
 import { comparePassword } from "@/lib/crypto";
+import { getAuthenticatedUser } from "@/lib/auth-server";
+import {
+  AUTH_COOKIE_NAME,
+  SESSION_COOKIE_OPTIONS,
+  signSessionToken,
+} from "@/lib/session-token";
 
 export async function POST(request: NextRequest) {
   try {
+    const authenticatedUser = await getAuthenticatedUser(request);
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
     const { userId, currentPassword, newPassword } = body;
 
-    if (!userId || !currentPassword || !newPassword) {
+    if (userId !== undefined && userId !== authenticatedUser.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (!currentPassword || !newPassword) {
       return NextResponse.json(
-        { error: "userId, currentPassword, and newPassword are required" },
+        { error: "currentPassword and newPassword are required" },
         { status: 400 }
       );
     }
 
     // Fetch the raw row to verify password (mapUser strips the password field)
-    const rawUser = await getUserRawById(userId);
+    const rawUser = await getUserRawById(authenticatedUser.id);
     if (!rawUser) {
       return NextResponse.json(
         { error: "User not found" },
@@ -41,7 +56,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await updateUserPassword(userId, newPassword);
+    await updateUserPassword(authenticatedUser.id, newPassword);
 
     // Log admin notification if changing password on first login
     if (wasFirstLoginPasswordChange) {
@@ -57,7 +72,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the mapped user for the response cookie
-    const user = await getUserById(userId);
+    const user = await getUserById(authenticatedUser.id);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     // Send confirmation email (fire-and-forget)
     if (user?.email) {
@@ -66,27 +84,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Refresh the auth cookie to clear mustChangePassword
-    const sessionUser = {
-      id: user!.id,
-      email: user!.email,
-      name: user!.name,
-      role: user!.role,
-      ...((user!.role === "therapist") && { clinicId: user!.clinicId }),
-    };
+    // Refresh the auth cookie to clear mustChangePassword.
+    const sessionToken = await signSessionToken({
+      sub: user.id as string,
+      role: user.role as "patient" | "therapist" | "admin",
+      mustChangePassword: user.mustChangePassword === true,
+    });
 
     const response = NextResponse.json(
       { success: true },
       { status: 200 }
     );
 
-    response.cookies.set("auth_token", JSON.stringify(sessionUser), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: "/",
-    });
+    response.cookies.set(
+      AUTH_COOKIE_NAME,
+      sessionToken,
+      SESSION_COOKIE_OPTIONS,
+    );
 
     return response;
   } catch (error) {

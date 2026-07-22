@@ -2,9 +2,9 @@
  * registry.ts
  *
  * Per-exercise definitions that drive rep counting, metric display, and
- * compensation tracking. Keyed by exercise IDs that match `admin_exercises`
- * seed data (ex_001…ex_006). When admin_exercises migrates from localStorage
- * to Postgres, this registry stays unchanged — the join is by id.
+ * compensation tracking. Keyed by exercise IDs that match the PostgreSQL
+ * `exercises` seed data (six active definitions plus two deprecated entries).
+ * Runtime prescriptions and history join to this fixed registry by id.
  *
  * ── WHY THIS IS CODE, NOT DATA ───────────────────────────────────────────────
  * Thresholds are part of the rep-counting algorithm. They warrant code review,
@@ -28,7 +28,7 @@
  *                                was the partial/complete boundary, which is
  *                                wrong; that boundary is `targetROM`. See
  *                                the classification comments in repCounter.ts and the
- *                                ex_004 inline comment for the authoritative
+ *                                ex_001 inline comment for the authoritative
  *                                semantics.)
  *   - `targetROM`              — clinically prescribed full ROM. THIS is the
  *                                "complete" vs "partial" classification boundary:
@@ -37,7 +37,9 @@
  *                                peak < minimumPeakThreshold  → discarded silently.
  *
  * For an `isometric` exercise, the state machine is NOT used. Instead, the
- * camera loop accumulates time-in-target-band using `isometric.targetBand`.
+ * camera loop accumulates time-in-target-band using `isometric.targetBand` —
+ * per limb for per-limb isometrics (ex_006), or per sign-attributed side for
+ * bidirectional-alternating isometrics (ex_004).
  *
  * ── COMPENSATION METRICS ─────────────────────────────────────────────────────
  * Listed metrics are displayed alongside the primary metric and logged per
@@ -78,8 +80,8 @@ export type MetricName =
   | "neckLateralFlexion"     // head tilting ear-to-shoulder, used by ex_004 neck lateral flexion
   | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
   | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
-  | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_005/ex_006/ex_007/ex_008
-  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_004/ex_006 (and deprecated ex_003)
+  | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_006/ex_007/ex_008 (NOT ex_005 — side bends score neckTilt + scapularElevation instead)
+  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_006 (and deprecated ex_003; removed from ex_004 2026-06-11 — sloped shoulders are prescribed technique in the assisted stretch)
   | "neckTilt"               // existing — used as compensation metric on ex_005
   | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
@@ -100,11 +102,15 @@ export type Side = "left" | "right";
  *   per-side signed angle. Examples: lateral arm raise, overhead arm
  *   raise, shoulder shrug, T-pose hold.
  *
- * "bidirectional-alternating": One bidirectional motion (left tilts negative,
- *   right tilts positive on the same signed scale). Patient alternates
- *   sides each rep. Camera loop runs ONE state machine fed the ABSOLUTE
- *   value of the signed angle, with the sign at peak time recorded
- *   separately so each rep can be tagged left or right.
+ * "bidirectional-alternating": One bidirectional motion on a single signed
+ *   scale (positive = patient's LEFT, negative = patient's RIGHT — the sign
+ *   convention pinned by neckSideAgreement.test.ts / trunkSideAgreement.test.ts).
+ *   Patient alternates sides. For a DYNAMIC exercise (ex_005) the camera loop
+ *   runs ONE state machine fed the ABSOLUTE value of the signed angle, with
+ *   the sign at peak time recorded separately so each rep can be tagged left
+ *   or right. For an ISOMETRIC exercise (ex_004) no state machine runs; the
+ *   camera loop accrues time-in-band PER SIDE from the sign of the angle —
+ *   see the ex_004 entry for the band semantics.
  *
  * Unilateral exercises (bilateral: false) ignore this field.
  */
@@ -175,6 +181,43 @@ export type PrimaryMetricSpec = {
 };
 
 /**
+ * How a compensation metric contributes to the 0–100 compensation score.
+ *
+ *  - "off":    warning-only. The metric still drives its UI warning via
+ *              `warningThreshold`, but it never deducts from the score and
+ *              never dilutes the weighting of scored metrics. Use for
+ *              metrics whose deduction semantics aren't settled yet (e.g.
+ *              `elbowFlexion`, which needs direction-aware deduction tuned
+ *              from live data before it can score fairly).
+ *  - "static": deduction from `|value|` against the metric's
+ *              `COMPENSATION_BANDS` entry. The default and the long-standing
+ *              behavior.
+ *  - "primary-coupled": the expected value of this metric moves with the
+ *              primary metric (e.g. the shoulder girdle necessarily elevates
+ *              as the arm abducts toward 90°). The deduction runs on the
+ *              RESIDUAL `|value − (intercept + slopePerPrimaryUnit·|primary|)|`
+ *              against the same bands, so movement that is an intrinsic
+ *              consequence of correct execution is not punished. Constants
+ *              must be fitted from recorded clean repetitions or taken from
+ *              published biomechanics — record which via `source`.
+ *
+ * When `scoring` is omitted on a `CompensationMetricSpec` it defaults to
+ * `{ mode: "static" }` — see `getCompensationScoring()`.
+ */
+export type CompensationScoring =
+  | { mode: "off" }
+  | { mode: "static" }
+  | {
+      mode: "primary-coupled";
+      /** Expected metric value when the primary metric reads 0 (≈ resting baseline). */
+      intercept: number;
+      /** Expected drift in this metric per unit of |primary| (same units as each metric). */
+      slopePerPrimaryUnit: number;
+      /** Where the constants came from — keeps every scoring constant traceable. */
+      source: "pilot-fit" | "literature";
+    };
+
+/**
  * A metric displayed and logged but NOT used for rep counting.
  * `warningThreshold` is the value at which the UI flags the metric as
  * a likely compensation pattern. Same units as the underlying metric.
@@ -237,7 +280,157 @@ export type CompensationMetricSpec = {
    * when the patient actually shrugs.
    */
   requiresBaselineCapture?: boolean;
+  /**
+   * How this metric contributes to the compensation score. Omitted means
+   * `{ mode: "static" }` — banded deduction on the absolute value. See
+   * `CompensationScoring` for the modes.
+   */
+  scoring?: CompensationScoring;
+  /**
+   * Per-exercise override of the metric's global `COMPENSATION_BANDS` entry.
+   * When present, the score deducts against THESE bands for this exercise
+   * instead of the shared default. Use when the metric's clean-form noise
+   * floor is genuinely different on one exercise (e.g. trunk sway is larger on
+   * an unbraced lateral raise than on a wall-braced overhead press) and a
+   * GLOBAL floor change would wrongly relax every other exercise that shares
+   * the metric. Validated by `validateRegistry()` with the same invariants as
+   * the global bands (start at 0 deduction, strictly increasing `max`,
+   * continuous knots). Resolve via `getCompensationBands()`, never read
+   * directly, so the override-vs-global precedence lives in one place.
+   */
+  bandsOverride?: Band[];
 };
+
+/**
+ * Effective scoring mode for a compensation metric spec — `scoring` is
+ * optional in the registry and defaults to static banded deduction. Every
+ * consumer of the `scoring` field must go through this helper so the default
+ * lives in exactly one place.
+ */
+export function getCompensationScoring(
+  spec: CompensationMetricSpec
+): CompensationScoring {
+  return spec.scoring ?? { mode: "static" };
+}
+
+/**
+ * Effective deduction bands for a compensation metric spec — a per-exercise
+ * `bandsOverride` wins over the metric's shared `COMPENSATION_BANDS` entry.
+ * Every consumer of the bands (the live score and the validator) must go
+ * through this helper so the override-vs-global precedence lives in one place.
+ * Returns undefined when the metric has neither (warning-only metrics).
+ */
+export function getCompensationBands(
+  spec: CompensationMetricSpec
+): Band[] | undefined {
+  return spec.bandsOverride ?? COMPENSATION_BANDS[spec.name];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPENSATION SCORE BANDS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One deduction band: values from the previous band's `max` (or 0) up to
+ * `max` interpolate linearly from `deductionMin` to `deductionMax`.
+ */
+export type Band = { max: number; deductionMin: number; deductionMax: number };
+
+/**
+ * Per-metric deduction bands for the compensation score. Each band defines a
+ * continuous interpolation range — entering a band scales linearly from
+ * `deductionMin` to `deductionMax`, so there are no score cliffs at band
+ * boundaries.
+ *
+ * Only metrics that actually deduct have an entry. A compensation metric
+ * without one MUST declare `scoring: { mode: "off" }` (warning-only) —
+ * enforced by `validateRegistry()`, so a scored metric can never silently
+ * lack its bands.
+ *
+ * Units match the metric:
+ *   - angle metrics (neck, shoulder symmetry, trunk lean):    degrees
+ *   - displacement metrics (scapular elevation):              torso-length fraction
+ *
+ * Each metric's first band is its measurement noise floor (no deduction).
+ * Band lists must start at zero deduction, be strictly increasing in `max`,
+ * and be continuous across boundaries (each band's `deductionMin` equals the
+ * previous band's `deductionMax`) — validated at module load. Continuity is
+ * load-bearing: consumers that interpolate over the knot points (e.g. the
+ * offline analytics pipeline reading the exported registry JSON) must compute
+ * exactly the same function as the app's per-band interpolation.
+ *
+ * The deduction values assume each band's full deduction represents a
+ * "saturated" metric. They get scaled by 1/N at score-computation time, where
+ * N is the number of scored compensation metrics available in the frame.
+ */
+export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
+  // Neck tilt: 5° normal floor (matches the severity classifier)
+  neckTilt: [
+    { max: 5,  deductionMin: 0,   deductionMax: 0   },
+    { max: 10, deductionMin: 0,   deductionMax: 35  },
+    { max: 20, deductionMin: 35,  deductionMax: 75  },
+    { max: 30, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Shoulder symmetry: 3° landmark noise floor
+  shoulderSymmetry: [
+    { max: 3,  deductionMin: 0,   deductionMax: 0   },
+    { max: 7,  deductionMin: 0,   deductionMax: 35  },
+    { max: 12, deductionMin: 35,  deductionMax: 75  },
+    { max: 20, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Trunk lean: 2° standing-sway floor
+  trunkLean: [
+    { max: 2,  deductionMin: 0,   deductionMax: 0   },
+    { max: 5,  deductionMin: 0,   deductionMax: 35  },
+    { max: 10, deductionMin: 35,  deductionMax: 75  },
+    { max: 20, deductionMin: 75,  deductionMax: 100 },
+  ],
+  // Scapular elevation as compensation: thresholds in normalized torso-length
+  // CHANGE from baseline. Below 0.02 = within noise floor.
+  scapularElevation: [
+    { max: 0.02, deductionMin: 0,   deductionMax: 0   },
+    { max: 0.04, deductionMin: 0,   deductionMax: 35  },
+    { max: 0.06, deductionMin: 35,  deductionMax: 75  },
+    { max: 0.10, deductionMin: 75,  deductionMax: 100 },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-EXERCISE BAND OVERRIDES
+// ─────────────────────────────────────────────────────────────────────────────
+// The global COMPENSATION_BANDS above are each metric's default noise floor. A
+// CompensationMetricSpec may point its `bandsOverride` at one of the lists
+// below to shift the floor on a SPECIFIC exercise without relaxing every other
+// exercise that shares the metric. All edges are single-subject pilot fits
+// (clean-rep recording, sessions 168–174) and PT-reviewable; same continuity
+// rules as the global bands (enforced by validateRegistry()).
+
+// trunkLean, unbraced exercises (ex_001 lateral raise, ex_004 neck hold): the
+// patient's clean standing sway measures ~3–5° (rest mean 1.97°, in-rep
+// medians 2.9–4.8°), so the global 2° floor deducted on ~90% of deliberately
+// clean frames (mean deduction ~21). Raising the floor to 6° puts honest sway
+// in the no-deduction band while still flagging a real torso shift. The braced
+// overhead exercises (ex_007/ex_008, clean trunk <2°) keep the global floor.
+const TRUNK_LEAN_UNBRACED_BANDS: Band[] = [
+  { max: 6,  deductionMin: 0,   deductionMax: 0   },
+  { max: 10, deductionMin: 0,   deductionMax: 35  },
+  { max: 15, deductionMin: 35,  deductionMax: 75  },
+  { max: 25, deductionMin: 75,  deductionMax: 100 },
+];
+
+// shoulderSymmetry, exercises where the subject's resting shoulder-line
+// asymmetry (~3.6°) sits right at the global 3° landmark-noise floor (ex_001
+// lateral raise, ex_006 T-pose hold). Raising the floor to 7° keeps the
+// resting asymmetry out of the deduction while still flagging a genuine uneven
+// shoulder line. (Future: a per-side, baseline-relative shoulder check would
+// replace this with a true zero-baseline; that needs per-exercise baseline
+// capture — out of scope here.)
+const SHOULDER_SYMMETRY_ASYMMETRIC_BANDS: Band[] = [
+  { max: 7,  deductionMin: 0,   deductionMax: 0   },
+  { max: 12, deductionMin: 0,   deductionMax: 35  },
+  { max: 17, deductionMin: 35,  deductionMax: 75  },
+  { max: 25, deductionMin: 75,  deductionMax: 100 },
+];
 
 /**
  * Configuration for an isometric (held-position) exercise.
@@ -266,10 +459,13 @@ export type ExerciseDefinition =
       bilateralMode?: BilateralMode;
       /**
        * Optional strategy override for signed bidirectional rep segmentation.
-       * Defaults to the magnitude/neutral-settle wrapper. ex_004 uses the
-       * velocity strategy so passive return-stroke overshoot does not count as
-       * an opposite-side rep while loose-neutral deliberate alternation still
-       * counts.
+       * Defaults to the magnitude/neutral-settle wrapper. The velocity
+       * strategy (velocityBidirectionalRepCounter.ts) suppresses passive
+       * return-stroke overshoot from counting as an opposite-side rep while
+       * loose-neutral deliberate alternation still counts. No active exercise
+       * sets it since ex_004's conversion to an isometric hold (2026-06-11) —
+       * ex_005 deliberately keeps the default — but the strategy remains
+       * available for future bidirectional dynamic exercises.
        */
       bidirectionalRepStrategy?: BidirectionalRepStrategy;
       /**
@@ -365,18 +561,25 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Trunk lean during lateral raise is the textbook compensation —
       // patients shift their torso away from the working arm to assist
-      // the lift. Trunk lean ≥ 5° during the rep should flag.
-      { name: "trunkLean", warningThreshold: 5 },
+      // the lift. Trunk lean ≥ 5° during the rep should flag. Unbraced-floor
+      // band override (6° vs the global 2°): clean standing sway here is 3–5°.
+      { name: "trunkLean", warningThreshold: 5, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
       // Shoulder shrug (scapular elevation) is the second-most-common
       // compensation — patients hike the trapezius to substitute for
       // weak deltoid. Surfaced as a warning when shrug exceeds the
-      // shrug exercise's own start threshold.
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
+      // shrug exercise's own start threshold. Scored as `primary-coupled`:
+      // the scapula necessarily elevates as the arm abducts (scapulohumeral
+      // rhythm), so the deduction runs on the residual from the expected
+      // elevation at the current abduction, not the raw value. Fit: expected
+      // ≈ -0.0077 + 0.00124·|abduction°| (clean-rep recording, n≈930).
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+        scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" } },
       // Uneven shoulder line during the raise — one whole shoulder rides
       // higher than the other (distinct from a symmetric shrug). Drives the
       // per-shoulder overlay boxes + "LOWER" arrow. Starting threshold 5°
-      // (above the 3° landmark noise floor); tune live.
-      { name: "shoulderSymmetry", warningThreshold: 5 },
+      // (above the 3° landmark noise floor); tune live. Band override raises
+      // the score floor to 7° (resting asymmetry here is ~3.6°).
+      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
   },
 
@@ -512,64 +715,84 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   },
 
   // ────────────────────────────────────────────────────────────────────────
-  // ex_004 — Neck Lateral Flexion (Cervical Side Bending)
-  // Patient tilts head ear-toward-shoulder, alternating sides. Bilateral
-  // by prescription convention ("10 each side"). A signed bidirectional
-  // segmenter tags left/right from the peak sign.
+  // ex_004 — Neck Lateral Flexion (Cervical Side Bending, Isometric Hold)
+  // Patient tilts head ear-toward-shoulder, HOLDS at the target angle, then
+  // alternates to the other side. CONVERTED 2026-06-11 from a dynamic
+  // (rep-counted) exercise to an isometric hold: the slow, small-range
+  // alternating motion segments poorly as reps near MediaPipe's ear-line
+  // noise, while a held tilt maps cleanly onto the same time-in-band
+  // scoring ex_006 uses. The dynamic config (velocity-zero-crossing
+  // segmentation, 5/2/12/30 thresholds) lives in git history if needed.
+  //
+  // SCORING MODEL: one signed bidirectional signal (neckLateralFlexion;
+  // positive = patient's LEFT — pinned by neckSideAgreement.test.ts). The
+  // camera loop accrues hold time PER SIDE from the sign of the angle:
+  // left accrues while the signed angle is inside [center−tol, center+tol],
+  // right while inside [−center−tol, −center+tol]. The two sides are
+  // surfaced separately (never merged) and a set completes only when BOTH
+  // sides reach the prescribed hold — the slower side gates, preserving
+  // the asymmetry signal. No rep state machine runs (isometric).
   // ────────────────────────────────────────────────────────────────────────
   ex_004: {
     id: "ex_004",
     name: "Neck Lateral Flexion",
-    kind: "dynamic",
+    kind: "isometric",
     bilateral: true,
     bilateralMode: "bidirectional-alternating",
-    bidirectionalRepStrategy: "velocity-zero-crossing",
-    primaryMetric: {
-      name: "neckLateralFlexion",
-      thresholds: {
-        // Above the ±2° dead-band already used by `computeLateralNeckTilt`.
-        startThreshold: 5,
-        repCompleteThreshold: 2,
-        // Minimum peak to count as a rep at all. Peaks below this are
-        // silently discarded as false starts. 12° (lowered from the
-        // original 20° literature value in May 2026 for the rehab pilot)
-        // — also acts as the noise/settle guard for the bidirectional
-        // abs() path: post-rep return wobble rarely exceeds 12°, so this
-        // suppresses the opposite-side phantom reps that a lower floor
-        // (the reverted three-tier 4°) let through. Tradeoff accepted:
-        // genuine sub-12° reduced-ROM tilts are not counted.
-        minimumPeakThreshold: 12,
-        // Healthy adult cervical lateral flexion ROM is 30–45°; conservative
-        // home-exercise target is 30°. Source: AAOS clinical assessment ROM
-        // norms.
-        targetROM: 30,
+    isometric: {
+      metric: "neckLateralFlexion",
+      targetBand: {
+        // PLACEHOLDER values — the clinical hold angle and tolerance are
+        // still pending a clinician decision; revise before validation.
+        // This exercise is the ASSISTED stretch (decided 2026-06-11): one
+        // hand applies gentle overpressure on the head, so the held angle
+        // sits at end-range, not at a sub-maximal target. The band is
+        // therefore one-sided in practice — "at least 12° toward that
+        // side": [12°, 88°] = center 50 ± 38.
+        center: 50,
+        // ±38° puts the lower band edge at 12°: strictly positive — required
+        // for sign-based side attribution (enforced in validateRegistry) —
+        // and at the noise-validated 12° floor, so landmark jitter near
+        // neutral cannot accrue hold time for either side. The upper edge
+        // (88°) sits above anything observable: a recorded clean assisted
+        // session measured holds at 44–63° (p95 55°, max 63°) — an earlier
+        // 48° ceiling based on anatomical neck range turned out wrong for
+        // this ear-line measurement (shoulder drop and head translation
+        // push it past anatomical cervical ROM) and was silently discarding
+        // 45% of legitimate hold time at the deepest stretch.
+        // Hold-quality note: for a stretch, drifting DEEPER during the hold
+        // is expected tissue creep, not failure — read drift/droop stats for
+        // this exercise with the opposite sign convention from the ex_006
+        // strength hold.
+        tolerance: 38,
       },
-      // neckLateralFlexion is a signed angle in degrees, range ~0–30°. The
-      // global degree-scale default (1.0, 0.1) was tuned for the 0–150°
-      // arm-raise range; at ~5× smaller scale it is too light and landmark
-      // jitter crosses the 5° startThreshold, accumulating phantom reps
-      // while the patient holds still (same failure mode ex_003 documents,
-      // milder — its signal is ~3000× smaller, this one ~5×). The velocity
-      // segmenter also reads the filter's smoothed derivative, so ex_004 uses
-      // a lower derivative cutoff to avoid near-neutral velocity spikes. These
-      // are live-tuned starting values; too much smoothing can lag real reps.
-      smoothing: { minCutoff: 0.45, beta: 0.04, dCutoff: 0.8 },
     },
     compensationMetrics: [
       // Trunk lean during neck flexion = patient is bending the whole spine
-      // instead of isolating the neck. Strong quality indicator.
-      { name: "trunkLean", warningThreshold: 3 },
-      // Asymmetric shoulder elevation during neck flexion = patient is
-      // raising the shoulder to meet the ear instead of lowering the ear.
-      { name: "shoulderSymmetry", warningThreshold: 5 },
+      // instead of isolating the neck. Strong quality indicator. Unbraced-floor
+      // band override (6° vs global 2°): clean assisted holds sway 1.8–3.4° and
+      // the global floor deducted on ~54% of clean-hold frames. The warning
+      // threshold stays the tighter 3° (warning ≠ score deduction here).
+      { name: "trunkLean", warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+      // NOTE 2026-06-11: `shoulderSymmetry` was REMOVED from this
+      // compensation list. The exercise is the assisted stretch, where a
+      // sloped shoulder line is PRESCRIBED technique (the opposite shoulder
+      // is deliberately depressed while the hand pulls the head over) — a
+      // symmetric line-angle metric cannot distinguish that from the genuine
+      // cheat (hiking the bend-side shoulder up to meet the ear). Restoring
+      // shoulder-cheat detection needs a per-side, baseline-relative
+      // scapular check (direction-aware), which requires baseline capture
+      // on this exercise — future work. The raw shoulder line is still
+      // recorded every frame by the tuning trace, so the signal is measured
+      // even though it is not scored or warned on.
     ],
   },
 
   // ────────────────────────────────────────────────────────────────────────
   // ex_005 — Standing Side Bends (Trunk Lateral Flexion)
   // Patient stands upright, bends torso to one side, returns to neutral,
-  // alternates. Same bilateral-with-independent-state-machines pattern
-  // as neck flexion.
+  // and alternates. Unlike isometric ex_004, this exercise uses the dynamic
+  // bidirectional counter and attributes each completed motion from its sign.
   // ────────────────────────────────────────────────────────────────────────
   ex_005: {
     id: "ex_005",
@@ -615,11 +838,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Neck tilt during a trunk side bend usually means the patient is
       // tilting their head INSTEAD of bending the trunk — common on the
-      // side where trunk mobility is restricted.
-      { name: "neckTilt", warningThreshold: 5 },
+      // side where trunk mobility is restricted. Scored as `primary-coupled`:
+      // the head rides with the trunk through a clean side bend, so the
+      // deduction runs on the residual from the expected neck tilt at the
+      // current trunk flexion. Fit: expected ≈ 11.71 + 1.505·|trunkFlexion°|
+      // (clean-rep recording, n≈1299; the intercept is an in-rep envelope
+      // extrapolation, not an anatomical resting claim).
+      { name: "neckTilt", warningThreshold: 5,
+        scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" } },
       // Shoulder shrug during side bend = bracing through the shoulder
-      // girdle instead of moving from the spine.
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
+      // girdle instead of moving from the spine. Also `primary-coupled`: the
+      // shoulder line necessarily rises on the lengthening side of a clean
+      // bend. Fit: expected ≈ -0.0230 + 0.01306·|trunkFlexion°|.
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+        scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" } },
     ],
   },
 
@@ -651,13 +883,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Shoulder shrug while holding T-pose = trapezius substituting for
       // deltoid endurance. Common after the first 15–20 seconds of hold.
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true },
-      // Trunk lean during T-pose hold = unbalanced load between arms.
+      // Scored as `primary-coupled`: holding the arms at 90° already carries a
+      // baseline scapular elevation, so the deduction runs on the residual
+      // from the expected elevation at the current abduction. Fit: expected
+      // ≈ -0.0142 + 0.00093·|abduction°| (clean-hold recording, n≈3348).
+      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+        scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" } },
+      // Trunk lean during T-pose hold = unbalanced load between arms. Keeps the
+      // global floor — clean T-pose trunk lean is ~1° (mean deduction ~2.8).
       { name: "trunkLean", warningThreshold: 5 },
       // Uneven shoulder line during the hold — one shoulder rides higher than
       // the other. Drives the per-shoulder overlay boxes + "LOWER" arrow.
       // Starting threshold 5° (above the 3° landmark noise floor); tune live.
-      { name: "shoulderSymmetry", warningThreshold: 5 },
+      // Band override raises the score floor to 7° (resting asymmetry ~3.6°).
+      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
   },
 
@@ -672,9 +911,9 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   //   negative at rest (wrist below shoulder), positive overhead. The metric
   //   LETS NEGATIVES FLOW — see poseMetrics.ts SIGN DISCIPLINE block.
   //
-  // THRESHOLD STATUS (2026-05-21): starting estimates. NOT pilot-calibrated.
-  //   Live-tuning pass expected before final validation; revise here when
-  //   empirical traces come in. Don't treat current values as final.
+  // THRESHOLD STATUS (2026-06-11): tuned from one researcher recording.
+  //   These are single-subject pilot engineering values, not clinically
+  //   validated thresholds; a broader validation set is still required.
   // ────────────────────────────────────────────────────────────────────────
   ex_007: {
     id: "ex_007",
@@ -703,12 +942,18 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // just above shoulder height (smoothed peak <= 0.18) from intended
         // medium partial presses (smoothed peak >= 0.24). 0.21 sits in that
         // observed gap: lower motions remain false starts, while deliberate
-        // partial presses can be recorded. Peaks in [0.21, 0.6) classify as
-        // `partial`; >= 0.6 (targetROM) classify as `complete`.
+        // partial presses can be recorded. Peaks in [0.21, 0.85) classify as
+        // `partial`; >= 0.85 (targetROM) classify as `complete`.
         minimumPeakThreshold: 0.21,
-        // 0.6 = ~60% of trunk length above shoulder, ≈ arms fully extended
-        // overhead. STARTING value.
-        targetROM: 0.6,
+        // Tuned 2026-06-11 from a recorded clean session: full overhead
+        // presses peaked at 0.89–0.95 trunk lengths (p25 0.89, p50 0.92),
+        // so the earlier 0.6 starting value classified every rep complete
+        // and discriminated nothing. 0.85 keeps clean full extension
+        // "complete" while genuine partial presses classify as partial.
+        // Single-subject pilot value. NOTE: the near-peak warning gate is
+        // a fraction of targetROM, so peak-gated cues (elbow flexion) now
+        // surface near true full extension (~0.765) instead of mid-press.
+        targetROM: 0.85,
       },
       // Default 0.5 would be ~5× the entire signal range; descent could
       // never fire. 0.025 = half of repCompleteThreshold, well within
@@ -749,7 +994,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // Threshold lowered 160→150 (2026-06-05) alongside the 0.8→0.9 peak gate
       // so only a clearly-bent elbow at near-full ROM flags, not one still
       // finishing extension.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true },
+      // Warning-only (`scoring: off`): deducting elbow bend fairly needs
+      // direction-aware ("below") banded deduction tuned from live data —
+      // until that exists this metric must not score, and must not dilute
+      // the weight of the metrics that do.
+      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
     ],
   },
 
@@ -770,8 +1019,9 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   //   overhead motion from elbow-off-wall drift without a real wall or a
   //   per-patient baseline. The function/test remain for future restoration.
   //
-  // THRESHOLD STATUS (2026-05-21): starting estimates. NOT pilot-calibrated.
-  //   Live-tuning pass expected before final validation.
+  // THRESHOLD STATUS (2026-06-11): tuned from one researcher recording.
+  //   The tuned hysteresis counted all 15 recorded cycles on each side.
+  //   These remain single-subject pilot values, not clinical validation.
   // ────────────────────────────────────────────────────────────────────────
   ex_008: {
     id: "ex_008",
@@ -785,20 +1035,32 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     primaryMetric: {
       name: "shoulderAbduction",
       thresholds: {
-        // Reuse ex_001's resting noise floor and hysteresis band — same
-        // underlying metric, same noise profile.
-        startThreshold: 20,
-        repCompleteThreshold: 10,
-        // 100° = arm well into the overhead range. Wall Angels' ROM goes
-        // past horizontal (90°) up toward overhead (~150°), so a 60° floor
-        // (ex_001's value) is too lax here — it would count a horizontal
-        // arm raise as a "partial" Wall Angel, which it isn't.
-        // STARTING value, live-tuning required.
-        minimumPeakThreshold: 100,
+        // Tuned 2026-06-11 from a recorded clean session. Wall Angels rest
+        // at the W-POSITION between reps, not with arms at the sides: the
+        // recorded W rest level measured ~14–50° of abduction (p75 ≈ 50°),
+        // so the earlier lateral-raise-style 20/10 values only completed a
+        // rep when the arms dropped fully — the counter saw 7 of 15 clean
+        // reps on one side and 5 of 15 on the other. Start/complete must
+        // sit ABOVE the W so the counter re-arms on the return to W:
+        // start 85 (above the W band with margin, well below the Y-peaks
+        // at ~146–167°), complete 70 (15° hysteresis below start, above
+        // the W p75 of 50°). With these values every one of the recorded
+        // session's 15 clean cycles per side counts. Single-subject pilot
+        // values.
+        startThreshold: 85,
+        repCompleteThreshold: 70,
+        // 110° = clearly past horizontal into the W→Y slide. The recorded
+        // clean Y-peaks ran 146–167°, so 110 keeps deliberate partial
+        // slides countable while arm settles near the W (≤ ~50°) stay
+        // discarded.
+        minimumPeakThreshold: 110,
         // 150° ≈ arms-overhead position at full extension along the wall.
         // Foreshortening at full overhead is an accepted thesis limitation
         // (known foreshortening limitation in computeShoulderAbduction).
-        // STARTING value.
+        // Confirmed plausible by the 2026-06-11 recorded clean session:
+        // Y-peaks ran 146–167° (p50 ≈ 147), so clean full extension
+        // straddles 150 the same way ex_001's clean peaks straddle its 90°
+        // target.
         targetROM: 150,
       },
       // No descentEpsilon override (degree-scale, global 0.5 is fine).
@@ -821,7 +1083,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // (elbows ~90°) and only straighten near the Y-position at the top — the
       // warning must only surface near peak ROM, never through the W→Y slide.
       // Threshold lowered 160→150 (2026-06-05) alongside the 0.8→0.9 peak gate.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true },
+      // Warning-only (`scoring: off`): deducting elbow bend fairly needs
+      // direction-aware ("below") banded deduction tuned from live data —
+      // until that exists this metric must not score, and must not dilute
+      // the weight of the metrics that do.
+      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
       // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
       // elbow-off-wall detection) was REMOVED from this compensation list
       // after live-tuning iter #4. The metric was designed to flag an elbow
@@ -864,6 +1130,51 @@ export function getExerciseDefinition(id: string): ExerciseDefinition | null {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Validates one deduction-band list: non-empty, starts at zero deduction,
+ * strictly increasing `max`, deductions within 0–100, and continuous across
+ * boundaries (band[i+1].deductionMin === band[i].deductionMax). Shared by the
+ * global `COMPENSATION_BANDS` check and the per-exercise `bandsOverride` check
+ * so both enforce identical shape. Continuity matters beyond aesthetics:
+ * consumers that linearly interpolate over the knot points (e.g. the offline
+ * analytics pipeline reading the exported registry JSON) only compute the same
+ * function as the app's per-band interpolation when the bands form one
+ * continuous piecewise-linear curve. `label` names the source in errors.
+ */
+function validateBandList(bands: Band[] | undefined, label: string): void {
+  if (!bands || bands.length === 0) {
+    throw new Error(
+      `Registry invariant violated: ${label} must not be empty — delete the ` +
+      `entry/override entirely if the metric never deducts.`
+    );
+  }
+  let prevMax = 0;
+  let prevDeduction = 0;
+  for (const b of bands) {
+    if (!(b.max > prevMax)) {
+      throw new Error(
+        `Registry invariant violated: ${label} band maxes must be strictly ` +
+        `increasing (got ${b.max} after ${prevMax}).`
+      );
+    }
+    if (b.deductionMin !== prevDeduction) {
+      throw new Error(
+        `Registry invariant violated: ${label} is discontinuous at ` +
+        `max=${b.max}: deductionMin (${b.deductionMin}) must equal the ` +
+        `previous band's deductionMax (${prevDeduction}).`
+      );
+    }
+    if (b.deductionMin < 0 || b.deductionMax > 100 || b.deductionMax < b.deductionMin) {
+      throw new Error(
+        `Registry invariant violated: ${label} band at max=${b.max} must ` +
+        `satisfy 0 ≤ deductionMin ≤ deductionMax ≤ 100.`
+      );
+    }
+    prevMax = b.max;
+    prevDeduction = b.deductionMax;
+  }
+}
+
+/**
  * Validates the registry's threshold invariants at module load time.
  * Catches typos in threshold values that would otherwise silently break
  * rep counting (e.g., repCompleteThreshold accidentally set higher than
@@ -873,7 +1184,36 @@ export function getExerciseDefinition(id: string): ExerciseDefinition | null {
  * once the registry is verified — the JIT eliminates the dead checks.
  */
 function validateRegistry(): void {
+  // Global band-table shape (see validateBandList for the invariants).
+  for (const [metric, bands] of Object.entries(COMPENSATION_BANDS)) {
+    validateBandList(bands, `COMPENSATION_BANDS["${metric}"]`);
+  }
+
   for (const def of Object.values(EXERCISE_REGISTRY)) {
+    // Every scored compensation metric must have real deduction bands —
+    // either the global entry or a per-exercise `bandsOverride`. Warning-only
+    // metrics must say so explicitly (`scoring: { mode: "off" }`) instead of
+    // relying on a missing/zero band entry — a silent gap here once diluted
+    // the score weighting on Wall Angels.
+    for (const comp of def.compensationMetrics) {
+      // Per-exercise overrides obey the same shape rules as the global bands.
+      if (comp.bandsOverride !== undefined) {
+        validateBandList(
+          comp.bandsOverride,
+          `${def.id} compensation metric "${comp.name}" bandsOverride`,
+        );
+      }
+      if (getCompensationScoring(comp).mode === "off") continue;
+      const bands = getCompensationBands(comp);
+      if (!bands || !bands.some((b) => b.deductionMax > 0)) {
+        throw new Error(
+          `Registry invariant violated for ${def.id}: compensation metric ` +
+          `"${comp.name}" is scored but has no deduction bands with a ` +
+          `positive deduction (global or override). Either add deduction ` +
+          `bands or declare scoring: { mode: "off" } to make it warning-only.`
+        );
+      }
+    }
     if (def.bilateral && !def.bilateralMode) {
       throw new Error(
         `Registry invariant violated for ${def.id}: ` +
@@ -955,10 +1295,25 @@ function validateRegistry(): void {
       }
     }
     if (def.kind === "isometric") {
-      if (def.isometric.targetBand.tolerance <= 0) {
+      const band = def.isometric.targetBand;
+      if (band.tolerance <= 0) {
         throw new Error(
           `Registry invariant violated for ${def.id}: ` +
           `isometric tolerance must be positive.`
+        );
+      }
+      if (
+        def.bilateral &&
+        def.bilateralMode === "bidirectional-alternating" &&
+        !(band.center - band.tolerance > 0)
+      ) {
+        throw new Error(
+          `Registry invariant violated for ${def.id}: ` +
+          `a bidirectional-alternating isometric attributes sides from the ` +
+          `SIGN of one signed metric, so targetBand.center (${band.center}) − ` +
+          `tolerance (${band.tolerance}) must be > 0. A band that reaches 0 ` +
+          `would put BOTH sides "in band" at neutral and accrue hold time ` +
+          `without any tilt.`
         );
       }
     }

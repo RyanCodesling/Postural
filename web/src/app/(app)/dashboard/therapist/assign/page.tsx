@@ -19,6 +19,7 @@ interface Exercise {
   name: string;
   description: string;
   is_custom: boolean;
+  monitoring_mode: "camera" | "manual";
 }
 
 interface Program {
@@ -491,7 +492,8 @@ export default function AssignExercisePage() {
   const toggleDelete = (exerciseId: string) => {
     setDeleteSelected((prev) => {
       const next = new Set(prev);
-      next.has(exerciseId) ? next.delete(exerciseId) : next.add(exerciseId);
+      if (next.has(exerciseId)) next.delete(exerciseId);
+      else next.add(exerciseId);
       return next;
     });
   };
@@ -527,10 +529,10 @@ export default function AssignExercisePage() {
       setShowDeleteModal(false);
       showToast({
         variant: "success",
-        message: `Removed from ${selectedPatient?.name ?? "patient"} and synced.`,
+        message: `Prescriptions ended for ${selectedPatient?.name ?? "patient"}; history preserved.`,
       });
     } catch {
-      setDeleteError("Failed to delete exercises.");
+      setDeleteError("Failed to end prescriptions.");
     } finally {
       setDeleting(false);
     }
@@ -616,7 +618,7 @@ export default function AssignExercisePage() {
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
                 >
                   <TrashIcon />
-                  Delete Selected ({deleteSelected.size})
+                  End Selected ({deleteSelected.size})
                 </button>
               )}
             </div>
@@ -653,7 +655,7 @@ export default function AssignExercisePage() {
               ))}
             </div>
             <p className="text-xs text-gray-400 mt-1.5">
-              Check rows above to select exercises to delete.
+              Select prescriptions to end. Historical occurrences and sessions will be preserved.
             </p>
           </div>
         )}
@@ -807,9 +809,9 @@ export default function AssignExercisePage() {
           <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteModal(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Confirm Delete</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">End Prescriptions</h2>
               <p className="text-sm text-gray-500 mb-4">
-                The following exercises will be permanently removed from{" "}
+                The following prescriptions will stop future scheduling for{" "}
                 <span className="font-semibold text-gray-700">{selectedPatient?.name}</span>:
               </p>
 
@@ -834,7 +836,9 @@ export default function AssignExercisePage() {
                   ))}
               </div>
 
-              <p className="text-xs text-red-600 mb-4">This action cannot be undone.</p>
+              <p className="text-xs text-amber-700 mb-4">
+                Completed, missed, and session records remain available for historical review.
+              </p>
 
               {deleteError && (
                 <p className="text-xs text-red-600 mb-3">{deleteError}</p>
@@ -852,7 +856,7 @@ export default function AssignExercisePage() {
                   disabled={deleting}
                   className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
                 >
-                  {deleting ? "Deleting..." : "Delete"}
+                  {deleting ? "Ending..." : "End Prescriptions"}
                 </button>
               </div>
             </div>
@@ -1041,7 +1045,9 @@ function AssignRow({
             <span className="font-medium text-gray-900 text-sm">{exercise.name}</span>
             <span className="text-xs text-gray-400 font-mono">{exercise.id}</span>
             {exercise.is_custom && (
-              <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">custom</span>
+              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full">
+                manual · no camera
+              </span>
             )}
             {isExisting && (
               <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">assigned</span>
@@ -1070,6 +1076,11 @@ function AssignRow({
             )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">{exercise.description}</p>
+          {exercise.monitoring_mode === "manual" && (
+            <p className="mt-1 text-xs text-amber-700">
+              The patient completes this task manually; pose tracking and camera scoring are not used.
+            </p>
+          )}
         </div>
       </label>
       {checked && (

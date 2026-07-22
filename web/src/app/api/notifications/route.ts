@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   getNotifications,
   markNotificationAsRead,
@@ -10,19 +11,9 @@ import {
   clearActivityLogs,
 } from "@/lib/db";
 
-function getSessionUser(request: NextRequest) {
-  const authToken = request.cookies.get("auth_token");
-  if (!authToken) return null;
-  try {
-    return JSON.parse(authToken.value);
-  } catch {
-    return null;
-  }
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -49,11 +40,12 @@ export async function GET(request: NextRequest) {
 
     // Filter login/logout events out of the regular bell notifications list
     const notifications = allNotifications.filter(
-      (n: any) => n.type !== "user_login" && n.type !== "user_logout"
+      (notification: { type: string }) =>
+        notification.type !== "user_login" && notification.type !== "user_logout"
     );
 
     // Return empty array for realtimeLogs to disable top-floating popup toasts
-    const realtimeLogs: any[] = [];
+    const realtimeLogs: unknown[] = [];
 
     return NextResponse.json({ notifications, realtimeLogs });
   } catch (error) {
@@ -64,7 +56,7 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -89,7 +81,7 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const user = getSessionUser(request);
+    const user = await getAuthenticatedUser(request);
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

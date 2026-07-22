@@ -1,0 +1,12 @@
+# Isolated dependency environment for the comparison (keeps ml/.venv untouched).
+.venv/
+# Researcher-recorded clips stay local (dev test data, never deployed).
+clips/
+# Generated reports, parquet, and figures.
+out/
+# Cached model weights downloaded on first run.
+models/
+*.onnx
+*.tflite
+*.task
+__pycache__/

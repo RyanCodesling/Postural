@@ -29,7 +29,7 @@ Name the Database **`postural`** → Click Save
 Expand Login/Group Roles
 Right-click → Create → Login/Group Role
 General tab → Name: postural
-Definition tab → Password: nasa sprint updates gdocs yung pass (copy paste mo nalang)
+Definition tab → Password: choose a unique local password and keep it out of Git
 Privileges tab → Enable Can login?
 Click Save
 
@@ -42,17 +42,21 @@ Now run the sql by clicking Execute script or F5
 ### Step 6 — Create `.env.local` (ONE-TIME SETUP ONLY)
 If you don't have a `.env.local` file inside the `web/` folder, create one and add:
 ```
-DATABASE_URL=postgresql://postural:nasasprintupdatesgdocsyungpass@localhost:5432/postural
+DATABASE_URL=postgresql://postural:replace-with-your-local-password@localhost:5432/postural
+SESSION_SECRET=replace-with-a-generated-secret-of-at-least-32-random-bytes
 NODE_ENV=development
 ```
-> `.env.local` is gitignored — it will not be pushed to the GitHub repository. You only need to create this once; it persists across all branches.
+Generate `SESSION_SECRET` with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+
+> `.env.local` is gitignored and must never be committed. Rotate the previously documented shared database password if it is still active because removing it here does not remove it from Git history.
 
 ### Step 7 — Install dependencies
 ```bash
 cd web
 npm install
-npm audit fix
+npm audit
 ```
+Review audit findings before applying dependency upgrades.
 
 ### Step 8 — Run the app
 ```bash
@@ -88,7 +92,7 @@ Then go to `http://localhost:3000`.
 - **Clinic ID:** `CLINIC_001`
 
 ### Admin Account
-- **Email:** `admin@postural.com`
+- **Email:** `accbpostural.noreply@gmail.com`
 - **Password:** `admin123`
 - **Role:** Admin
 - **User ID:** `admin_001`
@@ -97,42 +101,41 @@ Then go to `http://localhost:3000`.
 ## Features Implemented
 
 ### 1. API Routes
-- **POST `/api/auth/login`** - Accepts email, password, and role. Queries database and returns user data with auth cookie.
+- **POST `/api/auth/login`** - Accepts email and password, verifies the current database user, and issues the signed session cookie.
+- **GET `/api/auth/me`** - Verifies the signed cookie, reloads the current non-archived database user, and returns a safe user DTO with `Cache-Control: no-store`.
 - **POST `/api/auth/logout`** - Clears the auth cookie.
 
 ### 2. Authentication Flow
-- Login credentials are displayed on the login page for easy testing
-- Role is selected via URL parameter (`?role=patient`, `?role=therapist`, `?role=admin`)
-- User data is stored in browser localStorage after login
-- Auth token is stored in an HTTP-only cookie
+- User identity is recovered from `/api/auth/me`; authentication does not trust localStorage
+- The HTTP-only `auth_token` cookie contains a signed, expiring session token
+- Protected API routes reload the current user from PostgreSQL and enforce role or ownership checks
 - Database queries validate credentials
+
+Old unsigned JSON cookies are rejected after deployment, so existing users must log in again.
 
 ### 3. Protected Routes
 The following routes are protected and require authentication:
-- `/dashboard` - Patient dashboard (requires patient login)
-- `/dashboard/therapist` - Therapist dashboard (requires therapist login)
-- `/dashboard/admin` - Admin CMS Interface (requires admin login)
-- `/profile` (requires login)
+- `/dashboard` and all dashboard subpaths
+- `/change-password` (requires a valid session)
 - `/camera` (requires login)
 
 ### 4. Utilities
-- `@/lib/auth.ts` - Helper functions for login, logout, and localStorage management
+- `@/lib/auth.ts` - Client helpers for login and logout requests
 - `@/lib/AuthContext.tsx` - React Context for managing user state across the app
+- `@/lib/session-token.ts` - Session signing, verification, expiry, and cookie options
+- `@/lib/auth-server.ts` - Database-backed server authentication and current-user loading
 - `@/lib/db.ts` - Database connection pool and query functions
-- `@/middleware.ts` - Route protection middleware
+- `@/proxy.ts` - Page-route session check and first-login redirect
 
 ## How to Use
 
 1. Set `DATABASE_URL` in `web/.env.local` with your PostgreSQL connection string
-2. Run `npm install` in the `web/` directory to install dependencies
-3. Import `scripts/user_credentials_pg.sql` into your PostgreSQL database
-4. Navigate to `http://localhost:3000/login`
-5. Choose between Patient, Therapist, or Admin using URL parameters:
-   - Patient: `http://localhost:3000/login?role=patient`
-   - Therapist: `http://localhost:3000/login?role=therapist`
-   - Admin: `http://localhost:3000/login?role=admin`
-6. Use the provided credentials to login
-7. After login, you'll be redirected to the appropriate dashboard
+2. Set a generated `SESSION_SECRET` in `web/.env.local`
+3. Run `npm install` in the `web/` directory to install dependencies
+4. Run the required SQL scripts in the order listed below
+5. Navigate to `http://localhost:3000/login`
+6. Enter the email and password for a seeded or administrator-created account
+7. After login, the server redirects the user to the dashboard for the role stored in PostgreSQL
 
 ## Admin Dashboard (CMS)
 The Admin panel allows system administrators to:
@@ -164,12 +167,12 @@ web/
 │   │   │   └── login/
 │   │   │       └── page.tsx
 │   │   └── layout.tsx
-│   └── lib/
-│       ├── auth.ts
-│       ├── AuthContext.tsx
-│       ├── db.ts (PostgreSQL connection pool)
-│       └── pose/
-├── middleware.ts
+│   ├── lib/
+│   │   ├── auth.ts
+│   │   ├── AuthContext.tsx
+│   │   ├── db.ts (PostgreSQL connection pool)
+│   │   └── pose/
+│   └── proxy.ts
 ├── .env.local
 └── package.json (uses pg)
 
@@ -182,7 +185,7 @@ scripts/
 The `users` table includes:
 - `id` - Primary key
 - `email` - User email (unique)
-- `password` - User password
+- `password` - bcrypt hash for created/updated accounts; the three local demo seeds retain a temporary plaintext compatibility fallback
 - `name` - User full name
 - `role` - User role (`patient`, `therapist`, `admin`)
 - `clinicId` - Clinic identifier (therapists only)
@@ -197,7 +200,24 @@ The `password_reset_otps` table includes:
 - `otp` - 6-digit OTP code
 - `expires_at` - When the OTP expires (5 minutes)
 - `used` - Whether the OTP has been consumed
+- `reset_token` - One-time token issued only after successful OTP verification
+- `reset_token_expires_at` - Reset-token expiry timestamp
 - `created_at` - Timestamp
+
+## Required SQL order
+
+To bring an existing PostgreSQL database up to the current application schema, run these scripts as the database owner/superuser (for example, `postgres`):
+
+1. `scripts/user_credentials_pg.sql`
+2. `scripts/exercises_pg.sql`
+3. `scripts/patient_exercises_pg.sql`
+4. `scripts/sessions_pg.sql`
+5. `scripts/exercise_occurrences_pg.sql`
+6. `scripts/email_features.sql`
+7. `scripts/reset_token_migration.sql`
+8. `scripts/notifications_pg.sql`
+
+Keep the exercise-preservation scripts in the order shown. Exercises must exist before prescriptions, sessions depend on prescriptions, and the occurrence script adds the occurrence link to the existing sessions table. Run notifications last because its optional occurrence foreign key depends on `exercise_occurrences`.
 
 ---
 
@@ -234,16 +254,14 @@ SMTP_FROM=accbpostural.noreply@gmail.com
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-### ‼️ Run the Email Features SQL Migration
-Right-click the `postural` database → Query Tool
-Open File → select `scripts/email_features.sql`
-Run the SQL by clicking Execute script or F5
+### ‼️ Run the Email and Reset-Token Migrations
+After the user, exercise, prescription, session, and occurrence schemas above are current, run `scripts/email_features.sql`, then `scripts/reset_token_migration.sql`, followed by `scripts/notifications_pg.sql`. The reset-token migration is required because password reset accepts only a token issued after successful OTP verification.
 
 ### New API Routes
-- **POST `/api/auth/change-password`** — Changes user password (requires userId, currentPassword, newPassword)
+- **POST `/api/auth/change-password`** — Changes the authenticated user's password (requires currentPassword and newPassword; a mismatched userId is rejected)
 - **POST `/api/auth/forgot-password`** — Sends OTP to user email (requires email)
-- **POST `/api/auth/verify-otp`** — Verifies OTP code (requires email, otp)
-- **POST `/api/auth/reset-password`** — Resets password after OTP verification (requires email, newPassword)
+- **POST `/api/auth/verify-otp`** — Verifies OTP code and returns a one-time reset token (requires email and otp)
+- **POST `/api/auth/reset-password`** — Resets password after OTP verification (requires email, newPassword, and resetToken)
 
 ### New Pages
 - **`/change-password`** — Force password change page (shown after first-time login)

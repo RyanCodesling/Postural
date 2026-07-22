@@ -106,8 +106,9 @@ validity) takes longer and is not required to defend the work.
   movement smoothness," J. NeuroEng. Rehabil. (2015).
 - **Synthetic data & the sim-to-real gap** — the biggest limitation and the #1
   thing a panel will probe. "The model is only as good as the generator"; why
-  results are framed as *feasibility*; domain randomization; why a real held-out
-  set matters. *In code:* the generator under `generators/`. *Learn:* search
+  results are framed as *feasibility*; domain randomization; why a newly collected
+  untouched real set matters. Sessions 168–174 are not eligible because they
+  informed threshold, scoring, and generator choices. *In code:* the generator under `generators/`. *Learn:* search
   "sim-to-real gap," "domain randomization (Tobin et al. 2017)," and "synthetic
   data fidelity vs utility."
 - **The probability distributions actually used** — **Beta** (overall severity)
@@ -140,7 +141,8 @@ validity) takes longer and is not required to defend the work.
 1. **Probability calibration** — why the score is a *calibrated probability*, and
    what sigmoid calibration does. (The code does something non-obvious here.)
 2. **Synthetic-data validity / sim-to-real** — why the results are *feasibility*,
-   not clinical proof, and why the real held-out test set is the credibility step.
+   not clinical proof, and why a new real test set collected after protocol freeze
+   is the credibility step.
 3. **Leave-one-subject-out + data leakage** — why subject-grouped evaluation is
    the honest way to estimate generalization.
 

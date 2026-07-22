@@ -33,6 +33,10 @@ export type OccurrenceState =
   | "overdue"
   | "missed";
 
+// Patient schedule-page sections. "current" includes anything due today plus
+// unfinished earlier work whose make-up window remains open.
+export type ScheduleBucket = "current" | "upcoming" | "history";
+
 // Per-calendar-day rollup across every occurrence due that day.
 export type DayState = "rest" | "due" | "overdue" | "partial" | "missed" | "complete";
 
@@ -166,6 +170,31 @@ export function deriveOccurrenceState(
   return occ.makeupUntil >= todayKey ? "overdue" : "missed";
 }
 
+// Mirrors the server-side session-start gate: only unfinished work whose due
+// date has arrived and whose make-up window is still open is actionable today.
+// Keeping this separate from assignment-level rollups prevents old, mixed
+// completion history from looking like a currently startable prescription.
+export function isOccurrenceActionable(
+  occ: OccurrenceLite,
+  todayKey: string
+): boolean {
+  return (
+    occ.status !== "completed" &&
+    occ.dueDate <= todayKey &&
+    occ.makeupUntil >= todayKey
+  );
+}
+
+export function classifyScheduleOccurrence(
+  occ: OccurrenceLite,
+  todayKey: string
+): ScheduleBucket {
+  if (occ.dueDate === todayKey || isOccurrenceActionable(occ, todayKey)) {
+    return "current";
+  }
+  return occ.dueDate > todayKey ? "upcoming" : "history";
+}
+
 // Collapse all occurrences due on one calendar day into a single calendar state.
 //   rest     — nothing was due
 //   complete — every due occurrence completed
@@ -185,6 +214,35 @@ export function rollupDay(
   if (dayKey >= todayKey) return "due";
   const anyOpen = due.some((o) => o.makeupUntil >= todayKey);
   return anyOpen ? "overdue" : "missed";
+}
+
+// Collapse one prescription's dated occurrences into the assignment-level badge
+// used by the dashboard cards. Future pending dates should not pull a completed
+// current/due prescription back to "in_progress".
+export function deriveAssignmentStatus(
+  occurrences: OccurrenceLite[],
+  todayKey: string,
+  fallbackStatus: OccurrenceStatus = "pending"
+): OccurrenceStatus {
+  if (occurrences.length === 0) return fallbackStatus;
+
+  const currentWindow = occurrences.filter(
+    (occ) => occ.dueDate <= todayKey && occ.makeupUntil >= todayKey
+  );
+  if (currentWindow.length > 0) return rollupAssignmentWindow(currentWindow);
+
+  const dueToDate = occurrences.filter((occ) => occ.dueDate <= todayKey);
+  if (dueToDate.length > 0) return rollupAssignmentWindow(dueToDate);
+
+  return "pending";
+}
+
+function rollupAssignmentWindow(occurrences: OccurrenceLite[]): OccurrenceStatus {
+  if (occurrences.every((occ) => occ.status === "completed")) return "completed";
+  if (occurrences.some((occ) => occ.status === "completed" || occ.status === "in_progress")) {
+    return "in_progress";
+  }
+  return "pending";
 }
 
 // ── Display ──────────────────────────────────────────────────────────────────

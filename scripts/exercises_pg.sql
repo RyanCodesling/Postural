@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   name                 VARCHAR(255) NOT NULL,
   description          TEXT         NOT NULL,
   is_custom            BOOLEAN      NOT NULL DEFAULT FALSE,
-  owner_therapist_id   VARCHAR(50)  REFERENCES users(id) ON DELETE SET NULL,
+  owner_therapist_id   VARCHAR(50)  REFERENCES users(id) ON DELETE RESTRICT,
   monitoring_mode      VARCHAR(20)  NOT NULL DEFAULT 'camera'
                                      CHECK (monitoring_mode IN ('camera', 'manual')),
   archived_at          TIMESTAMPTZ,
@@ -17,11 +17,18 @@ CREATE TABLE IF NOT EXISTS exercises (
 -- Safe to re-run on existing tables
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS is_custom BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS owner_therapist_id VARCHAR(50)
-  REFERENCES users(id) ON DELETE SET NULL;
+  REFERENCES users(id) ON DELETE RESTRICT;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS monitoring_mode VARCHAR(20) NOT NULL DEFAULT 'camera';
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50)
   REFERENCES users(id) ON DELETE SET NULL;
+
+-- Ownership is durable history. Archive the therapist account while any custom
+-- exercise remains attributed to it; do not silently erase ownership.
+ALTER TABLE exercises DROP CONSTRAINT IF EXISTS exercises_owner_therapist_id_fkey;
+ALTER TABLE exercises
+  ADD CONSTRAINT exercises_owner_therapist_id_fkey
+  FOREIGN KEY (owner_therapist_id) REFERENCES users(id) ON DELETE RESTRICT;
 
 DO $$
 BEGIN

@@ -76,13 +76,45 @@ export async function PATCH(
     }
 
     const body = await request.json().catch(() => ({}));
-    await endSession(sessionId, {
+    const allowedKeys = new Set([
+      "captureQualitySummary",
+      "notes",
+      "completed",
+      "endReason",
+    ]);
+    const unknownKeys = Object.keys(body).filter((key) => !allowedKeys.has(key));
+    if (unknownKeys.length > 0) {
+      return NextResponse.json(
+        { error: `Unsupported fields: ${unknownKeys.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    if (body.completed !== true && body.endReason !== "user" && body.endReason !== "pain") {
+      return NextResponse.json(
+        { error: "Incomplete sessions require endReason user or pain." },
+        { status: 400 },
+      );
+    }
+    if (
+      body.completed === true &&
+      body.endReason !== undefined &&
+      body.endReason !== "completed"
+    ) {
+      return NextResponse.json(
+        { error: "Completed sessions cannot use another end reason." },
+        { status: 400 },
+      );
+    }
+    const transitioned = await endSession(sessionId, {
       captureQualitySummary: body?.captureQualitySummary,
       notes: typeof body?.notes === "string" ? body.notes : undefined,
       completed: body?.completed === true,
-      endReason: typeof body?.endReason === "string" ? body.endReason : undefined,
+      endReason:
+        body?.endReason === "user" || body?.endReason === "pain"
+          ? body.endReason
+          : undefined,
     });
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, transitioned });
   } catch (error) {
     console.error("PATCH /api/sessions/[id] error:", error);
     return NextResponse.json({ error: "Failed to end session" }, { status: 500 });

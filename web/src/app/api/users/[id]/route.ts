@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken, createNotification } from "@/lib/db";
+import {
+  PermanentUserDeletionError,
+  archiveUser,
+  createNotification,
+  deleteUser,
+  getUserById,
+  isEmailTaken,
+  restoreUser,
+  updateUser,
+} from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   sendEmailChangedToOldAddress,
@@ -213,14 +222,11 @@ export async function DELETE(
     const { searchParams } = request.nextUrl;
     const isPermanent = searchParams.get("permanent") === "true";
 
-    // Capture user data before deleting/archiving for email notifications
-    const userToProcess = await getUserById(id);
-    if (!userToProcess) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
     if (isPermanent) {
-      await deleteUser(id);
+      // The transactional helper returns the locked target row only after the
+      // archived/history-free eligibility checks and DELETE have succeeded.
+      // That keeps failure responses from triggering deletion emails.
+      const userToProcess = await deleteUser(id, String(authenticatedUser.id));
 
       // Send delete notifications fire-and-forget
       if (userToProcess.email) {
@@ -244,6 +250,11 @@ export async function DELETE(
 
       return NextResponse.json({ success: true, message: "User permanently deleted." });
     } else {
+      // Capture user data before archiving for email notifications.
+      const userToProcess = await getUserById(id);
+      if (!userToProcess) {
+        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      }
       await archiveUser(id);
 
       // Send archive notifications fire-and-forget
@@ -269,6 +280,16 @@ export async function DELETE(
       return NextResponse.json({ success: true, message: "User archived." });
     }
   } catch (error) {
+    if (error instanceof PermanentUserDeletionError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: error.code,
+          blockers: error.blockers,
+        },
+        { status: error.code === "not_found" ? 404 : 409 },
+      );
+    }
     console.error("DELETE /api/users/[id] error:", error);
     return NextResponse.json({ error: "Failed to process delete/archive request" }, { status: 500 });
   }

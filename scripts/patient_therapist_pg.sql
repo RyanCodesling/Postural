@@ -8,17 +8,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id VARCHAR(50);
 
 CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
 
--- Add FK constraint only if it does not already exist
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'fk_therapist_id'
-  ) THEN
-    ALTER TABLE users
-      ADD CONSTRAINT fk_therapist_id
-      FOREIGN KEY (therapist_id) REFERENCES users(id) ON DELETE SET NULL;
-  END IF;
-END $$;
+-- Patient assignment is durable while the patient record exists. Removing a
+-- therapist account must not silently detach assigned patients; archive it or
+-- explicitly reassign those patients first.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_therapist_id;
+ALTER TABLE users
+  ADD CONSTRAINT fk_therapist_id
+  FOREIGN KEY (therapist_id) REFERENCES users(id) ON DELETE RESTRICT;
 
 -- Query to view all current patient-therapist assignments:
 -- SELECT

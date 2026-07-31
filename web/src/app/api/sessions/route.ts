@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   createSession,
-  getPatientExercises,
   getSessionsForPatient,
   getUsers,
   SessionNotScheduledError,
@@ -57,35 +56,38 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const patientExerciseId = Number(body?.patientExerciseId);
+    const occurrenceId = Number(body?.occurrenceId);
     const exerciseId = body?.exerciseId;
 
-    if (!Number.isInteger(patientExerciseId) || typeof exerciseId !== "string") {
+    if (
+      !Number.isInteger(patientExerciseId) ||
+      patientExerciseId < 1 ||
+      !Number.isInteger(occurrenceId) ||
+      occurrenceId < 1 ||
+      typeof exerciseId !== "string"
+    ) {
       return NextResponse.json(
-        { error: "patientExerciseId (integer) and exerciseId (string) are required" },
+        {
+          error:
+            "patientExerciseId (integer), occurrenceId (integer), and exerciseId (string) are required",
+        },
         { status: 400 },
-      );
-    }
-
-    // Verify the patient_exercise belongs to this patient (and matches the
-    // exercise id) before creating a session against it.
-    const assigned = await getPatientExercises(user.id);
-    const owns = assigned.some(
-      (pe) => pe.id === patientExerciseId && pe.exercise_id === exerciseId,
-    );
-    if (!owns) {
-      return NextResponse.json(
-        { error: "patient_exercise not found for this patient" },
-        { status: 403 },
       );
     }
 
     const session = await createSession({
       patientId: user.id,
       patientExerciseId,
+      occurrenceId,
       exerciseId,
       deviceInfo: body?.deviceInfo,
     });
-    return NextResponse.json({ sessionId: session.id, startedAt: session.startedAt });
+    return NextResponse.json({
+      sessionId: session.id,
+      startedAt: session.startedAt,
+      runtimePrescription: session.runtimePrescription,
+      context: session.context,
+    });
   } catch (error) {
     // Strict schedule lock: nothing actionable for this exercise today.
     if (error instanceof SessionNotScheduledError) {

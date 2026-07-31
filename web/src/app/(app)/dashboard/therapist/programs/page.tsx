@@ -7,6 +7,16 @@ import {
   isIsometricExercise,
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
+import {
+  formatResistanceContext,
+  parseResistanceContext,
+  type PrescribedSide,
+  type ResistanceContext,
+} from "@/lib/prescriptionContext";
+import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import MovementContextFields, {
+  type MovementContextForm,
+} from "../_components/MovementContextFields";
 
 interface Exercise {
   id: string;
@@ -25,6 +35,17 @@ interface ProgramExercise {
   reps?: number | null;
   restSeconds?: number | null;
   holdSeconds?: number | null;
+  sequenceIndex?: number | null;
+  prescribedSide?: PrescribedSide;
+  resistanceType?:
+    | "unknown"
+    | "none"
+    | "external_weight"
+    | "resistance_band"
+    | "other";
+  resistanceValue?: number | string | null;
+  resistanceUnit?: "kg" | "lb" | null;
+  resistanceLabel?: string | null;
 }
 
 interface ExerciseProgram {
@@ -35,12 +56,26 @@ interface ExerciseProgram {
   exercises: ProgramExercise[];
 }
 
-type ExerciseParams = {
+type ExerciseParams = MovementContextForm & {
   sets?: number;
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
+  sequenceIndex?: number;
 };
+
+function programResistance(exercise: ProgramExercise): ResistanceContext {
+  const value =
+    exercise.resistanceValue == null
+      ? null
+      : Number(exercise.resistanceValue);
+  return {
+    type: exercise.resistanceType ?? "unknown",
+    value: value !== null && Number.isFinite(value) ? value : null,
+    unit: exercise.resistanceUnit ?? null,
+    label: exercise.resistanceLabel ?? null,
+  };
+}
 
 export default function ExerciseProgramsPage() {
   const [programs, setPrograms] = useState<ExerciseProgram[]>([]);
@@ -129,6 +164,21 @@ export default function ExerciseProgramsPage() {
         });
       } else {
         next.add(exerciseId);
+        setExerciseParams((params) => ({
+          ...params,
+          [exerciseId]: {
+            ...params[exerciseId],
+            sequenceIndex:
+              params[exerciseId]?.sequenceIndex ??
+              nextExerciseSequenceIndex(
+                Array.from(next, (selectedId) =>
+                  selectedId === exerciseId
+                    ? undefined
+                    : params[selectedId]?.sequenceIndex,
+                ),
+              ),
+          },
+        }));
       }
       return next;
     });
@@ -183,14 +233,21 @@ export default function ExerciseProgramsPage() {
       reps?: number;
       restSeconds: number;
       holdSeconds?: number;
+      sequenceIndex: number;
+      prescribedSide: PrescribedSide;
+      resistanceType: Exclude<ResistanceContext["type"], "unknown">;
+      resistanceValue: number | null;
+      resistanceUnit: ResistanceContext["unit"];
+      resistanceLabel: string | null;
     }[] = [];
 
-    selectedExercises.forEach((exId) => {
+    Array.from(selectedExercises).forEach((exId, selectedIndex) => {
       const ex = exercises.find((e) => e.id === exId);
       if (!ex) return;
       const p = exerciseParams[exId] ?? {};
       const isIsometric = isIsometricExercise(ex.id);
       const restSeconds = p.restSeconds == null || p.restSeconds < 0 ? 60 : p.restSeconds;
+      const resistance = parseResistanceContext(p);
       result.push({
         exerciseId: ex.id,
         name: ex.name,
@@ -200,6 +257,15 @@ export default function ExerciseProgramsPage() {
         reps: isIsometric ? undefined : p.reps,
         restSeconds,
         holdSeconds: isIsometric ? getDisplayHoldSeconds(p.holdSeconds) : undefined,
+        sequenceIndex: p.sequenceIndex ?? selectedIndex + 1,
+        prescribedSide: p.prescribedSide ?? "both",
+        resistanceType: resistance.type as Exclude<
+          ResistanceContext["type"],
+          "unknown"
+        >,
+        resistanceValue: resistance.value,
+        resistanceUnit: resistance.unit,
+        resistanceLabel: resistance.label,
       });
     });
 
@@ -210,9 +276,29 @@ export default function ExerciseProgramsPage() {
     if (!programName.trim()) {
       setErrorTitle("Required Fields"); setErrorMsg("Please enter a program name."); setShowErrorModal(true); return;
     }
-    const exPayload = buildExercisePayload();
+    let exPayload;
+    try {
+      exPayload = buildExercisePayload();
+    } catch (error) {
+      setErrorTitle("Invalid Movement Context");
+      setErrorMsg(
+        error instanceof Error ? error.message : "Check the resistance details.",
+      );
+      setShowErrorModal(true);
+      return;
+    }
     if (exPayload.length === 0) {
       setErrorTitle("Required Fields"); setErrorMsg("Please select at least one exercise."); setShowErrorModal(true); return;
+    }
+    const sequenceIndexes = exPayload.map((exercise) => exercise.sequenceIndex);
+    if (
+      sequenceIndexes.some((value) => !Number.isInteger(value) || value < 1) ||
+      new Set(sequenceIndexes).size !== sequenceIndexes.length
+    ) {
+      setErrorTitle("Invalid Exercise Order");
+      setErrorMsg("Each exercise needs a unique positive whole-number order.");
+      setShowErrorModal(true);
+      return;
     }
 
     setSaving(true);
@@ -263,6 +349,20 @@ export default function ExerciseProgramsPage() {
           reps: ex.reps ?? undefined,
           restSeconds: ex.restSeconds ?? undefined,
           holdSeconds: ex.holdSeconds ?? undefined,
+          sequenceIndex: ex.sequenceIndex ?? undefined,
+          prescribedSide: ex.prescribedSide ?? "both",
+          resistanceType:
+            ex.resistanceType === "external_weight" ||
+            ex.resistanceType === "resistance_band" ||
+            ex.resistanceType === "other"
+              ? ex.resistanceType
+              : "none",
+          resistanceValue:
+            ex.resistanceValue == null
+              ? undefined
+              : Number(ex.resistanceValue),
+          resistanceUnit: ex.resistanceUnit ?? undefined,
+          resistanceLabel: ex.resistanceLabel ?? undefined,
         };
       }
     });
@@ -450,7 +550,26 @@ export default function ExerciseProgramsPage() {
                       </label>
 
                       {checked && (
-                        <div className="mt-3 grid grid-cols-3 gap-3 pl-7">
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 pl-7">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Order</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={p.sequenceIndex ?? ""}
+                              onChange={(e) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: {
+                                    ...prev[ex.id],
+                                    sequenceIndex: e.target.value ? Number(e.target.value) : undefined,
+                                  },
+                                }))
+                              }
+                              placeholder="1"
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Sets</label>
                             <input
@@ -528,6 +647,17 @@ export default function ExerciseProgramsPage() {
                               }
                               placeholder="60"
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div className="col-span-2 sm:col-span-4">
+                            <MovementContextFields
+                              value={p}
+                              onChange={(patch) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: { ...prev[ex.id], ...patch },
+                                }))
+                              }
                             />
                           </div>
                         </div>
@@ -577,7 +707,26 @@ export default function ExerciseProgramsPage() {
                       </label>
 
                       {checked && (
-                        <div className="mt-3 grid grid-cols-3 gap-3 pl-7">
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 pl-7">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Order</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={p.sequenceIndex ?? ""}
+                              onChange={(e) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: {
+                                    ...prev[ex.id],
+                                    sequenceIndex: e.target.value ? Number(e.target.value) : undefined,
+                                  },
+                                }))
+                              }
+                              placeholder="1"
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Sets</label>
                             <input
@@ -655,6 +804,17 @@ export default function ExerciseProgramsPage() {
                               }
                               placeholder="60"
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div className="col-span-2 sm:col-span-4">
+                            <MovementContextFields
+                              value={p}
+                              onChange={(patch) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: { ...prev[ex.id], ...patch },
+                                }))
+                              }
                             />
                           </div>
                         </div>
@@ -787,6 +947,7 @@ export default function ExerciseProgramsPage() {
                                 className="text-xs px-2 py-1 rounded-full font-medium bg-green-50 text-green-600 border border-green-200"
                               >
                                 {ex.name}
+                                {` #${ex.sequenceIndex ?? i + 1}`}
                                 {hasPrescription && (
                                   <>
                                     {" — "}
@@ -796,6 +957,10 @@ export default function ExerciseProgramsPage() {
                                       reps: ex.reps,
                                       holdSeconds: ex.holdSeconds,
                                     })}
+                                    {" · "}
+                                    {ex.prescribedSide ?? "both"}
+                                    {" · "}
+                                    {formatResistanceContext(programResistance(ex))}
                                   </>
                                 )}
                               </span>

@@ -96,5 +96,18 @@ test("future prescription is upcoming and not started", () => {
   assertEqual(summary.adherenceState, "not_started", "adherence state");
 });
 
+test("pain-stopped work is not counted as missed or assessed completion", () => {
+  const summary = summarizePrescription({
+    occurrences: [occ("2026-07-17", "pain_stopped")],
+    endDate: "2026-07-17",
+    todayKey: "2026-07-18",
+  });
+
+  assertEqual(summary.painStoppedCount, 1, "pain-stopped count");
+  assertEqual(summary.missedCount, 0, "missed count");
+  assertEqual(summary.remainingCount, 0, "remaining count");
+  assertEqual(summary.adherenceState, "not_assessed", "adherence state");
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exitCode = 1;

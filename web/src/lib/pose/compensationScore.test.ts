@@ -110,20 +110,18 @@ test("negative values are scored by magnitude: −10° trunkLean → 65", () => 
   );
 });
 
-test("neckTilt static-fallback knots via ex_005 (no primary): 5°→100, 7.5°→83, 10°→65", () => {
-  // ex_005 neckTilt is primary-coupled; with NO primaryValue it falls back to
-  // static |value|, exercising the global neckTilt knots.
+test("primary-coupled ex_005 channels are unavailable without a primary value", () => {
   const score = (v: number) =>
     computeCompensationScore(ex005, { neckTilt: v, scapularElevation: null });
-  assertEq(score(5), 100, "5° (dead-band edge)");
-  assertEq(score(7.5), 83, "7.5° (round(82.5))");
-  assertEq(score(10), 65, "10°");
+  assertEq(score(5), null, "5°");
+  assertEq(score(7.5), null, "7.5°");
+  assertEq(score(10), null, "10°");
 });
 
-test("scapularElevation static-fallback knot via ex_005 (no primary): 0.04 → 65", () => {
+test("primary-coupled scapular elevation is unavailable without a primary value", () => {
   assertEq(
     computeCompensationScore(ex005, { scapularElevation: 0.04, neckTilt: null }),
-    65,
+    null,
     "0.04 torso-lengths",
   );
 });
@@ -321,16 +319,15 @@ test("primary-coupled: primary sign is ignored (|primary|)", () => {
   );
 });
 
-test("primary-coupled: missing primary falls back to static |value|", () => {
-  // value 15 statically → deduction 87.5 → round(12.5) = 13.
+test("primary-coupled: missing primary is unavailable instead of using a static fallback", () => {
   assertEq(
     computeCompensationScore(coupledDef, { trunkLean: 15 }, null),
-    13,
+    null,
     "null primary",
   );
   assertEq(
     computeCompensationScore(coupledDef, { trunkLean: 15 }),
-    13,
+    null,
     "omitted primary",
   );
 });

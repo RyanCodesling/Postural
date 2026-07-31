@@ -10,14 +10,15 @@
 --                NOT video; no image/frame bytes are stored.
 --
 -- Scope note: raw_frames is intentionally metric-only. The camera writer
--- records upper-body tuning traces for any active exercise (trace_kind
--- upper_body_v2), gated behind an opt-in "Record tuning trace" toggle in the
--- patient camera UI. Earlier rows use the ex_007-only ex_007_upper_body_v1
--- payload; both kinds coexist — trace_kind versioning is this table's design.
+-- records upper-body tuning traces for any active exercise (current trace_kind
+-- upper_body_v3), gated behind an opt-in "Record tuning trace" toggle in the
+-- patient camera UI. Earlier rows use upper_body_v2 or the ex_007-only
+-- ex_007_upper_body_v1 payload; all kinds coexist because trace_kind versioning
+-- is this table's design.
 
 CREATE TABLE IF NOT EXISTS sessions (
   id                       SERIAL       PRIMARY KEY,
-  patient_id               VARCHAR(50)  NOT NULL REFERENCES users(id)              ON DELETE CASCADE,
+  patient_id               VARCHAR(50)  NOT NULL REFERENCES users(id)              ON DELETE RESTRICT,
   patient_exercise_id      INTEGER      NOT NULL REFERENCES patient_exercises(id)  ON DELETE RESTRICT,
   -- Stored directly (in addition to being reachable via patient_exercise_id)
   -- so per-exercise queries don't need the join.
@@ -28,7 +29,20 @@ CREATE TABLE IF NOT EXISTS sessions (
   capture_quality_summary  JSONB,
   notes                    TEXT,
   -- How the session ended; see the idempotent ALTER below for the values.
-  end_reason               TEXT
+  end_reason               TEXT,
+  -- Immutable context captured at session start. Legacy sessions stay NULL;
+  -- their historical context is deliberately not fabricated.
+  context_snapshot         JSONB,
+  context_snapshot_version INT,
+  context_captured_at      TIMESTAMPTZ,
+  registry_version         TEXT,
+  exercise_config_version  TEXT,
+  app_revision             TEXT,
+  pain_report_status       TEXT NOT NULL DEFAULT 'not_reported',
+  pain_score               SMALLINT,
+  pain_timing              TEXT,
+  pain_body_area           VARCHAR(80),
+  pain_reported_at         TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_patient ON sessions (patient_id, started_at DESC);
@@ -41,6 +55,48 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS notes                   TEXT;
 -- finished, 'superseded' = auto-closed when a newer session for the same
 -- assignment started, NULL = still open (tab close / navigation / exit).
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS end_reason              TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_snapshot         JSONB;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_snapshot_version INT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_captured_at      TIMESTAMPTZ;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS registry_version         TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS exercise_config_version  TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS app_revision             TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pain_report_status        TEXT NOT NULL DEFAULT 'not_reported';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pain_score                SMALLINT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pain_timing               TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pain_body_area            VARCHAR(80);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pain_reported_at          TIMESTAMPTZ;
+
+-- Completed and partial sessions are durable patient history.
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_patient_id_fkey;
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_patient_id_fkey
+  FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE RESTRICT;
+
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_end_reason_check;
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_end_reason_check
+  CHECK (end_reason IS NULL OR end_reason IN ('completed', 'user', 'pain', 'superseded'));
+
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_pain_report_check;
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_pain_report_check CHECK (
+    pain_report_status IN ('not_reported', 'reported', 'declined')
+    AND (pain_score IS NULL OR pain_score BETWEEN 0 AND 10)
+    AND (pain_timing IS NULL OR pain_timing IN ('during', 'after', 'both'))
+    AND (
+      (pain_report_status = 'not_reported'
+        AND pain_score IS NULL AND pain_timing IS NULL
+        AND pain_body_area IS NULL AND pain_reported_at IS NULL)
+      OR
+      (pain_report_status = 'declined'
+        AND pain_score IS NULL AND pain_timing IS NULL
+        AND pain_body_area IS NULL AND pain_reported_at IS NOT NULL)
+      OR
+      (pain_report_status = 'reported'
+        AND pain_score IS NOT NULL AND pain_reported_at IS NOT NULL)
+    )
+  );
 -- occurrence_id (the scheduled day this session fulfilled) is added by
 -- exercise_occurrences_pg.sql, so the FK target table exists before the column.
 
@@ -77,10 +133,33 @@ CREATE TABLE IF NOT EXISTS set_events (
   hold_quality    JSONB
 );
 
-CREATE INDEX IF NOT EXISTS idx_set_events_session ON set_events (session_id, set_index);
-
 -- Safe to re-run: adds the hold-quality JSONB to an existing set_events table.
 ALTER TABLE set_events ADD COLUMN IF NOT EXISTS hold_quality JSONB;
+ALTER TABLE set_events DROP CONSTRAINT IF EXISTS set_events_terminated_by_check;
+ALTER TABLE set_events
+  ADD CONSTRAINT set_events_terminated_by_check
+  CHECK (terminated_by IN ('min_reached', 'user', 'pain', 'capture_lost', 'stall'));
+
+-- Refuse to hide pre-existing corruption. Resolve any reported session/set pair
+-- before rerunning this migration; once created, the unique index makes browser
+-- retries and overlapping requests safely idempotent.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM set_events
+     GROUP BY session_id, set_index
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION
+      'Duplicate set_events rows exist for (session_id, set_index); resolve them before adding uq_set_events_session_set_index'
+      USING ERRCODE = '23505';
+  END IF;
+END $$;
+
+DROP INDEX IF EXISTS idx_set_events_session;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_set_events_session_set_index
+  ON set_events (session_id, set_index);
 
 CREATE TABLE IF NOT EXISTS rep_events (
   id              SERIAL            PRIMARY KEY,
@@ -108,7 +187,23 @@ CREATE TABLE IF NOT EXISTS rep_events (
   end_ts          TIMESTAMPTZ       NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_rep_events_session ON rep_events (session_id, rep_index);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM rep_events
+     GROUP BY session_id, rep_index
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION
+      'Duplicate rep_events rows exist for (session_id, rep_index); resolve them before adding uq_rep_events_session_rep_index'
+      USING ERRCODE = '23505';
+  END IF;
+END $$;
+
+DROP INDEX IF EXISTS idx_rep_events_session;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rep_events_session_rep_index
+  ON rep_events (session_id, rep_index);
 
 CREATE TABLE IF NOT EXISTS raw_frames (
   id            BIGSERIAL    PRIMARY KEY,
@@ -120,7 +215,7 @@ CREATE TABLE IF NOT EXISTS raw_frames (
   set_index     INT          NOT NULL CHECK (set_index >= 1),
   elapsed_ms    INT          NOT NULL CHECK (elapsed_ms >= 0),
   captured_at   TIMESTAMPTZ  NOT NULL,
-  -- Payload contract identifier, e.g. ex_007_upper_body_v1.
+  -- Payload contract identifier, e.g. upper_body_v3.
   trace_kind    TEXT         NOT NULL,
   -- Derived RAW/unsmoothed metrics. Never write One Euro filtered UI values.
   metrics       JSONB        NOT NULL,
@@ -132,11 +227,44 @@ CREATE TABLE IF NOT EXISTS raw_frames (
 
 CREATE INDEX IF NOT EXISTS idx_raw_frames_session ON raw_frames (session_id, frame_index);
 
+-- Append-only therapist comparison labels. The application records the score
+-- source/value on the server so a review cannot silently move when algorithms
+-- change. Re-submitting the latest identical label is treated as idempotent;
+-- changing a label appends another row.
+CREATE TABLE IF NOT EXISTS session_reviews (
+  id                      BIGSERIAL    PRIMARY KEY,
+  session_id              INTEGER      NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  therapist_id            VARCHAR(50)  NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  label                   TEXT         NOT NULL
+                                       CHECK (label IN ('agree', 'worse_than_score', 'better_than_score')),
+  score_source            TEXT         NOT NULL
+                                       CHECK (score_source IN ('raw_rule_v1', 'hold_rule_v1')),
+  score_value             DOUBLE PRECISION NOT NULL,
+  registry_version        TEXT,
+  exercise_config_version TEXT,
+  created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE session_reviews DROP CONSTRAINT IF EXISTS session_reviews_therapist_id_fkey;
+ALTER TABLE session_reviews
+  ADD CONSTRAINT session_reviews_therapist_id_fkey
+  FOREIGN KEY (therapist_id) REFERENCES users(id) ON DELETE RESTRICT;
+
+CREATE INDEX IF NOT EXISTS idx_session_reviews_session
+  ON session_reviews (session_id, created_at DESC, id DESC);
+
+ALTER TABLE session_reviews DROP CONSTRAINT IF EXISTS session_reviews_score_source_check;
+ALTER TABLE session_reviews
+  ADD CONSTRAINT session_reviews_score_source_check
+  CHECK (score_source IN ('raw_rule_v1', 'hold_rule_v1'));
+
 GRANT ALL PRIVILEGES ON TABLE sessions   TO postural;
 GRANT ALL PRIVILEGES ON TABLE set_events TO postural;
 GRANT ALL PRIVILEGES ON TABLE rep_events TO postural;
 GRANT ALL PRIVILEGES ON TABLE raw_frames TO postural;
+GRANT ALL PRIVILEGES ON TABLE session_reviews TO postural;
 GRANT USAGE, SELECT ON SEQUENCE sessions_id_seq   TO postural;
 GRANT USAGE, SELECT ON SEQUENCE set_events_id_seq TO postural;
 GRANT USAGE, SELECT ON SEQUENCE rep_events_id_seq TO postural;
 GRANT USAGE, SELECT ON SEQUENCE raw_frames_id_seq TO postural;
+GRANT USAGE, SELECT ON SEQUENCE session_reviews_id_seq TO postural;

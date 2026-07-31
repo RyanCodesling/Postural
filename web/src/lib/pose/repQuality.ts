@@ -3,6 +3,7 @@ import type {
   MetricName,
 } from "@/lib/exercises/registry";
 import type { RepEvent } from "./repCounter";
+import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
 
 /**
  * Versioned dynamic-repetition quality payload persisted in
@@ -57,6 +58,19 @@ export type DynamicRepQualityV1 = {
     >;
   } | null;
 };
+
+/**
+ * V2 keeps the rep aggregation/feature contract intact while recording the
+ * changed pose-metric semantics that produced its raw channels.
+ */
+export type DynamicRepQualityV2 = Omit<DynamicRepQualityV1, "version"> & {
+  version: 2;
+  metricAlgorithmVersion: typeof POSE_METRIC_ALGORITHM_VERSION;
+};
+
+export type DynamicRepQuality =
+  | DynamicRepQualityV1
+  | DynamicRepQualityV2;
 
 export type RepQualityChannel = "left" | "right" | "single";
 
@@ -408,7 +422,7 @@ export class DynamicRepQualityBuffer {
     channel: RepQualityChannel,
     event: RepEvent,
     scoredCompensations: CompensationMetricSpec[],
-  ): DynamicRepQualityV1 {
+  ): DynamicRepQualityV2 {
     const channelSamples = this.byChannel[channel];
     const samples = channelSamples.filter(
       (sample) =>
@@ -418,7 +432,8 @@ export class DynamicRepQualityBuffer {
       (sample) => sample.tMs > event.endTimeMs,
     );
     return {
-      version: 1,
+      version: 2,
+      metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION,
       liveRule: summarizeRuleScore(
         samples,
         event.totalDurationMs,
@@ -450,11 +465,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const inRange = (value: unknown, min: number, max: number): value is number =>
   isFiniteNumber(value) && value >= min && value <= max;
 
-/** Strict API-boundary validator for the versioned JSONB payload. */
-export function isDynamicRepQualityV1(
-  value: unknown,
-): value is DynamicRepQualityV1 {
-  if (!isRecord(value) || value.version !== 1) return false;
+/** Shared strict API-boundary validation for both version envelopes. */
+function isDynamicRepQualityBody(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
   try {
     if (JSON.stringify(value).length > MAX_PERSISTED_JSON_CHARS) return false;
   } catch {
@@ -561,4 +574,27 @@ export function isDynamicRepQualityV1(
     }
   }
   return true;
+}
+
+export function isDynamicRepQualityV1(
+  value: unknown,
+): value is DynamicRepQualityV1 {
+  return isRecord(value) && value.version === 1 && isDynamicRepQualityBody(value);
+}
+
+export function isDynamicRepQualityV2(
+  value: unknown,
+): value is DynamicRepQualityV2 {
+  return (
+    isRecord(value) &&
+    value.version === 2 &&
+    value.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION &&
+    isDynamicRepQualityBody(value)
+  );
+}
+
+export function isDynamicRepQuality(
+  value: unknown,
+): value is DynamicRepQuality {
+  return isDynamicRepQualityV1(value) || isDynamicRepQualityV2(value);
 }

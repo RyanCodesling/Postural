@@ -521,7 +521,7 @@ export async function sendAccountDeletedUserEmail(
       <tr>
         <td style="padding:16px 20px;">
           <p style="margin:0;color:#991b1b;font-size:14px;line-height:1.5;">
-            🚨 This action is permanent. All of your records, details, and access tokens have been completely deleted from the system and cannot be recovered.
+            🚨 This action is permanent. Your history-free account record and its non-clinical access data cannot be recovered. Accounts with durable clinical or assignment history are archived instead of permanently deleted.
           </p>
         </td>
       </tr>
@@ -559,7 +559,7 @@ export async function sendAccountDeletedAdminEmail(
       </tr>
     </table>
     <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
-      All database records associated with this user have been completely removed and cannot be restored.
+      The account passed the archived and history-free eligibility checks before deletion. Accounts with durable clinical or assignment history remain archived and cannot be permanently deleted.
     </p>
   `;
   return sendEmail(adminEmail, subject, wrapTemplate("Account Deletion Confirmation", body));

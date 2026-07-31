@@ -9,9 +9,12 @@ import { EXERCISE_REGISTRY, getCompensationScoring } from "@/lib/exercises/regis
 import type { RepEvent } from "./repCounter";
 import {
   DynamicRepQualityBuffer,
+  isDynamicRepQuality,
   isDynamicRepQualityV1,
+  isDynamicRepQualityV2,
   type DynamicRepQualitySample,
 } from "./repQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
 
 let passed = 0;
 let failed = 0;
@@ -137,7 +140,22 @@ test("raw features use raw samples and match the versioned ML feature contract",
   assert(typeof raw!.negLogDimensionlessJerk === "number", "jerk feature missing");
   assert(raw!.shapeP50 > 0.9, "triangle midpoint should be near peak");
   assert(raw!.compensations.trunkLean !== undefined, "trunkLean aggregate missing");
-  assert(isDynamicRepQualityV1(quality), "generated payload should pass API validation");
+  assert(quality.version === 2, "new payload should use quality schema version 2");
+  assert(
+    quality.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION,
+    "pose metric algorithm version changed",
+  );
+  assert(isDynamicRepQualityV2(quality), "generated V2 payload should pass API validation");
+  assert(isDynamicRepQuality(quality), "generated payload should pass compatibility validation");
+
+  const legacyQuality = {
+    ...quality,
+    version: 1 as const,
+    metricAlgorithmVersion: undefined,
+  };
+  delete (legacyQuality as { metricAlgorithmVersion?: string }).metricAlgorithmVersion;
+  assert(isDynamicRepQualityV1(legacyQuality), "legacy V1 payload should remain valid");
+  assert(isDynamicRepQuality(legacyQuality), "compatibility validator should accept V1");
 
   const missingChannel = new DynamicRepQualityBuffer();
   for (const sample of triangleSamples(() => 90)) {
@@ -251,7 +269,7 @@ test("validator rejects malformed or oversized payloads", () => {
   ) as Record<string, unknown>;
   (inconsistent.rawFeatures as Record<string, unknown>).mlEligible = false;
   assert(
-    !isDynamicRepQualityV1(inconsistent),
+    !isDynamicRepQuality(inconsistent),
     "inconsistent ML eligibility metadata accepted",
   );
 });

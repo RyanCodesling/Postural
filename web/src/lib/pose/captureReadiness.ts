@@ -163,6 +163,7 @@ export function evaluateCaptureReadiness(
   videoW: number,
   videoH: number,
   mode: FramingMode = "default",
+  requiredSide: "both" | "left" | "right" = "both",
 ): ReadinessResult {
   const { min: HEAD_Y_MIN, max: HEAD_Y_MAX } = headYBounds(mode);
   const HEAD_X_TOL = headXTol(mode);
@@ -342,11 +343,27 @@ export function evaluateCaptureReadiness(
   const rightWrist = landmarks[16];
 
   if (!isOverhead && !isLateral) {
-    const leftHandOk  = !!leftWrist  && inFrame01(leftWrist)  && vis(leftWrist)  >= HAND_VIS_MIN;
-    const rightHandOk = !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
+    const rawLeftHandOk =
+      !!leftWrist && inFrame01(leftWrist) && vis(leftWrist) >= HAND_VIS_MIN;
+    const rawRightHandOk =
+      !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
+    // The selfie camera is mirrored: MediaPipe's raw left wrist is the
+    // patient's anatomical right, and vice versa.
+    const leftHandOk = rawRightHandOk;
+    const rightHandOk = rawLeftHandOk;
+    const requiredHandsOk =
+      requiredSide === "left"
+        ? leftHandOk
+        : requiredSide === "right"
+          ? rightHandOk
+          : leftHandOk && rightHandOk;
 
-    if (!leftHandOk || !rightHandOk) {
-      const msg = !leftHandOk && !rightHandOk
+    if (!requiredHandsOk) {
+      const msg = requiredSide === "left"
+        ? "Show your left hand to the camera."
+        : requiredSide === "right"
+          ? "Show your right hand to the camera."
+          : !leftHandOk && !rightHandOk
         ? "Show both hands to the camera."
         : !leftHandOk
         ? "Show your left hand to the camera."
@@ -358,10 +375,15 @@ export function evaluateCaptureReadiness(
         message: msg,
         target,
         person,
-        score01: Math.min(
-          vis(leftWrist  ?? { x: 0, y: 0 }),
-          vis(rightWrist ?? { x: 0, y: 0 })
-        ),
+        score01:
+          requiredSide === "left"
+            ? vis(rightWrist ?? { x: 0, y: 0 })
+            : requiredSide === "right"
+              ? vis(leftWrist ?? { x: 0, y: 0 })
+              : Math.min(
+                  vis(leftWrist ?? { x: 0, y: 0 }),
+                  vis(rightWrist ?? { x: 0, y: 0 }),
+                ),
       };
     }
   }
@@ -371,8 +393,18 @@ export function evaluateCaptureReadiness(
   // we required it (default mode). In overhead mode, missing wrists are
   // acceptable and don't penalize confidence — the metric pipeline
   // gracefully degrades. Use `??` fallbacks so we never call `vis(undefined)`.
-  const safeLeftWristVis  = leftWrist  ? vis(leftWrist)  : 1;
-  const safeRightWristVis = rightWrist ? vis(rightWrist) : 1;
+  const safeLeftWristVis =
+    requiredSide === "right" || requiredSide === "both"
+      ? leftWrist
+        ? vis(leftWrist)
+        : 1
+      : 1;
+  const safeRightWristVis =
+    requiredSide === "left" || requiredSide === "both"
+      ? rightWrist
+        ? vis(rightWrist)
+        : 1
+      : 1;
   return {
     ok: true,
     status: "OK",

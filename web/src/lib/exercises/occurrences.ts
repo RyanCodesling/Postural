@@ -14,7 +14,11 @@
 // is only "missed" once today passes that deadline.
 
 export type Recurrence = "interval" | "weekly";
-export type OccurrenceStatus = "pending" | "in_progress" | "completed";
+export type OccurrenceStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "pain_stopped";
 
 // A single scheduled day, its make-up deadline, and its stored status. "overdue"
 // and "missed" are derived from these + today (see deriveOccurrenceState).
@@ -27,6 +31,7 @@ export interface OccurrenceLite {
 // Per-occurrence display state.
 export type OccurrenceState =
   | "completed"
+  | "pain_stopped"
   | "in_progress"
   | "upcoming"
   | "due"
@@ -38,7 +43,14 @@ export type OccurrenceState =
 export type ScheduleBucket = "current" | "upcoming" | "history";
 
 // Per-calendar-day rollup across every occurrence due that day.
-export type DayState = "rest" | "due" | "overdue" | "partial" | "missed" | "complete";
+export type DayState =
+  | "rest"
+  | "due"
+  | "overdue"
+  | "partial"
+  | "missed"
+  | "complete"
+  | "pain_stopped";
 
 export interface RecurrenceRule {
   recurrence: Recurrence | null | undefined;
@@ -163,6 +175,7 @@ export function deriveOccurrenceState(
   todayKey: string
 ): OccurrenceState {
   if (occ.status === "completed") return "completed";
+  if (occ.status === "pain_stopped") return "pain_stopped";
   if (occ.status === "in_progress") return "in_progress";
   if (occ.dueDate > todayKey) return "upcoming";
   if (occ.dueDate === todayKey) return "due";
@@ -180,15 +193,57 @@ export function isOccurrenceActionable(
 ): boolean {
   return (
     occ.status !== "completed" &&
+    occ.status !== "pain_stopped" &&
     occ.dueDate <= todayKey &&
     occ.makeupUntil >= todayKey
   );
+}
+
+export interface ActionableOccurrenceOrderInput extends OccurrenceLite {
+  occurrenceId: number;
+  exerciseId: string;
+  exerciseName: string;
+  sequenceIndex: number;
+}
+
+// Patient camera order. Resumable work comes first, followed by pending work;
+// older make-ups precede today's items, then the therapist's explicit order.
+// Names/IDs make the result deterministic even when legacy rows share an order.
+export function compareActionableOccurrences(
+  left: ActionableOccurrenceOrderInput,
+  right: ActionableOccurrenceOrderInput,
+): number {
+  const statusRank = (status: OccurrenceStatus) =>
+    status === "in_progress" ? 0 : status === "pending" ? 1 : 2;
+  return (
+    statusRank(left.status) - statusRank(right.status) ||
+    left.dueDate.localeCompare(right.dueDate) ||
+    left.sequenceIndex - right.sequenceIndex ||
+    left.exerciseName.localeCompare(right.exerciseName) ||
+    left.exerciseId.localeCompare(right.exerciseId) ||
+    left.occurrenceId - right.occurrenceId
+  );
+}
+
+export function removeActionableOccurrence<
+  T extends { occurrenceId?: number },
+>(queue: readonly T[], terminalOccurrenceId: number): {
+  remaining: T[];
+  next: T | null;
+} {
+  const remaining = queue.filter(
+    (occurrence) => occurrence.occurrenceId !== terminalOccurrenceId,
+  );
+  return { remaining, next: remaining[0] ?? null };
 }
 
 export function classifyScheduleOccurrence(
   occ: OccurrenceLite,
   todayKey: string
 ): ScheduleBucket {
+  if (occ.status === "pain_stopped") {
+    return "history";
+  }
   if (occ.dueDate === todayKey || isOccurrenceActionable(occ, todayKey)) {
     return "current";
   }
@@ -209,8 +264,11 @@ export function rollupDay(
 ): DayState {
   if (due.length === 0) return "rest";
   const completed = due.filter((o) => o.status === "completed").length;
+  const painStopped = due.filter((o) => o.status === "pain_stopped").length;
   if (completed === due.length) return "complete";
+  if (painStopped === due.length) return "pain_stopped";
   if (completed > 0) return "partial";
+  if (painStopped > 0) return "partial";
   if (dayKey >= todayKey) return "due";
   const anyOpen = due.some((o) => o.makeupUntil >= todayKey);
   return anyOpen ? "overdue" : "missed";
@@ -239,6 +297,7 @@ export function deriveAssignmentStatus(
 
 function rollupAssignmentWindow(occurrences: OccurrenceLite[]): OccurrenceStatus {
   if (occurrences.every((occ) => occ.status === "completed")) return "completed";
+  if (occurrences.every((occ) => occ.status === "pain_stopped")) return "pain_stopped";
   if (occurrences.some((occ) => occ.status === "completed" || occ.status === "in_progress")) {
     return "in_progress";
   }

@@ -6,8 +6,10 @@
 
 import {
   classifyScheduleOccurrence,
+  compareActionableOccurrences,
   deriveAssignmentStatus,
   isOccurrenceActionable,
+  removeActionableOccurrence,
   type OccurrenceLite,
 } from "./occurrences";
 
@@ -147,6 +149,79 @@ test("due and open make-up occurrences remain actionable", () => {
     false,
     "completed occurrence"
   );
+  assertEqual(
+    isOccurrenceActionable(occ("2026-07-16", "2026-07-16", "pain_stopped"), "2026-07-16"),
+    false,
+    "pain-stopped occurrence"
+  );
+});
+
+test("camera queue orders resumable work, due date, therapist sequence, and stable fallbacks", () => {
+  const queue = [
+    {
+      occurrenceId: 4,
+      exerciseId: "ex_006",
+      exerciseName: "Arm Abduction",
+      sequenceIndex: 2,
+      dueDate: "2026-07-31",
+      makeupUntil: "2026-07-31",
+      status: "pending" as const,
+    },
+    {
+      occurrenceId: 3,
+      exerciseId: "ex_001",
+      exerciseName: "Lateral Arm Raises",
+      sequenceIndex: 1,
+      dueDate: "2026-07-31",
+      makeupUntil: "2026-07-31",
+      status: "pending" as const,
+    },
+    {
+      occurrenceId: 2,
+      exerciseId: "ex_005",
+      exerciseName: "Standing Side Bends",
+      sequenceIndex: 9,
+      dueDate: "2026-07-30",
+      makeupUntil: "2026-07-31",
+      status: "pending" as const,
+    },
+    {
+      occurrenceId: 1,
+      exerciseId: "ex_008",
+      exerciseName: "Wall Angels",
+      sequenceIndex: 8,
+      dueDate: "2026-07-31",
+      makeupUntil: "2026-07-31",
+      status: "in_progress" as const,
+    },
+  ].sort(compareActionableOccurrences);
+
+  assertEqual(
+    queue.map((item) => item.occurrenceId).join(","),
+    "1,2,3,4",
+    "ordered occurrence ids",
+  );
+});
+
+test("terminal occurrence removal preserves order and selects only remaining work", () => {
+  const queue = [
+    { occurrenceId: 11, exerciseId: "ex_001" },
+    { occurrenceId: 12, exerciseId: "ex_006" },
+    { occurrenceId: 13, exerciseId: "ex_008" },
+  ];
+  const result = removeActionableOccurrence(queue, 12);
+
+  assertEqual(
+    result.remaining.map((item) => item.occurrenceId).join(","),
+    "11,13",
+    "remaining occurrence ids",
+  );
+  assertEqual(result.next?.occurrenceId, 11, "next occurrence id");
+  assertEqual(queue.length, 3, "input queue remains unchanged");
+
+  const exhausted = removeActionableOccurrence([{ occurrenceId: 21 }], 21);
+  assertEqual(exhausted.remaining.length, 0, "exhausted queue length");
+  assertEqual(exhausted.next, null, "exhausted queue next item");
 });
 
 test("schedule buckets keep only current work expanded", () => {
@@ -169,6 +244,23 @@ test("schedule buckets keep only current work expanded", () => {
     classifyScheduleOccurrence(occ("2026-07-10", "2026-07-12", "pending"), "2026-07-16"),
     "history",
     "expired occurrence"
+  );
+  assertEqual(
+    classifyScheduleOccurrence(occ("2026-07-16", "2026-07-16", "pain_stopped"), "2026-07-16"),
+    "history",
+    "pain-stopped occurrence"
+  );
+});
+
+test("pain-stopped due window remains distinct from missed or completed", () => {
+  assertEqual(
+    deriveAssignmentStatus(
+      [occ("2026-07-16", "2026-07-18", "pain_stopped")],
+      "2026-07-16",
+      "pending",
+    ),
+    "pain_stopped",
+    "assignment status",
   );
 });
 

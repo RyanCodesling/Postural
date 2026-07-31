@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
 import {
@@ -16,15 +16,21 @@ import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
 import {
   classifyScheduleOccurrence,
+  compareActionableOccurrences,
   isOccurrenceActionable,
   type OccurrenceStatus,
 } from "@/lib/exercises/occurrences";
 import {
+  completedSessionDoseText,
   groupSessionsByOccurrence,
   selectCompletedOccurrenceResult,
   type CompletedOccurrenceResult,
   type ScheduleSessionRecord,
 } from "@/lib/exercises/scheduleSessionSummary";
+import type {
+  PrescribedSide,
+  ResistanceContext,
+} from "@/lib/prescriptionContext";
 
 interface PatientProfile {
   id: string;
@@ -70,6 +76,7 @@ interface PatientOccurrence {
   reps: number;
   rest_seconds: number;
   hold_seconds: number;
+  sequence_index: number;
   monitoring_mode: "camera" | "manual";
 }
 
@@ -80,6 +87,10 @@ interface SessionLite extends ScheduleSessionRecord {
   exerciseId: string;
   exerciseName: string;
   avgPeakValue: number | null;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
+  comparableContextKey: string;
+  exerciseConfigVersion: string | null;
 }
 
 type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
@@ -87,6 +98,7 @@ type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [pageLoading, setPageLoading] = useState(true);
@@ -97,6 +109,10 @@ export default function PatientDashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [scheduleActionError, setScheduleActionError] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("tab") === "session") setActiveTab("session");
+  }, [searchParams]);
 
   useEffect(() => {
     if (loading) return;
@@ -138,7 +154,9 @@ export default function PatientDashboardPage() {
   const handleOccurrenceStart = async (occurrence: PatientOccurrence) => {
     setScheduleActionError("");
     if (occurrence.monitoring_mode === "camera") {
-      router.push(`/camera?exerciseId=${occurrence.exercise_id}`);
+      router.push(
+        `/camera?occurrenceId=${occurrence.id}&exerciseId=${encodeURIComponent(occurrence.exercise_id)}`,
+      );
       return;
     }
 
@@ -192,15 +210,41 @@ export default function PatientDashboardPage() {
   const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
 
   const today = sessionTodayPH();
-  const actionableOccurrences = occurrences.filter((occurrence) =>
-    isOccurrenceActionable(
-      {
-        dueDate: occurrence.due_date,
-        makeupUntil: occurrence.makeup_until,
-        status: occurrence.status,
-      },
-      today
+  const actionableOccurrences = occurrences
+    .filter((occurrence) =>
+      isOccurrenceActionable(
+        {
+          dueDate: occurrence.due_date,
+          makeupUntil: occurrence.makeup_until,
+          status: occurrence.status,
+        },
+        today,
+      ),
     )
+    .sort((left, right) =>
+      compareActionableOccurrences(
+        {
+          occurrenceId: left.id,
+          exerciseId: left.exercise_id,
+          exerciseName: left.name,
+          sequenceIndex: left.sequence_index,
+          dueDate: left.due_date,
+          makeupUntil: left.makeup_until,
+          status: left.status,
+        },
+        {
+          occurrenceId: right.id,
+          exerciseId: right.exercise_id,
+          exerciseName: right.name,
+          sequenceIndex: right.sequence_index,
+          dueDate: right.due_date,
+          makeupUntil: right.makeup_until,
+          status: right.status,
+        },
+      ),
+    );
+  const actionableCameraOccurrences = actionableOccurrences.filter(
+    (occurrence) => occurrence.monitoring_mode === "camera",
   );
 
   return (
@@ -312,9 +356,9 @@ export default function PatientDashboardPage() {
               <div className="bg-white border border-green-200 rounded-2xl p-6">
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <h2 className="text-base font-semibold text-green-700">Your Exercises</h2>
-                  {actionableOccurrences.length > 0 ? (
+                  {actionableCameraOccurrences.length > 0 ? (
                     <Link
-                      href={`/camera?exerciseId=${encodeURIComponent(actionableOccurrences[0].exercise_id)}`}
+                      href={`/camera?occurrenceId=${actionableCameraOccurrences[0].id}&exerciseId=${encodeURIComponent(actionableCameraOccurrences[0].exercise_id)}`}
                       className="shrink-0 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
                     >
                       Start Session
@@ -392,7 +436,7 @@ export default function PatientDashboardPage() {
               ) : (
                 <div className="space-y-5">
                   {trendGroups.map((g) => (
-                    <ExerciseTrendCard key={g.exerciseId} group={g} />
+                    <ExerciseTrendCard key={g.contextKey} group={g} />
                   ))}
                 </div>
               )}
@@ -911,6 +955,10 @@ function ScheduleOccurrenceCard({
 
         {style.action === "done" ? (
           <span className="ml-auto text-xs font-semibold text-green-700">✓ Done</span>
+        ) : style.action === "pain" ? (
+          <span className="ml-auto text-xs font-semibold text-red-700">
+            Contact your therapist
+          </span>
         ) : style.action === "start" ? (
           <button
             type="button"
@@ -981,18 +1029,6 @@ function CompletedSessionSummary({
   );
 }
 
-function completedSessionDoseText(session: ScheduleSessionRecord): string | null {
-  if (session.exerciseKind === "isometric" && (session.totalPairedHoldMs ?? 0) > 0) {
-    return `${formatSessionDuration(session.totalPairedHoldMs)} paired hold`;
-  }
-  if (session.completeLeftReps > 0 || session.completeRightReps > 0) {
-    return `L ${session.completeLeftReps} / R ${session.completeRightReps} complete`;
-  }
-  if (session.completeReps > 0) return `${session.completeReps} complete reps`;
-  if (session.totalReps > 0) return `${session.totalReps} recorded reps`;
-  return null;
-}
-
 function formatSessionTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
@@ -1041,9 +1077,22 @@ function occurrenceCardStyle(
   dueDate: string,
   makeupUntil: string,
   today: string
-): { label: string; card: string; badge: string; action: "done" | "start" | "upcoming" | "missed" } {
+): {
+  label: string;
+  card: string;
+  badge: string;
+  action: "done" | "pain" | "start" | "upcoming" | "missed";
+} {
   if (status === "completed") {
     return { label: "Completed", card: "bg-green-50 border-green-200", badge: "bg-green-100 text-green-700", action: "done" };
+  }
+  if (status === "pain_stopped") {
+    return {
+      label: "Stopped for pain",
+      card: "bg-red-50 border-red-200",
+      badge: "bg-red-100 text-red-700",
+      action: "pain",
+    };
   }
   if (dueDate === today) {
     return {

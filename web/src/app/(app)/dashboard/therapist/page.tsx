@@ -16,6 +16,7 @@ interface RosterPatient {
   dueCount: number;       // scheduled occurrences due on or before today
   completedCount: number; // occurrences completed
   missedCount: number;    // past-due occurrences never completed
+  painStoppedCount: number; // occurrences paused after a pain stop
 }
 
 export default function TherapistDashboardPage() {
@@ -73,7 +74,11 @@ export default function TherapistDashboardPage() {
   // Flag a patient when they have prescriptions but either no activity this week
   // or scheduled days that slipped past uncompleted.
   const needsAttention = patients.filter(
-    (p) => p.assignedCount > 0 && (p.sessionsThisWeek === 0 || p.missedCount > 0),
+    (p) =>
+      p.assignedCount > 0 &&
+      (p.sessionsThisWeek === 0 ||
+        p.missedCount > 0 ||
+        p.painStoppedCount > 0),
   ).length;
 
   return (
@@ -159,6 +164,11 @@ export default function TherapistDashboardPage() {
                             {p.missedCount} missed
                           </span>
                         )}
+                        {p.painStoppedCount > 0 && (
+                          <span className="ml-2 text-xs font-medium text-red-600">
+                            {p.painStoppedCount} pain stop
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 pl-4">
                         <span
@@ -188,6 +198,9 @@ export default function TherapistDashboardPage() {
 function rosterStatus(p: RosterPatient): { label: string; classes: string } {
   if (p.assignedCount === 0) {
     return { label: "No exercises", classes: "bg-gray-100 text-gray-500" };
+  }
+  if (p.painStoppedCount > 0) {
+    return { label: "Pain follow-up", classes: "bg-red-100 text-red-700" };
   }
   if (p.missedCount > 0) {
     return { label: "Needs attention", classes: "bg-amber-100 text-amber-700" };

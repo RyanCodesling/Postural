@@ -1,5 +1,100 @@
 # Sprint Updates 
 
+## 📌 Update-7-31-26
+
+- Consolidated the complete post–July 22 clinical-context and patient-workflow batch: typed prescription side/load, immutable runtime context, pain reporting, therapist review labels, occurrence-driven session starts, therapist-controlled order, and explicit completion acknowledgement
+- Preserved completed, started, missed, cancelled, pain-stopped, and otherwise historical occurrences without rewriting their durable prescription/session context; active camera work now locks and navigates by one exact actionable occurrence
+- Replaced moving per-frame tilt correction with capture-ready frozen neutral calibration shared by display, coaching, raw rule aggregation, and raw feature traces, while keeping the unprescribed limb observation-only
+- Made patient and therapist outcomes follow the immutable prescription context: unilateral results show only the treated side, bilateral sides remain separate, and unlike side/load/configuration contexts are not presented as one continuous trend
+- Added durable idempotent repetition/set delivery, duplicate-safe database writes, and archive-first permanent-deletion safeguards so retry or account administration cannot silently remove recorded clinical history
+- Kept live rule-based coaching separate from the offline ML scorer; no model training, inference, prediction writeback, or `ml.features.extract.rep-v1` feature definition changed
+
+### *AUTHENTICATION_SETUP.md*, *scripts\patient_exercises_pg.sql*, *scripts\exercise_programs_pg.sql*, *scripts\sessions_pg.sql*, and *scripts\exercise_occurrences_pg.sql*
+
+- Corrected the existing-database migration order to include exercise programs between prescriptions and sessions, and documented the dependency-safe owner-script sequence
+- Added constrained `prescribed_side` and typed resistance fields for prescriptions and programs; `unknown` remains migration-only for legacy rows
+- Added immutable versioned prescription snapshots and session context containing the exact dose, side, resistance, exercise definition, effective compensation bands, registry/configuration hashes, application revision, and repetition-quality version used at session start
+- Added terminal `pain_stopped` occurrences, structured 0–10 post-attempt pain reports, explicit terminal session reasons, and append-only `session_reviews`
+- Added positive therapist-controlled `sequence_index` fields with deterministic idempotent backfill and supporting indexes for program exercises and patient prescriptions
+- Upgraded only still-actionable version-1 occurrence snapshots to version 2 with their captured sequence; started and terminal history remains unchanged, and Manila calendar dates govern migration-time actionability
+
+### *scripts\exercises_pg.sql*, *scripts\patient_therapist_pg.sql*, *scripts\patient_exercises_pg.sql*, *scripts\exercise_programs_pg.sql*, and *scripts\sessions_pg.sql*
+
+- Changed durable user relationships to `ON DELETE RESTRICT` while keeping audit-actor references nullable and ephemeral account data independently removable
+- Added duplicate preflight checks and unique `(session_id, set_index)` and `(session_id, rep_index)` indexes so deployment stops for manual review instead of deleting or merging existing outcomes
+- Kept the schema scripts rerunnable and history-preserving for owner deployment
+
+### *web\src\lib\prescriptionContext.ts*, *web\src\lib\exercises\versioning.ts*, *web\src\lib\db.ts*, and the patient-exercise, program, occurrence, and session APIs
+
+- Centralized typed side/resistance parsing and validation, including positive-load/unit pairing and migration-only legacy values
+- Made session creation the authoritative transaction: it locks the exact actionable occurrence selected by the patient, adopts that occurrence's snapshot, hashes the live registry/configuration, closes an orphaned open attempt as superseded, and returns the runtime prescription used by the camera
+- Made terminal transitions first-write-wins; pain reports and identical clinician-review retries are idempotent, while changed clinician judgments append a new audit record
+- Derived therapist review scores only from sufficiently covered raw rule data or isometric hold-rule data; smoothed coaching scores remain audit-only
+- Kept the exact occurrence in dashboard and camera URLs. Explicit stale or non-actionable identifiers now fail closed to the schedule instead of silently selecting different work
+- Ordered actionable work by state, due date, therapist sequence, exercise name, exercise identifier, and occurrence identifier without introducing a global exercise order
+
+### *web\src\lib\pose\eventOutbox.ts*, *web\src\app\api\sessions\[id]\rep-events\route.ts*, *web\src\app\api\sessions\[id]\set-events\route.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Added a durable repetition/set outbox that removes items only after an acknowledged OK response, retains failed batches, prevents concurrent duplicate sends, and retries with bounded exponential backoff
+- Persisted undelivered clinical outcome events in local storage for same-session recovery; tuning traces use bounded in-memory retries and report dropped batches without risking browser storage quotas
+- Validated event rows independently so one malformed repetition cannot discard the rest of a valid batch, and made session completion report partial persistence when outcome events remain queued
+- Replaced retry-sensitive event inserts with `ON CONFLICT DO NOTHING` backed by the unique set/repetition indexes
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\captureReadiness.ts*, *web\src\lib\pose\neutralCalibration.ts*, *web\src\lib\pose\compensationSignals.ts*, and *web\src\lib\pose\poseMetrics.ts*
+
+- Added prescribed-side-aware dynamic progress and independent isometric per-arm timing; the unprescribed side remains visible as observation and cannot satisfy the treatment target
+- Applied the front-camera anatomical-side swap to unilateral wrist readiness, selected the prescribed limb for primary cards, used the matching-side residual for primary-coupled warnings, and suppressed form warnings outside an active capture-ready calibrated set
+- Added a three-second neutral setup with at least 15 valid samples, a 250 ms maximum credited gap, median tilt/baseline estimates, readiness-loss pauses, and recalibration after sustained capture loss or camera restart
+- Applied frozen neutral tilt to every derived metric path while retaining live hip/ear agreement as confidence metadata; `upper_body_v3`, pose-metric versioning, session-context V2, and repetition-quality V2 prevent unlike algorithms from being silently compared
+- Preserved legacy `upper_body_v1`/`upper_body_v2`, session-context V1, and repetition-quality V1 readback
+- Added the post-attempt pain-report step and one-click pain stop, prevented pain-stopped work from resuming before therapist follow-up, and kept that state separate from completed, missed, or adherence outcomes
+- Retained the just-completed side-aware recap after reporting or decline, removed Redo from terminal patient recaps, and delayed queue removal/navigation until explicit Next or Finish acknowledgement
+- Reset displayed metrics, warning labels, near-peak state, and the metric clock before paint whenever the selected occurrence changes
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\lib\exercises\scheduleSessionSummary.ts*, and patient schedule/session presentation
+
+- Limited `Start Session` to actionable camera occurrences while leaving therapist-owned manual exercises in their acknowledgement workflow
+- Added side-specific peak and hold aggregates. Unilateral live and persisted recaps show only the prescribed side; bilateral outcomes retain separate left/right values and asymmetry
+- Reworded dynamic quality as “met full-ROM target” so counted partial repetitions are not presented as missing data
+- Replaced schedule-only `paired hold` and unconditional left/right repetition wording with shared prescribed-side helpers and legacy-safe aggregate fallbacks
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\app\(app)\dashboard\therapist\programs\page.tsx*, *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, and *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*
+
+- Added reusable prescribed-side and resistance controls to direct assignments and reusable programs, including before/after review text
+- Added editable positive unique order fields with program-to-prescription copying; new selections use the highest retained order plus one so later additions cannot collide with preserved history
+- Added pain-follow-up indicators and notifications, recorded context/version readback, and append-only review labels for agreement, form worse than score, or form better than score
+- Segmented descriptive trends by exercise, prescribed side, resistance, and exercise-configuration hash, with the comparison context shown on each card
+
+### *web\src\lib\sessionOutcomePresentation.ts*, administrative/user APIs and surfaces, and *web\src\lib\email.ts*
+
+- Applied prescribed-side outcome wording to patient recaps, therapist summaries, set drill-downs, and trend charts while preserving bilateral asymmetry
+- Made permanent user deletion transactional, archive-first, self-protected, and history-free only; prescriptions, sessions, assigned patients, owned programs/exercises, and therapist reviews block deletion and remain available through archival
+- Returned the server's eligibility reason to the admin UI and corrected deletion confirmation/email wording so it no longer claims durable history is removed
+
+### *web\scripts\export-registry.ts*, *web\scripts\export-tuning-traces.ts*, *ml\analysis\real_frames.py*, and *ml\tests\test_real_frames.py*
+
+- Added registry and per-exercise configuration hashes to registry export output
+- Added `upper_body_v3` export/readback with frozen-neutral provenance while retaining V1/V2 trace compatibility and the existing raw feature field mapping
+- Added focused mapper coverage confirming V3 calibration/tilt metadata does not change offline feature values
+
+### *Validation and deployment*
+
+- All **34** framework-free TypeScript regression files pass, including clinical-context, typed-load, pain-state, event-outbox, frozen-calibration, legacy-version, prescribed-side presentation, deletion, ordering, exact-occurrence, actionable-queue, snapshot-version, and reset contracts
+- `npx tsc --noEmit`, full `npm run lint`, and `npm run build` pass; the production build generated all **34** pages/routes and retains only the existing multiple-lockfile workspace-root warning
+- The real-trace mapper passes **5** focused Python tests, including V1 compatibility and V3 frozen-tilt metadata
+- Applied the five clinical-context scripts twice in a rolled-back temporary PostgreSQL schema, then deployed them through pgAdmin as `postgres`; restricted-role readback confirmed the expected columns, constraints, tables, and grants without changing the deployment baseline
+- Deployed the history-protection/event DDL in one owner transaction; restricted-role readback confirmed six restrictive relationships, both unique event indexes, zero duplicate keys, and duplicate retries returning `inserted: 0, skipped: 1`
+- Applied the three occurrence-workflow scripts twice against legacy-shaped temporary tables, then individually to the live database; readback confirmed sequence checks/indexes, deterministic backfill, pending-only V1-to-V2 upgrade, preservation of in-progress context, and unambiguous legacy-session links
+- Authenticated HTTP verification covered typed left-only band assignment, immutable session context, pain stopping/reporting, append-only therapist review, role boundaries, ordered programs/prescriptions, and 400/409 rejection of invalid or expired exact session starts
+- Real-person occurrences 262/263 verified the right-only isometric hold, left-only dynamic wrong-side negative control, readiness pauses, and prescribed-side persisted summaries
+- Fresh occurrence 264 completed the retained-recap gate: after the right-only five-second hold and declined report, the camera remained on `Session complete` with `Right hold 5s / 5s`, `Sets 1 / 1`, and no Redo action until explicit Finish acknowledgement
+- `git diff --check` passes with line-ending normalization warnings only
+
+### *Remaining follow-up*
+
+- Obtain clinician-approved `ex_004` assisted-hold parameters and retain the deferred `ex_005` threshold decision until its required live-protocol input exists
+- Collect a new untouched multi-subject evaluation set only after the protocol is frozen; researcher sessions 168–174 remain calibration evidence
+
 ## 📌 Update-7-22-26
 
 - Preserved prescription, occurrence, session, set, repetition, and raw-trace history by replacing exercise and assignment hard deletion with archival and cancellation workflows
@@ -63,7 +158,7 @@
 
 ### *Remaining follow-up*
 - Keep calibrated ML inference and dashboard writeback deferred until a frozen real-data collection protocol and untouched evaluation cohort exist
-- Add the before-collection schema fields for load, pain/stop-pain, frequency/adherence, prescription side, registry version, and therapist review labels
+- Complete a real-person webcam pass for prescribed-side repetition/timing behavior; automated mirrored-wrist gating coverage already passes, but pose-dependent behavior cannot be claimed from an API-only session
 - Obtain clinician-approved decisions for the `ex_004` assisted-hold target and the deferred `ex_005` threshold retune
 
 ## 📌 Update-7-11-26

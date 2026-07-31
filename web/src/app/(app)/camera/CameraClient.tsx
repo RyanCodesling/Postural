@@ -1,8 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
 import {
@@ -18,6 +25,7 @@ import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
+  computeTiltReference,
   isNearPeak,
   computeElbowFlexion,
   computeLateralNeckTilt,
@@ -34,6 +42,7 @@ import {
   computeWristShoulderLateral,
   computeWristShoulderVertical,
   type ExerciseFrameMetrics,
+  type TiltReference,
 } from "@/lib/pose/poseMetrics";
 import {
   updateCompensationWarningMap,
@@ -46,6 +55,12 @@ import {
   type MetricName,
 } from "@/lib/exercises/registry";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import {
+  compareActionableOccurrences,
+  isOccurrenceActionable,
+  removeActionableOccurrence,
+  type OccurrenceStatus,
+} from "@/lib/exercises/occurrences";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
 import { RepCounter, type RepCounterOptions, type RepEvent } from "@/lib/pose/repCounter";
 import {
@@ -56,14 +71,55 @@ import {
 import { VelocityBidirectionalRepCounter } from "@/lib/pose/velocityBidirectionalRepCounter";
 import {
   DynamicRepQualityBuffer,
-  type DynamicRepQualityV1,
+  type DynamicRepQuality,
   type RepQualityChannel,
 } from "@/lib/pose/repQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import {
+  NEUTRAL_CALIBRATION_DURATION_MS,
+  NEUTRAL_CALIBRATION_MIN_SAMPLES,
+  advanceNeutralCalibrationClock,
+  frozenNeutralTiltReference,
+  medianFinite,
+  neutralCalibrationProgressPct,
+  neutralCalibrationReady,
+  newNeutralCalibrationClock,
+  pauseNeutralCalibrationClock,
+  type NeutralCalibrationClock,
+} from "@/lib/pose/neutralCalibration";
+import {
+  perLimbCompensationWarningSignal,
+  singleCompensationWarningSignal,
+  type CompensationWarningSignal,
+} from "@/lib/pose/compensationSignals";
+import { EventOutbox } from "@/lib/pose/eventOutbox";
+import {
+  formatResistanceContext,
+  type PainTiming,
+  type PrescribedSide,
+  type ResistanceContext,
+  type RuntimePrescription,
+} from "@/lib/prescriptionContext";
+import {
+  fullRomOutcomeText,
+  prescribedOutcomeSides,
+  shouldShowOutcomeAsymmetry,
+  sideLabel,
+} from "@/lib/sessionOutcomePresentation";
 
 type CamDevice = MediaDeviceInfo;
 
-type AssignmentStatus = "pending" | "in_progress" | "completed";
-type EndSessionPersistenceResult = "saved" | "pending" | "skipped" | "failed";
+type AssignmentStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "pain_stopped";
+type EndSessionPersistenceResult =
+  | "saved"
+  | "partial"   // session row closed, but outcome events are still undelivered
+  | "pending"
+  | "skipped"
+  | "failed";
 
 interface Exercise {
   id: string;
@@ -99,6 +155,11 @@ interface Exercise {
    * staff debug path has no row, so it skips session persistence entirely.
    */
   patientExerciseId?: number;
+  /** Exact actionable schedule row represented by this queue item. */
+  occurrenceId?: number;
+  dueDate?: string;
+  makeupUntil?: string;
+  sequenceIndex?: number;
   /**
    * Assignment status from `patient_exercises.status` via
    * `/api/patient-exercises` (patient assignments only). Drives the
@@ -106,6 +167,8 @@ interface Exercise {
    * to a finished exercise. Undefined for the staff debug catalog.
    */
   status?: AssignmentStatus;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 }
 
 /**
@@ -118,6 +181,7 @@ interface Exercise {
  */
 type ExerciseSessionRecap = {
   exerciseKind: "dynamic" | "isometric" | null;
+  prescribedSide: PrescribedSide;
   endedAt: string | null;
   durationMs: number | null;
   setCount: number;
@@ -126,8 +190,12 @@ type ExerciseSessionRecap = {
   completeLeftReps: number;
   completeRightReps: number;
   avgPeakValue: number | null;
+  avgLeftPeakValue: number | null;
+  avgRightPeakValue: number | null;
   totalPairedHoldMs: number | null;
   totalTargetHoldMs: number | null;
+  totalLeftHoldMs: number | null;
+  totalRightHoldMs: number | null;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -157,7 +225,10 @@ function integerField(record: JsonRecord, field: string): number | undefined {
 }
 
 function assignmentStatus(value: unknown): AssignmentStatus | undefined {
-  return value === "pending" || value === "in_progress" || value === "completed"
+  return value === "pending" ||
+    value === "in_progress" ||
+    value === "completed" ||
+    value === "pain_stopped"
     ? value
     : undefined;
 }
@@ -257,7 +328,13 @@ function clearResumeSnapshot(patientExerciseId: number | undefined): void {
 // "resting" = hard-block rest between sets: rep counting is suspended and a
 // countdown is shown. Auto-entered after a completed set when sets remain and
 // restSeconds > 0; auto-resumes to "active" when the countdown elapses.
-type SessionState = "idle" | "countdown" | "active" | "resting" | "ended";
+type SessionState =
+  | "idle"
+  | "countdown"
+  | "active"
+  | "resting"
+  | "reporting"
+  | "ended";
 
 /**
  * Session set summary. The live UI keeps a local log, and patient sessions also
@@ -272,7 +349,12 @@ type CompletedSetRecord = {
   rightReps: number;
   pairedReps: number;
   durationMs: number;
-  terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
+  terminatedBy:
+    | "min_reached"
+    | "user"
+    | "pain"
+    | "capture_lost"
+    | "stall";
   asymmetryIndex: number;
   /**
    * Isometric-only: milliseconds of credited hold for this set, plus the
@@ -304,9 +386,19 @@ type Prescription = {
   holdSeconds: number;
   // patient_exercises.id for the current assignment; undefined for staff debug.
   patientExerciseId?: number;
+  occurrenceId?: number;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 };
 
-const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60, holdSeconds: 30 };
+const DEFAULT_PRESCRIPTION: Prescription = {
+  sets: 3,
+  reps: 12,
+  restSeconds: 60,
+  holdSeconds: 30,
+  prescribedSide: "both",
+  resistance: { type: "none", value: null, unit: null, label: null },
+};
 
 /**
  * A counted rep shaped for the `rep_events` write API. Kept local (not imported
@@ -323,7 +415,7 @@ type RepEventPayload = {
   descentMs: number;
   totalMs: number;
   classification: RepEvent["classification"];
-  compensations: DynamicRepQualityV1;
+  compensations: DynamicRepQuality;
   startTs: string;
   endTs: string;
 };
@@ -336,17 +428,17 @@ type RawTraceLandmark = {
 };
 
 /**
- * Raw per-frame metric payload for the tuning trace (`upper_body_v2`).
- * Extends the original ex_007-only `ex_007_upper_body_v1` payload with the
- * metrics the other active exercises need (neck/trunk signed flexion,
- * horizontal abduction) plus a snapshot of the in-session baselines, so the
- * offline analysis can reproduce the values the live score sees:
+ * Raw per-frame metric payload for the tuning trace (`upper_body_v3`).
+ * V3 keeps the cross-exercise fields introduced by V2 and records both the
+ * observed per-frame tilt diagnostic and the frozen effective correction.
+ * The offline analysis can reproduce the values the live score sees:
  *   - scapularElevation as scored = baseline − raw (per side)
  *   - ex_005 primary as counted   = |uncorrected signed − bidirectional baseline|
  * All metric values are RAW/unsmoothed (pre One Euro), captured only on
  * capture-ready frames. No image/video data, ever.
  */
 type UpperBodyTraceMetrics = {
+  metricAlgorithmVersion: typeof POSE_METRIC_ALGORITHM_VERSION;
   exerciseId: string;
   wristShoulderVertical: { left: number | null; right: number | null };
   wristShoulderLateral: { left: number | null; right: number | null };
@@ -380,9 +472,17 @@ type UpperBodyTraceMetrics = {
   };
   baselinePhase: "not-needed" | "capturing" | "captured";
   tiltReference: {
+    /** Frozen neutral correction used to derive every metric in this frame. */
     cameraTiltDeg: number;
+    /** Per-frame hip/ear observation retained only for confidence analysis. */
+    observedCameraTiltDeg: number;
     confidence: ExerciseFrameMetrics["tiltReference"]["confidence"];
     divergenceDeg: number | null;
+  };
+  calibration: {
+    sampleCount: number;
+    validElapsedMs: number;
+    frozenCameraTiltDeg: number;
   };
 };
 
@@ -390,15 +490,14 @@ type UpperBodyTraceMetrics = {
  * One raw metric-only frame shaped for the `/raw-frames` write API. The
  * landmark payload is deliberately limited to upper-body analysis points plus
  * hips (needed for the trunk-relative coordinate frame); no image/video data.
- * `ex_007_upper_body_v1` rows (the original ex_007-only trace) remain in the
- * table; this client only writes `upper_body_v2`.
+ * Existing V1/V2 rows remain in the table; this client writes V3.
  */
 type RawFramePayload = {
   frameIndex: number;
   setIndex: number;
   elapsedMs: number;
   capturedAt: string;
-  traceKind: "upper_body_v2";
+  traceKind: "upper_body_v3";
   metrics: UpperBodyTraceMetrics;
   landmarks: Record<string, RawTraceLandmark | null>;
 };
@@ -651,7 +750,11 @@ const MAX_NECK_REP_DEBUG_RECORDS = 3000;
 const MAX_EX005_DEBUG_RECORDS = 2000;
 const EX005_DEBUG_THROTTLE_MS = 250;
 const RAW_FRAME_UPLOAD_BATCH_SIZE = 120;
-const BASELINE_SAMPLE_COUNT = 90; // ~3 s at 30 fps
+// Tuning traces are retried a few times and then given up on — see flushRawFrames.
+const RAW_FRAME_UPLOAD_ATTEMPTS = 3;
+const RAW_FRAME_RETRY_BASE_MS = 500;
+// How long session end waits for queued reps/sets before reporting "partial".
+const SESSION_END_DRAIN_TIMEOUT_MS = 6000;
 const CAPTURE_READINESS_RESET_GRACE_MS = 300;
 
 function finiteNumberOrNull(value: unknown): number | null {
@@ -690,15 +793,18 @@ function upperBodyTraceLandmarks(landmarks: NormalizedLandmark[]) {
 function upperBodyTraceMetrics(
   landmarks: NormalizedLandmark[],
   raw: ExerciseFrameMetrics,
+  observedTilt: TiltReference,
   exerciseId: string,
   baselines: UpperBodyTraceMetrics["baselines"],
   baselinePhase: UpperBodyTraceMetrics["baselinePhase"],
+  calibrationClock: NeutralCalibrationClock,
 ): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
   const trunkLean = computeTrunkLateralLean(landmarks, tilt);
   const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt);
   const neckTilt = computeLateralNeckTilt(landmarks, tilt);
   return {
+    metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION,
     exerciseId,
     wristShoulderVertical: {
       left: finiteNumberOrNull(
@@ -785,9 +891,27 @@ function upperBodyTraceMetrics(
     baselinePhase,
     tiltReference: {
       cameraTiltDeg: tilt.cameraTiltDeg,
-      confidence: tilt.confidence,
-      divergenceDeg: finiteNumberOrNull(tilt.divergenceDeg),
+      observedCameraTiltDeg: observedTilt.cameraTiltDeg,
+      confidence: observedTilt.confidence,
+      divergenceDeg: finiteNumberOrNull(observedTilt.divergenceDeg),
     },
+    calibration: {
+      sampleCount: calibrationClock.sampleCount,
+      validElapsedMs: Math.round(calibrationClock.validElapsedMs),
+      frozenCameraTiltDeg: tilt.cameraTiltDeg,
+    },
+  };
+}
+
+function emptyFrameMetrics(): ExerciseFrameMetrics {
+  return {
+    tiltReference: {
+      cameraTiltDeg: 0,
+      confidence: "insufficient",
+      divergenceDeg: null,
+    },
+    metrics: {},
+    compensationScore: null,
   };
 }
 
@@ -834,10 +958,12 @@ function clinicalNavBtnStyle(): CSSProperties {
 }
 
 type CardSpec = {
-  key: MetricName;
+  id: string;
+  metric: MetricName;
   label: string;
   value: number | null;
   kind: "primary" | "compensation";
+  unit: "°" | "";
   warningThreshold?: number;
   compareDirection?: "above" | "below";
   warningActive?: boolean;
@@ -889,8 +1015,13 @@ export default function CameraClient() {
   const frameMsSumRef = useRef(0);
   const perfSampleCountRef = useRef(0);
 
-  const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
+  const leftCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(
+    new Map(),
+  );
+  const rightCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(
+    new Map(),
+  );
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
   // the metricFiltersRef map because per-limb exercises need TWO filters for
   // the same MetricName — one per side. Cleared on exercise change, reset on
@@ -911,6 +1042,15 @@ export default function CameraClient() {
   });
   const leftScapBaselineRef  = useRef<BaselineState>({ samples: [], value: null });
   const rightScapBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  type NeutralCalibrationSample = {
+    landmarks: NormalizedLandmark[];
+    observedTilt: TiltReference;
+  };
+  const neutralCalibrationClockRef = useRef<NeutralCalibrationClock>(
+    newNeutralCalibrationClock(),
+  );
+  const neutralCalibrationSamplesRef = useRef<NeutralCalibrationSample[]>([]);
+  const frozenTiltDegRef = useRef<number | null>(null);
   const lastMetricsUpdateRef = useRef(0);
   const compensationWarningLatchesRef = useRef<Map<MetricName, CompensationWarningLatch>>(
     new Map(),
@@ -1059,10 +1199,8 @@ export default function CameraClient() {
   const [captureOk, setCaptureOk] = useState(true);
   const [captureMessage, setCaptureMessage] = useState("Captured");
 
-  // Resting-baseline phase. "capturing" while the per-side baseline samples
-  // are being accumulated, "captured" once both sides have enough samples,
-  // "not-needed" for exercises whose primary metric is already baseline-
-  // relative (everything except scapularElevation today).
+  // Neutral calibration phase. Every monitored attempt freezes a camera-tilt
+  // reference before clinical metrics, rep counting, or hold timing starts.
   //
   // The ref is what predictWebcam reads — the rAF chain holds a stale
   // closure on the React state, mirroring the lastCaptureOkRef pattern
@@ -1072,12 +1210,19 @@ export default function CameraClient() {
   const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
   const [baselineProgress, setBaselineProgress] = useState({
     samples: 0,
-    required: BASELINE_SAMPLE_COUNT,
+    validElapsedMs: 0,
   });
   const setBaselinePhase = useCallback((phase: BaselinePhase) => {
     baselinePhaseRef.current = phase;
     setBaselinePhaseState(phase);
   }, []);
+  const [displayPerSidePrimary, setDisplayPerSidePrimary] = useState<{
+    left: number | null;
+    right: number | null;
+  } | null>(null);
+  const compensationWarningSignalsRef = useRef<
+    Map<MetricName, CompensationWarningSignal>
+  >(new Map());
 
   const lastBadCaptureAtRef = useRef<number>(0);
   const stableOkSinceRef = useRef<number>(0);
@@ -1097,7 +1242,14 @@ export default function CameraClient() {
   const [viewportWidth, setViewportWidth] = useState(1280);
 
   const searchParams = useSearchParams();
+  const router = useRouter();
   const initialExerciseId = searchParams.get("exerciseId") ?? "";
+  const initialOccurrenceIdParam = searchParams.get("occurrenceId");
+  const initialOccurrenceIdRaw =
+    initialOccurrenceIdParam === null ? Number.NaN : Number(initialOccurrenceIdParam);
+  const initialOccurrenceId = Number.isInteger(initialOccurrenceIdRaw)
+    ? initialOccurrenceIdRaw
+    : null;
 
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>(initialExerciseId);
@@ -1117,7 +1269,7 @@ export default function CameraClient() {
   // actionable today — due today or still inside its make-up window. A patient
   // may only start one of these; the server enforces the same rule. Empty for
   // staff debug (which bypasses the lock entirely).
-  const [actionableExerciseIds, setActionableExerciseIds] = useState<Set<string>>(new Set());
+  const [actionableOccurrenceIds, setActionableOccurrenceIds] = useState<Set<number>>(new Set());
   // Set when a start is blocked because nothing is scheduled today for the
   // selected exercise (or the server rejects with 409).
   const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
@@ -1204,6 +1356,7 @@ export default function CameraClient() {
    * timer useEffect when `sessionState === "active"`.
    */
   const sessionStartMsRef = useRef<number | null>(null);
+  const countdownResumeElapsedMsRef = useRef<number | null>(null);
   const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
   const [countdownSec, setCountdownSec] = useState(3);
 
@@ -1229,6 +1382,20 @@ export default function CameraClient() {
    */
   const prescriptionRef = useRef<Prescription>(DEFAULT_PRESCRIPTION);
   const [prescription, setPrescriptionRaw] = useState<Prescription>(DEFAULT_PRESCRIPTION);
+  const reportSessionIdRef = useRef<number | null>(null);
+  const showCompletionRecapAfterReportRef = useRef(false);
+  const terminalOccurrenceAfterReportRef = useRef<
+    "completed" | "pain_stopped" | null
+  >(null);
+  const [pendingCompletionNavigation, setPendingCompletionNavigation] = useState<{
+    remaining: Exercise[];
+    next: Exercise | null;
+  } | null>(null);
+  const [painScore, setPainScore] = useState(0);
+  const [painTiming, setPainTiming] = useState<PainTiming | "">("");
+  const [painBodyArea, setPainBodyArea] = useState("");
+  const [painReportSaving, setPainReportSaving] = useState(false);
+  const [painReportError, setPainReportError] = useState<string | null>(null);
 
   /**
    * When true, the sidebar shows an inline confirm step instead of ending the
@@ -1271,19 +1438,27 @@ export default function CameraClient() {
    *    performance.now() captured at create, used to convert the rep counter's
    *    monotonic timestamps into wall-clock start_ts/end_ts.
    *  - `globalRepIndexRef` — session-wide 1..N rep index across sides and sets.
-   *  - `pendingSetEventsRef` / `pendingRepEventsRef` — outcomes buffered since
-   *    the last flush. Flushed at each set completion and at session end.
-   *    Persistence is best-effort: all writes are fire-and-forget and never
-   *    block rep counting, hold accumulation, or the UI.
+   *  - `eventOutboxRef` — durable queue for rep/set outcomes. Items leave it
+   *    only on an acknowledged OK response; failures are retried and anything
+   *    still pending is reported at session end instead of being discarded.
+   *    Enqueueing never blocks rep counting, hold accumulation, or the UI.
    */
   const sessionIdRef = useRef<number | null>(null);
   const sessionWallStartMsRef = useRef<number>(0);
   const sessionPerfStartMsRef = useRef<number>(0);
   const globalRepIndexRef = useRef<number>(0);
-  const pendingSetEventsRef = useRef<SetEventPayload[]>([]);
-  const pendingRepEventsRef = useRef<RepEventPayload[]>([]);
+  const eventOutboxRef = useRef(
+    new EventOutbox<RepEventPayload, SetEventPayload>({
+      fetchFn: (url, init) => fetch(url, init),
+      storage: typeof window !== "undefined" ? window.localStorage : null,
+      onError: (kind, message) =>
+        console.warn(`${kind}-events delivery failed (will retry):`, message),
+    }),
+  );
   const rawFrameIndexRef = useRef<number>(0);
   const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
+  /** Trace batches abandoned after exhausting retries, for honest reporting. */
+  const rawFrameDroppedBatchesRef = useRef<number>(0);
   // Opt-in tuning-trace recording (patient mode only, default OFF). The ref
   // mirrors the state for the rAF loop — same stale-closure pattern as
   // lastCaptureOkRef. Flipping mid-session simply starts/stops buffering;
@@ -1309,7 +1484,10 @@ export default function CameraClient() {
    */
   const sessionTokenRef = useRef<number>(0);
   const endSessionPersistenceRef = useRef<
-    (completed?: boolean, endReason?: "user") => Promise<EndSessionPersistenceResult>
+    (
+      completed?: boolean,
+      endReason?: "user" | "pain",
+    ) => Promise<EndSessionPersistenceResult>
   >(() => Promise.resolve("skipped"));
   /**
    * If an end (notably the End button) fires before the session create resolves,
@@ -1318,7 +1496,7 @@ export default function CameraClient() {
    * create leaves `end_reason` NULL and the dashboard mislabels the attempt as
    * "In Progress" instead of "Ended Early". Reset on each start and after use.
    */
-  const pendingStaleEndReasonRef = useRef<"user" | undefined>(undefined);
+  const pendingStaleEndReasonRef = useRef<"user" | "pain" | undefined>(undefined);
 
   // Capture-quality tally for the current session (→ sessions.capture_quality_summary).
   // Counts frames processed while the session is active and how many had OK
@@ -1327,12 +1505,18 @@ export default function CameraClient() {
   const captureFramesTotalRef = useRef<number>(0);
   const captureFramesOkRef = useRef<number>(0);
 
-  /** Reset all in-memory session-persistence state (no DB call). */
+  /**
+   * Reset all in-memory session-persistence state (no DB call).
+   *
+   * This discards anything still queued, so callers that end a session must
+   * drain the outbox FIRST — see `endSessionPersistence`. Reaching here with a
+   * non-empty queue means those outcomes were abandoned deliberately (session
+   * never adopted) or already reported to the patient as undelivered.
+   */
   const resetSessionPersistence = () => {
     sessionIdRef.current = null;
     globalRepIndexRef.current = 0;
-    pendingSetEventsRef.current = [];
-    pendingRepEventsRef.current = [];
+    eventOutboxRef.current.setSession(null);
     rawFrameIndexRef.current = 0;
     pendingRawFramesRef.current = [];
     dynamicRepQualityBufferRef.current.reset();
@@ -1346,10 +1530,19 @@ export default function CameraClient() {
    */
   const startSessionPersistence = async (): Promise<boolean> => {
     resetSessionPersistence();
+    reportSessionIdRef.current = null;
+    showCompletionRecapAfterReportRef.current = false;
+    terminalOccurrenceAfterReportRef.current = null;
+    setPendingCompletionNavigation(null);
     pendingStaleEndReasonRef.current = undefined;
     const patientExerciseId = prescriptionRef.current.patientExerciseId;
+    const occurrenceId = prescriptionRef.current.occurrenceId;
     const exerciseId = activeDefinitionRef.current?.id;
     if (typeof patientExerciseId !== "number" || !exerciseId) return true;
+    if (typeof occurrenceId !== "number") {
+      setScheduleNotice("Choose an exercise from today's schedule before starting.");
+      return false;
+    }
     // Token for THIS run; if it changes before the create resolves, the run is
     // already over and the created row must be closed rather than adopted.
     const token = ++sessionTokenRef.current;
@@ -1361,6 +1554,7 @@ export default function CameraClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           patientExerciseId,
+          occurrenceId,
           exerciseId,
           deviceInfo:
             typeof navigator !== "undefined"
@@ -1383,7 +1577,21 @@ export default function CameraClient() {
       }
 
       const data = await response.json();
-      if (!data || typeof data.sessionId !== "number") {
+      const runtime = data?.runtimePrescription as RuntimePrescription | undefined;
+      if (
+        !data ||
+        typeof data.sessionId !== "number" ||
+        !runtime ||
+        runtime.patientExerciseId !== patientExerciseId ||
+        runtime.occurrenceId !== occurrenceId ||
+        runtime.exerciseId !== exerciseId ||
+        !Number.isInteger(runtime.occurrenceId) ||
+        !Number.isFinite(runtime.sets) ||
+        !Number.isFinite(runtime.reps) ||
+        (runtime.prescribedSide !== "both" &&
+          runtime.prescribedSide !== "left" &&
+          runtime.prescribedSide !== "right")
+      ) {
         setScheduleNotice("The session could not be saved, so it was not started.");
         resetSessionPersistence();
         return false;
@@ -1391,7 +1599,21 @@ export default function CameraClient() {
 
       if (sessionTokenRef.current === token) {
         // Still the active run — adopt the session and flush buffered outcomes.
+        // Adoption preserves anything queued while the create was in flight.
         sessionIdRef.current = data.sessionId;
+        eventOutboxRef.current.setSession(data.sessionId);
+        const authoritativePrescription: Prescription = {
+          sets: runtime.sets,
+          reps: runtime.reps,
+          restSeconds: runtime.restSeconds,
+          holdSeconds: runtime.holdSeconds,
+          patientExerciseId: runtime.patientExerciseId,
+          occurrenceId: runtime.occurrenceId,
+          prescribedSide: runtime.prescribedSide,
+          resistance: runtime.resistance,
+        };
+        prescriptionRef.current = authoritativePrescription;
+        setPrescriptionRaw(authoritativePrescription);
         flushSetEvents();
         flushRepEvents();
         flushRawFrames();
@@ -1408,7 +1630,10 @@ export default function CameraClient() {
       fetch(`/api/sessions/${data.sessionId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endReason: pendingStaleEndReasonRef.current }),
+        body: JSON.stringify({
+          completed: false,
+          endReason: pendingStaleEndReasonRef.current ?? "user",
+        }),
       }).catch((err) => console.warn("stale session close failed:", err));
       pendingStaleEndReasonRef.current = undefined;
       return false;
@@ -1432,11 +1657,12 @@ export default function CameraClient() {
    * landmarks only — never image data. Opt-in: gated on the "Record tuning
    * trace" toggle (default OFF), so ordinary patient sessions write nothing.
    * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
-   * now covers every active exercise with the `upper_body_v2` payload.
+   * now covers every active exercise with the versioned V3 payload.
    */
   const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
     raw: ExerciseFrameMetrics,
+    observedTilt: TiltReference,
     tNow: number,
   ) => {
     if (!tuningTraceEnabledRef.current) return;
@@ -1450,10 +1676,11 @@ export default function CameraClient() {
       setIndex: completedSetsRef.current + 1,
       elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
       capturedAt: perfToIso(tNow),
-      traceKind: "upper_body_v2",
+      traceKind: "upper_body_v3",
       metrics: upperBodyTraceMetrics(
         landmarks,
         raw,
+        observedTilt,
         def.id,
         {
           scapLeft: leftScapBaselineRef.current.value,
@@ -1461,6 +1688,7 @@ export default function CameraClient() {
           bidirectionalPrimary: bidirectionalBaselineRef.current.value,
         },
         baselinePhaseRef.current,
+        neutralCalibrationClockRef.current,
       ),
       landmarks: upperBodyTraceLandmarks(landmarks),
     });
@@ -1471,9 +1699,14 @@ export default function CameraClient() {
   };
 
   /**
-   * Queue pending raw-frame batches for durable upload. The queue is
-   * fire-and-forget like rep/set persistence, but serializing batches avoids a
-   * burst of concurrent large JSON requests during a long set.
+   * Queue pending raw-frame batches for upload, serializing them so a long set
+   * cannot fire a burst of concurrent large JSON requests.
+   *
+   * Unlike rep/set outcomes these are opt-in tuning traces, not clinical
+   * outcome data, so they are retried a bounded number of times and then given
+   * up on rather than persisted across reloads — a trace batch is large enough
+   * that queueing it in localStorage risks the storage quota. Dropped batches
+   * are counted and surfaced instead of vanishing into a lone console warning.
    */
   const flushRawFrames = () => {
     const sessionId = sessionIdRef.current;
@@ -1487,16 +1720,37 @@ export default function CameraClient() {
       rawFrameUploadChainRef.current = rawFrameUploadChainRef.current
         .catch(() => undefined)
         .then(async () => {
-          const response = await fetch(`/api/sessions/${sessionId}/raw-frames`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ frames }),
-          });
-          if (!response.ok) {
-            throw new Error(`raw-frames upload returned ${response.status}`);
+          for (let attempt = 1; attempt <= RAW_FRAME_UPLOAD_ATTEMPTS; attempt += 1) {
+            try {
+              const response = await fetch(
+                `/api/sessions/${sessionId}/raw-frames`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ frames }),
+                },
+              );
+              // `fetch` resolves for 4xx/5xx, so the status must be checked.
+              if (!response.ok) {
+                throw new Error(`raw-frames upload returned ${response.status}`);
+              }
+              return;
+            } catch (err) {
+              if (attempt === RAW_FRAME_UPLOAD_ATTEMPTS) {
+                rawFrameDroppedBatchesRef.current += 1;
+                console.warn(
+                  `raw-frames batch dropped after ${attempt} attempts ` +
+                    `(${rawFrameDroppedBatchesRef.current} total this session):`,
+                  err,
+                );
+                return;
+              }
+              await new Promise((resolve) =>
+                setTimeout(resolve, RAW_FRAME_RETRY_BASE_MS * 2 ** (attempt - 1)),
+              );
+            }
           }
-        })
-        .catch((err) => console.warn("raw-frames flush failed:", err));
+        });
     }
   };
 
@@ -1522,7 +1776,7 @@ export default function CameraClient() {
       event,
       scoredCompensations,
     );
-    pendingRepEventsRef.current.push({
+    eventOutboxRef.current.enqueue("rep", {
       repIndex: ++globalRepIndexRef.current,
       setIndex: completedSetsRef.current + 1,
       side,
@@ -1596,7 +1850,7 @@ export default function CameraClient() {
       exerciseKind === "isometric" && def?.kind === "isometric"
         ? finalizeHoldQuality(def.isometric.targetBand.center)
         : undefined;
-    pendingSetEventsRef.current.push({
+    eventOutboxRef.current.enqueue("set", {
       setIndex: record.setIndex,
       exerciseKind,
       targetReps: record.targetReps,
@@ -1615,36 +1869,19 @@ export default function CameraClient() {
   };
 
   /**
-   * Flush buffered set outcomes to the DB. Kept separate from rep flushing so
-   * ex_006 can persist a set even when no rep_events exist.
+   * Ask the outbox to deliver queued set outcomes. Kept separate from rep
+   * flushing so ex_006 can persist a set even when no rep_events exist.
+   *
+   * Both flushers are non-blocking: the outbox keeps items until the server
+   * acknowledges them and retries on its own, so a failure here delays delivery
+   * rather than losing it. No-op while the session id is unresolved.
    */
   const flushSetEvents = () => {
-    const sessionId = sessionIdRef.current;
-    if (sessionId === null || pendingSetEventsRef.current.length === 0) return;
-    const sets = pendingSetEventsRef.current;
-    pendingSetEventsRef.current = [];
-    fetch(`/api/sessions/${sessionId}/set-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sets }),
-    }).catch((err) => console.warn("set-events flush failed:", err));
+    void eventOutboxRef.current.flush("set");
   };
 
-  /**
-   * Flush buffered reps to the DB. No-op while `sessionIdRef` is null (keeps
-   * them buffered until the session id resolves). Fire-and-forget; on failure
-   * the reps are dropped (best-effort persistence for a proof-of-concept).
-   */
   const flushRepEvents = () => {
-    const sessionId = sessionIdRef.current;
-    if (sessionId === null || pendingRepEventsRef.current.length === 0) return;
-    const reps = pendingRepEventsRef.current;
-    pendingRepEventsRef.current = [];
-    fetch(`/api/sessions/${sessionId}/rep-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reps }),
-    }).catch((err) => console.warn("rep-events flush failed:", err));
+    void eventOutboxRef.current.flush("rep");
   };
 
   /**
@@ -1654,7 +1891,7 @@ export default function CameraClient() {
    */
   const endSessionPersistence = (
     completed = false,
-    endReason?: "user",
+    endReason?: "user" | "pain",
   ): Promise<EndSessionPersistenceResult> => {
     const sessionId = sessionIdRef.current;
     const hasPatientAssignment =
@@ -1670,8 +1907,7 @@ export default function CameraClient() {
       resetSessionPersistence();
       return Promise.resolve(hasPatientAssignment ? "pending" : "skipped");
     }
-    flushSetEvents();
-    flushRepEvents();
+    reportSessionIdRef.current = sessionId;
     flushRawFrames();
     // Session-level capture-quality summary (% of active frames with OK capture).
     const framesTotal = captureFramesTotalRef.current;
@@ -1685,7 +1921,11 @@ export default function CameraClient() {
     const endRequest = fetch(`/api/sessions/${sessionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ completed, captureQualitySummary, endReason }),
+      body: JSON.stringify({
+        completed,
+        captureQualitySummary,
+        endReason: completed ? "completed" : endReason ?? "user",
+      }),
     })
       .then((response) => {
         if (!response.ok) {
@@ -1697,8 +1937,23 @@ export default function CameraClient() {
         console.warn("session end failed:", err);
         return "failed" as const;
       });
-    resetSessionPersistence();
-    return endRequest;
+
+    // The outcome events decide the reported result alongside the session row.
+    // Previously the PATCH alone produced "Session saved.", so a session could
+    // be reported as saved with every repetition silently lost.
+    return (async (): Promise<EndSessionPersistenceResult> => {
+      const outbox = eventOutboxRef.current;
+      const [rowResult, drainResult] = await Promise.all([
+        endRequest,
+        outbox.drain({ timeoutMs: SESSION_END_DRAIN_TIMEOUT_MS }),
+      ]);
+      if (drainResult.drained) outbox.clearStorage(sessionId);
+      // Anything still queued stays persisted for the next load; reset only
+      // after the drain has had its chance, never before.
+      resetSessionPersistence();
+      if (rowResult === "failed") return "failed";
+      return drainResult.drained ? "saved" : "partial";
+    })();
   };
   endSessionPersistenceRef.current = endSessionPersistence;
 
@@ -1706,6 +1961,14 @@ export default function CameraClient() {
     (result: EndSessionPersistenceResult) => {
       if (result === "saved") {
         showToast({ variant: "success", message: "Session saved." });
+      } else if (result === "partial") {
+        // The session row closed but some reps/sets are still queued. They are
+        // persisted locally and retried, so this is a delay, not a loss.
+        showToast({
+          variant: "info",
+          message:
+            "Session saved. Some repetitions are still uploading — reopen the camera to finish.",
+        });
       } else if (result === "pending") {
         showToast({
           variant: "info",
@@ -1720,6 +1983,117 @@ export default function CameraClient() {
     },
     [showToast],
   );
+
+  const finishPostAttemptReport = () => {
+    const shouldShowCompletionRecap = showCompletionRecapAfterReportRef.current;
+    showCompletionRecapAfterReportRef.current = false;
+    const terminalOutcome = terminalOccurrenceAfterReportRef.current;
+    terminalOccurrenceAfterReportRef.current = null;
+    reportSessionIdRef.current = null;
+    setPainReportError(null);
+    setPainScore(0);
+    setPainTiming("");
+    setPainBodyArea("");
+    const currentOccurrenceId = prescriptionRef.current.occurrenceId;
+    if (terminalOutcome && currentOccurrenceId !== undefined) {
+      const { remaining, next } = removeActionableOccurrence(
+        assignedExercisesRef.current,
+        currentOccurrenceId,
+      );
+      setActionableOccurrenceIds((previous) => {
+        const next = new Set(previous);
+        next.delete(currentOccurrenceId);
+        return next;
+      });
+
+      if (terminalOutcome === "completed" && shouldShowCompletionRecap) {
+        // Keep the just-finished exercise mounted until the patient explicitly
+        // acknowledges its side-aware recap. Applying `remaining` here would
+        // remove the active definition and make the existing recap unreachable.
+        setPendingCompletionNavigation({ remaining, next });
+        setSessionState("ended");
+        return;
+      }
+
+      assignedExercisesRef.current = remaining;
+      setAssignedExercises(remaining);
+      if (user?.role === "patient") {
+        router.push("/dashboard/patient?tab=session");
+        return;
+      }
+    }
+    setSessionState("ended");
+  };
+
+  const savePainReport = async (declined: boolean) => {
+    const sessionId = reportSessionIdRef.current;
+    if (sessionId === null) {
+      finishPostAttemptReport();
+      return;
+    }
+    setPainReportSaving(true);
+    setPainReportError(null);
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/pain-report`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          declined
+            ? { status: "declined" }
+            : {
+                status: "reported",
+                score: painScore,
+                timing: painTiming || null,
+                bodyArea: painBodyArea.trim() || null,
+              },
+        ),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          body && typeof body.error === "string"
+            ? body.error
+            : "The pain report could not be saved.",
+        );
+      }
+      finishPostAttemptReport();
+    } catch (error) {
+      setPainReportError(
+        error instanceof Error
+          ? error.message
+          : "The pain report could not be saved.",
+      );
+    } finally {
+      setPainReportSaving(false);
+    }
+  };
+
+  const continueFromCompletionRecap = (destination: "next" | "schedule") => {
+    const pending = pendingCompletionNavigation;
+    if (!pending) return;
+
+    if (destination === "next" && pending.next) {
+      setPendingCompletionNavigation(null);
+      assignedExercisesRef.current = pending.remaining;
+      setAssignedExercises(pending.remaining);
+      selectedExerciseRef.current = pending.next.id;
+      setSelectedExercise(pending.next.id);
+      if (user?.role === "patient" && pending.next.occurrenceId !== undefined) {
+        router.replace(
+          `/camera?occurrenceId=${pending.next.occurrenceId}&exerciseId=${encodeURIComponent(pending.next.id)}`,
+          { scroll: false },
+        );
+      }
+      setSessionState("idle");
+      return;
+    }
+
+    if (user?.role === "patient") {
+      router.push("/dashboard/patient?tab=session");
+      return;
+    }
+    setPendingCompletionNavigation(null);
+  };
 
   /**
    * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
@@ -1864,35 +2238,34 @@ export default function CameraClient() {
     return () => clearInterval(interval);
   }, [sessionState]);
 
-  /**
-   * 3-2-1 start countdown. Fires when the Start button transitions the session
-   * to "countdown". Counts from 3 to 1 at 1-second intervals, then stamps the
-   * session start timestamps and transitions to "active". The guard on
-   * `sessionStateRef` ensures that if End is clicked mid-countdown the interval
-   * does not then overwrite the "ended" state with "active".
-   *
-   * Baseline capture (for exercises that need it) runs in parallel during the
-   * countdown — both are reset together in `handleSessionStart`, so they race
-   * and typically finish around the same time.
-   */
+  /** Neutral-calibration countdown. It cannot open the outcome gate early. */
   useEffect(() => {
     if (sessionState !== "countdown") return;
     setCountdownSec(3);
-    let remaining = 3;
-    const interval = setInterval(() => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        clearInterval(interval);
-        // Guard: End button may have fired during the interval
-        if (sessionStateRef.current !== "countdown") return;
+    const tick = () => {
+      const clock = neutralCalibrationClockRef.current;
+      const remaining = Math.max(
+        0,
+        Math.ceil(
+          (NEUTRAL_CALIBRATION_DURATION_MS - clock.validElapsedMs) / 1_000,
+        ),
+      );
+      setCountdownSec(remaining);
+      if (
+        sessionStateRef.current === "countdown" &&
+        baselinePhaseRef.current === "captured"
+      ) {
         const now = performance.now();
-        sessionStartMsRef.current = now;
+        const resumedElapsed = countdownResumeElapsedMsRef.current;
+        sessionStartMsRef.current =
+          resumedElapsed === null ? now : now - resumedElapsed;
         currentSetStartMsRef.current = now;
+        countdownResumeElapsedMsRef.current = null;
         setSessionState("active");
-      } else {
-        setCountdownSec(remaining);
       }
-    }, 1000);
+    };
+    tick();
+    const interval = setInterval(tick, 100);
     return () => clearInterval(interval);
   }, [sessionState]);
 
@@ -1904,6 +2277,24 @@ export default function CameraClient() {
     const max = Math.max(left, right);
     if (max === 0) return 0;
     return Math.abs(left - right) / max;
+  };
+
+  const prescribedTargetReached = (
+    left: number,
+    right: number,
+    target: number,
+  ): boolean => {
+    const side = prescriptionRef.current.prescribedSide;
+    if (side === "left") return left >= target;
+    if (side === "right") return right >= target;
+    return Math.min(left, right) >= target;
+  };
+
+  const prescribedCreditedValue = (left: number, right: number): number => {
+    const side = prescriptionRef.current.prescribedSide;
+    if (side === "left") return left;
+    if (side === "right") return right;
+    return Math.min(left, right);
   };
 
   /**
@@ -1926,9 +2317,15 @@ export default function CameraClient() {
     if (curIdx === -1) return false;
     const nextIdx = curIdx + offset;
     if (nextIdx < 0 || nextIdx >= ids.length) return false;
-    const nextId = ids[nextIdx].id;
-    selectedExerciseRef.current = nextId;
-    setSelectedExercise(nextId);
+    const nextExercise = ids[nextIdx];
+    selectedExerciseRef.current = nextExercise.id;
+    setSelectedExercise(nextExercise.id);
+    if (user?.role === "patient" && nextExercise.occurrenceId !== undefined) {
+      router.replace(
+        `/camera?occurrenceId=${nextExercise.occurrenceId}&exerciseId=${encodeURIComponent(nextExercise.id)}`,
+        { scroll: false },
+      );
+    }
     return true;
   };
 
@@ -1963,7 +2360,7 @@ export default function CameraClient() {
       const left = repCountsRef.current.left;
       const right = repCountsRef.current.right;
       setComplete = def.bilateral
-        ? Math.min(left, right) >= target
+        ? prescribedTargetReached(left, right, target)
         : left >= target;
       if (!setComplete) return;
       setRecord = {
@@ -1988,7 +2385,7 @@ export default function CameraClient() {
       const targetMs = prescriptionRef.current.holdSeconds * 1000;
       const leftMs = leftHoldMsRef.current;
       const rightMs = rightHoldMsRef.current;
-      setComplete = Math.min(leftMs, rightMs) >= targetMs;
+      setComplete = prescribedTargetReached(leftMs, rightMs, targetMs);
       if (!setComplete) return;
       setRecord = {
         setIndex: completedSetsRef.current + 1,
@@ -2002,20 +2399,20 @@ export default function CameraClient() {
             : 0,
         terminatedBy: "min_reached",
         asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
-        pairedHoldMs: Math.min(leftMs, rightMs),
+        pairedHoldMs: prescribedCreditedValue(leftMs, rightMs),
         targetHoldMs: targetMs,
         leftHoldMs: leftMs,
         rightHoldMs: rightMs,
       };
     } else {
-      // Per-limb isometric (ex_006): a set completes when the patient has held
-      // a valid T-pose (BOTH arms in the band simultaneously) for the
-      // prescribed duration. The paired accumulator only advanced on
-      // both-in-band frames, so this is a single threshold — no per-side
-      // min() needed.
+      // Per-limb isometric (ex_006): each arm accrues independently. "both"
+      // uses the slower arm; a unilateral prescription gates only its selected
+      // side while the other remains an observation.
       const targetMs = prescriptionRef.current.holdSeconds * 1000;
-      const pairedMs = pairedHoldMsRef.current;
-      setComplete = pairedMs >= targetMs;
+      const leftMs = leftHoldMsRef.current;
+      const rightMs = rightHoldMsRef.current;
+      const creditedMs = prescribedCreditedValue(leftMs, rightMs);
+      setComplete = prescribedTargetReached(leftMs, rightMs, targetMs);
       if (!setComplete) return;
       setRecord = {
         setIndex: completedSetsRef.current + 1,
@@ -2028,9 +2425,11 @@ export default function CameraClient() {
             ? tNow - currentSetStartMsRef.current
             : 0,
         terminatedBy: "min_reached",
-        asymmetryIndex: 0,
-        pairedHoldMs: pairedMs,
+        asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
+        pairedHoldMs: creditedMs,
         targetHoldMs: targetMs,
+        leftHoldMs: leftMs,
+        rightHoldMs: rightMs,
       };
     }
     completedSetsLogRef.current.push(setRecord);
@@ -2064,8 +2463,8 @@ export default function CameraClient() {
     setConfirmingEnd(false);
 
     if (completedSetsRef.current >= prescriptionRef.current.sets) {
-      // All prescribed sets done. Guided flow: advance to the next assigned
-      // exercise if there is one, otherwise the whole session is complete.
+      // All prescribed sets done. Close this occurrence, then require the
+      // post-attempt pain report/decline before any guided-flow advance.
       // Close the rep gate synchronously FIRST. This runs from the rAF loop,
       // and the exercise-change reset effect that also lands the next exercise
       // idle is async — so without this immediate flip there is a brief window
@@ -2076,14 +2475,18 @@ export default function CameraClient() {
       // This exercise's session is finished either way — close it (completed:
       // all prescribed sets were reached). Advancing re-selects the next
       // exercise; the patient presses Start to open a new session for it.
+      showCompletionRecapAfterReportRef.current = true;
+      terminalOccurrenceAfterReportRef.current = "completed";
       void endSessionPersistence(true).then(showSessionPersistenceToast);
       // This exercise is finished — drop its resume snapshot so a later visit
       // shows the "already completed" recap, not a resume prompt.
       clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
-      setSessionState("idle");
-      if (!goToAdjacentExercise(1)) {
-        setSessionState("ended");
-      }
+      setPainReportError(null);
+      setSessionState(
+        prescriptionRef.current.patientExerciseId !== undefined
+          ? "reporting"
+          : "ended",
+      );
     } else if (prescriptionRef.current.restSeconds > 0) {
       // More sets remain → hard-block rest between sets. Flip to "resting"
       // synchronously (closes the rep gate this frame), then start the
@@ -2117,7 +2520,7 @@ export default function CameraClient() {
     if (
       user?.role === "patient" &&
       selectedExercise &&
-      !actionableExerciseIds.has(selectedExercise)
+      !actionableOccurrenceIds.has(prescriptionRef.current.occurrenceId ?? -1)
     ) {
       setScheduleNotice(
         "This exercise isn't scheduled for today. Start it from your schedule on its due day.",
@@ -2147,19 +2550,7 @@ export default function CameraClient() {
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
     resetCompensationWarnings();
-    if (
-      (activeDefinition.kind === "dynamic" &&
-        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
-      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
-    ) {
-      leftBaselineRef.current  = { samples: [], value: null };
-      rightBaselineRef.current = { samples: [], value: null };
-      bidirectionalBaselineRef.current = { samples: [], value: null };
-      leftScapBaselineRef.current  = { samples: [], value: null };
-      rightScapBaselineRef.current = { samples: [], value: null };
-      setBaselinePhase("capturing");
-      setBaselineSampleProgress(0);
-    }
+    resetNeutralCalibration("capturing");
     pairedHoldMsRef.current = 0;
     leftHoldMsRef.current = 0;
     rightHoldMsRef.current = 0;
@@ -2171,6 +2562,7 @@ export default function CameraClient() {
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
+    countdownResumeElapsedMsRef.current = null;
     setSessionState("countdown");
   };
 
@@ -2178,9 +2570,8 @@ export default function CameraClient() {
    * Resume a disrupted session from its localStorage snapshot: restore the
    * completed-set count, the current set's counter, and the elapsed timer, and
    * continue writing to the SAME open DB session (no new row). Mirrors
-   * `handleSessionStart`, but restores state instead of zeroing it and goes
-   * straight to `active` — routing through `countdown` would overwrite the
-   * restored timer anchor (see the countdown effect).
+   * `handleSessionStart`, but restores state instead of zeroing it. A resumed
+   * attempt recalibrates before returning to `active`.
    */
   const resumeSession = () => {
     if (!activeDefinition) return;
@@ -2243,20 +2634,7 @@ export default function CameraClient() {
       });
     }
 
-    // Re-capture the resting baseline if the exercise needs one (same as start).
-    if (
-      (activeDefinition.kind === "dynamic" &&
-        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
-      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
-    ) {
-      leftBaselineRef.current  = { samples: [], value: null };
-      rightBaselineRef.current = { samples: [], value: null };
-      bidirectionalBaselineRef.current = { samples: [], value: null };
-      leftScapBaselineRef.current  = { samples: [], value: null };
-      rightScapBaselineRef.current = { samples: [], value: null };
-      setBaselinePhase("capturing");
-      setBaselineSampleProgress(0);
-    }
+    resetNeutralCalibration("capturing");
 
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
@@ -2267,6 +2645,15 @@ export default function CameraClient() {
     // collide with rows already persisted under this session id.
     resetSessionPersistence();
     sessionIdRef.current = snap.sessionId;
+    // Re-adopt any outcome events the interrupted run could not deliver, then
+    // let the normal flush path retry them. Inserts are idempotent by
+    // (session_id, rep_index) / (session_id, set_index), so re-sending an event
+    // that did land is a no-op rather than a duplicate.
+    eventOutboxRef.current.setSession(snap.sessionId);
+    if (eventOutboxRef.current.restoreFor(snap.sessionId) > 0) {
+      flushSetEvents();
+      flushRepEvents();
+    }
     globalRepIndexRef.current = snap.globalRepIndex;
     rawFrameIndexRef.current = snap.rawFrameIndex;
     sessionWallStartMsRef.current = Date.now();
@@ -2279,6 +2666,7 @@ export default function CameraClient() {
     const now = performance.now();
     sessionStartMsRef.current = now - snap.elapsedMs;
     currentSetStartMsRef.current = now;
+    countdownResumeElapsedMsRef.current = snap.elapsedMs;
     setSessionElapsedSec(Math.floor(snap.elapsedMs / 1000));
 
     // Manual-start page: ensure the camera is running so reps can count.
@@ -2286,7 +2674,7 @@ export default function CameraClient() {
       void startCamera(selectedDeviceId || undefined);
     }
 
-    setSessionState("active");
+    setSessionState("countdown");
   };
 
   /**
@@ -2295,7 +2683,7 @@ export default function CameraClient() {
    * `terminatedBy: "user"` so the session timeline reflects the
    * incomplete attempt.
    */
-  const handleSessionEnd = () => {
+  const handleSessionEnd = (reason: "user" | "pain" = "user") => {
     if (
       sessionStateRef.current !== "active" &&
       sessionStateRef.current !== "resting" &&
@@ -2317,13 +2705,10 @@ export default function CameraClient() {
       // Side-split (ex_004): per-side accumulators; credited pairedHoldMs is
       // the min (slower side gates), which can legitimately be 0 when only
       // one side was held — the per-side fields keep that partial visible.
-      const sideSplit = isSideSplitIsometric(def);
       const leftMs = leftHoldMsRef.current;
       const rightMs = rightHoldMsRef.current;
-      const pairedMs = sideSplit
-        ? Math.min(leftMs, rightMs)
-        : pairedHoldMsRef.current;
-      const anyHold = sideSplit ? leftMs > 0 || rightMs > 0 : pairedMs > 0;
+      const pairedMs = prescribedCreditedValue(leftMs, rightMs);
+      const anyHold = leftMs > 0 || rightMs > 0;
       if (anyHold) {
         const setRecord: CompletedSetRecord = {
           setIndex: completedSetsRef.current + 1,
@@ -2335,11 +2720,12 @@ export default function CameraClient() {
             currentSetStartMsRef.current !== null
               ? endedAtMs - currentSetStartMsRef.current
               : 0,
-          terminatedBy: "user",
-          asymmetryIndex: sideSplit ? computeAsymmetryIndex(leftMs, rightMs) : 0,
+          terminatedBy: reason,
+          asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
           pairedHoldMs: pairedMs,
           targetHoldMs: prescriptionRef.current.holdSeconds * 1000,
-          ...(sideSplit ? { leftHoldMs: leftMs, rightHoldMs: rightMs } : {}),
+          leftHoldMs: leftMs,
+          rightHoldMs: rightMs,
         };
         completedSetsLogRef.current.push(setRecord);
         bufferSetEvent(setRecord, def.kind, endedAtMs);
@@ -2358,7 +2744,7 @@ export default function CameraClient() {
             currentSetStartMsRef.current !== null
               ? endedAtMs - currentSetStartMsRef.current
               : 0,
-          terminatedBy: "user",
+          terminatedBy: reason,
           asymmetryIndex: computeAsymmetryIndex(left, right),
         };
         completedSetsLogRef.current.push(setRecord);
@@ -2368,11 +2754,19 @@ export default function CameraClient() {
     // Flush any reps from the in-progress (partial) set and stamp ended_at.
     // endReason "user" = the End button was pressed — distinguishes a deliberate
     // early end from a tab-close/exit (which leaves the session open).
-    void endSessionPersistence(false, "user").then(showSessionPersistenceToast);
+    showCompletionRecapAfterReportRef.current = false;
+    terminalOccurrenceAfterReportRef.current =
+      reason === "pain" ? "pain_stopped" : null;
+    void endSessionPersistence(false, reason).then(showSessionPersistenceToast);
     // Deliberate end → drop the resume snapshot so this attempt is not offered
     // for resume on return (the row is also closed, the authoritative guard).
     clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
-    setSessionState("ended");
+    setPainReportError(null);
+    setSessionState(
+      prescriptionRef.current.patientExerciseId !== undefined
+        ? "reporting"
+        : "ended",
+    );
   };
 
   /**
@@ -2547,21 +2941,176 @@ export default function CameraClient() {
     return rawLine === null ? null : angleDiffDebug(rawLine, -90);
   }
 
-  function medianSample(xs: number[]): number {
-    const sorted = [...xs].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0
-      ? (sorted[mid - 1] + sorted[mid]) / 2
-      : sorted[mid];
+  const resetNeutralCalibration = useCallback((
+    phase: BaselinePhase = "capturing",
+  ): void => {
+    neutralCalibrationClockRef.current = newNeutralCalibrationClock();
+    neutralCalibrationSamplesRef.current = [];
+    frozenTiltDegRef.current = null;
+    leftBaselineRef.current = { samples: [], value: null };
+    rightBaselineRef.current = { samples: [], value: null };
+    bidirectionalBaselineRef.current = { samples: [], value: null };
+    leftScapBaselineRef.current = { samples: [], value: null };
+    rightScapBaselineRef.current = { samples: [], value: null };
+    metricFiltersRef.current.clear();
+    leftCompensationFiltersRef.current.clear();
+    rightCompensationFiltersRef.current.clear();
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    setDisplayPerSidePrimary(null);
+    setBaselineProgress({ samples: 0, validElapsedMs: 0 });
+    setBaselinePhase(phase);
+  }, [setBaselinePhase]);
+
+  function updateNeutralCalibrationProgress(
+    clock: NeutralCalibrationClock,
+  ): void {
+    const samples = clock.sampleCount;
+    const validElapsedMs = Math.round(clock.validElapsedMs);
+    setBaselineProgress((previous) =>
+      previous.samples === samples &&
+      previous.validElapsedMs === validElapsedMs
+        ? previous
+        : { samples, validElapsedMs },
+    );
   }
 
-  function setBaselineSampleProgress(samples: number) {
-    const clamped = Math.max(0, Math.min(BASELINE_SAMPLE_COUNT, samples));
-    setBaselineProgress((prev) =>
-      prev.samples === clamped && prev.required === BASELINE_SAMPLE_COUNT
-        ? prev
-        : { samples: clamped, required: BASELINE_SAMPLE_COUNT },
+  function finalizeNeutralCalibration(
+    definition: ExerciseDefinition,
+  ): boolean {
+    const samples = neutralCalibrationSamplesRef.current;
+    const frozenTiltDeg = medianFinite(
+      samples
+        .filter(
+          (sample) => sample.observedTilt.confidence !== "insufficient",
+        )
+        .map((sample) => sample.observedTilt.cameraTiltDeg),
     );
+    if (frozenTiltDeg === null) return false;
+
+    const fixedReference: TiltReference = {
+      cameraTiltDeg: frozenTiltDeg,
+      confidence: "high",
+      divergenceDeg: null,
+    };
+    const needsPrimaryBaseline =
+      definition.kind === "dynamic" &&
+      definition.primaryMetric.requiresBaselineCapture === true;
+    const needsScapBaseline = definition.compensationMetrics.some(
+      (metric) =>
+        metric.name === "scapularElevation" &&
+        metric.requiresBaselineCapture === true,
+    );
+
+    if (needsPrimaryBaseline && definition.kind === "dynamic") {
+      if (definition.bilateralMode === "bidirectional-alternating") {
+        const values = samples.map((sample) =>
+          computeTrunkLateralFlexionUncorrectedSigned(sample.landmarks),
+        );
+        const baseline = medianFinite(
+          values.filter((value): value is number => value !== null),
+        );
+        if (baseline === null) return false;
+        bidirectionalBaselineRef.current = {
+          samples: values.filter((value): value is number => value !== null),
+          value: baseline,
+        };
+      } else if (definition.bilateralMode === "per-limb") {
+        const perFrame = samples.map((sample) =>
+          computePoseMetricsForExercise(
+            sample.landmarks,
+            definition,
+            fixedReference,
+          ).perSideMetrics,
+        );
+        const left = perFrame
+          .map((value) => value?.left)
+          .filter((value): value is number => typeof value === "number");
+        const right = perFrame
+          .map((value) => value?.right)
+          .filter((value): value is number => typeof value === "number");
+        const leftMedian = medianFinite(left);
+        const rightMedian = medianFinite(right);
+        if (leftMedian === null || rightMedian === null) return false;
+        leftBaselineRef.current = { samples: left, value: leftMedian };
+        rightBaselineRef.current = { samples: right, value: rightMedian };
+      }
+    }
+
+    if (needsScapBaseline) {
+      const left = samples
+        .map((sample) =>
+          computeScapularElevation(
+            sample.landmarks,
+            fixedReference,
+            "left",
+          ),
+        )
+        .filter((value): value is number => value !== null);
+      const right = samples
+        .map((sample) =>
+          computeScapularElevation(
+            sample.landmarks,
+            fixedReference,
+            "right",
+          ),
+        )
+        .filter((value): value is number => value !== null);
+      const leftMedian = medianFinite(left);
+      const rightMedian = medianFinite(right);
+      if (leftMedian === null || rightMedian === null) return false;
+      leftScapBaselineRef.current = { samples: left, value: leftMedian };
+      rightScapBaselineRef.current = { samples: right, value: rightMedian };
+    }
+
+    frozenTiltDegRef.current = frozenTiltDeg;
+    neutralCalibrationSamplesRef.current = [];
+    metricFiltersRef.current.clear();
+    leftCompensationFiltersRef.current.clear();
+    rightCompensationFiltersRef.current.clear();
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    resetCompensationWarnings();
+    setBaselinePhase("captured");
+    updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
+    return true;
+  }
+
+  function resetAfterSustainedCaptureDropout(
+    definition: ExerciseDefinition | null,
+  ): void {
+    metricFiltersRef.current.forEach((filter) => filter.reset());
+    leftCompensationFiltersRef.current.forEach((filter) => filter.reset());
+    rightCompensationFiltersRef.current.forEach((filter) => filter.reset());
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    leftRepCounterRef.current?.reset();
+    rightRepCounterRef.current?.reset();
+    bidirectionalRepCounterRef.current?.reset();
+    dynamicRepQualityBufferRef.current.reset();
+    pairedHoldMsRef.current = 0;
+    leftHoldMsRef.current = 0;
+    rightHoldMsRef.current = 0;
+    leftInBandRef.current = false;
+    rightInBandRef.current = false;
+    lastIsometricTickMsRef.current = null;
+    resetHoldQualityAccum();
+    setHoldState({
+      pairedSec: 0,
+      leftSec: 0,
+      rightSec: 0,
+      leftInBand: false,
+      rightInBand: false,
+    });
+    resetCompensationWarnings();
+    if (
+      definition &&
+      (sessionStateRef.current === "active" ||
+        sessionStateRef.current === "countdown")
+    ) {
+      resetNeutralCalibration("capturing");
+    }
+    captureDropoutResetDoneRef.current = true;
   }
 
   function ex005CounterSide(
@@ -2708,11 +3257,9 @@ export default function CameraClient() {
     console.log(`[ex005-debug] ${JSON.stringify(record)}`);
   }
   
-  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
-    tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-    metrics: {},
-    compensationScore: null,
-  });
+  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>(
+    emptyFrameMetrics,
+  );
   // Whether the primary movement is near peak ROM this frame. Gates the
   // `peakRelevant` compensation warnings (e.g. elbowFlexion "Straighten arms"
   // on ex_007 / ex_008) so they only surface near full extension. Updated on
@@ -2738,36 +3285,71 @@ export default function CameraClient() {
     if (!activeDefinition) return [];
     const cards: CardSpec[] = [];
   
-    if (activeDefinition.kind === "dynamic") {
-      const p = activeDefinition.primaryMetric;
+    const primaryMetric =
+      activeDefinition.kind === "dynamic"
+        ? activeDefinition.primaryMetric.name
+        : activeDefinition.isometric.metric;
+    const primaryUnit = metricUsesDegrees(primaryMetric) ? "°" : "";
+    const perLimb =
+      activeDefinition.bilateral &&
+      activeDefinition.bilateralMode === "per-limb";
+    if (perLimb && prescription.prescribedSide === "both") {
+      for (const side of ["left", "right"] as const) {
+        cards.push({
+          id: `primary:${side}`,
+          metric: primaryMetric,
+          label: `${metricLabel(primaryMetric)} · ${side}`,
+          value: displayPerSidePrimary?.[side] ?? null,
+          kind: "primary",
+          unit: primaryUnit,
+        });
+      }
+    } else if (perLimb) {
+      const side: "left" | "right" =
+        prescription.prescribedSide === "right" ? "right" : "left";
       cards.push({
-        key: p.name,
-        label: metricLabel(p.name),
-        value: frameMetrics.metrics[p.name] ?? null,
+        id: `primary:${side}`,
+        metric: primaryMetric,
+        label: `${metricLabel(primaryMetric)} · ${side}`,
+        value: displayPerSidePrimary?.[side] ?? null,
         kind: "primary",
+        unit: primaryUnit,
       });
     } else {
-      const i = activeDefinition.isometric;
       cards.push({
-        key: i.metric,
-        label: metricLabel(i.metric),
-        value: frameMetrics.metrics[i.metric] ?? null,
+        id: "primary:single",
+        metric: primaryMetric,
+        label: metricLabel(primaryMetric),
+        value: frameMetrics.metrics[primaryMetric] ?? null,
         kind: "primary",
+        unit: primaryUnit,
       });
     }
   
     for (const comp of activeDefinition.compensationMetrics) {
+      const signal = compensationWarningSignalsRef.current.get(comp.name);
+      const coupled =
+        getCompensationScoring(comp).mode === "primary-coupled";
+      const sideSuffix = signal?.side ? ` · ${signal.side}` : "";
       cards.push({
-        key: comp.name,
-        label: metricLabel(comp.name),
+        id: `compensation:${comp.name}`,
+        metric: comp.name,
+        label: `${metricLabel(comp.name)}${coupled ? " DEV" : ""}${sideSuffix}`,
         value: frameMetrics.metrics[comp.name] ?? null,
         kind: "compensation",
+        unit: metricUsesDegrees(comp.name) ? "°" : "",
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
         warningActive: activeCompensationWarnings.has(comp.name),
         // peakRelevant comps (elbowFlexion on ex_007/ex_008) only warn near
         // peak ROM — bent elbows are correct form lower in the movement.
-        suppressWarning: comp.peakRelevant === true && !nearPeak,
+        suppressWarning:
+          sessionState !== "active" ||
+          !captureOk ||
+          baselinePhase !== "captured" ||
+          (comp.peakRelevant === true && !nearPeak) ||
+          (prescription.prescribedSide !== "both" &&
+            comp.name === "shoulderSymmetry"),
       });
     }
     return cards;
@@ -2791,7 +3373,11 @@ export default function CameraClient() {
    * fall back to 0 so the bar doesn't show a misleading value.
    */
   const currentSetMinReps = activeDefinition?.bilateral
-    ? Math.min(repCounts.left, repCounts.right)
+    ? prescription.prescribedSide === "left"
+      ? repCounts.left
+      : prescription.prescribedSide === "right"
+        ? repCounts.right
+        : Math.min(repCounts.left, repCounts.right)
     : repCounts.left;
   const targetTotalReps = Math.max(1, prescription.sets * prescription.reps);
   const clampPct = (x: number) => Math.max(0, Math.min(100, Math.round(x)));
@@ -2811,10 +3397,16 @@ export default function CameraClient() {
             // each side owes the full hold, so the set is the average of the
             // two capped per-side holds — finishing one side reads as half
             // the set, and the faster side's surplus can't advance it further.
-            const cappedSec = isSideSplitIsometric(activeDefinition)
-              ? (Math.min(holdState.leftSec, prescription.holdSeconds) +
-                  Math.min(holdState.rightSec, prescription.holdSeconds)) / 2
-              : Math.min(holdState.pairedSec, prescription.holdSeconds);
+            const creditedSec =
+              prescription.prescribedSide === "left"
+                ? holdState.leftSec
+                : prescription.prescribedSide === "right"
+                  ? holdState.rightSec
+                  : Math.min(holdState.leftSec, holdState.rightSec);
+            const cappedSec = Math.min(
+              creditedSec,
+              prescription.holdSeconds,
+            );
             const targetTotalSec = Math.max(
               1,
               prescription.sets * prescription.holdSeconds,
@@ -2895,6 +3487,8 @@ export default function CameraClient() {
                 reps: DEFAULT_PRESCRIPTION.reps,
                 restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
                 holdSeconds: DEFAULT_PRESCRIPTION.holdSeconds,
+                prescribedSide: DEFAULT_PRESCRIPTION.prescribedSide,
+                resistance: DEFAULT_PRESCRIPTION.resistance,
               }];
             })
             .sort((a, b) => a.id.localeCompare(b.id));
@@ -2912,9 +3506,40 @@ export default function CameraClient() {
       fetch("/api/patient-exercises")
         .then((r) => r.json())
         .then((data: unknown) => {
-          const assigned: Exercise[] = recordsField(data, "exercises").flatMap((row): Exercise[] => {
+          const todayPH = new Date().toLocaleDateString("en-CA", {
+            timeZone: "Asia/Manila",
+          });
+          const assigned: Exercise[] = recordsField(data, "occurrences").flatMap((row): Exercise[] => {
+            const occurrenceId = integerField(row, "id");
             const id = stringField(row, "exercise_id");
-            if (!id) return [];
+            const dueDate = stringField(row, "due_date");
+            const makeupUntil = stringField(row, "makeup_until") ?? dueDate;
+            const status = assignmentStatus(row.status);
+            if (
+              occurrenceId === undefined ||
+              !id ||
+              !dueDate ||
+              !makeupUntil ||
+              !status ||
+              stringField(row, "monitoring_mode") !== "camera" ||
+              !isOccurrenceActionable(
+                { dueDate, makeupUntil, status },
+                todayPH,
+              )
+            ) {
+              return [];
+            }
+            const prescribedSideValue = stringField(row, "prescribed_side");
+            const prescribedSide: PrescribedSide =
+              prescribedSideValue === "left" || prescribedSideValue === "right"
+                ? prescribedSideValue
+                : "both";
+            const resistanceRow = isRecord(row.resistance) ? row.resistance : {};
+            const resistanceValueRaw = resistanceRow.value;
+            const resistanceValue =
+              resistanceValueRaw === null || resistanceValueRaw === undefined
+                ? null
+                : Number(resistanceValueRaw);
             return [{
               id,
               name: stringField(row, "name") ?? id,
@@ -2932,33 +3557,99 @@ export default function CameraClient() {
               holdSeconds:
                 numberField(row, "hold_seconds") ??
                 DEFAULT_PRESCRIPTION.holdSeconds,
-            // patient_exercises.id — returned by the API, carried through so a
-            // session can be persisted against it. Absent → session
-            // persistence is skipped (staff debug has no such row).
-              patientExerciseId: integerField(row, "id"),
-            // Assignment status — drives the "already completed" recap.
-              status: assignmentStatus(row.status),
+              patientExerciseId: integerField(row, "patient_exercise_id"),
+              occurrenceId,
+              dueDate,
+              makeupUntil,
+              sequenceIndex: integerField(row, "sequence_index") ?? Number.MAX_SAFE_INTEGER,
+              status,
+              prescribedSide,
+              resistance: {
+                type:
+                  resistanceRow.type === "none" ||
+                  resistanceRow.type === "external_weight" ||
+                  resistanceRow.type === "resistance_band" ||
+                  resistanceRow.type === "other"
+                    ? resistanceRow.type
+                    : "unknown",
+                value:
+                  resistanceValue !== null && Number.isFinite(resistanceValue)
+                    ? resistanceValue
+                    : null,
+                unit:
+                  resistanceRow.unit === "kg" || resistanceRow.unit === "lb"
+                    ? resistanceRow.unit
+                    : null,
+                label:
+                  typeof resistanceRow.label === "string"
+                    ? resistanceRow.label
+                    : null,
+              },
             }];
-          });
+          }).sort((left, right) =>
+            compareActionableOccurrences(
+              {
+                occurrenceId: left.occurrenceId!,
+                exerciseId: left.id,
+                exerciseName: left.name,
+                sequenceIndex: left.sequenceIndex!,
+                dueDate: left.dueDate!,
+                makeupUntil: left.makeupUntil!,
+                status: left.status as OccurrenceStatus,
+              },
+              {
+                occurrenceId: right.occurrenceId!,
+                exerciseId: right.id,
+                exerciseName: right.name,
+                sequenceIndex: right.sequenceIndex!,
+                dueDate: right.dueDate!,
+                makeupUntil: right.makeupUntil!,
+                status: right.status as OccurrenceStatus,
+              },
+            ),
+          );
+          assignedExercisesRef.current = assigned;
           setAssignedExercises(assigned);
+          setActionableOccurrenceIds(
+            new Set(
+              assigned.flatMap((exercise) =>
+                exercise.occurrenceId === undefined ? [] : [exercise.occurrenceId],
+              ),
+            ),
+          );
           if (assigned.length > 0) {
-            setSelectedExercise((prev) => prev || assigned[0].id);
-          }
-
-          // Strict schedule lock: an exercise is startable today only if it has
-          // an occurrence due today or still inside its make-up window.
-          const todayPH = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
-          const actionable = new Set<string>();
-          for (const o of recordsField(data, "occurrences")) {
-            const exId = stringField(o, "exercise_id");
-            const due = stringField(o, "due_date");
-            if (!exId || !due) continue;
-            const makeup = stringField(o, "makeup_until") ?? due;
-            if (stringField(o, "status") !== "completed" && due <= todayPH && makeup >= todayPH) {
-              actionable.add(exId);
+            const exactOccurrenceWasRequested = initialOccurrenceIdParam !== null;
+            const exactOccurrence =
+              initialOccurrenceId === null
+                ? undefined
+                : assigned.find(
+                    (exercise) => exercise.occurrenceId === initialOccurrenceId,
+                  );
+            if (exactOccurrenceWasRequested && !exactOccurrence) {
+              selectedExerciseRef.current = "";
+              setSelectedExercise("");
+              setScheduleNotice(
+                "That scheduled occurrence is no longer actionable. Returning to your schedule.",
+              );
+              router.replace("/dashboard/patient?tab=session");
+              return;
             }
+            const requested =
+              exactOccurrence ??
+              assigned.find((exercise) => exercise.id === initialExerciseId) ??
+              assigned[0];
+            selectedExerciseRef.current = requested.id;
+            setSelectedExercise(requested.id);
+            if (!exactOccurrenceWasRequested && requested.occurrenceId !== undefined) {
+              router.replace(
+                `/camera?occurrenceId=${requested.occurrenceId}&exerciseId=${encodeURIComponent(requested.id)}`,
+                { scroll: false },
+              );
+            }
+          } else {
+            selectedExerciseRef.current = "";
+            setSelectedExercise("");
           }
-          setActionableExerciseIds(actionable);
         })
         .catch((err) => console.error("Error loading exercises:", err));
 
@@ -2996,8 +3687,14 @@ export default function CameraClient() {
             // end_reason 'completed' rows qualify; newest-first → first wins.
             if (stringField(s, "endReason") !== "completed") continue;
             if (recaps.has(exerciseId)) continue;
+            const recapSideValue = stringField(s, "prescribedSide");
+            const recapPrescribedSide: PrescribedSide =
+              recapSideValue === "left" || recapSideValue === "right"
+                ? recapSideValue
+                : "both";
             recaps.set(exerciseId, {
               exerciseKind: exerciseKind(s.exerciseKind),
+              prescribedSide: recapPrescribedSide,
               endedAt,
               durationMs: numberField(s, "durationMs") ?? null,
               setCount: numberField(s, "setCount") ?? 0,
@@ -3006,8 +3703,12 @@ export default function CameraClient() {
               completeLeftReps: numberField(s, "completeLeftReps") ?? 0,
               completeRightReps: numberField(s, "completeRightReps") ?? 0,
               avgPeakValue: numberField(s, "avgPeakValue") ?? null,
+              avgLeftPeakValue: numberField(s, "avgLeftPeakValue") ?? null,
+              avgRightPeakValue: numberField(s, "avgRightPeakValue") ?? null,
               totalPairedHoldMs: numberField(s, "totalPairedHoldMs") ?? null,
               totalTargetHoldMs: numberField(s, "totalTargetHoldMs") ?? null,
+              totalLeftHoldMs: numberField(s, "totalLeftHoldMs") ?? null,
+              totalRightHoldMs: numberField(s, "totalRightHoldMs") ?? null,
             });
           }
           setSessionRecaps(recaps);
@@ -3015,7 +3716,14 @@ export default function CameraClient() {
         })
         .catch((err) => console.warn("Error loading session recaps:", err));
     }
-  }, [initialExerciseId, user?.id, user?.role]);
+  }, [
+    initialExerciseId,
+    initialOccurrenceId,
+    initialOccurrenceIdParam,
+    router,
+    user?.id,
+    user?.role,
+  ]);
 
   useEffect(() => {
     const assignedEntry = selectedExercise
@@ -3028,13 +3736,16 @@ export default function CameraClient() {
           restSeconds: assignedEntry.restSeconds,
           holdSeconds: assignedEntry.holdSeconds,
           patientExerciseId: assignedEntry.patientExerciseId,
+          occurrenceId: assignedEntry.occurrenceId,
+          prescribedSide: assignedEntry.prescribedSide,
+          resistance: assignedEntry.resistance,
         }
       : DEFAULT_PRESCRIPTION;
     prescriptionRef.current = nextPrescription;
     setPrescriptionRaw(nextPrescription);
   }, [selectedExercise, assignedExercises]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!selectedExercise) {
       setActiveDefinition(null);
       // Close any open persisted session (idempotent; no-op if none).
@@ -3051,7 +3762,13 @@ export default function CameraClient() {
         window.__neckRepDebug = neckRepDebugRef.current;
       }
       setRepCounts({ left: 0, right: 0 });
+      lastMetricsUpdateRef.current = 0;
+      compensationWarningSignalsRef.current.clear();
+      setDisplayPerSidePrimary(null);
+      setFrameMetrics(emptyFrameMetrics());
+      setNearPeak(false);
       resetCompensationWarnings();
+      resetNeutralCalibration("not-needed");
       return;
     }
 
@@ -3084,6 +3801,14 @@ export default function CameraClient() {
     lastIsometricTickMsRef.current = null;
     resetHoldQualityAccumRef.current();
     setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
+    // Clear every displayed value synchronously with the selected exercise.
+    // The next exercise must enter calibration with empty cards rather than
+    // briefly showing the previous side's primary/compensation telemetry.
+    lastMetricsUpdateRef.current = 0;
+    compensationWarningSignalsRef.current.clear();
+    setDisplayPerSidePrimary(null);
+    setFrameMetrics(emptyFrameMetrics());
+    setNearPeak(false);
     resetCompensationWarnings();
 
     // Reset filters whenever the exercise changes — old filter history would
@@ -3123,45 +3848,23 @@ export default function CameraClient() {
     }
     setRepCounts({ left: 0, right: 0 });
 
-    // Reset baseline state on every exercise change. If the new exercise
-    // needs a baseline (primary metric or any compensation metric), enter
-    // "capturing"; otherwise "not-needed".
-    leftBaselineRef.current  = { samples: [], value: null };
-    rightBaselineRef.current = { samples: [], value: null };
-    bidirectionalBaselineRef.current = { samples: [], value: null };
-    leftScapBaselineRef.current  = { samples: [], value: null };
-    rightScapBaselineRef.current = { samples: [], value: null };
-    const needsBaseline =
-      (def?.kind === "dynamic" && !!def.primaryMetric.requiresBaselineCapture) ||
-      !!def?.compensationMetrics.some((c) => c.requiresBaselineCapture);
-    setBaselinePhase(needsBaseline ? "capturing" : "not-needed");
-    setBaselineSampleProgress(0);
+    // Calibration starts only after the user presses Start. Idle camera
+    // preview must not silently establish an attempt's neutral reference.
+    resetNeutralCalibration("not-needed");
 
     const counters = createRepCountersForDefinition(def);
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
-  }, [selectedExercise, resetCompensationWarnings, setBaselinePhase]);
+  }, [selectedExercise, resetCompensationWarnings, resetNeutralCalibration]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
-      const currentDefinition = activeDefinitionRef.current;
-      // Transition into not-ok: any already-captured baseline is now stale
-      // (patient may have shifted while we couldn't see them). Drop it and
-      // require re-capture when readiness returns.
-      if (
-        !ok &&
-        ((currentDefinition?.kind === "dynamic" &&
-          !!currentDefinition.primaryMetric.requiresBaselineCapture) ||
-          !!currentDefinition?.compensationMetrics.some((c) => c.requiresBaselineCapture))
-      ) {
-        leftBaselineRef.current  = { samples: [], value: null };
-        rightBaselineRef.current = { samples: [], value: null };
-        bidirectionalBaselineRef.current = { samples: [], value: null };
-        leftScapBaselineRef.current  = { samples: [], value: null };
-        rightScapBaselineRef.current = { samples: [], value: null };
-        setBaselinePhase("capturing");
-        setBaselineSampleProgress(0);
+      if (!ok && baselinePhaseRef.current === "capturing") {
+        neutralCalibrationClockRef.current = pauseNeutralCalibrationClock(
+          neutralCalibrationClockRef.current,
+        );
+        updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
       }
       lastCaptureOkRef.current = ok;
       setCaptureOk(ok);
@@ -3268,7 +3971,13 @@ export default function CameraClient() {
               : activeDefinition?.requiresLateralRoom
                 ? "lateral"
                 : "default";
-          const r = evaluateCaptureReadiness(landmarks, canvas.width, canvas.height, framingMode);
+          const r = evaluateCaptureReadiness(
+            landmarks,
+            canvas.width,
+            canvas.height,
+            framingMode,
+            prescriptionRef.current.prescribedSide,
+          );
 
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
@@ -3326,8 +4035,51 @@ export default function CameraClient() {
                 compensationScore: null,
               });
             } else {
-              const raw = computePoseMetricsForExercise(landmarks, activeDefinition);
               const tNow = performance.now();
+              const observedTilt = computeTiltReference(landmarks);
+
+              if (baselinePhaseRef.current === "capturing") {
+                const clock = advanceNeutralCalibrationClock(
+                  neutralCalibrationClockRef.current,
+                  tNow,
+                );
+                neutralCalibrationClockRef.current = clock;
+                neutralCalibrationSamplesRef.current.push({
+                  landmarks: landmarks.map((landmark) => ({ ...landmark })),
+                  observedTilt,
+                });
+                if (neutralCalibrationSamplesRef.current.length > 300) {
+                  neutralCalibrationSamplesRef.current.shift();
+                }
+                updateNeutralCalibrationProgress(clock);
+                if (neutralCalibrationReady(clock)) {
+                  finalizeNeutralCalibration(activeDefinition);
+                }
+              }
+
+              if (
+                baselinePhaseRef.current !== "captured" ||
+                frozenTiltDegRef.current === null
+              ) {
+                if (compensationWarningLatchesRef.current.size > 0) {
+                  resetCompensationWarnings();
+                }
+                setFrameMetrics({
+                  tiltReference: observedTilt,
+                  metrics: {},
+                  compensationScore: null,
+                });
+                setDisplayPerSidePrimary(null);
+              } else {
+              const effectiveTilt = frozenNeutralTiltReference(
+                observedTilt,
+                frozenTiltDegRef.current,
+              );
+              const raw = computePoseMetricsForExercise(
+                landmarks,
+                activeDefinition,
+                effectiveTilt,
+              );
               const metricInputs: Partial<Record<MetricName, number | null>> = {
                 ...raw.metrics,
               };
@@ -3339,7 +4091,7 @@ export default function CameraClient() {
               // capture-readiness `r.ok`, so unreliable frames remain
               // excluded per the logging discipline. Baseline values read
               // from the refs are the medians captured in earlier frames.
-              bufferTuningRawFrame(landmarks, raw, tNow);
+              bufferTuningRawFrame(landmarks, raw, observedTilt, tNow);
 
               // Direction strings for compensation overlay labels.
               // computePoseMetricsForExercise only surfaces absolute values in
@@ -3366,65 +4118,16 @@ export default function CameraClient() {
                 }
               }
 
-              // Smooth the camera-tilt estimate (still always needed)
-              const smoothedTilt = tiltFilterRef.current.filter(
-                raw.tiltReference.cameraTiltDeg,
-                tNow
-              );
-
-              // Re-correct the tilt-dependent COMPENSATION metrics against the
-              // smoothed camera tilt instead of the raw per-frame consensus
-              // tilt. The raw consensus tilt (hip/ear lines) carries several
-              // degrees of landmark jitter at rest, which leaked into trunk
-              // lean / shoulder symmetry / neck tilt and tripped compensation
-              // warnings while the patient held still. We reuse the same metric
-              // computation (identical sign/worst-side/rounding) with only the
-              // tilt swapped, then value-smooth as usual below. `raw.metrics`
-              // is left untouched and continues to feed the ML/log pipeline
-              // (data-flow discipline: raw -> ML, smoothed -> display/warnings).
-              const smoothedTiltMetrics = computePoseMetricsForExercise(
-                landmarks,
-                activeDefinition,
-                { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
-              );
-              for (const comp of activeDefinition.compensationMetrics) {
-                if (comp.name in smoothedTiltMetrics.metrics) {
-                  metricInputs[comp.name] =
-                    smoothedTiltMetrics.metrics[comp.name] ?? null;
-                }
-              }
-
               if (
                 activeDefinition.kind === "dynamic" &&
                 activeDefinition.id === "ex_005"
               ) {
                 const primaryName = activeDefinition.primaryMetric.name;
-                const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(
-                  landmarks,
-                );
                 const perFrameCorrected = raw.metrics[primaryName];
                 ex005PerFrameCorrectedSignedDeg =
                   typeof perFrameCorrected === "number"
                     ? perFrameCorrected
                     : null;
-
-                if (baselinePhaseRef.current === "capturing") {
-                  if (typeof uncorrected === "number") {
-                    bidirectionalBaselineRef.current.samples.push(uncorrected);
-                  }
-                  // Progress is updated (and phase transitioned) by the scap
-                  // compensation baseline block below so both baselines complete
-                  // together. Only compute the median here once ready.
-                  if (
-                    bidirectionalBaselineRef.current.samples.length >=
-                    BASELINE_SAMPLE_COUNT
-                  ) {
-                    bidirectionalBaselineRef.current.value = medianSample(
-                      bidirectionalBaselineRef.current.samples,
-                    );
-                    metricFiltersRef.current.delete(primaryName);
-                  }
-                }
 
                 const neutralBaseline = bidirectionalBaselineRef.current.value;
                 metricInputs[primaryName] =
@@ -3446,74 +4149,19 @@ export default function CameraClient() {
               let scapDeltaRight: number | null = null;
 
               // ── Scapular elevation compensation baseline ─────────────────
-              // For any exercise whose scapularElevation compensation metric
-              // carries requiresBaselineCapture, capture 90 resting frames
-              // per side, compute per-side medians, then replace the raw
-              // absolute projection in metricInputs with (baseline − raw).
+              // For an exercise whose scapularElevation compensation metric
+              // requires a neutral baseline, replace the raw projection with
+              // (baseline − raw). The medians were finalized from the shared
+              // time-based calibration window before this outcome path opened.
               // At rest the delta ≈ 0; it grows positive when the patient
               // shrugs, making the 0.04 warningThreshold meaningful.
-              // This block is also the single "captured" transition point for
-              // ex_005, where both the primary bidirectional baseline and this
-              // scap baseline must complete before the phase advances.
               const needsScapCompBaseline = activeDefinition.compensationMetrics.some(
                 (c) => c.name === "scapularElevation" && c.requiresBaselineCapture,
               );
-              const needsPrimaryBaseline =
-                activeDefinition.kind === "dynamic" &&
-                !!activeDefinition.primaryMetric.requiresBaselineCapture;
 
               if (needsScapCompBaseline) {
                 const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left");
                 const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right");
-
-                if (baselinePhaseRef.current === "capturing") {
-                  if (typeof rawScapLeft  === "number") leftScapBaselineRef.current.samples.push(rawScapLeft);
-                  if (typeof rawScapRight === "number") rightScapBaselineRef.current.samples.push(rawScapRight);
-
-                  // Finalize medians once both sides have enough samples
-                  if (
-                    leftScapBaselineRef.current.value === null &&
-                    leftScapBaselineRef.current.samples.length  >= BASELINE_SAMPLE_COUNT &&
-                    rightScapBaselineRef.current.samples.length >= BASELINE_SAMPLE_COUNT
-                  ) {
-                    leftScapBaselineRef.current.value  = medianSample(leftScapBaselineRef.current.samples);
-                    rightScapBaselineRef.current.value = medianSample(rightScapBaselineRef.current.samples);
-                  }
-
-                  // Overall progress = min across all active baselines
-                  const scapProg = Math.min(
-                    leftScapBaselineRef.current.samples.length,
-                    rightScapBaselineRef.current.samples.length,
-                  );
-                  const primaryProg = needsPrimaryBaseline
-                    ? (activeDefinition.kind === "dynamic" &&
-                       activeDefinition.bilateralMode === "bidirectional-alternating"
-                         ? bidirectionalBaselineRef.current.samples.length
-                         : Math.min(
-                             leftBaselineRef.current.samples.length,
-                             rightBaselineRef.current.samples.length,
-                           ))
-                    : BASELINE_SAMPLE_COUNT;
-                  setBaselineSampleProgress(Math.min(scapProg, primaryProg));
-
-                  // Transition to "captured" only when ALL needed baselines
-                  // are ready (prevents early completion on ex_005 where both
-                  // primary bidirectional and scap baselines must finish).
-                  const scapDone =
-                    leftScapBaselineRef.current.value  !== null &&
-                    rightScapBaselineRef.current.value !== null;
-                  const primaryDone = !needsPrimaryBaseline || (
-                    activeDefinition.kind === "dynamic" &&
-                    activeDefinition.bilateralMode === "bidirectional-alternating"
-                      ? bidirectionalBaselineRef.current.value !== null
-                      : leftBaselineRef.current.value  !== null &&
-                        rightBaselineRef.current.value !== null
-                  );
-                  if (scapDone && primaryDone) {
-                    setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
-                    setBaselinePhase("captured");
-                  }
-                }
 
                 // Override metricInputs with baseline-adjusted delta.
                 // (baseline − raw) is positive when shrugging; worst side
@@ -3584,55 +4232,144 @@ export default function CameraClient() {
                 smoothedMetricVelocities[metricName] = filtered.velocity;
               }
 
-              // ── Per-frame compensation score ─────────────────────────────
-              // Computed once and reused by the isometric hold-quality
-              // accumulator and the frame-metrics UI update below.
-              //
-              // For per-limb exercises (ex_001 dynamic, ex_006 isometric) each
-              // side is scored against its OWN primary so a `primary-coupled`
-              // metric's expected baseline (scapular elevation rising with
-              // abduction) is anatomically paired, then the WORSE side is
-              // surfaced — a clean arm cannot mask a compensating one. We reuse
-              // the smoothed whole-body metrics for both sides and override
-              // only scapularElevation with that side's raw per-side delta
-              // (trunkLean / shoulderSymmetry are single whole-body measures;
-              // any future scored metric flows through unchanged). Per-side
-              // scap/primary are read raw: their frame jitter (~0.006 scap,
-              // ~1° primary → ~0.0015 expected) sits well below the coupled
-              // residual's 0.02 noise floor, so smoothing would not move the
-              // rounded score. Bidirectional/unilateral exercises pass the
-              // single smoothed primary.
+              // Per-limb primary streams are filtered once and reused by the
+              // counter, card, coupled warning, and live score. This prevents
+              // one surface from silently reading the legacy scalar-left slot.
               const scoreIsPerLimb =
                 activeDefinition.bilateral &&
                 activeDefinition.bilateralMode === "per-limb";
+              const scorePrimaryName =
+                activeDefinition.kind === "dynamic"
+                  ? activeDefinition.primaryMetric.name
+                  : activeDefinition.isometric.metric;
+              const primaryNeedsBaseline =
+                activeDefinition.kind === "dynamic" &&
+                activeDefinition.primaryMetric.requiresBaselineCapture === true;
+              const primaryScale =
+                scorePrimaryName === "wristShoulderVertical" ? 1_000 : 10;
+              const adjustedPrimary = (
+                value: number | null | undefined,
+                baseline: number | null,
+              ): number | null =>
+                typeof value !== "number"
+                  ? null
+                  : primaryNeedsBaseline && baseline !== null
+                    ? baseline - value
+                    : value;
+              const rawPrimaryLeft = scoreIsPerLimb
+                ? adjustedPrimary(
+                    raw.perSideMetrics?.left,
+                    leftBaselineRef.current.value,
+                  )
+                : null;
+              const rawPrimaryRight = scoreIsPerLimb
+                ? adjustedPrimary(
+                    raw.perSideMetrics?.right,
+                    rightBaselineRef.current.value,
+                  )
+                : null;
+              const smoothedPrimaryLeft =
+                rawPrimaryLeft === null
+                  ? null
+                  : Math.round(
+                      leftPrimaryFilterRef.current.filter(rawPrimaryLeft, tNow) *
+                        primaryScale,
+                    ) / primaryScale;
+              const smoothedPrimaryRight =
+                rawPrimaryRight === null
+                  ? null
+                  : Math.round(
+                      rightPrimaryFilterRef.current.filter(rawPrimaryRight, tNow) *
+                        primaryScale,
+                    ) / primaryScale;
+
+              const filterSideCompensation = (
+                filters: Map<MetricName, OneEuroFilter>,
+                name: MetricName,
+                value: number | null | undefined,
+                threshold: number,
+              ): number | null => {
+                if (typeof value !== "number") return null;
+                let filter = filters.get(name);
+                if (!filter) {
+                  filter = new OneEuroFilter(1.0, 0.1);
+                  filters.set(name, filter);
+                }
+                const scale = threshold < 1 ? 1_000 : 10;
+                return (
+                  Math.round(filter.filter(value, tNow) * scale) / scale
+                );
+              };
+              const smoothedLeftCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              const smoothedRightCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              if (scoreIsPerLimb) {
+                for (const comp of activeDefinition.compensationMetrics) {
+                  const leftValue =
+                    comp.name === "scapularElevation" && needsScapCompBaseline
+                      ? scapDeltaLeft
+                      : raw.perSideCompensationMetrics?.left[comp.name] ??
+                        metricInputs[comp.name];
+                  const rightValue =
+                    comp.name === "scapularElevation" && needsScapCompBaseline
+                      ? scapDeltaRight
+                      : raw.perSideCompensationMetrics?.right[comp.name] ??
+                        metricInputs[comp.name];
+                  smoothedLeftCompensations[comp.name] =
+                    filterSideCompensation(
+                      leftCompensationFiltersRef.current,
+                      comp.name,
+                      leftValue,
+                      comp.warningThreshold,
+                    );
+                  smoothedRightCompensations[comp.name] =
+                    filterSideCompensation(
+                      rightCompensationFiltersRef.current,
+                      comp.name,
+                      rightValue,
+                      comp.warningThreshold,
+                    );
+                }
+              }
+
+              // ── Per-frame compensation score ─────────────────────────────
+              // Each limb is paired with its own primary. A unilateral
+              // prescription surfaces its prescribed limb; "both" surfaces
+              // the worse score so a clean limb cannot mask compensation.
               let leftFrameCompensationScore: number | null = null;
               let rightFrameCompensationScore: number | null = null;
               let frameCompensationScore: number | null;
               if (scoreIsPerLimb) {
                 leftFrameCompensationScore = computeCompensationScore(
                   activeDefinition,
-                  { ...smoothedMetrics, scapularElevation: scapDeltaLeft },
-                  raw.perSideMetrics?.left ?? null,
+                  smoothedLeftCompensations,
+                  smoothedPrimaryLeft,
                 );
                 rightFrameCompensationScore = computeCompensationScore(
                   activeDefinition,
-                  { ...smoothedMetrics, scapularElevation: scapDeltaRight },
-                  raw.perSideMetrics?.right ?? null,
+                  smoothedRightCompensations,
+                  smoothedPrimaryRight,
                 );
-                frameCompensationScore =
-                  leftFrameCompensationScore === null
-                    ? rightFrameCompensationScore
-                    : rightFrameCompensationScore === null
-                      ? leftFrameCompensationScore
-                      : Math.min(
-                          leftFrameCompensationScore,
-                          rightFrameCompensationScore,
-                        );
+                const prescribed = prescriptionRef.current.prescribedSide;
+                if (prescribed === "left") {
+                  frameCompensationScore = leftFrameCompensationScore;
+                } else if (prescribed === "right") {
+                  frameCompensationScore = rightFrameCompensationScore;
+                } else {
+                  frameCompensationScore =
+                    leftFrameCompensationScore === null
+                      ? rightFrameCompensationScore
+                      : rightFrameCompensationScore === null
+                        ? leftFrameCompensationScore
+                        : Math.min(
+                            leftFrameCompensationScore,
+                            rightFrameCompensationScore,
+                          );
+                }
               } else {
-                const scorePrimaryName =
-                  activeDefinition.kind === "dynamic"
-                    ? activeDefinition.primaryMetric.name
-                    : activeDefinition.isometric.metric;
                 frameCompensationScore = computeCompensationScore(
                   activeDefinition,
                   smoothedMetrics,
@@ -3665,6 +4402,44 @@ export default function CameraClient() {
                 rawRightCompensations.scapularElevation = scapDeltaRight;
               }
 
+              // Warning/card inputs use the same transformed signal as the
+              // score. Coupled metrics therefore show and threshold their
+              // residual from the expected value, not the raw movement that
+              // naturally accompanies the exercise.
+              const warningDisplayMetrics: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              const warningSignals = new Map<
+                MetricName,
+                CompensationWarningSignal
+              >();
+              for (const comp of activeDefinition.compensationMetrics) {
+                const signal = scoreIsPerLimb
+                  ? perLimbCompensationWarningSignal(
+                      comp,
+                      prescriptionRef.current.prescribedSide,
+                      {
+                        leftValue:
+                          smoothedLeftCompensations[comp.name] ?? null,
+                        leftPrimary: smoothedPrimaryLeft,
+                        rightValue:
+                          smoothedRightCompensations[comp.name] ?? null,
+                        rightPrimary: smoothedPrimaryRight,
+                      },
+                    )
+                  : singleCompensationWarningSignal(
+                      comp,
+                      smoothedMetrics[comp.name] ?? null,
+                      smoothedMetrics[scorePrimaryName] ?? null,
+                    );
+                warningSignals.set(comp.name, signal);
+                warningDisplayMetrics[comp.name] = signal.value;
+                if (signal.side !== null) {
+                  metricDirections[comp.name] = signal.side;
+                }
+              }
+              compensationWarningSignalsRef.current = warningSignals;
+
               // Near-peak gate for `peakRelevant` compensation warnings
               // (elbowFlexion "Straighten arms" on ex_007/ex_008). Driven by
               // the per-side primary (raw.perSideMetrics) for per-limb
@@ -3673,14 +4448,19 @@ export default function CameraClient() {
               // warning, because bent elbows are correct form there.
               const nearPeakNow = isNearPeak(
                 activeDefinition,
-                raw.perSideMetrics,
+                scoreIsPerLimb
+                  ? {
+                      left: smoothedPrimaryLeft,
+                      right: smoothedPrimaryRight,
+                    }
+                  : raw.perSideMetrics,
                 activeDefinition.kind === "dynamic"
                   ? smoothedMetrics[activeDefinition.primaryMetric.name] ?? null
                   : null,
               );
 
               const baselineReadyForExercise =
-                baselinePhaseRef.current !== "capturing";
+                baselinePhaseRef.current === "captured";
 
               // ── Rep counting ──────────────────────────────────────────
               // Feeds the appropriate counter(s) based on the exercise's
@@ -3704,90 +4484,10 @@ export default function CameraClient() {
                   // while right elbow is visible). Each side handles its own null.
                   const perSide = raw.perSideMetrics;
                   if (perSide) {
-                    const primaryNeedsBaseline =
-                      !!activeDefinition.primaryMetric.requiresBaselineCapture;
-                    // Read via ref — the rAF chain captured a stale state value.
-                    if (
-                      primaryNeedsBaseline &&
-                      baselinePhaseRef.current === "capturing"
-                    ) {
-                      // Accumulate raw projections until each side has enough
-                      // samples to summarize. Rep counting stays paused while
-                      // the primary metric is in calibration. Compensation-only
-                      // baselines must not calibrate or transform rep inputs.
-                      if (typeof perSide.left === "number") {
-                        leftBaselineRef.current.samples.push(perSide.left);
-                      }
-                      if (typeof perSide.right === "number") {
-                        rightBaselineRef.current.samples.push(perSide.right);
-                      }
-                      setBaselineSampleProgress(
-                        Math.min(
-                          leftBaselineRef.current.samples.length,
-                          rightBaselineRef.current.samples.length,
-                        ),
-                      );
-                      if (
-                        leftBaselineRef.current.samples.length >=
-                          BASELINE_SAMPLE_COUNT &&
-                        rightBaselineRef.current.samples.length >=
-                          BASELINE_SAMPLE_COUNT
-                      ) {
-                        // Median, not mean — robust to single-frame spikes
-                        // if the patient briefly shifted during capture.
-                        leftBaselineRef.current.value = medianSample(
-                          leftBaselineRef.current.samples,
-                        );
-                        rightBaselineRef.current.value = medianSample(
-                          rightBaselineRef.current.samples,
-                        );
-                        setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
-                        setBaselinePhase("captured");
-                      }
-                    } else {
-                      // For requiresBaselineCapture exercises, the registry's
-                      // thresholds expect (baseline − raw): a shrug DECREASES
-                      // the raw projection, so subtracting from the captured
-                      // resting value yields a positive delta that increases
-                      // during the rep — matching what the state machine expects.
-                      // Pass-through when no baseline was captured.
-                      const lb = leftBaselineRef.current.value;
-                      const rb = rightBaselineRef.current.value;
-                      const inputLeft =
-                        typeof perSide.left === "number"
-                          ? primaryNeedsBaseline && lb !== null
-                            ? lb - perSide.left
-                            : perSide.left
-                          : null;
-                      const inputRight =
-                        typeof perSide.right === "number"
-                          ? primaryNeedsBaseline && rb !== null
-                            ? rb - perSide.right
-                            : perSide.right
-                          : null;
-
-                      // ex_007's normalized wrist-height calibration groups
-                      // are separated by hundredths (low <= 0.18, intended
-                      // partial >= 0.24). One-decimal rounding collapses both
-                      // into 0.2 before the RepCounter sees them, so preserve
-                      // three decimals for that metric. Degree-scale metrics
-                      // keep their existing one-decimal behavior.
-                      const primaryInputScale =
-                        primaryName === "wristShoulderVertical" ? 1000 : 10;
-                      const smoothedLeft =
-                        inputLeft !== null
-                          ? Math.round(
-                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) *
-                                primaryInputScale,
-                            ) / primaryInputScale
-                          : null;
-                      const smoothedRight =
-                        inputRight !== null
-                          ? Math.round(
-                              rightPrimaryFilterRef.current.filter(inputRight, tNow) *
-                                primaryInputScale,
-                            ) / primaryInputScale
-                          : null;
+                      const inputLeft = rawPrimaryLeft;
+                      const inputRight = rawPrimaryRight;
+                      const smoothedLeft = smoothedPrimaryLeft;
+                      const smoothedRight = smoothedPrimaryRight;
 
                       // Rep counting is gated on the active session state and
                       // completed baseline capture. During calibration, metrics
@@ -3861,7 +4561,6 @@ export default function CameraClient() {
                           console.log(`[rep] ${activeDefinition.id} right`, event);
                         }
                       }
-                    }
                   }
                 } else {
                   // Bidirectional-alternating or unilateral — single smoothed value.
@@ -4208,8 +4907,13 @@ export default function CameraClient() {
                       }
                       acc.prevPairedInBand = anyIn;
                     } else {
-                      // Paired (true T-pose) bookkeeping: hold accrual, streak,
-                      // drops, settle time, out-of-position time.
+                      // Per-limb hold accrual stays independent. A bilateral
+                      // prescription later gates on the slower side; a
+                      // unilateral prescription gates only its selected side.
+                      // The simultaneous accumulator remains a quality field,
+                      // not the completion source.
+                      if (lInBand) leftHoldMsRef.current += dt;
+                      if (rInBand) rightHoldMsRef.current += dt;
                       const pairedIn = lInBand && rInBand;
                       if (pairedIn) {
                         pairedHoldMsRef.current += dt;
@@ -4250,27 +4954,45 @@ export default function CameraClient() {
 
               if (tNow - lastMetricsUpdateRef.current > 150) {
                 lastMetricsUpdateRef.current = tNow;
+                const coachingWarningsEnabled =
+                  sessionStateRef.current === "active" &&
+                  lastCaptureOkRef.current &&
+                  baselineReadyForExercise;
                 const suppressedWarningNames = new Set(
                   activeDefinition.compensationMetrics
-                    .filter((comp) => comp.peakRelevant === true && !nearPeakNow)
+                    .filter(
+                      (comp) =>
+                        !coachingWarningsEnabled ||
+                        (comp.peakRelevant === true && !nearPeakNow) ||
+                        (prescriptionRef.current.prescribedSide !== "both" &&
+                          comp.name === "shoulderSymmetry"),
+                    )
                     .map((comp) => comp.name),
                 );
                 const activeWarningNames = updateCompensationWarningMap(
                   compensationWarningLatchesRef.current,
                   activeDefinition.compensationMetrics,
-                  smoothedMetrics,
+                  warningDisplayMetrics,
                   tNow,
                   suppressedWarningNames,
                 );
                 setFrameMetrics({
-                  tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
-                  metrics: smoothedMetrics,
+                  tiltReference: raw.tiltReference,
+                  metrics: warningDisplayMetrics,
                   // Single per-frame score computed above from the SAME
                   // smoothed values the metric cards render (with per-side
                   // primaries for per-limb exercises). raw.metrics is still
                   // available separately for the ML/log pipeline.
                   compensationScore: frameCompensationScore,
                 });
+                setDisplayPerSidePrimary(
+                  scoreIsPerLimb
+                    ? {
+                        left: smoothedPrimaryLeft,
+                        right: smoothedPrimaryRight,
+                      }
+                    : null,
+                );
                 setNearPeak(nearPeakNow);
                 setActiveCompensationWarnings(activeWarningNames);
                 if (activeDefinition.kind === "isometric") {
@@ -4288,7 +5010,20 @@ export default function CameraClient() {
               // peak ROM — drawn every frame, so gate with the per-frame value.
               const overlayWarningNames = new Set<MetricName>();
               const overlayComps = activeDefinition.compensationMetrics.filter((comp) => {
+                if (
+                  sessionStateRef.current !== "active" ||
+                  !lastCaptureOkRef.current ||
+                  !baselineReadyForExercise
+                ) {
+                  return false;
+                }
                 if (comp.peakRelevant === true && !nearPeakNow) return false;
+                if (
+                  prescriptionRef.current.prescribedSide !== "both" &&
+                  comp.name === "shoulderSymmetry"
+                ) {
+                  return false;
+                }
                 const isActive =
                   compensationWarningLatchesRef.current.get(comp.name)?.active === true;
                 if (isActive) overlayWarningNames.add(comp.name);
@@ -4300,10 +5035,11 @@ export default function CameraClient() {
                 canvas.width,
                 canvas.height,
                 overlayComps,
-                smoothedMetrics,
+                warningDisplayMetrics,
                 metricDirections,
                 overlayWarningNames,
               );
+              }
             }
           } else {
             // Pause isometric dt accumulation immediately on any unverified
@@ -4317,31 +5053,7 @@ export default function CameraClient() {
               !captureDropoutResetDoneRef.current &&
               dropoutElapsedMs >= CAPTURE_READINESS_RESET_GRACE_MS
             ) {
-              // A sustained not-ready interval is a true capture dropout:
-              // reset filters/counters so the next good frame does not blend
-              // against stale pre-dropout state. Short flickers only pause
-              // computation; resetting on those was discarding valid reps.
-              tiltFilterRef.current.reset();
-              metricFiltersRef.current.forEach((f) => f.reset());
-              leftPrimaryFilterRef.current.reset();
-              rightPrimaryFilterRef.current.reset();
-              leftRepCounterRef.current?.reset();
-              rightRepCounterRef.current?.reset();
-              bidirectionalRepCounterRef.current?.reset();
-              dynamicRepQualityBufferRef.current.reset();
-              // Discard any in-progress isometric hold — a sustained dropout
-              // means we couldn't verify the band, so the partial accumulation
-              // is stale (matches the rep-counter reset philosophy).
-              pairedHoldMsRef.current = 0;
-              leftHoldMsRef.current = 0;
-              rightHoldMsRef.current = 0;
-              leftInBandRef.current = false;
-              rightInBandRef.current = false;
-              lastIsometricTickMsRef.current = null;
-              resetHoldQualityAccum();
-              setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
-              resetCompensationWarnings();
-              captureDropoutResetDoneRef.current = true;
+              resetAfterSustainedCaptureDropout(activeDefinition);
             }
 
             setFrameMetrics({
@@ -4354,7 +5066,22 @@ export default function CameraClient() {
           // No tracked person means no verified in-band interval. Do not erase
           // accumulated hold time for a flicker; just restart the dt anchor.
           lastIsometricTickMsRef.current = null;
+          const noPersonNow = performance.now();
+          if (captureDropoutStartedAtRef.current === null) {
+            captureDropoutStartedAtRef.current = noPersonNow;
+          }
+          neutralCalibrationClockRef.current = pauseNeutralCalibrationClock(
+            neutralCalibrationClockRef.current,
+          );
+          updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
           commitCaptureState(false, "No person detected. Step into the frame.");
+          if (
+            !captureDropoutResetDoneRef.current &&
+            noPersonNow - captureDropoutStartedAtRef.current >=
+              CAPTURE_READINESS_RESET_GRACE_MS
+          ) {
+            resetAfterSustainedCaptureDropout(activeDefinition);
+          }
           // Count as a not-OK frame so a patient who steps out of frame lowers
           // pctOk rather than being invisible to the capture-quality summary.
           if (sessionStateRef.current === "active") {
@@ -4381,7 +5108,7 @@ export default function CameraClient() {
   const canUseMediaDevices =
     mounted && typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
-  async function stopCamera() {
+  const stopCamera = useCallback(async () => {
     try {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -4403,10 +5130,17 @@ export default function CameraClient() {
       frameMsSumRef.current = 0;
       perfSampleCountRef.current = 0;
       setPerfMs(null);
+      if (
+        activeDefinitionRef.current &&
+        (sessionStateRef.current === "active" ||
+          sessionStateRef.current === "countdown")
+      ) {
+        resetNeutralCalibration("capturing");
+      }
     } catch {
       // ignore
     }
-  }
+  }, [resetNeutralCalibration]);
 
   async function listCameras() {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -4460,9 +5194,9 @@ export default function CameraClient() {
   useEffect(() => {
     setMounted(true);
     return () => {
-      stopCamera();
+      void stopCamera();
     };
-  }, []);
+  }, [stopCamera]);
 
   useEffect(() => {
     const updateDateTime = () => {
@@ -4497,6 +5231,8 @@ export default function CameraClient() {
   // overlays a live session, and on a dismiss flag so the patient can close it.
   const selectedRecap = sessionRecaps.get(selectedExercise) ?? null;
   const selectedExerciseCompleted = selectedExerciseObj?.status === "completed";
+  const selectedExercisePainStopped =
+    selectedExerciseObj?.status === "pain_stopped";
   const showCompletedRecap =
     sessionState === "idle" &&
     selectedExerciseCompleted &&
@@ -4532,24 +5268,29 @@ export default function CameraClient() {
   const blockedBySchedule =
     user?.role === "patient" &&
     !!selectedExercise &&
-    !actionableExerciseIds.has(selectedExercise);
+    !actionableOccurrenceIds.has(selectedExerciseObj?.occurrenceId ?? -1);
   // Stepper navigation locked while a session is in progress.
   const sessionBusy =
     sessionState === "active" ||
     sessionState === "resting" ||
-    sessionState === "countdown";
+    sessionState === "countdown" ||
+    sessionState === "reporting";
   const baselineVisible = baselinePhase === "capturing";
-  const baselineSamples = Math.min(
-    baselineProgress.samples,
-    baselineProgress.required,
-  );
-  const baselineProgressPct = Math.round(
-    (baselineSamples / Math.max(1, baselineProgress.required)) * 100,
-  );
+  const baselineProgressPct = neutralCalibrationProgressPct({
+    validElapsedMs: baselineProgress.validElapsedMs,
+    sampleCount: baselineProgress.samples,
+    lastValidAtMs: null,
+  });
   const baselineRemainingSec = Math.max(
     0,
-    Math.ceil((baselineProgress.required - baselineSamples) / 30),
+    Math.ceil(
+      (NEUTRAL_CALIBRATION_DURATION_MS - baselineProgress.validElapsedMs) /
+        1_000,
+    ),
   );
+  const baselineFinishingSamples =
+    baselineRemainingSec === 0 &&
+    baselineProgress.samples < NEUTRAL_CALIBRATION_MIN_SAMPLES;
   const score = frameMetrics.compensationScore;
   const tier = scoreTier(score);
   const cameraBg = "oklch(0.20 0.008 240)";
@@ -4560,11 +5301,17 @@ export default function CameraClient() {
   const tightLayout = viewportWidth < 720;
   const prescriptionTargetText =
     activeDefinition?.kind === "isometric"
-      ? isSideSplitIsometric(activeDefinition)
-        ? `${prescription.holdSeconds}s hold/side`
-        : `${prescription.holdSeconds}s hold`
+      ? `${prescription.holdSeconds}s hold${
+          prescription.prescribedSide === "both"
+            ? "/side"
+            : ` · ${prescription.prescribedSide}`
+        }`
       : activeDefinition?.bilateral
-        ? `${prescription.reps} reps/side`
+        ? `${prescription.reps} reps${
+            prescription.prescribedSide === "both"
+              ? "/side"
+              : ` · ${prescription.prescribedSide}`
+          }`
         : `${prescription.reps} reps`;
 
   return (
@@ -4816,7 +5563,7 @@ export default function CameraClient() {
             <ClinicalScoreRow score={score} tier={tier} />
 
             {metricCards.map((card) => (
-              <ClinicalMetricRow key={card.key} card={card} />
+              <ClinicalMetricRow key={card.id} card={card} />
             ))}
 
             <div style={{ flex: 1 }} />
@@ -5028,12 +5775,24 @@ export default function CameraClient() {
                       textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 2,
                     }}>Baseline capture</div>
                     <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
-                      {captureOk ? "Stand naturally, arms relaxed" : "Paused — improve framing"}
+                      {captureOk
+                        ? baselineFinishingSamples
+                          ? "Finishing setup — stand still"
+                          : "Stand naturally, arms relaxed"
+                        : "Paused — improve framing"}
                     </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
                     <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 500, color: "oklch(0.18 0.01 240)", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
-                      {baselineRemainingSec}<span style={{ fontSize: 12, color: "oklch(0.55 0.01 240)", marginLeft: 2 }}>s</span>
+                      {baselineFinishingSamples
+                        ? `${Math.min(
+                            baselineProgress.samples,
+                            NEUTRAL_CALIBRATION_MIN_SAMPLES,
+                          )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
+                        : baselineRemainingSec}
+                      {!baselineFinishingSamples && (
+                        <span style={{ fontSize: 12, color: "oklch(0.55 0.01 240)", marginLeft: 2 }}>s</span>
+                      )}
                     </div>
                     <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", color: "oklch(0.55 0.01 240)", marginTop: 3 }}>
                       {baselineProgressPct}% READY
@@ -5089,48 +5848,63 @@ export default function CameraClient() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {countdownSec}
+                      {countdownSec > 0 ? countdownSec : "···"}
                     </span>
                     <span style={{
                       fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.8)",
                       textTransform: "uppercase", letterSpacing: "0.2em",
                       filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.9))",
                     }}>
-                      Get ready
+                      {countdownSec > 0 ? "Get ready" : "Finishing setup"}
                     </span>
                   </div>
                 </div>
               )}
 
-              {/* Post-session summary — recap of the just-finished session. Shown
-                  in the "ended" state (last exercise complete, or a manual End;
-                  the guided flow auto-advances between exercises otherwise). */}
+              {/* Post-session summary — recap of the just-finished session. A
+                  completed patient attempt reaches this only after the required
+                  pain report/decline, and navigation waits for acknowledgement. */}
               {sessionState === "ended" && (() => {
                 const def = activeDefinition;
                 const isIso = def?.kind === "isometric";
                 const setsLog = completedSetsLogRef.current;
                 const setsDone = setsLog.length;
 
-                // Per-side tallies — NEVER summed (preserves the asymmetry signal).
                 const L = repLogRef.current.left;
                 const R = repLogRef.current.right;
-                const lComplete = L.filter((e) => e.classification === "complete").length;
-                const rComplete = R.filter((e) => e.classification === "complete").length;
-                const peaks = [...L, ...R].map((e) => e.peakValue);
-                const avgPeak = peaks.length ? peaks.reduce((a, b) => a + b, 0) / peaks.length : null;
+                const outcomeSides = prescribedOutcomeSides(
+                  prescription.prescribedSide,
+                );
+                const showAsymmetry = shouldShowOutcomeAsymmetry(
+                  prescription.prescribedSide,
+                );
+                const repEventsBySide = { left: L, right: R };
+                const completeBySide = {
+                  left: L.filter((event) => event.classification === "complete").length,
+                  right: R.filter((event) => event.classification === "complete").length,
+                };
+                const averagePeak = (events: RepEvent[]) =>
+                  events.length > 0
+                    ? events.reduce((sum, event) => sum + event.peakValue, 0) /
+                      events.length
+                    : null;
+                const avgPeakBySide = {
+                  left: averagePeak(L),
+                  right: averagePeak(R),
+                };
                 const isAngle = def && def.kind === "dynamic" ? def.primaryMetric.name !== "wristShoulderVertical" : true;
                 const target = def && def.kind === "dynamic" ? def.primaryMetric.thresholds.targetROM : 0;
                 const unit = isAngle ? "°" : "";
                 const fmtVal = (v: number) => (isAngle ? `${Math.round(v)}` : v.toFixed(2));
                 const avgAsym = setsDone ? setsLog.reduce((s, r) => s + r.asymmetryIndex, 0) / setsDone : 0;
                 const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
-                const heldMs = setsLog.reduce((s, r) => s + (r.pairedHoldMs ?? 0), 0);
                 const targetMs = setsLog.reduce((s, r) => s + (r.targetHoldMs ?? 0), 0);
-                // Side-split isometric (ex_004): per-side hold totals, shown
-                // as separate rows — never merged into one number.
-                const sideSplitIso = isIso && isSideSplitIsometric(def);
                 const leftHeldMs = setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0);
                 const rightHeldMs = setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0);
+                const heldMsBySide = {
+                  left: leftHeldMs,
+                  right: rightHeldMs,
+                };
                 const isPatient = prescription.patientExerciseId !== undefined;
 
                 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
@@ -5156,45 +5930,75 @@ export default function CameraClient() {
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {sideSplitIso ? (
+                        {isIso ? (
                           <>
-                            <div style={rowStyle}><span style={labelStyle}>Left hold</span><span style={valStyle}>{Math.round(leftHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right hold</span><span style={valStyle}>{Math.round(rightHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
-                        ) : isIso ? (
-                          <>
-                            <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{Math.round(heldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
+                            {outcomeSides.map((side) => (
+                              <div key={side} style={rowStyle}>
+                                <span style={labelStyle}>{sideLabel(side)} hold</span>
+                                <span style={valStyle}>
+                                  {Math.round(heldMsBySide[side] / 1000)}s
+                                  {targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}
+                                </span>
+                              </div>
+                            ))}
+                            {showAsymmetry && (
+                              <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
+                            )}
                             <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
                           </>
                         ) : (
                           <>
-                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{lComplete}/{L.length} complete</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{rComplete}/{R.length} complete</span></div>
-                            {avgPeak !== null && (
-                              <div style={rowStyle}><span style={labelStyle}>Avg peak</span><span style={valStyle}>{fmtVal(avgPeak)}{unit}{target ? ` · target ${fmtVal(target)}${unit}` : ""}</span></div>
+                            {outcomeSides.map((side) => (
+                              <div key={side} style={{ display: "contents" }}>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>{sideLabel(side)} reps</span>
+                                  <span style={valStyle}>
+                                    {fullRomOutcomeText(
+                                      completeBySide[side],
+                                      repEventsBySide[side].length,
+                                    )}
+                                  </span>
+                                </div>
+                                {avgPeakBySide[side] !== null && (
+                                  <div style={rowStyle}>
+                                    <span style={labelStyle}>{sideLabel(side)} avg peak</span>
+                                    <span style={valStyle}>
+                                      {fmtVal(avgPeakBySide[side]!)}{unit}
+                                      {target ? ` · target ${fmtVal(target)}${unit}` : ""}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            {showAsymmetry && (
+                              <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
                             )}
-                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
                             <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
                           </>
                         )}
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={handleSessionStart}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
-                        >Redo</button>
-                        {hasNextExercise && (
+                        {!pendingCompletionNavigation && (
                           <button
                             type="button"
-                            onClick={() => goToAdjacentExercise(1)}
+                            onClick={handleSessionStart}
+                            style={{
+                              width: "100%", padding: "10px 12px",
+                              background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
+                              fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
+                            }}
+                          >Redo</button>
+                        )}
+                        {(pendingCompletionNavigation?.next ||
+                          (!pendingCompletionNavigation && hasNextExercise)) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              pendingCompletionNavigation
+                                ? continueFromCompletionRecap("next")
+                                : goToAdjacentExercise(1)
+                            }
                             style={{
                               width: "100%", padding: "10px 12px",
                               background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
@@ -5202,7 +6006,21 @@ export default function CameraClient() {
                             }}
                           >Next exercise →</button>
                         )}
-                        {isPatient && (
+                        {isPatient && pendingCompletionNavigation ? (
+                          <button
+                            type="button"
+                            onClick={() => continueFromCompletionRecap("schedule")}
+                            style={{
+                              width: "100%", padding: "10px 12px", textAlign: "center",
+                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
+                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                            }}
+                          >
+                            {pendingCompletionNavigation.next
+                              ? "Back to schedule"
+                              : "Finish and return to schedule"}
+                          </button>
+                        ) : isPatient ? (
                           <Link
                             href="/dashboard/patient"
                             style={{
@@ -5211,7 +6029,7 @@ export default function CameraClient() {
                               fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
                             }}
                           >Back to schedule</Link>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -5236,14 +6054,36 @@ export default function CameraClient() {
                       minute: "2-digit",
                     })
                   : "—";
-                const heldSec =
-                  recap.totalPairedHoldMs != null
-                    ? Math.round(recap.totalPairedHoldMs / 1000)
-                    : 0;
+                const outcomeSides = prescribedOutcomeSides(
+                  recap.prescribedSide,
+                );
+                const repCountBySide = {
+                  left: recap.leftReps,
+                  right: recap.rightReps,
+                };
+                const completeBySide = {
+                  left: recap.completeLeftReps,
+                  right: recap.completeRightReps,
+                };
+                const peakBySide = {
+                  left: recap.avgLeftPeakValue,
+                  right: recap.avgRightPeakValue,
+                };
+                const holdMsBySide = {
+                  left: recap.totalLeftHoldMs ?? recap.totalPairedHoldMs ?? 0,
+                  right: recap.totalRightHoldMs ?? recap.totalPairedHoldMs ?? 0,
+                };
                 const targetSec =
                   recap.totalTargetHoldMs != null
                     ? Math.round(recap.totalTargetHoldMs / 1000)
                     : 0;
+                const recapIsAngle =
+                  activeDefinition?.kind === "dynamic"
+                    ? activeDefinition.primaryMetric.name !== "wristShoulderVertical"
+                    : true;
+                const recapUnit = recapIsAngle ? "°" : "";
+                const formatRecapPeak = (value: number) =>
+                  recapIsAngle ? `${Math.round(value)}` : value.toFixed(2);
 
                 const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
                 const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
@@ -5284,11 +6124,38 @@ export default function CameraClient() {
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
                         {isIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{heldSec}s{targetSec ? ` / ${targetSec}s` : ""}</span></div>
+                          outcomeSides.map((side) => (
+                            <div key={side} style={rowStyle}>
+                              <span style={labelStyle}>{sideLabel(side)} hold</span>
+                              <span style={valStyle}>
+                                {Math.round(holdMsBySide[side] / 1000)}s
+                                {targetSec ? ` / ${targetSec}s` : ""}
+                              </span>
+                            </div>
+                          ))
                         ) : (
                           <>
-                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{recap.completeLeftReps}/{recap.leftReps} complete</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{recap.completeRightReps}/{recap.rightReps} complete</span></div>
+                            {outcomeSides.map((side) => (
+                              <div key={side} style={{ display: "contents" }}>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>{sideLabel(side)} reps</span>
+                                  <span style={valStyle}>
+                                    {fullRomOutcomeText(
+                                      completeBySide[side],
+                                      repCountBySide[side],
+                                    )}
+                                  </span>
+                                </div>
+                                {peakBySide[side] !== null && (
+                                  <div style={rowStyle}>
+                                    <span style={labelStyle}>{sideLabel(side)} avg peak</span>
+                                    <span style={valStyle}>
+                                      {formatRecapPeak(peakBySide[side]!)}{recapUnit}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
                           </>
                         )}
                         <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{recap.setCount} / {prescription.sets}</span></div>
@@ -5478,7 +6345,15 @@ export default function CameraClient() {
                   background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
                   fontSize: 12, color: "oklch(0.40 0.08 75)",
                 }}>
-                  No exercises assigned yet.
+                  No exercises are due today. Return to your schedule to review
+                  completed, upcoming, or historical prescriptions.
+                  {user?.role === "patient" && (
+                    <div style={{ marginTop: 8 }}>
+                      <Link href="/dashboard/patient?tab=session" style={{ color: ACCENT.text, fontWeight: 650 }}>
+                        Return to schedule
+                      </Link>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div id="cam-tour-exercise" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
@@ -5506,8 +6381,8 @@ export default function CameraClient() {
                         textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
                       }}>
                         {selectedExerciseIndex >= 0
-                          ? `Exercise ${selectedExerciseIndex + 1} / ${assignedExercises.length}`
-                          : `${assignedExercises.length} exercises`}
+                          ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length} today`
+                          : `${assignedExercises.length} exercises today`}
                       </span>
                       {selectedExerciseCompleted ? (
                         <span style={{
@@ -5559,6 +6434,16 @@ export default function CameraClient() {
                     <span>{prescriptionTargetText}</span>
                     <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
                     <span>{prescription.restSeconds}s rest</span>
+                  </div>
+                  <div style={{
+                    marginTop: 7,
+                    fontSize: 11,
+                    color: "oklch(0.45 0.01 240)",
+                    lineHeight: 1.45,
+                  }}>
+                    Prescribed side: <strong>{prescription.prescribedSide}</strong>
+                    {" · "}
+                    {formatResistanceContext(prescription.resistance)}
                   </div>
                   {activeDefinition?.id === "ex_007" &&
                     prescription.patientExerciseId !== undefined && (
@@ -5639,7 +6524,82 @@ export default function CameraClient() {
 
             {/* Session controls */}
             <div id="cam-tour-session" style={{ padding: 16, marginTop: "auto" }}>
-              {sessionState === "resting" ? (
+              {sessionState === "reporting" ? (
+                <div style={{
+                  padding: 12,
+                  borderRadius: 8,
+                  background: "oklch(0.98 0.01 240)",
+                  border: "1px solid oklch(0.90 0.01 240)",
+                }}>
+                  <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 650 }}>
+                    Pain after this attempt
+                  </p>
+                  <p style={{ margin: "0 0 10px", fontSize: 11, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+                    Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
+                  </p>
+                  <label style={{ display: "block", fontSize: 11, marginBottom: 4 }}>
+                    Pain score: <strong>{painScore}/10</strong>
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={painScore}
+                    onChange={(event) => setPainScore(Number(event.target.value))}
+                    disabled={painReportSaving}
+                    style={{ width: "100%" }}
+                  />
+                  <label style={{ display: "block", fontSize: 11, marginTop: 8, marginBottom: 4 }}>
+                    Timing (optional)
+                  </label>
+                  <select
+                    value={painTiming}
+                    onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
+                    disabled={painReportSaving}
+                    style={{ width: "100%", padding: "7px 8px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6 }}
+                  >
+                    <option value="">Not specified</option>
+                    <option value="during">During</option>
+                    <option value="after">After</option>
+                    <option value="both">During and after</option>
+                  </select>
+                  <label style={{ display: "block", fontSize: 11, marginTop: 8, marginBottom: 4 }}>
+                    Body area (optional)
+                  </label>
+                  <input
+                    value={painBodyArea}
+                    maxLength={80}
+                    onChange={(event) => setPainBodyArea(event.target.value)}
+                    disabled={painReportSaving}
+                    placeholder="e.g. left shoulder"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "7px 8px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6 }}
+                  />
+                  {painReportError && (
+                    <p style={{ margin: "8px 0 0", fontSize: 11, color: "oklch(0.50 0.18 25)" }}>
+                      {painReportError} Please retry while this page remains open.
+                    </p>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => void savePainReport(false)}
+                      disabled={painReportSaving}
+                      style={{ flex: 1, padding: "8px 10px", border: `1px solid ${ACCENT.hex}`, borderRadius: 6, background: ACCENT.hex, color: "white", fontWeight: 600 }}
+                    >
+                      {painReportSaving ? "Saving…" : "Save report"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void savePainReport(true)}
+                      disabled={painReportSaving}
+                      style={{ flex: 1, padding: "8px 10px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6, background: "white" }}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              ) : sessionState === "resting" ? (
                 <>
                   <div style={{
                     padding: 12, borderRadius: 8,
@@ -5671,7 +6631,7 @@ export default function CameraClient() {
                     >Skip rest</button>
                     <button
                       type="button"
-                      onClick={handleSessionEnd}
+                      onClick={() => handleSessionEnd()}
                       style={{
                         flex: 1, padding: "8px 12px",
                         background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
@@ -5734,7 +6694,9 @@ export default function CameraClient() {
                       : sessionState === "countdown"
                         ? `Starting… (${countdownSec})`
                         : blockedBySchedule
-                          ? "Not scheduled today"
+                          ? selectedExercisePainStopped
+                            ? "Await therapist rescheduling"
+                            : "Not scheduled today"
                           : "Start session"}
                   </button>
                   <button
@@ -5757,10 +6719,35 @@ export default function CameraClient() {
                 </div>
               )}
 
+              {(sessionState === "active" ||
+                sessionState === "resting" ||
+                sessionState === "countdown") && (
+                <button
+                  type="button"
+                  onClick={() => handleSessionEnd("pain")}
+                  style={{
+                    marginTop: 8,
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 6,
+                    border: "1px solid oklch(0.55 0.17 25)",
+                    background: "oklch(0.97 0.025 25)",
+                    color: "oklch(0.42 0.16 25)",
+                    fontSize: 13,
+                    fontWeight: 650,
+                    cursor: "pointer",
+                  }}
+                >
+                  Stop — I have pain
+                </button>
+              )}
+
               {(blockedBySchedule || scheduleNotice) && sessionState !== "active" && sessionState !== "countdown" && (
                 <p style={{ marginTop: 8, fontSize: 12, color: "oklch(0.55 0.14 45)", lineHeight: 1.4 }}>
                   {scheduleNotice ??
-                    "Not scheduled today — start this exercise from your schedule on its due day."}
+                    (selectedExercisePainStopped
+                      ? "This occurrence was closed after pain was reported. Do not resume it; your therapist must review and reschedule if appropriate."
+                      : "Not scheduled today — start this exercise from your schedule on its due day.")}
                 </p>
               )}
 
@@ -6331,8 +7318,11 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
     card.warningActive === true &&
     card.value !== null;
 
-  const displayValue = card.value === null ? "—" : Math.abs(card.value).toFixed(1);
-  const warnLabel = metricWarnLabel(card.key);
+  const displayValue =
+    card.value === null
+      ? "—"
+      : Math.abs(card.value).toFixed(card.unit === "°" ? 1 : 3);
+  const warnLabel = metricWarnLabel(card.metric);
   const warningText = compareDirection === "below" ? "Below threshold" : "Above threshold";
 
   return (
@@ -6387,8 +7377,8 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
         fontFamily: "var(--mono)",
       }}>
         {displayValue}
-        {displayValue !== "—" && (
-          <span style={{ fontSize: 14, color: "oklch(0.60 0.01 240)", marginLeft: 1 }}>°</span>
+        {displayValue !== "—" && card.unit && (
+          <span style={{ fontSize: 14, color: "oklch(0.60 0.01 240)", marginLeft: 1 }}>{card.unit}</span>
         )}
       </div>
     </div>
@@ -6435,7 +7425,7 @@ function ClinicalStatStrip({
   );
 
   let repsContent: React.ReactNode;
-  if (activeDefinition?.kind === "isometric" && isSideSplitIsometric(activeDefinition)) {
+  if (activeDefinition?.kind === "isometric" && activeDefinition.bilateral) {
     // Side-split isometric (ex_004): per-side hold times, split-panel style —
     // the same L/R convention as bilateral rep counting, never merged into
     // one number (the asymmetry between sides is the clinical signal).
@@ -6454,7 +7444,9 @@ function ClinicalStatStrip({
             <span style={{
               fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>L</span>
+            }}>
+              L{prescription.prescribedSide === "right" ? " · observation" : ""}
+            </span>
             <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
               {leftSec}
               <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
@@ -6465,7 +7457,9 @@ function ClinicalStatStrip({
             <span style={{
               fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>R</span>
+            }}>
+              R{prescription.prescribedSide === "left" ? " · observation" : ""}
+            </span>
             <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
               {rightSec}
               <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
@@ -6504,7 +7498,9 @@ function ClinicalStatStrip({
             <span style={{
               fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>L</span>
+            }}>
+              L{prescription.prescribedSide === "right" ? " · observation" : ""}
+            </span>
             <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
               {repCounts.left}
             </span>
@@ -6514,7 +7510,9 @@ function ClinicalStatStrip({
             <span style={{
               fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>R</span>
+            }}>
+              R{prescription.prescribedSide === "left" ? " · observation" : ""}
+            </span>
             <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
               {repCounts.right}
             </span>
@@ -6598,7 +7596,9 @@ function ClinicalProgressStrip({
   compact: boolean;
 }) {
   const label =
-    sessionState === "ended"
+    sessionState === "reporting"
+      ? "Pain report required before continuing"
+      : sessionState === "ended"
       ? completedSets >= prescription.sets
         ? "Session complete"
         : `Ended at set ${completedSets} / ${prescription.sets}`
@@ -6732,6 +7732,14 @@ function metricLabel(name: MetricName): string {
     case "wristShoulderVertical":  return "OVERHEAD";
     case "shoulderElbowDistance":  return "ELBOW POS";
   }
+}
+
+function metricUsesDegrees(name: MetricName): boolean {
+  return (
+    name !== "scapularElevation" &&
+    name !== "wristShoulderVertical" &&
+    name !== "shoulderElbowDistance"
+  );
 }
 
 function CameraHomeIcon() {

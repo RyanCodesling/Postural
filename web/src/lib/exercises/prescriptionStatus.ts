@@ -2,6 +2,7 @@ import type { OccurrenceLite } from "./occurrences";
 
 export type PrescriptionState = "upcoming" | "active" | "ended" | "archived";
 export type PrescriptionAdherenceState =
+  | "not_assessed"
   | "not_started"
   | "in_progress"
   | "partially_completed"
@@ -20,6 +21,7 @@ export interface PrescriptionSummary {
   inProgressCount: number;
   remainingCount: number;
   cancelledCount: number;
+  painStoppedCount: number;
 }
 
 /**
@@ -40,12 +42,16 @@ export function summarizePrescription(args: {
   const cancelledCount = occurrences.length - scheduled.length;
   const completedCount = scheduled.filter((occ) => occ.status === "completed").length;
   const inProgressCount = scheduled.filter((occ) => occ.status === "in_progress").length;
+  const painStoppedCount = scheduled.filter((occ) => occ.status === "pain_stopped").length;
   const missedCount = scheduled.filter(
-    (occ) => occ.status !== "completed" && occ.makeupUntil < todayKey,
+    (occ) =>
+      occ.status !== "completed" &&
+      occ.status !== "pain_stopped" &&
+      occ.makeupUntil < todayKey,
   ).length;
   const remainingCount = Math.max(
     0,
-    scheduled.length - completedCount - missedCount,
+    scheduled.length - completedCount - painStoppedCount - missedCount,
   );
 
   let prescriptionState: PrescriptionState;
@@ -66,7 +72,10 @@ export function summarizePrescription(args: {
   }
 
   let adherenceState: PrescriptionAdherenceState = "not_started";
-  if (scheduled.length > 0 && completedCount === scheduled.length) {
+  const assessedCount = scheduled.length - painStoppedCount;
+  if (scheduled.length > 0 && assessedCount === 0) {
+    adherenceState = "not_assessed";
+  } else if (assessedCount > 0 && completedCount === assessedCount) {
     adherenceState = "completed";
   } else if (completedCount > 0) {
     adherenceState = "partially_completed";
@@ -83,5 +92,6 @@ export function summarizePrescription(args: {
     inProgressCount,
     remainingCount,
     cancelledCount,
+    painStoppedCount,
   };
 }

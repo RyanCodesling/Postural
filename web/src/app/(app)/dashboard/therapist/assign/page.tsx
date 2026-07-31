@@ -13,6 +13,16 @@ import {
   spanDays,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
+import {
+  formatResistanceContext,
+  parseResistanceContext,
+  type PrescribedSide,
+  type ResistanceContext,
+} from "@/lib/prescriptionContext";
+import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import MovementContextFields, {
+  type MovementContextForm,
+} from "../_components/MovementContextFields";
 
 interface Exercise {
   id: string;
@@ -33,6 +43,12 @@ interface Program {
     reps?: number | null;
     restSeconds?: number | null;
     holdSeconds?: number | null;
+    sequenceIndex?: number | null;
+    prescribedSide?: PrescribedSide;
+    resistanceType?: MovementContextForm["resistanceType"];
+    resistanceValue?: number | null;
+    resistanceUnit?: MovementContextForm["resistanceUnit"] | null;
+    resistanceLabel?: string | null;
   }[];
 }
 
@@ -44,18 +60,30 @@ interface PatientExercise {
   rest_seconds: number;
   assigned_date: string;
   hold_seconds: number;
+  sequence_index: number;
   recurrence: Recurrence | null;
   interval_days: number | null;
   weekdays: number[] | null;
   start_date: string | null;
   end_date: string | null;
+  prescribed_side: PrescribedSide;
+  resistance_type:
+    | "unknown"
+    | "none"
+    | "external_weight"
+    | "resistance_band"
+    | "other";
+  resistance_value: number | string | null;
+  resistance_unit: "kg" | "lb" | null;
+  resistance_label: string | null;
 }
 
-type AssignmentParams = {
+type AssignmentParams = MovementContextForm & {
   sets?: number;
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
+  sequenceIndex?: number;
   scheduledDate?: string; // recurrence start date
   recurrence?: Recurrence;
   intervalDays?: number;
@@ -69,11 +97,17 @@ type AssignmentPayload = {
   reps: number;
   restSeconds: number;
   holdSeconds: number;
+  sequenceIndex: number;
   scheduledDate: string;
   recurrence: Recurrence;
   intervalDays: number | null;
   weekdays: number[];
   endDate: string;
+  prescribedSide: PrescribedSide;
+  resistanceType: Exclude<ResistanceContext["type"], "unknown">;
+  resistanceValue: number | null;
+  resistanceUnit: ResistanceContext["unit"];
+  resistanceLabel: string | null;
 };
 
 type PreviewSnapshot = {
@@ -81,11 +115,14 @@ type PreviewSnapshot = {
   reps: number;
   restSeconds: number;
   holdSeconds: number;
+  sequenceIndex: number;
   scheduledDate: string;
   recurrence: Recurrence;
   intervalDays: number | null;
   weekdays: number[];
   endDate: string;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 };
 
 // Friendly cadence presets shown in the Repeat dropdown. Each maps to either an
@@ -168,12 +205,24 @@ function paramsFromExisting(ex: PatientExercise): AssignmentParams {
     reps: ex.reps,
     restSeconds: ex.rest_seconds,
     holdSeconds: ex.hold_seconds,
+    sequenceIndex: ex.sequence_index,
     scheduledDate: ex.start_date ?? ex.assigned_date,
     // Anything that isn't 'weekly' (null, or a legacy 'once') edits as interval.
     recurrence: ex.recurrence === "weekly" ? "weekly" : "interval",
     intervalDays: ex.interval_days ?? 1,
     weekdays: ex.weekdays ?? [],
     endDate: ex.end_date ?? (ex.start_date ?? ex.assigned_date),
+    prescribedSide: ex.prescribed_side ?? "both",
+    resistanceType:
+      ex.resistance_type === "external_weight" ||
+      ex.resistance_type === "resistance_band" ||
+      ex.resistance_type === "other"
+        ? ex.resistance_type
+        : "none",
+    resistanceValue:
+      ex.resistance_value == null ? undefined : Number(ex.resistance_value),
+    resistanceUnit: ex.resistance_unit ?? undefined,
+    resistanceLabel: ex.resistance_label ?? undefined,
   };
 }
 
@@ -194,6 +243,9 @@ function PrescriptionDetails({
         <p>Reps: {snapshot.reps}</p>
       )}
       <p>Rest: {snapshot.restSeconds}s</p>
+      <p>Order: {snapshot.sequenceIndex}</p>
+      <p>Side: {snapshot.prescribedSide}</p>
+      <p>Resistance: {formatResistanceContext(snapshot.resistance)}</p>
       <p>Repeat: {formatCadence({ recurrence: snapshot.recurrence, intervalDays: snapshot.intervalDays, weekdays: snapshot.weekdays })}</p>
       <p>From {fmtDate(snapshot.scheduledDate)} to {fmtDate(snapshot.endDate)}</p>
     </>
@@ -294,7 +346,7 @@ export default function AssignExercisePage() {
     });
     setAssignParams((prev) => {
       const next = { ...prev };
-      tmpl.exercises.forEach((ex) => {
+      tmpl.exercises.forEach((ex, index) => {
         if (ex.exerciseId) {
           next[ex.exerciseId] = {
             ...next[ex.exerciseId],
@@ -302,6 +354,14 @@ export default function AssignExercisePage() {
             reps: ex.reps ?? undefined,
             restSeconds: ex.restSeconds ?? next[ex.exerciseId]?.restSeconds,
             holdSeconds: ex.holdSeconds ?? next[ex.exerciseId]?.holdSeconds,
+            sequenceIndex:
+              ex.sequenceIndex ?? next[ex.exerciseId]?.sequenceIndex ?? index + 1,
+            prescribedSide:
+              ex.prescribedSide ?? next[ex.exerciseId]?.prescribedSide ?? "both",
+            resistanceType: ex.resistanceType ?? "none",
+            resistanceValue: ex.resistanceValue ?? undefined,
+            resistanceUnit: ex.resistanceUnit ?? undefined,
+            resistanceLabel: ex.resistanceLabel ?? undefined,
           };
         }
       });
@@ -322,6 +382,21 @@ export default function AssignExercisePage() {
         }
       } else {
         next.add(exerciseId);
+        setAssignParams((params) => ({
+          ...params,
+          [exerciseId]: {
+            ...params[exerciseId],
+            sequenceIndex:
+              params[exerciseId]?.sequenceIndex ??
+              nextExerciseSequenceIndex(
+                Array.from(next, (selectedId) =>
+                  selectedId === exerciseId
+                    ? undefined
+                    : params[selectedId]?.sequenceIndex,
+                ),
+              ),
+          },
+        }));
       }
       return next;
     });
@@ -337,6 +412,11 @@ export default function AssignExercisePage() {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
       const isIsometric = getExerciseDefinition(exId)?.kind === "isometric";
+      if (!Number.isInteger(p.sequenceIndex) || (p.sequenceIndex ?? 0) < 1) {
+        setAssignErrorMsg(`Please enter a valid order for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
       if (!p.sets || p.sets < 1) {
         setAssignErrorMsg(`Please enter valid sets for "${ex?.name ?? exId}".`);
         setShowAssignError(true);
@@ -400,18 +480,49 @@ export default function AssignExercisePage() {
       // Isometric exercises carry a placeholder rep value to satisfy the NOT
       // NULL column; the camera page uses holdSeconds, not reps, for them.
       const reps = isIsometric ? p.reps ?? 1 : p.reps!;
+      let resistance: ResistanceContext;
+      try {
+        resistance = parseResistanceContext(p);
+      } catch (error) {
+        setAssignErrorMsg(
+          `${ex?.name ?? exId}: ${
+            error instanceof Error ? error.message : "Invalid resistance."
+          }`,
+        );
+        setShowAssignError(true);
+        return;
+      }
       payload.push({
         exerciseId: exId,
         sets: p.sets,
         reps,
         restSeconds,
         holdSeconds,
+        sequenceIndex: p.sequenceIndex as number,
         scheduledDate: p.scheduledDate,
         recurrence,
         intervalDays,
         weekdays,
         endDate,
+        prescribedSide: p.prescribedSide ?? "both",
+        resistanceType: resistance.type as Exclude<
+          ResistanceContext["type"],
+          "unknown"
+        >,
+        resistanceValue: resistance.value,
+        resistanceUnit: resistance.unit,
+        resistanceLabel: resistance.label,
       });
+    }
+
+    const sequenceIndexes = payload.map((exercise) => exercise.sequenceIndex);
+    if (
+      sequenceIndexes.some((value) => !Number.isInteger(value) || value < 1) ||
+      new Set(sequenceIndexes).size !== sequenceIndexes.length
+    ) {
+      setAssignErrorMsg("Each selected exercise needs a unique positive whole-number order.");
+      setShowAssignError(true);
+      return;
     }
 
     // Build diff for preview
@@ -421,29 +532,51 @@ export default function AssignExercisePage() {
       const existing = existingAssignments.find((e) => e.exercise_id === item.exerciseId);
       const after: PreviewSnapshot = {
         sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds,
+        sequenceIndex: item.sequenceIndex,
         scheduledDate: item.scheduledDate, recurrence: item.recurrence, intervalDays: item.intervalDays,
         weekdays: item.weekdays, endDate: item.endDate,
+        prescribedSide: item.prescribedSide,
+        resistance: {
+          type: item.resistanceType,
+          value: item.resistanceValue,
+          unit: item.resistanceUnit,
+          label: item.resistanceLabel,
+        },
       };
       if (!existing) {
         return { exerciseId: item.exerciseId, name, type: "new", after };
       }
       const before: PreviewSnapshot = {
         sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, holdSeconds: existing.hold_seconds,
+        sequenceIndex: existing.sequence_index,
         scheduledDate: existing.start_date ?? existing.assigned_date,
         recurrence: existing.recurrence ?? "interval",
         intervalDays: existing.interval_days ?? null,
         weekdays: existing.weekdays ?? [],
         endDate: existing.end_date ?? existing.assigned_date,
+        prescribedSide: existing.prescribed_side ?? "both",
+        resistance: {
+          type: existing.resistance_type ?? "unknown",
+          value:
+            existing.resistance_value == null
+              ? null
+              : Number(existing.resistance_value),
+          unit: existing.resistance_unit ?? null,
+          label: existing.resistance_label ?? null,
+        },
       };
       const changed =
         after.sets !== before.sets ||
         after.reps !== before.reps ||
         after.restSeconds !== before.restSeconds ||
         after.holdSeconds !== before.holdSeconds ||
+        after.sequenceIndex !== before.sequenceIndex ||
         after.scheduledDate !== before.scheduledDate ||
         after.recurrence !== before.recurrence ||
         after.intervalDays !== before.intervalDays ||
         after.endDate !== before.endDate ||
+        after.prescribedSide !== before.prescribedSide ||
+        JSON.stringify(after.resistance) !== JSON.stringify(before.resistance) ||
         !sameWeekdays(after.weekdays, before.weekdays);
       return {
         exerciseId: item.exerciseId,
@@ -556,15 +689,34 @@ export default function AssignExercisePage() {
       const holdSeconds = p.holdSeconds === undefined || p.holdSeconds < 1 ? DEFAULT_HOLD_SECONDS : p.holdSeconds;
       const recurrence = p.recurrence ?? "interval";
       const intervalDays = recurrence === "interval" ? (p.intervalDays ?? 1) : null;
+      let resistance: ResistanceContext;
+      try {
+        resistance = parseResistanceContext(p);
+      } catch {
+        return true;
+      }
+      const existingResistance: ResistanceContext = {
+        type: existing.resistance_type ?? "unknown",
+        value:
+          existing.resistance_value == null
+            ? null
+            : Number(existing.resistance_value),
+        unit: existing.resistance_unit ?? null,
+        label: existing.resistance_label ?? null,
+      };
       if (
         p.sets !== existing.sets ||
         p.reps !== existing.reps ||
         restSeconds !== existing.rest_seconds ||
         holdSeconds !== existing.hold_seconds ||
+        (p.sequenceIndex ?? existing.sequence_index) !== existing.sequence_index ||
         p.scheduledDate !== (existing.start_date ?? existing.assigned_date) ||
         recurrence !== (existing.recurrence ?? "interval") ||
         intervalDays !== (existing.interval_days ?? (recurrence === "interval" ? 1 : null)) ||
         (p.endDate ?? "") !== (existing.end_date ?? existing.assigned_date) ||
+        (p.prescribedSide ?? "both") !==
+          (existing.prescribed_side ?? "both") ||
+        JSON.stringify(resistance) !== JSON.stringify(existingResistance) ||
         !sameWeekdays(p.weekdays ?? [], existing.weekdays ?? [])
       ) return true;
     }
@@ -692,7 +844,7 @@ export default function AssignExercisePage() {
                     <ul className="space-y-1">
                       {tmpl.exercises.map((ex, i) => (
                         <li key={i} className="flex items-center justify-between text-xs text-gray-700">
-                          <span>{ex.name}</span>
+                          <span>#{ex.sequenceIndex ?? i + 1} · {ex.name}</span>
                           {(ex.sets || ex.reps || ex.holdSeconds) && (
                             <span className="text-gray-400 font-mono ml-4 shrink-0">
                               {ex.sets ?? "?"}×
@@ -1005,7 +1157,10 @@ function AssignRow({
   onToggle: () => void;
   onEdit: () => void;
   onCancelEdit: () => void;
-  onParam: (field: "sets" | "reps" | "restSeconds" | "holdSeconds", val: number | undefined) => void;
+  onParam: (
+    field: "sequenceIndex" | "sets" | "reps" | "restSeconds" | "holdSeconds",
+    val: number | undefined,
+  ) => void;
   onSchedule: (patch: Partial<AssignmentParams>) => void;
 }) {
   const locked = isExisting && !isEditing;
@@ -1085,7 +1240,19 @@ function AssignRow({
       </label>
       {checked && (
         <div className="mt-3 pl-7 space-y-3">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">
+                Order <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number" min={1} value={params.sequenceIndex ?? ""}
+                onChange={(e) => onParam("sequenceIndex", e.target.value ? Number(e.target.value) : undefined)}
+                placeholder="1"
+                disabled={locked}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+              />
+            </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Sets <span className="text-red-500">*</span></label>
               <input
@@ -1130,6 +1297,11 @@ function AssignRow({
               />
             </div>
           </div>
+          <MovementContextFields
+            value={params}
+            disabled={locked}
+            onChange={onSchedule}
+          />
           {/* Schedule: a repeat cadence over a start–end date range */}
           <div>
             <label className="block text-xs text-gray-500 mb-1">

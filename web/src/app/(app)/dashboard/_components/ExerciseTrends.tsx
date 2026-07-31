@@ -6,6 +6,17 @@
 // not the ML model, not a diagnosis. Left/right are never summed.
 
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import {
+  comparableContextKey,
+  formatResistanceContext,
+  type PrescribedSide,
+  type ResistanceContext,
+} from "@/lib/prescriptionContext";
+import {
+  prescribedOutcomeSides,
+  prescribedValue,
+  sideLabel,
+} from "@/lib/sessionOutcomePresentation";
 import TrendChart from "./TrendChart";
 
 /** The per-session fields the trends need. Both dashboards' session shapes (from
@@ -16,19 +27,31 @@ export interface TrendSession {
   exerciseKind: "dynamic" | "isometric" | null;
   startedAt: string;
   avgPeakValue: number | null;
+  avgLeftPeakValue?: number | null;
+  avgRightPeakValue?: number | null;
   completeLeftReps: number;
   completeRightReps: number;
   totalPairedHoldMs: number | null;
+  totalLeftHoldMs?: number | null;
+  totalRightHoldMs?: number | null;
   setCount: number;
   totalReps: number;
+  comparableContextKey?: string;
+  prescribedSide?: PrescribedSide;
+  resistance?: ResistanceContext;
+  exerciseConfigVersion?: string | null;
 }
 
 type TrendStatus = "improving" | "plateau" | "regressing";
 
 export interface TrendGroup {
+  contextKey: string;
   exerciseId: string;
   exerciseName: string;
   exerciseKind: TrendSession["exerciseKind"];
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
+  exerciseConfigVersion: string;
   sessions: TrendSession[]; // oldest → newest
 }
 
@@ -38,7 +61,35 @@ const STATUS_STYLE: Record<TrendStatus, { label: string; classes: string }> = {
   regressing: { label: "Regressing", classes: "bg-amber-100 text-amber-700" },
 };
 
-// Group sessions by exercise. Outcome-bearing sessions only (a started-then-
+const LEGACY_RESISTANCE: ResistanceContext = {
+  type: "unknown",
+  value: null,
+  unit: null,
+  label: null,
+};
+
+function sessionContext(s: TrendSession) {
+  const prescribedSide = s.prescribedSide ?? "both";
+  const resistance = s.resistance ?? LEGACY_RESISTANCE;
+  const exerciseConfigVersion = s.exerciseConfigVersion ?? "legacy-unversioned";
+  return {
+    prescribedSide,
+    resistance,
+    exerciseConfigVersion,
+    contextKey:
+      s.comparableContextKey ??
+      comparableContextKey({
+        exerciseId: s.exerciseId,
+        prescribedSide,
+        resistance,
+        exerciseConfigVersion,
+      }),
+  };
+}
+
+// Group sessions by exact exercise + prescription + scoring configuration.
+// This prevents a side/load/threshold change from being presented as one
+// continuous clinical trend. Outcome-bearing sessions only (a started-then-
 // abandoned session has no reps/sets and would add spurious zero points). Input
 // is newest-first (the API orders started_at DESC), so each group is reversed to
 // oldest→newest for the time axis; groups are ordered by most-recent activity.
@@ -46,24 +97,32 @@ export function groupSessionsByExercise(sessions: TrendSession[]): TrendGroup[] 
   const real = sessions.filter((s) => s.setCount > 0 || s.totalReps > 0);
   const map = new Map<string, TrendSession[]>();
   for (const s of real) {
-    const arr = map.get(s.exerciseId) ?? [];
+    const key = sessionContext(s).contextKey;
+    const arr = map.get(key) ?? [];
     arr.push(s);
-    map.set(s.exerciseId, arr);
+    map.set(key, arr);
   }
-  return Array.from(map.values())
-    .map((list) => ({
-      exerciseId:   list[0].exerciseId,
-      exerciseName: list[0].exerciseName,
-      // Authoritative from the registry — NOT list[0].exerciseKind, which is
-      // derived from set_events and is null for an abandoned/legacy newest
-      // session (would mislabel e.g. an isometric card as dynamic). Fall back to
-      // the first session that does carry a kind, then null.
-      exerciseKind:
-        getExerciseDefinition(list[0].exerciseId)?.kind ??
-        list.find((s) => s.exerciseKind != null)?.exerciseKind ??
-        null,
-      sessions:     [...list].reverse(),
-    }))
+  return Array.from(map.entries())
+    .map(([contextKey, list]) => {
+      const context = sessionContext(list[0]);
+      return {
+        contextKey,
+        exerciseId: list[0].exerciseId,
+        exerciseName: list[0].exerciseName,
+        // Authoritative from the registry — NOT list[0].exerciseKind, which is
+        // derived from set_events and is null for an abandoned/legacy newest
+        // session (would mislabel e.g. an isometric card as dynamic). Fall back
+        // to the first session that does carry a kind, then null.
+        exerciseKind:
+          getExerciseDefinition(list[0].exerciseId)?.kind ??
+          list.find((s) => s.exerciseKind != null)?.exerciseKind ??
+          null,
+        prescribedSide: context.prescribedSide,
+        resistance: context.resistance,
+        exerciseConfigVersion: context.exerciseConfigVersion,
+        sessions: [...list].reverse(),
+      };
+    })
     .sort((a, b) =>
       b.sessions[b.sessions.length - 1].startedAt.localeCompare(
         a.sessions[a.sessions.length - 1].startedAt,
@@ -74,10 +133,26 @@ export function groupSessionsByExercise(sessions: TrendSession[]): TrendGroup[] 
 // The session's primary trend value: ROM (avgPeakValue) for dynamic exercises,
 // hold seconds for isometric. Null when the session didn't record it.
 function sessionPrimaryValue(s: TrendSession): number | null {
+  const side = s.prescribedSide ?? "both";
   if (s.exerciseKind === "isometric") {
-    return s.totalPairedHoldMs != null ? s.totalPairedHoldMs / 1000 : null;
+    const holdMs = prescribedValue(
+      side,
+      {
+        left: s.totalLeftHoldMs ?? s.totalPairedHoldMs,
+        right: s.totalRightHoldMs ?? s.totalPairedHoldMs,
+      },
+      s.totalPairedHoldMs,
+    );
+    return holdMs != null ? holdMs / 1000 : null;
   }
-  return s.avgPeakValue;
+  return prescribedValue(
+    side,
+    {
+      left: s.avgLeftPeakValue ?? s.avgPeakValue,
+      right: s.avgRightPeakValue ?? s.avgPeakValue,
+    },
+    s.avgPeakValue,
+  );
 }
 
 // Label / unit / whether the metric is an angle (the latter drives the badge
@@ -127,7 +202,14 @@ function fmtTrendDate(iso: string): string {
 }
 
 export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
-  const { exerciseId, exerciseName, exerciseKind, sessions } = group;
+  const {
+    exerciseId,
+    exerciseName,
+    exerciseKind,
+    prescribedSide,
+    resistance,
+    sessions,
+  } = group;
   const meta = primaryMetricMeta(exerciseId, exerciseKind);
   const isIso = exerciseKind === "isometric";
 
@@ -144,6 +226,13 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
           <h3 className="font-semibold text-green-700">{exerciseName}</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {prescribedSide === "both"
+              ? "Both sides"
+              : `${prescribedSide[0].toUpperCase()}${prescribedSide.slice(1)} side`}
+            {" · "}
+            {formatResistanceContext(resistance)}
+          </p>
           <p className="text-xs text-gray-400 mt-0.5">
             {sessions.length} session{sessions.length === 1 ? "" : "s"}
             {sessions.length > 1 && (
@@ -185,12 +274,21 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
 
           {!isIso && (
             <div>
-              <p className="text-xs font-medium text-gray-500 mb-1">Completed reps — left vs right</p>
+              <p className="text-xs font-medium text-gray-500 mb-1">
+                {prescribedSide === "both"
+                  ? "Completed reps — left vs right"
+                  : "Completed reps — prescribed side"}
+              </p>
               <TrendChart
-                series={[
-                  { label: "Left",  color: "#2563eb", values: sessions.map((s) => s.completeLeftReps) },
-                  { label: "Right", color: "#ea580c", values: sessions.map((s) => s.completeRightReps) },
-                ]}
+                series={prescribedOutcomeSides(prescribedSide).map((side) => ({
+                  label: sideLabel(side),
+                  color: side === "left" ? "#2563eb" : "#ea580c",
+                  values: sessions.map((session) =>
+                    side === "left"
+                      ? session.completeLeftReps
+                      : session.completeRightReps,
+                  ),
+                }))}
               />
             </div>
           )}

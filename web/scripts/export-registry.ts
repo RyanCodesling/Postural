@@ -8,7 +8,8 @@
  * registry also runs its startup validation, so a malformed registry fails
  * this export loudly.
  *
- * Output shape: { exercises: {...}, compensationBands: {...} }.
+ * Output shape:
+ * { registryVersion, exerciseConfigVersions, exercises, compensationBands }.
  *
  * Run from the web project root:
  *   npx tsx scripts/export-registry.ts
@@ -18,12 +19,18 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { COMPENSATION_BANDS, EXERCISE_REGISTRY } from "../src/lib/exercises/registry";
+import {
+  EXERCISE_CONFIG_VERSIONS,
+  REGISTRY_VERSION,
+} from "../src/lib/exercises/versioning";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> web/ -> Postural/ -> ml/config/registry.json
 const outPath = resolve(scriptDir, "../../ml/config/registry.json");
 
 const payload = {
+  registryVersion: REGISTRY_VERSION,
+  exerciseConfigVersions: EXERCISE_CONFIG_VERSIONS,
   exercises: EXERCISE_REGISTRY,
   compensationBands: COMPENSATION_BANDS,
 };
@@ -36,3 +43,4 @@ const bandMetrics = Object.keys(COMPENSATION_BANDS);
 console.log(`Wrote ${ids.length} exercises to ${outPath}`);
 console.log(`Exercises: ${ids.join(", ")}`);
 console.log(`Compensation bands: ${bandMetrics.join(", ")}`);
+console.log(`Registry version: ${REGISTRY_VERSION}`);

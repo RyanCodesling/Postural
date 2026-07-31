@@ -328,7 +328,16 @@ export default function AdminDashboard() {
     if (!targetUserId) return;
     try {
       const res = await fetch(`/api/users/${targetUserId}?permanent=true`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete user.");
+      const payload = (await res.json().catch(() => null)) as
+        | { error?: unknown }
+        | null;
+      if (!res.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : "Failed to delete user.",
+        );
+      }
       const deletedUser = users.find((u) => u.id === targetUserId);
       const deletedEmail = deletedUser?.email;
       
@@ -343,7 +352,11 @@ export default function AdminDashboard() {
     } catch (err) {
       console.error("Failed to delete user:", err);
       setStatusModalType("error");
-      setStatusModalMsg("Unable to delete user. Please try again.");
+      setStatusModalMsg(
+        err instanceof Error
+          ? err.message
+          : "Unable to delete user. Please try again.",
+      );
       setShowStatusModal(true);
     } finally {
       setIsFinalDeleteOpen(false);
@@ -1574,7 +1587,12 @@ export default function AdminDashboard() {
                     </div>
                     <h2 className="text-lg font-bold text-gray-900 mb-1">Delete User Account</h2>
                     <p className="text-sm text-gray-500 mb-5">
-                      Are you sure you want to permanently delete <span className="font-semibold text-gray-900">{targetUserName}</span>? This will remove all their records from the database.
+                      Permanent deletion is available only for archived accounts
+                      with no prescriptions, sessions, assigned patients, owned
+                      exercises or programs, or clinician reviews. Accounts with
+                      durable history remain archived. Check{" "}
+                      <span className="font-semibold text-gray-900">{targetUserName}</span>{" "}
+                      for eligibility?
                     </p>
                     <div className="flex gap-3">
                       <button
@@ -1610,7 +1628,9 @@ export default function AdminDashboard() {
                     </div>
                     <h2 className="text-lg font-bold text-gray-900 mb-1">WARNING: Permanent Deletion</h2>
                     <p className="text-sm text-red-600 mb-5 font-semibold">
-                      This action CANNOT be undone. All database records and session history for {targetUserName} will be lost forever.
+                      This removes the history-free account record for {targetUserName}{" "}
+                      and cannot be undone. The server will refuse deletion if any
+                      protected history or assignment is present.
                     </p>
                     <div className="flex gap-3">
                       <button

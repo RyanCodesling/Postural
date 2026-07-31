@@ -19,6 +19,10 @@ import {
   spanDays,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
+import {
+  parsePrescribedSide,
+  parseResistanceContext,
+} from "@/lib/prescriptionContext";
 
 type PatientExerciseAssignmentRequest = {
   exerciseId?: unknown;
@@ -31,6 +35,12 @@ type PatientExerciseAssignmentRequest = {
   intervalDays?: unknown;
   weekdays?: unknown;
   endDate?: unknown;
+  sequenceIndex?: unknown;
+  prescribedSide?: unknown;
+  resistanceType?: unknown;
+  resistanceValue?: unknown;
+  resistanceUnit?: unknown;
+  resistanceLabel?: unknown;
 };
 
 export async function GET(request: NextRequest) {
@@ -137,7 +147,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
-    const normalizedExercises = exercises.map((rawExercise: unknown) => {
+    let normalizedExercises;
+    try {
+      normalizedExercises = exercises.map((rawExercise: unknown, index: number) => {
       const exercise =
         rawExercise !== null && typeof rawExercise === "object"
           ? (rawExercise as PatientExerciseAssignmentRequest)
@@ -180,6 +192,10 @@ export async function POST(request: NextRequest) {
           )
         : [];
       const endDate = isDateKey(exercise.endDate) ? exercise.endDate : undefined;
+      const sequenceIndex =
+        exercise.sequenceIndex === undefined || exercise.sequenceIndex === null
+          ? index + 1
+          : Number(exercise.sequenceIndex);
 
       return {
         exerciseId: exercise.exerciseId,
@@ -192,8 +208,17 @@ export async function POST(request: NextRequest) {
         intervalDays,
         weekdays,
         endDate,
+        sequenceIndex,
+        prescribedSide: parsePrescribedSide(exercise.prescribedSide),
+        resistance: parseResistanceContext(exercise),
       };
-    });
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid movement context." },
+        { status: 400 },
+      );
+    }
 
     const invalidExercise = normalizedExercises.find(
       (exercise) =>
@@ -204,11 +229,21 @@ export async function POST(request: NextRequest) {
         exercise.sets < 1 ||
         typeof exercise.reps !== "number" ||
         !Number.isFinite(exercise.reps) ||
-        exercise.reps < 1,
+        exercise.reps < 1 ||
+        !Number.isInteger(exercise.sequenceIndex) ||
+        exercise.sequenceIndex < 1,
     );
     if (invalidExercise) {
       return NextResponse.json(
         { error: "Each exercise requires exerciseId, sets, and reps" },
+        { status: 400 },
+      );
+    }
+
+    const sequenceIndexes = normalizedExercises.map((exercise) => exercise.sequenceIndex);
+    if (new Set(sequenceIndexes).size !== sequenceIndexes.length) {
+      return NextResponse.json(
+        { error: "Exercise order values must be unique." },
         { status: 400 },
       );
     }
@@ -254,6 +289,9 @@ export async function POST(request: NextRequest) {
         intervalDays: exercise.intervalDays,
         weekdays:    exercise.weekdays,
         endDate:     exercise.endDate as string | undefined,
+        sequenceIndex: exercise.sequenceIndex,
+        prescribedSide: exercise.prescribedSide,
+        resistance: exercise.resistance,
       })),
       user.id,
     );

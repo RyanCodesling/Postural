@@ -5,7 +5,23 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
-import type { DynamicRepQualityV1 } from "@/lib/pose/repQuality";
+import type { DynamicRepQuality } from "@/lib/pose/repQuality";
+import {
+  formatResistanceContext,
+  type PainReportStatus,
+  type PainTiming,
+  type PrescribedSide,
+  type ResistanceContext,
+  type SessionContextSnapshot,
+  type SessionEndReason,
+  type TherapistReviewLabel,
+} from "@/lib/prescriptionContext";
+import {
+  fullRomOutcomeText,
+  prescribedOutcomeSides,
+  shouldShowOutcomeAsymmetry,
+  sideLabel,
+} from "@/lib/sessionOutcomePresentation";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
 
@@ -27,7 +43,7 @@ interface PatientExercise {
   exercise_id: string;
   name: string;
   description: string;
-  status: "pending" | "in_progress" | "completed";
+  status: "pending" | "in_progress" | "completed" | "pain_stopped";
   sets: number;
   reps: number;
   rest_seconds: number;
@@ -37,8 +53,18 @@ interface PatientExercise {
   end_date: string | null;
   archived_at: string | null;
   monitoring_mode: "camera" | "manual";
+  prescribed_side: PrescribedSide;
+  resistance_type: ResistanceContext["type"];
+  resistance_value: number | string | null;
+  resistance_unit: ResistanceContext["unit"];
+  resistance_label: string | null;
   prescription_state: "upcoming" | "active" | "ended" | "archived";
-  adherence_state: "not_started" | "in_progress" | "partially_completed" | "completed";
+  adherence_state:
+    | "not_assessed"
+    | "not_started"
+    | "in_progress"
+    | "partially_completed"
+    | "completed";
   occurrence_summary: {
     scheduled: number;
     completed: number;
@@ -46,6 +72,7 @@ interface PatientExercise {
     inProgress: number;
     remaining: number;
     cancelled: number;
+    painStopped: number;
   };
 }
 
@@ -57,6 +84,7 @@ interface SessionSummary {
   exerciseKind: "dynamic" | "isometric" | null;
   startedAt: string;
   endedAt: string | null;
+  endReason: SessionEndReason | null;
   durationMs: number | null;
   setCount: number;
   totalReps: number;
@@ -66,11 +94,37 @@ interface SessionSummary {
   completeLeftReps: number;
   completeRightReps: number;
   avgPeakValue: number | null;
+  avgLeftPeakValue: number | null;
+  avgRightPeakValue: number | null;
   totalPairedHoldMs: number | null;
   totalTargetHoldMs: number | null;
+  totalLeftHoldMs: number | null;
+  totalRightHoldMs: number | null;
   avgAsymmetryIndex: number | null;
   // Rule-based compensation score (0–100), only present for isometric sessions.
   avgCompensationScore: number | null;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
+  comparableContextKey: string;
+  exerciseConfigVersion: string | null;
+  painReport: {
+    status: PainReportStatus;
+    score: number | null;
+    timing: PainTiming | null;
+    bodyArea: string | null;
+    reportedAt: string | null;
+  };
+  reviewScore: number | null;
+  reviewScoreSource: "raw_rule_v1" | "hold_rule_v1" | null;
+  latestReview: SessionReview | null;
+}
+
+interface SessionReview {
+  id?: number;
+  label: TherapistReviewLabel;
+  scoreSource: "raw_rule_v1" | "hold_rule_v1";
+  scoreValue: number;
+  createdAt: string;
 }
 
 // Per-arm hold-quality summary stored on isometric set rows.
@@ -115,7 +169,7 @@ interface SessionRepDetail {
   peakValue: number | null;
   targetRom: number | null;
   classification: "complete" | "partial";
-  compensations: DynamicRepQualityV1 | null;
+  compensations: DynamicRepQuality | null;
 }
 interface SessionDetail {
   id: number;
@@ -123,10 +177,23 @@ interface SessionDetail {
   exerciseName: string;
   startedAt: string;
   endedAt: string | null;
+  endReason: SessionEndReason | null;
+  context: SessionContextSnapshot | null;
+  registryVersion: string | null;
+  exerciseConfigVersion: string | null;
+  appRevision: string | null;
+  painReport: {
+    status: PainReportStatus;
+    score: number | null;
+    timing: PainTiming | null;
+    bodyArea: string | null;
+    reportedAt: string | null;
+  };
   captureQuality: { framesTotal: number; framesOk: number; pctOk: number } | null;
   deviceContext: { browser: string; platform: string } | null;
   sets: SessionSetDetail[];
   reps: SessionRepDetail[];
+  reviews: SessionReview[];
 }
 
 function formatDateKey(value: string | null): string {
@@ -138,12 +205,36 @@ function formatDateKey(value: string | null): string {
   });
 }
 
+function patientExerciseResistance(exercise: PatientExercise): ResistanceContext {
+  const parsedValue =
+    exercise.resistance_value == null ? null : Number(exercise.resistance_value);
+  return {
+    type: exercise.resistance_type ?? "unknown",
+    value:
+      parsedValue !== null && Number.isFinite(parsedValue) ? parsedValue : null,
+    unit: exercise.resistance_unit ?? null,
+    label: exercise.resistance_label ?? null,
+  };
+}
+
+function prescribedSideText(side: PrescribedSide): string {
+  if (side === "both") return "Both sides";
+  return `${side[0].toUpperCase()}${side.slice(1)} side`;
+}
+
 function adherenceSummaryText(exercise: PatientExercise): string {
   const summary = exercise.occurrence_summary;
   if (summary.scheduled === 0) return "No scheduled occurrences";
-  const parts = [`${summary.completed} of ${summary.scheduled} completed`];
+  const assessed = Math.max(0, summary.scheduled - summary.painStopped);
+  const parts =
+    assessed > 0
+      ? [`${summary.completed} of ${assessed} assessed occurrence${assessed === 1 ? "" : "s"} completed`]
+      : ["No occurrence outcome assessed"];
   if (summary.missed > 0) parts.push(`${summary.missed} missed`);
   if (summary.remaining > 0) parts.push(`${summary.remaining} remaining`);
+  if (summary.painStopped > 0) {
+    parts.push(`${summary.painStopped} stopped for pain`);
+  }
   if (summary.cancelled > 0) parts.push(`${summary.cancelled} cancelled when ended`);
   return parts.join(" · ");
 }
@@ -201,6 +292,23 @@ export default function PatientDetailPage() {
     void loadData();
   }, [patientId]);
 
+  const refreshSessionDetail = async (id: number) => {
+    setLoadingDetailId(id);
+    try {
+      const res = await fetch(`/api/sessions/${id}`);
+      if (res.ok) {
+        const d = await res.json();
+        if (d.session) {
+          setSessionDetails((prev) => ({ ...prev, [id]: d.session }));
+        }
+      }
+    } catch (err) {
+      console.error("Error loading session detail:", err);
+    } finally {
+      setLoadingDetailId(null);
+    }
+  };
+
   // Toggle a session row open; lazily fetch its detail on first expand.
   const toggleSession = async (id: number) => {
     if (expandedSessionId === id) {
@@ -208,20 +316,7 @@ export default function PatientDetailPage() {
       return;
     }
     setExpandedSessionId(id);
-    if (!sessionDetails[id]) {
-      setLoadingDetailId(id);
-      try {
-        const res = await fetch(`/api/sessions/${id}`);
-        if (res.ok) {
-          const d = await res.json();
-          if (d.session) setSessionDetails((prev) => ({ ...prev, [id]: d.session }));
-        }
-      } catch (err) {
-        console.error("Error loading session detail:", err);
-      } finally {
-        setLoadingDetailId(null);
-      }
-    }
+    if (!sessionDetails[id]) await refreshSessionDetail(id);
   };
 
   const scrollToSessions = () => {
@@ -423,6 +518,10 @@ export default function PatientDetailPage() {
                     })} · {ex.rest_seconds}s rest
                   </p>
                   <p className="mt-1 text-xs text-gray-500">
+                    {prescribedSideText(ex.prescribed_side ?? "both")} ·{" "}
+                    {formatResistanceContext(patientExerciseResistance(ex))}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
                     {formatDateKey(ex.start_date ?? ex.assigned_date)} to {formatDateKey(ex.end_date ?? ex.assigned_date)}
                   </p>
                   <p className="mt-1 text-xs text-gray-500">{adherenceSummaryText(ex)}</p>
@@ -455,6 +554,10 @@ export default function PatientDetailPage() {
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {prescribedSideText(ex.prescribed_side ?? "both")} ·{" "}
+                    {formatResistanceContext(patientExerciseResistance(ex))}
+                  </p>
                   <p className="mt-1 text-sm text-gray-500">{adherenceSummaryText(ex)}</p>
                   <p className="mt-1 text-xs text-gray-400">
                     Scheduled through {formatDateKey(ex.end_date ?? ex.assigned_date)}
@@ -571,7 +674,7 @@ export default function PatientDetailPage() {
         ) : (
           <div className="space-y-5">
             {trendGroups.map((g) => (
-              <ExerciseTrendCard key={g.exerciseId} group={g} />
+              <ExerciseTrendCard key={g.contextKey} group={g} />
             ))}
           </div>
         )}
@@ -597,6 +700,7 @@ export default function PatientDetailPage() {
                 detail={sessionDetails[s.id] ?? null}
                 loadingDetail={loadingDetailId === s.id}
                 onToggle={() => toggleSession(s.id)}
+                onDetailChanged={() => refreshSessionDetail(s.id)}
               />
             ))}
           </div>
@@ -649,14 +753,34 @@ function SessionCard({
   detail,
   loadingDetail,
   onToggle,
+  onDetailChanged,
 }: {
   session: SessionSummary;
   expanded: boolean;
   detail: SessionDetail | null;
   loadingDetail: boolean;
   onToggle: () => void;
+  onDetailChanged: () => Promise<void>;
 }) {
   const isIsometric = session.exerciseKind === "isometric";
+  const outcomeSides = prescribedOutcomeSides(session.prescribedSide);
+  const repCountBySide = {
+    left: session.leftReps,
+    right: session.rightReps,
+  };
+  const completeBySide = {
+    left: session.completeLeftReps,
+    right: session.completeRightReps,
+  };
+  const peakBySide = {
+    left: session.avgLeftPeakValue,
+    right: session.avgRightPeakValue,
+  };
+  const holdMsBySide = {
+    left: session.totalLeftHoldMs ?? session.totalPairedHoldMs ?? 0,
+    right: session.totalRightHoldMs ?? session.totalPairedHoldMs ?? 0,
+  };
+  const angleUnit = isAngleUnit(session.exerciseId);
 
   return (
     <div className="rounded-xl border border-gray-100 overflow-hidden">
@@ -673,34 +797,48 @@ function SessionCard({
                 incomplete
               </span>
             )}
+            {session.endReason === "pain" && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-red-100 text-red-700 font-semibold">
+                stopped for pain
+              </span>
+            )}
+            {session.latestReview && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-700 font-medium">
+                clinician reviewed
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">{fmtDateTime(session.startedAt)}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {prescribedSideText(session.prescribedSide)} ·{" "}
+            {formatResistanceContext(session.resistance)}
+          </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-gray-600">
             <span>{fmtDuration(session.durationMs)}</span>
             <span>{session.setCount} set{session.setCount === 1 ? "" : "s"}</span>
             {isIsometric ? (
-              <span>
-                held {Math.round((session.totalPairedHoldMs ?? 0) / 1000)}s
-                {session.totalTargetHoldMs
-                  ? ` / ${Math.round(session.totalTargetHoldMs / 1000)}s`
-                  : ""}
-              </span>
+              outcomeSides.map((side) => (
+                <span key={side}>
+                  {sideLabel(side)} held {Math.round(holdMsBySide[side] / 1000)}s
+                  {session.totalTargetHoldMs
+                    ? ` / ${Math.round(session.totalTargetHoldMs / 1000)}s`
+                    : ""}
+                </span>
+              ))
             ) : (
               <>
-                {/* Per-side complete/total — never a summed bilateral counter
-                    (preserves the L/R asymmetry signal). */}
-                <span>
-                  L {session.completeLeftReps}/{session.leftReps} complete
-                </span>
-                <span>
-                  R {session.completeRightReps}/{session.rightReps} complete
-                </span>
-                {session.avgPeakValue !== null && (
-                  <span>
-                    avg peak {session.avgPeakValue.toFixed(1)}
-                    {isAngleUnit(session.exerciseId) ? "°" : ""}
+                {outcomeSides.map((side) => (
+                  <span key={side}>
+                    {sideLabel(side)}{" "}
+                    {fullRomOutcomeText(
+                      completeBySide[side],
+                      repCountBySide[side],
+                    )}
+                    {peakBySide[side] !== null
+                      ? ` · avg peak ${peakBySide[side]!.toFixed(angleUnit ? 1 : 2)}${angleUnit ? "°" : ""}`
+                      : ""}
                   </span>
-                )}
+                ))}
               </>
             )}
           </div>
@@ -714,7 +852,12 @@ function SessionCard({
           {loadingDetail && !detail ? (
             <p className="text-sm text-gray-400">Loading session detail…</p>
           ) : detail ? (
-            <SessionDetailBody detail={detail} />
+            <SessionDetailBody
+              detail={detail}
+              reviewScore={session.reviewScore}
+              reviewScoreSource={session.reviewScoreSource}
+              onDetailChanged={onDetailChanged}
+            />
           ) : (
             <p className="text-sm text-gray-400">Could not load session detail.</p>
           )}
@@ -724,26 +867,187 @@ function SessionCard({
   );
 }
 
-function SessionDetailBody({ detail }: { detail: SessionDetail }) {
+function SessionDetailBody({
+  detail,
+  reviewScore,
+  reviewScoreSource,
+  onDetailChanged,
+}: {
+  detail: SessionDetail;
+  reviewScore: number | null;
+  reviewScoreSource: "raw_rule_v1" | "hold_rule_v1" | null;
+  onDetailChanged: () => Promise<void>;
+}) {
+  const prescribedSide =
+    detail.context?.prescription.prescribedSide ?? "both";
   const outcomeRows = detail.sets.length > 0 ? (
     detail.sets.map((set) => (
       <SetRow
         key={set.setIndex}
         set={set}
         reps={detail.reps.filter((rep) => rep.setIndex === set.setIndex)}
+        prescribedSide={prescribedSide}
       />
     ))
   ) : detail.reps.length > 0 ? (
     // Legacy/edge sessions may have rep records but no set records.
-    <RepFallbackList reps={detail.reps} />
+    <RepFallbackList reps={detail.reps} prescribedSide={prescribedSide} />
   ) : (
     <p className="text-sm text-gray-400">No set or rep records for this session.</p>
   );
 
   return (
     <div className="space-y-3">
+      <SessionPrescriptionContext detail={detail} />
+      <SessionPainReport detail={detail} />
       <SessionCaptureContext detail={detail} />
       {outcomeRows}
+      <SessionReviewPanel
+        sessionId={detail.id}
+        reviews={detail.reviews}
+        score={reviewScore}
+        scoreSource={reviewScoreSource}
+        onReviewed={onDetailChanged}
+      />
+    </div>
+  );
+}
+
+function SessionPrescriptionContext({ detail }: { detail: SessionDetail }) {
+  const context = detail.context;
+  if (!context) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+        Prescription and scoring context is unavailable for this legacy session.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
+      <p className="font-semibold text-gray-800">Recorded session context</p>
+      <p className="mt-1">
+        {prescribedSideText(context.prescription.prescribedSide)} ·{" "}
+        {formatResistanceContext(context.prescription.resistance)} ·{" "}
+        {context.prescription.sets} set
+        {context.prescription.sets === 1 ? "" : "s"} · registry{" "}
+        {detail.registryVersion?.slice(0, 12) ?? "unversioned"}
+      </p>
+      <p className="mt-1 text-gray-400">
+        This snapshot is fixed to the session; later prescription or threshold
+        edits do not rewrite it.
+      </p>
+    </div>
+  );
+}
+
+function SessionPainReport({ detail }: { detail: SessionDetail }) {
+  const report = detail.painReport;
+  if (detail.endReason !== "pain" && report.status !== "reported") return null;
+  return (
+    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+      <p className="font-semibold">Pain follow-up required before rescheduling</p>
+      {report.status === "reported" ? (
+        <p className="mt-1">
+          Score {report.score}/10 · {report.timing?.replace("_", " ")}
+          {report.bodyArea ? ` · ${report.bodyArea}` : ""}
+        </p>
+      ) : (
+        <p className="mt-1">
+          The patient stopped the attempt for pain but did not submit the optional
+          detail form.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const REVIEW_OPTIONS: Array<{
+  label: TherapistReviewLabel;
+  text: string;
+}> = [
+  { label: "agree", text: "Agree" },
+  { label: "worse_than_score", text: "Form was worse" },
+  { label: "better_than_score", text: "Form was better" },
+];
+
+function SessionReviewPanel({
+  sessionId,
+  reviews,
+  score,
+  scoreSource,
+  onReviewed,
+}: {
+  sessionId: number;
+  reviews: SessionReview[];
+  score: number | null;
+  scoreSource: "raw_rule_v1" | "hold_rule_v1" | null;
+  onReviewed: () => Promise<void>;
+}) {
+  const [saving, setSaving] = useState<TherapistReviewLabel | null>(null);
+  const [error, setError] = useState("");
+  const latest = reviews.at(-1) ?? null;
+
+  const submit = async (label: TherapistReviewLabel) => {
+    setSaving(label);
+    setError("");
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "Could not save the clinician review.");
+      }
+      await onReviewed();
+    } catch (reviewError) {
+      setError(
+        reviewError instanceof Error
+          ? reviewError.message
+          : "Could not save the clinician review.",
+      );
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-white p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-semibold text-gray-800">Clinician score review</p>
+          <p className="mt-1 text-gray-500">
+            {score !== null
+              ? `Rule score ${Math.round(score)}/100 (${scoreSource === "raw_rule_v1" ? "raw rep coverage" : "hold rule"}).`
+              : "No sufficiently covered rule score is available."}
+          </p>
+        </div>
+        {latest && (
+          <span className="rounded-full bg-blue-100 px-2 py-1 font-medium text-blue-700">
+            Latest: {REVIEW_OPTIONS.find((option) => option.label === latest.label)?.text}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {REVIEW_OPTIONS.map((option) => (
+          <button
+            key={option.label}
+            type="button"
+            disabled={score === null || saving !== null}
+            onClick={() => submit(option.label)}
+            className="rounded-md border border-blue-200 px-2.5 py-1.5 font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {saving === option.label ? "Saving…" : option.text}
+          </button>
+        ))}
+      </div>
+      {reviews.length > 1 && (
+        <p className="mt-2 text-gray-400">
+          {reviews.length} append-only reviews retained for audit.
+        </p>
+      )}
+      {error && <p className="mt-2 text-red-600">{error}</p>}
     </div>
   );
 }
@@ -784,7 +1088,13 @@ function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
 
 // Fallback for sessions that have rep_events but no set_events: group reps by
 // their set index and show a compact per-set summary.
-function RepFallbackList({ reps }: { reps: SessionRepDetail[] }) {
+function RepFallbackList({
+  reps,
+  prescribedSide,
+}: {
+  reps: SessionRepDetail[];
+  prescribedSide: PrescribedSide;
+}) {
   const bySet = new Map<number, SessionRepDetail[]>();
   for (const rep of reps) {
     const arr = bySet.get(rep.setIndex) ?? [];
@@ -797,15 +1107,31 @@ function RepFallbackList({ reps }: { reps: SessionRepDetail[] }) {
       <p className="text-xs text-gray-400">No set records — reconstructed from reps.</p>
       {setIndexes.map((idx) => {
         const group = bySet.get(idx)!;
-        const left = group.filter((r) => r.side === "left").length;
-        const right = group.filter((r) => r.side === "right").length;
-        const complete = group.filter((r) => r.classification === "complete").length;
-        const formScore = meanRawRuleScore(group);
+        const outcomeSides = prescribedOutcomeSides(prescribedSide);
+        const outcomeReps = group.filter(
+          (rep) =>
+            rep.side !== "left" ||
+            outcomeSides.includes("left"),
+        ).filter(
+          (rep) =>
+            rep.side !== "right" ||
+            outcomeSides.includes("right"),
+        );
+        const formScore = meanRawRuleScore(outcomeReps);
         return (
           <div key={idx} className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
             <span className="font-semibold text-gray-800">Set {idx}</span>{" "}
             <span className="text-gray-600">
-              {group.length} rep{group.length === 1 ? "" : "s"} · L {left} / R {right} · {complete} complete
+              {outcomeSides.map((side) => {
+                const sideReps = group.filter((rep) => rep.side === side);
+                const complete = sideReps.filter(
+                  (rep) => rep.classification === "complete",
+                ).length;
+                return `${sideLabel(side)} ${fullRomOutcomeText(
+                  complete,
+                  sideReps.length,
+                )}`;
+              }).join(" · ")}
               {formScore !== null ? ` · avg form ${formScore}/100` : ""}
             </span>
           </div>
@@ -831,25 +1157,61 @@ function meanRawRuleScore(reps: SessionRepDetail[]): number | null {
 function SetRow({
   set,
   reps,
+  prescribedSide,
 }: {
   set: SessionSetDetail;
   reps: SessionRepDetail[];
+  prescribedSide: PrescribedSide;
 }) {
   const isIso = set.exerciseKind === "isometric";
-  const formScore = isIso ? null : meanRawRuleScore(reps);
+  const outcomeSides = prescribedOutcomeSides(prescribedSide);
+  const outcomeReps = reps.filter(
+    (rep) =>
+      (rep.side !== "left" && rep.side !== "right") ||
+      outcomeSides.includes(rep.side),
+  );
+  const formScore = isIso ? null : meanRawRuleScore(outcomeReps);
+  const setRepsBySide = {
+    left: set.leftReps,
+    right: set.rightReps,
+  };
+  const holdMsBySide = {
+    left:
+      typeof set.holdQuality?.leftInBandMs === "number"
+        ? set.holdQuality.leftInBandMs
+        : set.pairedHoldMs,
+    right:
+      typeof set.holdQuality?.rightInBandMs === "number"
+        ? set.holdQuality.rightInBandMs
+        : set.pairedHoldMs,
+  };
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
         <span className="font-semibold text-gray-800">Set {set.setIndex}</span>
         {isIso ? (
-          <span className="text-gray-600">
-            held {Math.round(set.pairedHoldMs / 1000)}s
-            {set.targetHoldMs ? ` / ${Math.round(set.targetHoldMs / 1000)}s` : ""}
-          </span>
+          outcomeSides.map((side) => (
+            <span key={side} className="text-gray-600">
+              {sideLabel(side)} held {Math.round(holdMsBySide[side] / 1000)}s
+              {set.targetHoldMs ? ` / ${Math.round(set.targetHoldMs / 1000)}s` : ""}
+            </span>
+          ))
         ) : (
           <>
-            <span className="text-gray-600">L {set.leftReps} / R {set.rightReps} reps</span>
-            {set.asymmetryIndex !== null && (
+            {outcomeSides.map((side) => {
+              const complete = reps.filter(
+                (rep) =>
+                  rep.side === side && rep.classification === "complete",
+              ).length;
+              return (
+                <span key={side} className="text-gray-600">
+                  {sideLabel(side)}{" "}
+                  {fullRomOutcomeText(complete, setRepsBySide[side])}
+                </span>
+              );
+            })}
+            {shouldShowOutcomeAsymmetry(prescribedSide) &&
+              set.asymmetryIndex !== null && (
               <span className="text-gray-500">
                 asymmetry {Math.round(set.asymmetryIndex * 100)}%
               </span>
@@ -863,7 +1225,9 @@ function SetRow({
       </div>
 
       {/* Isometric hold-quality grid */}
-      {isIso && set.holdQuality && <HoldQualityGrid hq={set.holdQuality} />}
+      {isIso && set.holdQuality && (
+        <HoldQualityGrid hq={set.holdQuality} prescribedSide={prescribedSide} />
+      )}
     </div>
   );
 }
@@ -878,7 +1242,13 @@ function secs(v: unknown, digits = 0): string {
   return typeof v === "number" && Number.isFinite(v) ? `${(v / 1000).toFixed(digits)}s` : "—";
 }
 
-function HoldQualityGrid({ hq }: { hq: HoldQuality }) {
+function HoldQualityGrid({
+  hq,
+  prescribedSide,
+}: {
+  hq: HoldQuality;
+  prescribedSide: PrescribedSide;
+}) {
   const sideText = (s: HoldSideQuality | null) => {
     if (!s || typeof s !== "object") return "—";
     return `mean ${unit(s.meanDeg, 0, "°")} · err ${unit(s.meanErrorDeg, 0, "°")} · steadiness ${unit(s.sdDeg, 1, "°")} · droop ${unit(s.droopSlopeDegPerSec, 2, "°/s")}`;
@@ -887,8 +1257,12 @@ function HoldQualityGrid({ hq }: { hq: HoldQuality }) {
     typeof hq.dropCount === "number" && Number.isFinite(hq.dropCount) ? hq.dropCount : null;
   return (
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600">
-      <div><span className="text-gray-400">Left arm:</span> {sideText(hq.left)}</div>
-      <div><span className="text-gray-400">Right arm:</span> {sideText(hq.right)}</div>
+      {prescribedOutcomeSides(prescribedSide).map((side) => (
+        <div key={side}>
+          <span className="text-gray-400">{sideLabel(side)} arm:</span>{" "}
+          {sideText(hq[side])}
+        </div>
+      ))}
       <div>
         <span className="text-gray-400">Out of position:</span>{" "}
         {secs(hq.outOfPositionMs)}

@@ -7,8 +7,9 @@
 //   session_<id>_meta.json     — session metadata (exercise, start/end, reason)
 //
 // The frames are RAW/unsmoothed metric values captured by the camera's
-// "Record tuning trace" toggle (trace_kind upper_body_v2) or the original
-// ex_007-only trace (ex_007_upper_body_v1). No image data exists in the DB.
+// "Record tuning trace" toggle (current trace_kind upper_body_v3), its
+// upper_body_v2 predecessor, or the original ex_007-only trace
+// (ex_007_upper_body_v1). No image data exists in the DB.
 //
 // Run from Postural/web:
 //   npx tsx scripts/export-tuning-traces.ts --exercise ex_001 [--session N] [--since YYYY-MM-DD]
@@ -18,7 +19,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 
-const TRACE_KINDS = ["ex_007_upper_body_v1", "upper_body_v2"];
+const TRACE_KINDS = [
+  "ex_007_upper_body_v1",
+  "upper_body_v2",
+  "upper_body_v3",
+];
 
 // ── DATABASE_URL (from env, else parse web/.env.local — same as seedDemo.ts) ─
 function resolveDatabaseUrl(): string {

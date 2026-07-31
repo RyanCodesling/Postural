@@ -5,8 +5,9 @@ These pin the parts most prone to silent drift against the live system's
 semantics: the scapularElevation sign convention (scored value =
 baseline_raw - raw, positive = shrug), ex_005's neutral-baseline-relative
 primary, the rep-window join (including side matching and rest frames), the
-per-limb two-rows-per-frame shape, and acceptance of the original v1
-(ex_007-only) payload that carries no baselines.
+    per-limb two-rows-per-frame shape, current v3 payload acceptance, and
+    acceptance of the original v1 (ex_007-only) payload that carries no
+    baselines.
 """
 from __future__ import annotations
 
@@ -51,7 +52,7 @@ def _frame(seconds: float, set_index: int, metrics: dict) -> dict:
         "set_index": set_index,
         "elapsed_ms": int(seconds * 1000),
         "captured_at": _ts(seconds),
-        "trace_kind": "upper_body_v2",
+        "trace_kind": "upper_body_v3",
         "metrics": metrics,
         "landmarks": {},
     }
@@ -168,6 +169,40 @@ def test_v1_payload_accepted_with_nan_scap(tmp_path):
     assert left["elbowFlexion"] == 170.0
     # No baselines in v1 -> scap channel unavailable, not fabricated.
     assert "scapularElevation" not in df.columns or df["scapularElevation"].isna().all()
+
+
+def test_v3_frozen_tilt_metadata_does_not_change_feature_mapping(tmp_path):
+    metrics = _ex001_metrics(0.28, 0.30)
+    metrics.update(
+        {
+            "metricAlgorithmVersion": "pose_metrics_v2_frozen_neutral_tilt",
+            "tilt": {
+                "cameraTiltDeg": 4.5,
+                "observedCameraTiltDeg": 7.0,
+                "confidence": "high",
+                "source": "average",
+                "divergenceDeg": 1.0,
+            },
+            "calibration": {
+                "sampleCount": 20,
+                "validElapsedMs": 3000,
+                "frozenCameraTiltDeg": 4.5,
+            },
+        }
+    )
+    _write_session(
+        tmp_path,
+        "ex_001",
+        5,
+        [_frame(0.0, 1, metrics)],
+        [_rep(1, "left", 0.0, 1.0)],
+    )
+
+    df = real_frames("ex_001", data_dir=tmp_path)
+
+    assert len(df) == 2
+    assert np.allclose(df["primary"], [45.0, 50.0])
+    assert np.allclose(df["trunkLean"], [3.0, 3.0])
 
 
 def test_verdict_table_smoke(tmp_path):

@@ -11,11 +11,37 @@ import {
   summarizePrescription,
   type PrescriptionOccurrenceLite,
 } from "@/lib/exercises/prescriptionStatus";
-import type { DynamicRepQualityV1 } from "@/lib/pose/repQuality";
+import type { DynamicRepQuality } from "@/lib/pose/repQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import {
   parseCaptureQualitySummary,
   summarizeDeviceInfo,
 } from "@/lib/sessionReadModels";
+import {
+  PRESCRIPTION_SNAPSHOT_VERSION,
+  REP_QUALITY_VERSION,
+  SESSION_CONTEXT_VERSION,
+  comparableContextKey,
+  resistanceContextFromRow,
+  type PainReportStatus,
+  type PainTiming,
+  type PrescribedSide,
+  type PrescriptionSnapshot,
+  type PrescriptionSnapshotV2,
+  type ResistanceContext,
+  type RuntimePrescription,
+  type SessionContextSnapshot,
+  type SessionContextSnapshotV2,
+  type SessionEndReason,
+  type TherapistReviewLabel,
+} from "@/lib/prescriptionContext";
+import { getExerciseDefinition } from "@/lib/exercises/registry";
+import {
+  EXERCISE_CONFIG_VERSIONS,
+  REGISTRY_VERSION,
+  effectiveCompensationBands,
+  getAppRevision,
+} from "@/lib/exercises/versioning";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -221,8 +247,117 @@ export async function updateUser(id: string, data: Partial<{
   return result.rows.length > 0 ? mapUser(result.rows[0]) : null;
 }
 
-export async function deleteUser(id: string) {
-  await pool.query("DELETE FROM users WHERE id = $1", [id]);
+export type PermanentUserDeletionBlocker =
+  | "patient_prescriptions"
+  | "patient_sessions"
+  | "assigned_patients"
+  | "owned_programs"
+  | "owned_exercises"
+  | "therapist_reviews";
+
+export type PermanentUserDeletionErrorCode =
+  | "not_found"
+  | "self_delete"
+  | "not_archived"
+  | "durable_history";
+
+export class PermanentUserDeletionError extends Error {
+  constructor(
+    public readonly code: PermanentUserDeletionErrorCode,
+    message: string,
+    public readonly blockers: PermanentUserDeletionBlocker[] = [],
+  ) {
+    super(message);
+    this.name = "PermanentUserDeletionError";
+  }
+}
+
+/**
+ * Permanently remove only an already-archived, history-free account.
+ *
+ * The target row is locked until the relationship checks and DELETE complete.
+ * Durable clinical/assignment relationships are protected both here (for a
+ * useful conflict response) and by ON DELETE RESTRICT constraints (for race
+ * safety). Ephemeral notifications/tokens may still use ON DELETE CASCADE.
+ */
+export async function deleteUser(id: string, actorId: string) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const target = await client.query(
+      `SELECT *
+         FROM users
+        WHERE id = $1
+        FOR UPDATE`,
+      [id],
+    );
+    if (target.rows.length === 0) {
+      throw new PermanentUserDeletionError(
+        "not_found",
+        "User not found.",
+      );
+    }
+    if (id === actorId) {
+      throw new PermanentUserDeletionError(
+        "self_delete",
+        "You cannot permanently delete your own account.",
+      );
+    }
+    if (target.rows[0].is_archived !== true) {
+      throw new PermanentUserDeletionError(
+        "not_archived",
+        "Archive this account before requesting permanent deletion.",
+      );
+    }
+
+    const relationships = await client.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM patient_exercises WHERE patient_id = $1) AS patient_prescriptions,
+         EXISTS (SELECT 1 FROM sessions WHERE patient_id = $1) AS patient_sessions,
+         EXISTS (SELECT 1 FROM users WHERE therapist_id = $1) AS assigned_patients,
+         EXISTS (SELECT 1 FROM exercise_programs WHERE therapist_id = $1) AS owned_programs,
+         EXISTS (SELECT 1 FROM exercises WHERE owner_therapist_id = $1) AS owned_exercises,
+         EXISTS (SELECT 1 FROM session_reviews WHERE therapist_id = $1) AS therapist_reviews`,
+      [id],
+    );
+    const relationshipRow = relationships.rows[0] as Record<string, boolean>;
+    const blockerNames: PermanentUserDeletionBlocker[] = [
+      "patient_prescriptions",
+      "patient_sessions",
+      "assigned_patients",
+      "owned_programs",
+      "owned_exercises",
+      "therapist_reviews",
+    ];
+    const blockers = blockerNames.filter((name) => relationshipRow[name] === true);
+    if (blockers.length > 0) {
+      throw new PermanentUserDeletionError(
+        "durable_history",
+        "This account has durable clinical or assignment history and cannot be permanently deleted. Keep it archived.",
+        blockers,
+      );
+    }
+
+    await client.query("DELETE FROM users WHERE id = $1", [id]);
+    await client.query("COMMIT");
+    return mapUser(target.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "23503"
+    ) {
+      throw new PermanentUserDeletionError(
+        "durable_history",
+        "This account is still referenced by protected records and cannot be permanently deleted. Keep it archived.",
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function archiveUser(id: string) {
@@ -454,7 +589,7 @@ export async function archiveExercise(id: string, archivedBy: string): Promise<b
 export const DEFAULT_REST_SECONDS = 60;
 export const DEFAULT_HOLD_SECONDS = 30;
 
-type PatientExerciseAssignment = {
+export type PatientExerciseAssignment = {
   exerciseId: string;
   sets: number;
   reps: number;
@@ -468,6 +603,9 @@ type PatientExerciseAssignment = {
   intervalDays?: number; // interval mode; every N days
   weekdays?: number[];   // weekly mode; JS getDay() numbering 0=Sun..6=Sat
   endDate?: string;      // inclusive window end (YYYY-MM-DD)
+  sequenceIndex: number;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 };
 
 export class ExerciseAssignmentNotAllowedError extends Error {
@@ -544,6 +682,7 @@ export async function assignExercisesToPatient(
         ex.endDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.endDate) && ex.endDate >= startDate
           ? ex.endDate
           : startDate; // missing/invalid window collapses to a single day
+      const capturedAt = new Date().toISOString();
 
       // assigned_date keeps its meaning as the "first scheduled day" for display
       // and back-compat; the recurrence rule + window live alongside it. Status
@@ -552,8 +691,10 @@ export async function assignExercisesToPatient(
       const upsert = await client.query(
         `INSERT INTO patient_exercises
            (exercise_id, patient_id, sets, reps, rest_seconds, assigned_date, hold_seconds,
-            recurrence, interval_days, weekdays, start_date, end_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::smallint[], $11, $12)
+            recurrence, interval_days, weekdays, start_date, end_date,
+            sequence_index, prescribed_side, resistance_type, resistance_value, resistance_unit, resistance_label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::smallint[], $11, $12,
+                 $13, $14, $15, $16, $17, $18)
          ON CONFLICT (exercise_id, patient_id) WHERE archived_at IS NULL DO UPDATE
          SET sets          = EXCLUDED.sets,
              reps          = EXCLUDED.reps,
@@ -564,10 +705,18 @@ export async function assignExercisesToPatient(
              interval_days = EXCLUDED.interval_days,
              weekdays      = EXCLUDED.weekdays,
              start_date    = EXCLUDED.start_date,
-             end_date      = EXCLUDED.end_date
+             end_date      = EXCLUDED.end_date,
+             sequence_index = EXCLUDED.sequence_index,
+             prescribed_side = EXCLUDED.prescribed_side,
+             resistance_type = EXCLUDED.resistance_type,
+             resistance_value = EXCLUDED.resistance_value,
+             resistance_unit = EXCLUDED.resistance_unit,
+             resistance_label = EXCLUDED.resistance_label
          RETURNING id`,
         [ex.exerciseId, patientId, ex.sets, ex.reps, restSeconds, startDate, holdSeconds,
-         recurrence, intervalDays, weekdays, startDate, endDate]
+         recurrence, intervalDays, weekdays, startDate, endDate,
+         ex.sequenceIndex, ex.prescribedSide, ex.resistance.type, ex.resistance.value,
+         ex.resistance.unit, ex.resistance.label]
       );
       const patientExerciseId = upsert.rows[0].id as number;
 
@@ -585,14 +734,47 @@ export async function assignExercisesToPatient(
       );
       const schedule = generateSchedule({ recurrence, intervalDays, weekdays, startDate, endDate });
       for (const occ of schedule) {
+        const snapshot: PrescriptionSnapshotV2 = {
+          version: PRESCRIPTION_SNAPSHOT_VERSION,
+          capturedAt,
+          patientExerciseId,
+          exerciseId: ex.exerciseId,
+          sets: ex.sets,
+          reps: ex.reps,
+          restSeconds,
+          holdSeconds,
+          sequenceIndex: ex.sequenceIndex,
+          prescribedSide: ex.prescribedSide,
+          resistance: ex.resistance,
+          schedule: {
+            dueDate: occ.dueDate,
+            makeupUntil: occ.makeupUntil,
+          },
+        };
         await client.query(
-          `INSERT INTO exercise_occurrences (patient_exercise_id, due_date, makeup_until)
-           VALUES ($1, $2, $3)
+          `INSERT INTO exercise_occurrences
+             (patient_exercise_id, due_date, makeup_until, prescription_snapshot,
+              prescription_snapshot_version, prescription_captured_at)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (patient_exercise_id, due_date) DO UPDATE
              SET makeup_until = EXCLUDED.makeup_until,
+                 prescription_snapshot = EXCLUDED.prescription_snapshot,
+                 prescription_snapshot_version = EXCLUDED.prescription_snapshot_version,
+                 prescription_captured_at = EXCLUDED.prescription_captured_at,
                  cancelled_at = NULL,
-                 cancelled_by = NULL`,
-          [patientExerciseId, occ.dueDate, occ.makeupUntil]
+                 cancelled_by = NULL
+           -- Only an unstarted scheduled occurrence may adopt an edited
+           -- prescription. Once a session starts (in_progress) or reaches a
+           -- terminal outcome, its scheduled context is historical evidence.
+           WHERE exercise_occurrences.status = 'pending'`,
+          [
+            patientExerciseId,
+            occ.dueDate,
+            occ.makeupUntil,
+            JSON.stringify(snapshot),
+            PRESCRIPTION_SNAPSHOT_VERSION,
+            capturedAt,
+          ]
         );
       }
     }
@@ -655,13 +837,16 @@ export async function getPatientExercises(
     pool.query(
       `SELECT pe.id, pe.exercise_id, pe.patient_id, pe.assigned_date,
               pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+              pe.prescribed_side, pe.resistance_type, pe.resistance_value,
+              pe.resistance_unit, pe.resistance_label,
               pe.recurrence, pe.interval_days, pe.weekdays, pe.start_date, pe.end_date,
+              pe.sequence_index,
               pe.status AS stored_status, pe.archived_at,
               e.name, e.description, e.monitoring_mode
        FROM patient_exercises pe
        JOIN exercises e ON e.id = pe.exercise_id
        WHERE pe.patient_id = $1 ${activeOnly}
-       ORDER BY pe.id ASC`,
+       ORDER BY pe.sequence_index ASC, e.name ASC, e.id ASC, pe.id ASC`,
       [patientId]
     ),
     pool.query(
@@ -721,6 +906,7 @@ export async function getPatientExercises(
         inProgress: summary.inProgressCount,
         remaining: summary.remainingCount,
         cancelled: summary.cancelledCount,
+        painStopped: summary.painStoppedCount,
       },
     };
   });
@@ -734,7 +920,20 @@ export async function getPatientOccurrences(patientId: string) {
   const result = await pool.query(
     `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
             COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
-            pe.exercise_id, pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds,
+            eo.pain_stopped_at, eo.prescription_snapshot,
+            pe.exercise_id,
+            COALESCE((eo.prescription_snapshot ->> 'sets')::int, pe.sets) AS sets,
+            COALESCE((eo.prescription_snapshot ->> 'reps')::int, pe.reps) AS reps,
+            COALESCE((eo.prescription_snapshot ->> 'restSeconds')::int, pe.rest_seconds) AS rest_seconds,
+            COALESCE((eo.prescription_snapshot ->> 'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+            COALESCE((eo.prescription_snapshot ->> 'sequenceIndex')::int, pe.sequence_index) AS sequence_index,
+            COALESCE(eo.prescription_snapshot ->> 'prescribedSide', pe.prescribed_side) AS prescribed_side,
+            COALESCE(eo.prescription_snapshot -> 'resistance', jsonb_build_object(
+              'type', pe.resistance_type,
+              'value', pe.resistance_value,
+              'unit', pe.resistance_unit,
+              'label', pe.resistance_label
+            )) AS resistance,
             e.name, e.description, e.monitoring_mode
      FROM exercise_occurrences eo
      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
@@ -743,7 +942,11 @@ export async function getPatientOccurrences(patientId: string) {
        AND pe.archived_at IS NULL
        AND e.archived_at IS NULL
        AND eo.cancelled_at IS NULL
-     ORDER BY eo.due_date ASC, e.name ASC`,
+     ORDER BY eo.due_date ASC,
+       COALESCE((eo.prescription_snapshot ->> 'sequenceIndex')::int, pe.sequence_index) ASC,
+       e.name ASC,
+       e.id ASC,
+       eo.id ASC`,
     [patientId]
   );
   return result.rows;
@@ -765,8 +968,14 @@ export async function getPrograms(therapistId: string) {
                   'sets',        te.sets,
                   'reps',        te.reps,
                   'restSeconds', te.rest_seconds,
-                  'holdSeconds', te.hold_seconds
-                ) ORDER BY te.id
+                  'holdSeconds', te.hold_seconds,
+                  'sequenceIndex', te.sequence_index,
+                  'prescribedSide', te.prescribed_side,
+                  'resistanceType', te.resistance_type,
+                  'resistanceValue', te.resistance_value,
+                  'resistanceUnit', te.resistance_unit,
+                  'resistanceLabel', te.resistance_label
+                ) ORDER BY te.sequence_index, te.id
               ) FILTER (WHERE te.id IS NOT NULL),
               '[]'
             ) AS exercises
@@ -796,9 +1005,15 @@ interface ProgramExerciseRow {
   reps: number | null;
   restSeconds: number | null;
   holdSeconds: number | null;
+  sequenceIndex: number;
+  prescribedSide: PrescribedSide;
+  resistanceType: ResistanceContext["type"];
+  resistanceValue: number | null;
+  resistanceUnit: ResistanceContext["unit"];
+  resistanceLabel: string | null;
 }
 
-interface ProgramExerciseInput {
+export interface ProgramExerciseInput {
   exerciseId?: string;
   name: string;
   description?: string;
@@ -807,6 +1022,9 @@ interface ProgramExerciseInput {
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
+  sequenceIndex: number;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 }
 
 export class ProgramExerciseNotAllowedError extends Error {
@@ -847,8 +1065,10 @@ async function insertProgramExercises(
     const holdSeconds = normalizeHoldSeconds(ex.holdSeconds);
     await client.query(
       `INSERT INTO program_exercises
-         (program_id, exercise_id, name, description, is_custom, sets, reps, rest_seconds, hold_seconds)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         (program_id, exercise_id, name, description, is_custom, sets, reps,
+          rest_seconds, hold_seconds, sequence_index, prescribed_side, resistance_type,
+          resistance_value, resistance_unit, resistance_label)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [
         programId,
         ex.exerciseId ?? null,
@@ -859,6 +1079,12 @@ async function insertProgramExercises(
         ex.reps ?? null,
         ex.restSeconds != null && ex.restSeconds >= 0 ? ex.restSeconds : 60,
         holdSeconds,
+        ex.sequenceIndex,
+        ex.prescribedSide,
+        ex.resistance.type,
+        ex.resistance.value,
+        ex.resistance.unit,
+        ex.resistance.label,
       ]
     );
   }
@@ -944,7 +1170,7 @@ export type RepEventRow = {
   totalMs: number;
   classification: "complete" | "partial";
   /** Versioned dynamic-rep quality summary stored in the JSONB column. */
-  compensations?: DynamicRepQualityV1 | null;
+  compensations?: DynamicRepQuality | null;
   /** ISO-8601 wall-clock timestamps. */
   startTs: string;
   endTs: string;
@@ -964,7 +1190,7 @@ export type SetEventRow = {
   targetHoldMs: number;
   pairedHoldMs: number;
   durationMs: number;
-  terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
+  terminatedBy: "min_reached" | "user" | "pain" | "capture_lost" | "stall";
   asymmetryIndex: number;
   /**
    * Optional set-level hold-quality summary (isometric holds only). Free-form
@@ -1042,64 +1268,201 @@ export async function completeManualOccurrence(
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
+  occurrenceId: number;
   exerciseId: string;
   deviceInfo?: unknown;
-}): Promise<{ id: number; startedAt: string }> {
+}): Promise<{
+  id: number;
+  startedAt: string;
+  runtimePrescription: RuntimePrescription;
+  context: SessionContextSnapshotV2;
+}> {
   // Strict schedule lock: a patient may only start an exercise that has an
   // actionable occurrence today — due today, or earlier with its make-up window
   // still open. Future, missed, or unscheduled starts are refused. Occurrence
   // windows are disjoint and contiguous, so at most one can match.
   const today = todayKeyPH();
-  const occ = await pool.query(
-    `SELECT eo.id
-       FROM exercise_occurrences eo
-       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
-       JOIN exercises e ON e.id = pe.exercise_id
-      WHERE eo.patient_exercise_id = $1
-        AND pe.archived_at IS NULL
-        AND e.archived_at IS NULL
-        AND e.monitoring_mode = 'camera'
-        AND eo.cancelled_at IS NULL
-        AND eo.due_date <= $2::date
-        AND COALESCE(eo.makeup_until, eo.due_date) >= $2::date
-        AND eo.status <> 'completed'
-      ORDER BY eo.due_date ASC
-      LIMIT 1`,
-    [data.patientExerciseId, today]
-  );
-  if (occ.rows.length === 0) {
-    throw new SessionNotScheduledError();
-  }
-  const occurrenceId = occ.rows[0].id as number;
+  const definition = getExerciseDefinition(data.exerciseId);
+  if (!definition) throw new SessionNotScheduledError("This exercise cannot be camera monitored.");
 
-  const result = await pool.query(
-    `INSERT INTO sessions (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, started_at`,
-    [
-      data.patientId,
-      data.patientExerciseId,
-      data.exerciseId,
-      data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+  const client = await pool.connect();
+  let row: Record<string, unknown>;
+  let occurrenceId: number;
+  let runtimePrescription: RuntimePrescription;
+  let context: SessionContextSnapshotV2;
+  try {
+    await client.query("BEGIN");
+    const occ = await client.query(
+      `SELECT eo.id, eo.due_date, eo.status,
+              COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
+              eo.prescription_snapshot,
+              pe.id AS patient_exercise_id, pe.exercise_id,
+              pe.sets, pe.reps, pe.rest_seconds, pe.hold_seconds, pe.sequence_index,
+              pe.prescribed_side, pe.resistance_type, pe.resistance_value,
+              pe.resistance_unit, pe.resistance_label,
+              e.name
+         FROM exercise_occurrences eo
+         JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+         JOIN exercises e ON e.id = pe.exercise_id
+        WHERE eo.id = $1
+          AND eo.patient_exercise_id = $2
+          AND pe.patient_id = $3
+          AND pe.exercise_id = $4
+          AND pe.archived_at IS NULL
+          AND e.archived_at IS NULL
+          AND e.monitoring_mode = 'camera'
+          AND eo.cancelled_at IS NULL
+          AND eo.due_date <= $5::date
+          AND COALESCE(eo.makeup_until, eo.due_date) >= $5::date
+          AND eo.status IN ('pending', 'in_progress')
+        ORDER BY eo.due_date ASC
+        LIMIT 1
+        FOR UPDATE OF eo`,
+      [data.occurrenceId, data.patientExerciseId, data.patientId, data.exerciseId, today],
+    );
+    if (occ.rows.length === 0) throw new SessionNotScheduledError();
+
+    const occurrence = occ.rows[0] as Record<string, unknown>;
+    occurrenceId = Number(occurrence.id);
+    const existingSnapshot = occurrence.prescription_snapshot as
+      | PrescriptionSnapshot
+      | null;
+    const capturedAt = new Date().toISOString();
+    const prescription: PrescriptionSnapshotV2 =
+      existingSnapshot?.version === PRESCRIPTION_SNAPSHOT_VERSION
+        ? existingSnapshot
+        : existingSnapshot?.version === 1
+          ? {
+              ...existingSnapshot,
+              version: PRESCRIPTION_SNAPSHOT_VERSION,
+              sequenceIndex: Number(occurrence.sequence_index),
+            }
+        : {
+            version: PRESCRIPTION_SNAPSHOT_VERSION,
+            capturedAt,
+            patientExerciseId: Number(occurrence.patient_exercise_id),
+            exerciseId: String(occurrence.exercise_id),
+            sets: Number(occurrence.sets),
+            reps: Number(occurrence.reps),
+            restSeconds: Number(occurrence.rest_seconds),
+            holdSeconds: Number(occurrence.hold_seconds),
+            sequenceIndex: Number(occurrence.sequence_index),
+            prescribedSide: (occurrence.prescribed_side ?? "both") as PrescribedSide,
+            resistance: resistanceContextFromRow(occurrence),
+            schedule: {
+              dueDate: String(occurrence.due_date),
+              makeupUntil: String(occurrence.makeup_until),
+            },
+          };
+    const shouldPersistPrescriptionSnapshot =
+      occurrence.status === "pending" &&
+      (existingSnapshot === null || existingSnapshot.version === 1);
+
+    const exerciseConfigVersion = EXERCISE_CONFIG_VERSIONS[data.exerciseId];
+    context = {
+      version: SESSION_CONTEXT_VERSION,
+      capturedAt,
+      prescription,
+      schedule: {
+        dueDate: String(occurrence.due_date),
+        makeupUntil: String(occurrence.makeup_until),
+        startedDuringMakeupWindow: today > String(occurrence.due_date),
+      },
+      exercise: {
+        id: data.exerciseId,
+        name: String(occurrence.name),
+        kind: definition.kind,
+        bilateralMode:
+          definition.bilateral && definition.bilateralMode
+            ? definition.bilateralMode
+            : null,
+        definition,
+        effectiveCompensationBands: effectiveCompensationBands(definition),
+      },
+      versions: {
+        registry: REGISTRY_VERSION,
+        exerciseConfig: exerciseConfigVersion,
+        appRevision: getAppRevision(),
+        poseMetrics: POSE_METRIC_ALGORITHM_VERSION,
+        repQuality: REP_QUALITY_VERSION,
+        model: null,
+      },
+    };
+
+    runtimePrescription = {
       occurrenceId,
-    ]
-  );
-  const row = result.rows[0];
-  // Close any orphan open sessions for this assignment — a prior Start that was
-  // never ended (e.g. the patient closed the tab / navigated away). Only the
-  // just-created session should stay open. Marked 'superseded' so it is never
-  // read as an End-button "Ended Early".
-  await pool.query(
-`UPDATE sessions
-        SET ended_at = NOW(), end_reason = 'superseded'
-      WHERE patient_exercise_id = $1 AND ended_at IS NULL AND id <> $2`,
-    [data.patientExerciseId, row.id]
-  );
-  // Mark the fulfilled occurrence in_progress (until endSession completes it).
-  await pool.query(
-    "UPDATE exercise_occurrences SET status = 'in_progress' WHERE id = $1 AND status = 'pending'",
-    [occurrenceId]
-  );
+      patientExerciseId: prescription.patientExerciseId,
+      exerciseId: prescription.exerciseId,
+      sets: prescription.sets,
+      reps: prescription.reps,
+      restSeconds: prescription.restSeconds,
+      holdSeconds: prescription.holdSeconds,
+      sequenceIndex: prescription.sequenceIndex,
+      prescribedSide: prescription.prescribedSide,
+      resistance: prescription.resistance,
+      dueDate: prescription.schedule.dueDate,
+      makeupUntil: prescription.schedule.makeupUntil,
+    };
+
+    await client.query(
+      `UPDATE sessions
+          SET ended_at = NOW(), end_reason = 'superseded'
+        WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
+      [data.patientExerciseId],
+    );
+    const result = await client.query(
+      `INSERT INTO sessions
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id,
+          context_snapshot, context_snapshot_version, context_captured_at,
+          registry_version, exercise_config_version, app_revision)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, started_at`,
+      [
+        data.patientId,
+        data.patientExerciseId,
+        data.exerciseId,
+        data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+        occurrenceId,
+        JSON.stringify(context),
+        SESSION_CONTEXT_VERSION,
+        capturedAt,
+        REGISTRY_VERSION,
+        exerciseConfigVersion,
+        context.versions.appRevision,
+      ],
+    );
+    row = result.rows[0] as Record<string, unknown>;
+    await client.query(
+      `UPDATE exercise_occurrences
+          SET status = 'in_progress',
+              prescription_snapshot = CASE
+                WHEN $5::boolean THEN $2
+                ELSE prescription_snapshot
+              END,
+              prescription_snapshot_version = CASE
+                WHEN $5::boolean THEN $3
+                ELSE prescription_snapshot_version
+              END,
+              prescription_captured_at = CASE
+                WHEN $5::boolean THEN $4
+                ELSE prescription_captured_at
+              END
+        WHERE id = $1`,
+      [
+        occurrenceId,
+        JSON.stringify(prescription),
+        PRESCRIPTION_SNAPSHOT_VERSION,
+        prescription.capturedAt,
+        shouldPersistPrescriptionSnapshot,
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   // Trigger start notification for therapist
   try {
     const patient = await getUserById(data.patientId);
@@ -1117,7 +1480,12 @@ export async function createSession(data: {
   } catch (err) {
     console.error("Failed to create start notification:", err);
   }
-  return { id: row.id, startedAt: row.started_at };
+  return {
+    id: Number(row.id),
+    startedAt: String(row.started_at),
+    runtimePrescription,
+    context,
+  };
 }
 
 /** Returns the owning patient_id for a session, or null if it does not exist. */
@@ -1135,40 +1503,68 @@ export async function endSession(
     captureQualitySummary?: unknown;
     notes?: string;
     completed?: boolean;
-    endReason?: string;
+    endReason?: Exclude<SessionEndReason, "completed" | "superseded">;
   } = {}
-): Promise<void> {
-  // 'completed' wins when all sets were finished; otherwise the caller's reason
-  // ('user' = End button pressed) or null. COALESCE keeps any reason already
-  // recorded (e.g. a 'superseded' row that a later stale PATCH must not blank).
+): Promise<boolean> {
+  // Terminal session state is immutable: the first completed/user/pain/
+  // superseded transition wins. A stale retry may enrich nothing and cannot
+  // rewrite the occurrence outcome.
   const endReasonValue = data.completed ? "completed" : data.endReason ?? null;
-  await pool.query(
-    `UPDATE sessions
-        SET ended_at = NOW(),
-            capture_quality_summary = COALESCE($2, capture_quality_summary),
-            notes = COALESCE($3, notes),
-            end_reason = COALESCE($4, end_reason)
-      WHERE id = $1`,
-    [
-      sessionId,
-      data.captureQualitySummary !== undefined
-        ? JSON.stringify(data.captureQualitySummary)
-        : null,
-      data.notes ?? null,
-      endReasonValue,
-    ]
-  );
-  // When the patient finished all prescribed sets, mark the scheduled occurrence
-  // this session fulfilled as completed. Keyed on the session's occurrence_id, so
-  // an extra/unscheduled session (no occurrence) completes nothing on the
-  // schedule. The assignment-level status is derived from occurrences at read
-  // time and is intentionally not written here.
-  if (data.completed) {
-    await pool.query(
-      `UPDATE exercise_occurrences SET status = 'completed', completed_at = NOW()
-        WHERE id = (SELECT occurrence_id FROM sessions WHERE id = $1)`,
-      [sessionId]
+  if (!endReasonValue) throw new Error("A terminal session reason is required.");
+
+  const client = await pool.connect();
+  let transitioned = false;
+  try {
+    await client.query("BEGIN");
+    const session = await client.query(
+      "SELECT occurrence_id, ended_at FROM sessions WHERE id = $1 FOR UPDATE",
+      [sessionId],
     );
+    if (session.rows.length === 0) throw new Error("Session not found.");
+    if (session.rows[0].ended_at) {
+      await client.query("COMMIT");
+      return false;
+    }
+
+    await client.query(
+      `UPDATE sessions
+          SET ended_at = NOW(),
+              capture_quality_summary = COALESCE($2, capture_quality_summary),
+              notes = COALESCE($3, notes),
+              end_reason = $4
+        WHERE id = $1`,
+      [
+        sessionId,
+        data.captureQualitySummary !== undefined
+          ? JSON.stringify(data.captureQualitySummary)
+          : null,
+        data.notes ?? null,
+        endReasonValue,
+      ],
+    );
+    const occurrenceId = session.rows[0].occurrence_id as number | null;
+    if (occurrenceId !== null && data.completed) {
+      await client.query(
+        `UPDATE exercise_occurrences
+            SET status = 'completed', completed_at = NOW()
+          WHERE id = $1 AND status IN ('pending', 'in_progress')`,
+        [occurrenceId],
+      );
+    } else if (occurrenceId !== null && endReasonValue === "pain") {
+      await client.query(
+        `UPDATE exercise_occurrences
+            SET status = 'pain_stopped', pain_stopped_at = NOW()
+          WHERE id = $1 AND status IN ('pending', 'in_progress')`,
+        [occurrenceId],
+      );
+    }
+    transitioned = true;
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
   // Trigger completion notifications for therapist
   try {
@@ -1198,29 +1594,234 @@ export async function endSession(
             "session_complete",
             row.occurrence_id
           );
+        } else if (endReasonValue === "pain") {
+          await createNotification(
+            row.therapist_id,
+            "Exercise stopped because of pain",
+            `${row.patient_name} stopped ${row.exercise_name} because of pain. Review before rescheduling.`,
+            "patient_pain_stopped",
+            row.occurrence_id,
+          );
         }
       }
     }
   } catch (err) {
     console.error("Failed to create completion notification:", err);
   }
+  return transitioned;
 }
 
-export async function insertRepEvents(
+export class PainReportConflictError extends Error {
+  constructor(message = "This session already has a different pain report.") {
+    super(message);
+    this.name = "PainReportConflictError";
+  }
+}
+
+export async function putPainReport(
   sessionId: number,
-  rows: RepEventRow[]
+  patientId: string,
+  report:
+    | { status: "declined" }
+    | {
+        status: "reported";
+        score: number;
+        timing: PainTiming | null;
+        bodyArea: string | null;
+      },
 ): Promise<void> {
-  if (rows.length === 0) return;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT pain_report_status, pain_score, pain_timing, pain_body_area, ended_at
+         FROM sessions
+        WHERE id = $1 AND patient_id = $2
+        FOR UPDATE`,
+      [sessionId, patientId],
+    );
+    if (result.rows.length === 0) throw new Error("Session not found.");
+    if (!result.rows[0].ended_at) throw new Error("Finish the attempt before reporting pain.");
+
+    const row = result.rows[0];
+    const expectedScore = report.status === "reported" ? report.score : null;
+    const expectedTiming = report.status === "reported" ? report.timing : null;
+    const expectedBodyArea = report.status === "reported" ? report.bodyArea : null;
+    if (row.pain_report_status !== "not_reported") {
+      const isSame =
+        row.pain_report_status === report.status &&
+        (row.pain_score === null ? null : Number(row.pain_score)) === expectedScore &&
+        (row.pain_timing ?? null) === expectedTiming &&
+        (row.pain_body_area ?? null) === expectedBodyArea;
+      if (!isSame) throw new PainReportConflictError();
+      await client.query("COMMIT");
+      return;
+    }
+
+    await client.query(
+      `UPDATE sessions
+          SET pain_report_status = $3,
+              pain_score = $4,
+              pain_timing = $5,
+              pain_body_area = $6,
+              pain_reported_at = NOW()
+        WHERE id = $1 AND patient_id = $2`,
+      [
+        sessionId,
+        patientId,
+        report.status,
+        expectedScore,
+        expectedTiming,
+        expectedBodyArea,
+      ],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export class SessionReviewUnavailableError extends Error {
+  constructor(message = "No sufficiently covered rule score is available for review.") {
+    super(message);
+    this.name = "SessionReviewUnavailableError";
+  }
+}
+
+export async function appendSessionReview(
+  sessionId: number,
+  therapistId: string,
+  label: TherapistReviewLabel,
+): Promise<{ id: number; createdAt: string; idempotent: boolean }> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const sessionResult = await client.query(
+      `SELECT s.registry_version, s.exercise_config_version
+         FROM sessions s
+         JOIN users patient ON patient.id = s.patient_id
+        WHERE s.id = $1
+          AND patient.therapist_id = $2
+          AND (patient.is_archived IS NULL OR patient.is_archived = FALSE)
+          AND s.ended_at IS NOT NULL
+        FOR UPDATE OF s`,
+      [sessionId, therapistId],
+    );
+    if (sessionResult.rows.length === 0) throw new Error("Session not found or forbidden.");
+
+    const scoreResult = await client.query(
+      `SELECT
+         (
+           SELECT AVG((r.compensations->'rawRule'->>'meanScore')::numeric)
+             FROM rep_events r
+            WHERE r.session_id = $1
+              AND jsonb_typeof(r.compensations->'rawRule'->'meanScore') = 'number'
+              AND jsonb_typeof(r.compensations->'rawRule'->'coveragePct') = 'number'
+              AND (r.compensations->'rawRule'->>'coveragePct')::numeric >= 80
+         ) AS dynamic_score,
+         (
+           SELECT AVG((st.hold_quality->>'meanCompensationScore')::numeric)
+             FROM set_events st
+            WHERE st.session_id = $1
+              AND jsonb_typeof(st.hold_quality->'meanCompensationScore') = 'number'
+         ) AS isometric_score`,
+      [sessionId],
+    );
+    const scores = scoreResult.rows[0];
+    const dynamicScore =
+      scores.dynamic_score === null ? null : Number(scores.dynamic_score);
+    const isometricScore =
+      scores.isometric_score === null ? null : Number(scores.isometric_score);
+    const scoreValue = dynamicScore ?? isometricScore;
+    const scoreSource =
+      dynamicScore !== null ? "raw_rule_v1" : "hold_rule_v1";
+    if (scoreValue === null || !Number.isFinite(scoreValue)) {
+      throw new SessionReviewUnavailableError();
+    }
+
+    const latest = await client.query(
+      `SELECT id, label, score_source, score_value, created_at
+         FROM session_reviews
+        WHERE session_id = $1 AND therapist_id = $2
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`,
+      [sessionId, therapistId],
+    );
+    if (
+      latest.rows.length > 0 &&
+      latest.rows[0].label === label &&
+      latest.rows[0].score_source === scoreSource &&
+      Number(latest.rows[0].score_value) === scoreValue
+    ) {
+      await client.query("COMMIT");
+      return {
+        id: Number(latest.rows[0].id),
+        createdAt: String(latest.rows[0].created_at),
+        idempotent: true,
+      };
+    }
+
+    const session = sessionResult.rows[0];
+    const inserted = await client.query(
+      `INSERT INTO session_reviews
+         (session_id, therapist_id, label, score_source, score_value,
+          registry_version, exercise_config_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, created_at`,
+      [
+        sessionId,
+        therapistId,
+        label,
+        scoreSource,
+        scoreValue,
+        session.registry_version,
+        session.exercise_config_version,
+      ],
+    );
+    await client.query("COMMIT");
+    return {
+      id: Number(inserted.rows[0].id),
+      createdAt: String(inserted.rows[0].created_at),
+      idempotent: false,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Idempotent by `(session_id, rep_index)`: a retried batch inserts nothing and
+ * reports the rows it skipped. Durable delivery retries batches after a failed
+ * or unacknowledged POST, so the same repetition can legitimately arrive twice.
+ *
+ * Database uniqueness is the concurrency-safe authority. The outbox serializes
+ * ordinary browser flushes, while ON CONFLICT also makes overlapping/retried
+ * requests harmless.
+ */
+export async function insertRepEvents(
+  sessionId: number,
+  rows: RepEventRow[]
+): Promise<{ inserted: number; skipped: number }> {
+  if (rows.length === 0) return { inserted: 0, skipped: 0 };
+  const client = await pool.connect();
+  let inserted = 0;
+  try {
+    await client.query("BEGIN");
     for (const r of rows) {
-      await client.query(
+      const result = await client.query(
         `INSERT INTO rep_events
            (session_id, rep_index, set_index, side, peak_value, target_rom,
              time_to_peak_ms, hold_ms, descent_ms, total_ms, classification,
              compensations, start_ts, end_ts)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (session_id, rep_index) DO NOTHING
+          RETURNING id`,
         [
           sessionId,
           r.repIndex,
@@ -1238,8 +1839,10 @@ export async function insertRepEvents(
           r.endTs,
         ]
       );
+      inserted += result.rowCount ?? 0;
     }
     await client.query("COMMIT");
+    return { inserted, skipped: rows.length - inserted };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -1248,22 +1851,26 @@ export async function insertRepEvents(
   }
 }
 
+/** Idempotent by `(session_id, set_index)`. See `insertRepEvents` for rationale. */
 export async function insertSetEvents(
   sessionId: number,
   rows: SetEventRow[]
-): Promise<void> {
-  if (rows.length === 0) return;
+): Promise<{ inserted: number; skipped: number }> {
+  if (rows.length === 0) return { inserted: 0, skipped: 0 };
   const client = await pool.connect();
+  let inserted = 0;
   try {
     await client.query("BEGIN");
     for (const r of rows) {
-      await client.query(
+      const result = await client.query(
         `INSERT INTO set_events
            (session_id, set_index, exercise_kind, target_reps, left_reps,
             right_reps, paired_reps, target_hold_ms, paired_hold_ms,
             duration_ms, terminated_by, asymmetry_index, start_ts, end_ts,
             hold_quality)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (session_id, set_index) DO NOTHING
+         RETURNING id`,
         [
           sessionId,
           r.setIndex,
@@ -1282,8 +1889,10 @@ export async function insertSetEvents(
           r.holdQuality !== undefined ? JSON.stringify(r.holdQuality) : null,
         ]
       );
+      inserted += result.rowCount ?? 0;
     }
     await client.query("COMMIT");
+    return { inserted, skipped: rows.length - inserted };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -1365,20 +1974,38 @@ export async function getSessionsForPatient(patientId: string) {
         s.started_at,
         s.ended_at,
         s.end_reason,
+        s.context_snapshot,
+        s.registry_version,
+        s.exercise_config_version,
+        s.app_revision,
+        s.pain_report_status,
+        s.pain_score,
+        s.pain_timing,
+        s.pain_body_area,
+        s.pain_reported_at,
         r.total_reps,
         r.complete_reps,
         r.left_reps,
         r.right_reps,
-        r.complete_left_reps,
-        r.complete_right_reps,
-        r.avg_peak_value,
+         r.complete_left_reps,
+         r.complete_right_reps,
+         r.avg_peak_value,
+         r.avg_left_peak_value,
+         r.avg_right_peak_value,
+         r.avg_dynamic_score,
         st.set_count,
         st.exercise_kind,
-        st.total_paired_hold_ms,
-        st.total_target_hold_ms,
-        st.total_duration_ms,
+         st.total_paired_hold_ms,
+         st.total_target_hold_ms,
+         st.total_left_hold_ms,
+         st.total_right_hold_ms,
+         st.total_duration_ms,
         st.avg_asymmetry_index,
-        st.avg_compensation_score
+        st.avg_compensation_score,
+        review.label AS latest_review_label,
+        review.score_source AS latest_review_score_source,
+        review.score_value AS latest_review_score_value,
+        review.created_at AS latest_review_created_at
      FROM sessions s
      JOIN exercises e ON e.id = s.exercise_id
      LEFT JOIN (
@@ -1387,18 +2014,43 @@ export async function getSessionsForPatient(patientId: string) {
                COUNT(*) FILTER (WHERE classification = 'complete') AS complete_reps,
                COUNT(*) FILTER (WHERE side = 'left')               AS left_reps,
                COUNT(*) FILTER (WHERE side = 'right')              AS right_reps,
-               COUNT(*) FILTER (WHERE side = 'left'  AND classification = 'complete') AS complete_left_reps,
-               COUNT(*) FILTER (WHERE side = 'right' AND classification = 'complete') AS complete_right_reps,
-               AVG(peak_value)                                     AS avg_peak_value
+                COUNT(*) FILTER (WHERE side = 'left'  AND classification = 'complete') AS complete_left_reps,
+                COUNT(*) FILTER (WHERE side = 'right' AND classification = 'complete') AS complete_right_reps,
+                AVG(peak_value)                                     AS avg_peak_value,
+                AVG(peak_value) FILTER (WHERE side = 'left')        AS avg_left_peak_value,
+                AVG(peak_value) FILTER (WHERE side = 'right')       AS avg_right_peak_value,
+                AVG(
+                 CASE
+                   WHEN jsonb_typeof(compensations->'rawRule'->'meanScore') = 'number'
+                    AND jsonb_typeof(compensations->'rawRule'->'coveragePct') = 'number'
+                    AND (compensations->'rawRule'->>'coveragePct')::numeric >= 80
+                   THEN (compensations->'rawRule'->>'meanScore')::numeric
+                   ELSE NULL
+                 END
+               ) AS avg_dynamic_score
         FROM rep_events GROUP BY session_id
      ) r ON r.session_id = s.id
      LEFT JOIN (
         SELECT session_id,
                COUNT(*)             AS set_count,
                MAX(exercise_kind)   AS exercise_kind,
-               SUM(paired_hold_ms)  AS total_paired_hold_ms,
-               SUM(target_hold_ms)  AS total_target_hold_ms,
-               SUM(duration_ms)     AS total_duration_ms,
+                SUM(paired_hold_ms)  AS total_paired_hold_ms,
+                SUM(target_hold_ms)  AS total_target_hold_ms,
+                SUM(
+                  CASE
+                    WHEN jsonb_typeof(hold_quality->'leftInBandMs') = 'number'
+                      THEN (hold_quality->>'leftInBandMs')::numeric
+                    ELSE NULL
+                  END
+                ) AS total_left_hold_ms,
+                SUM(
+                  CASE
+                    WHEN jsonb_typeof(hold_quality->'rightInBandMs') = 'number'
+                      THEN (hold_quality->>'rightInBandMs')::numeric
+                    ELSE NULL
+                  END
+                ) AS total_right_hold_ms,
+                SUM(duration_ms)     AS total_duration_ms,
                AVG(asymmetry_index) AS avg_asymmetry_index,
                -- Rule-based compensation score (0-100), persisted only for
                -- isometric holds inside the hold_quality JSONB. Guard the cast
@@ -1413,12 +2065,26 @@ export async function getSessionsForPatient(patientId: string) {
                ) AS avg_compensation_score
         FROM set_events GROUP BY session_id
      ) st ON st.session_id = s.id
+     LEFT JOIN LATERAL (
+       SELECT sr.label, sr.score_source, sr.score_value, sr.created_at
+         FROM session_reviews sr
+        WHERE sr.session_id = s.id
+        ORDER BY sr.created_at DESC, sr.id DESC
+        LIMIT 1
+     ) review ON TRUE
      WHERE s.patient_id = $1
      ORDER BY s.started_at DESC`,
     [patientId]
   );
 
   return result.rows.map((row) => {
+    const context = (row.context_snapshot as SessionContextSnapshot | null) ?? null;
+    const prescribedSide = context?.prescription.prescribedSide ?? "both";
+    const resistance =
+      context?.prescription.resistance ??
+      ({ type: "unknown", value: null, unit: null, label: null } as const);
+    const exerciseConfigVersion =
+      (row.exercise_config_version as string | null) ?? "legacy-unversioned";
     const durationMs =
       row.total_duration_ms != null
         ? Number(row.total_duration_ms)
@@ -1434,6 +2100,26 @@ export async function getSessionsForPatient(patientId: string) {
       startedAt:         row.started_at,
       endedAt:           row.ended_at ?? null,
       endReason:         row.end_reason ?? null,
+      context,
+      registryVersion: row.registry_version ?? null,
+      exerciseConfigVersion:
+        row.exercise_config_version ?? null,
+      appRevision: row.app_revision ?? null,
+      prescribedSide,
+      resistance,
+      comparableContextKey: comparableContextKey({
+        exerciseId: String(row.exercise_id),
+        prescribedSide,
+        resistance,
+        exerciseConfigVersion,
+      }),
+      painReport: {
+        status: (row.pain_report_status ?? "not_reported") as PainReportStatus,
+        score: row.pain_score == null ? null : Number(row.pain_score),
+        timing: (row.pain_timing as PainTiming | null) ?? null,
+        bodyArea: row.pain_body_area ?? null,
+        reportedAt: row.pain_reported_at ?? null,
+      },
       durationMs,
       setCount:          row.set_count != null ? Number(row.set_count) : 0,
       totalReps:         row.total_reps != null ? Number(row.total_reps) : 0,
@@ -1443,10 +2129,35 @@ export async function getSessionsForPatient(patientId: string) {
       completeLeftReps:  row.complete_left_reps != null ? Number(row.complete_left_reps) : 0,
       completeRightReps: row.complete_right_reps != null ? Number(row.complete_right_reps) : 0,
       avgPeakValue:      row.avg_peak_value != null ? Number(row.avg_peak_value) : null,
+      avgLeftPeakValue:  row.avg_left_peak_value != null ? Number(row.avg_left_peak_value) : null,
+      avgRightPeakValue: row.avg_right_peak_value != null ? Number(row.avg_right_peak_value) : null,
       totalPairedHoldMs: row.total_paired_hold_ms != null ? Number(row.total_paired_hold_ms) : null,
       totalTargetHoldMs: row.total_target_hold_ms != null ? Number(row.total_target_hold_ms) : null,
+      totalLeftHoldMs:   row.total_left_hold_ms != null ? Number(row.total_left_hold_ms) : null,
+      totalRightHoldMs:  row.total_right_hold_ms != null ? Number(row.total_right_hold_ms) : null,
       avgAsymmetryIndex: row.avg_asymmetry_index != null ? Number(row.avg_asymmetry_index) : null,
       avgCompensationScore: row.avg_compensation_score != null ? Number(row.avg_compensation_score) : null,
+      reviewScore:
+        row.avg_dynamic_score != null
+          ? Number(row.avg_dynamic_score)
+          : row.avg_compensation_score != null
+            ? Number(row.avg_compensation_score)
+            : null,
+      reviewScoreSource:
+        row.avg_dynamic_score != null
+          ? "raw_rule_v1"
+          : row.avg_compensation_score != null
+            ? "hold_rule_v1"
+            : null,
+      latestReview:
+        row.latest_review_label
+          ? {
+              label: row.latest_review_label,
+              scoreSource: row.latest_review_score_source,
+              scoreValue: Number(row.latest_review_score_value),
+              createdAt: row.latest_review_created_at,
+            }
+          : null,
     };
   });
 }
@@ -1468,7 +2179,8 @@ export async function getTherapistRoster(therapistId: string) {
         COALESCE(ex.assigned_count, 0)       AS assigned_count,
         COALESCE(ex.due_count, 0)            AS due_count,
         COALESCE(ex.completed_count, 0)      AS completed_count,
-        COALESCE(ex.missed_count, 0)         AS missed_count
+        COALESCE(ex.missed_count, 0)         AS missed_count,
+        COALESCE(ex.pain_stopped_count, 0)   AS pain_stopped_count
      FROM users u
      LEFT JOIN (
         SELECT s.patient_id,
@@ -1487,12 +2199,16 @@ export async function getTherapistRoster(therapistId: string) {
         SELECT pe.patient_id,
                COUNT(DISTINCT pe.id) FILTER (WHERE pe.archived_at IS NULL)         AS assigned_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
-                                      AND eo.due_date <= $2::date)                  AS due_count,
+                                      AND eo.due_date <= $2::date
+                                      AND eo.status <> 'pain_stopped')              AS due_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
                                       AND eo.status = 'completed')                  AS completed_count,
                COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $2::date
                                       AND eo.status <> 'completed'
-                                      AND eo.cancelled_at IS NULL)                  AS missed_count
+                                      AND eo.status <> 'pain_stopped'
+                                      AND eo.cancelled_at IS NULL)                  AS missed_count,
+               COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
+                                      AND eo.status = 'pain_stopped')               AS pain_stopped_count
         FROM patient_exercises pe
         LEFT JOIN exercise_occurrences eo ON eo.patient_exercise_id = pe.id
         GROUP BY pe.patient_id
@@ -1511,6 +2227,7 @@ export async function getTherapistRoster(therapistId: string) {
     dueCount:         Number(row.due_count),
     completedCount:   Number(row.completed_count),
     missedCount:      Number(row.missed_count),
+    painStoppedCount: Number(row.pain_stopped_count),
   }));
 }
 
@@ -1522,7 +2239,10 @@ export async function getSessionDetail(sessionId: number) {
   const sessionRes = await pool.query(
     `SELECT s.id, s.patient_id, s.patient_exercise_id, s.exercise_id,
             e.name AS exercise_name, s.started_at, s.ended_at,
-            s.device_info, s.capture_quality_summary, s.notes
+            s.device_info, s.capture_quality_summary, s.notes, s.end_reason,
+            s.context_snapshot, s.registry_version, s.exercise_config_version,
+            s.app_revision, s.pain_report_status, s.pain_score, s.pain_timing,
+            s.pain_body_area, s.pain_reported_at
      FROM sessions s
      JOIN exercises e ON e.id = s.exercise_id
      WHERE s.id = $1`,
@@ -1545,6 +2265,14 @@ export async function getSessionDetail(sessionId: number) {
      FROM rep_events WHERE session_id = $1 ORDER BY rep_index ASC`,
     [sessionId]
   );
+  const reviewsRes = await pool.query(
+    `SELECT id, therapist_id, label, score_source, score_value,
+            registry_version, exercise_config_version, created_at
+       FROM session_reviews
+      WHERE session_id = $1
+      ORDER BY created_at ASC, id ASC`,
+    [sessionId],
+  );
 
   return {
     id:               s.id,
@@ -1553,7 +2281,19 @@ export async function getSessionDetail(sessionId: number) {
     exerciseName:     s.exercise_name,
     startedAt:        s.started_at,
     endedAt:          s.ended_at ?? null,
+    endReason:        s.end_reason ?? null,
     notes:            s.notes ?? null,
+    context:          s.context_snapshot ?? null,
+    registryVersion:  s.registry_version ?? null,
+    exerciseConfigVersion: s.exercise_config_version ?? null,
+    appRevision:      s.app_revision ?? null,
+    painReport: {
+      status: (s.pain_report_status ?? "not_reported") as PainReportStatus,
+      score: s.pain_score == null ? null : Number(s.pain_score),
+      timing: (s.pain_timing as PainTiming | null) ?? null,
+      bodyArea: s.pain_body_area ?? null,
+      reportedAt: s.pain_reported_at ?? null,
+    },
     captureQuality:   parseCaptureQualitySummary(s.capture_quality_summary),
     deviceContext:    summarizeDeviceInfo(s.device_info),
     sets: setsRes.rows.map((r) => ({
@@ -1582,6 +2322,16 @@ export async function getSessionDetail(sessionId: number) {
       totalMs:        r.total_ms,
       classification: r.classification,
       compensations:  r.compensations ?? null,
+    })),
+    reviews: reviewsRes.rows.map((review) => ({
+      id: Number(review.id),
+      therapistId: review.therapist_id,
+      label: review.label,
+      scoreSource: review.score_source,
+      scoreValue: Number(review.score_value),
+      registryVersion: review.registry_version ?? null,
+      exerciseConfigVersion: review.exercise_config_version ?? null,
+      createdAt: review.created_at,
     })),
   };
 }
@@ -1645,7 +2395,8 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 
-  // 1. Fetch missed occurrences: makeup_until < today AND status <> 'completed'
+  // 1. Fetch missed occurrences. Pain-stopped attempts are closed for therapist
+  // review and are neither completed nor missed.
   const missedResult = await pool.query(
     `SELECT eo.id, eo.due_date, pe.exercise_id, e.name AS exercise_name, u.name AS patient_name, u.therapist_id
      FROM exercise_occurrences eo
@@ -1656,7 +2407,7 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
        AND pe.archived_at IS NULL
        AND e.archived_at IS NULL
        AND eo.cancelled_at IS NULL
-       AND eo.status <> 'completed'
+       AND eo.status NOT IN ('completed', 'pain_stopped')
        AND eo.makeup_until < $2::date`,
     [patientId, today]
   );

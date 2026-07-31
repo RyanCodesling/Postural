@@ -22,6 +22,7 @@ import {
   getCompensationBands,
   getCompensationScoring,
   type Band,
+  type CompensationMetricSpec,
   type ExerciseDefinition,
   type MetricName,
 } from "@/lib/exercises/registry";
@@ -730,8 +731,8 @@ function bandedDeduction(absValue: number, bands: Band[]): number {
  *                      computed this frame (e.g. occlusion).
  * @param primaryValue  The current primary-metric reading for this frame
  *                      (same units as the primary). Only consulted by
- *                      "primary-coupled" metrics; when absent/null they fall
- *                      back to the static `|value|` deduction. NOTE for
+ *                      "primary-coupled" metrics; when absent/null that
+ *                      coupled channel is unavailable for this frame. NOTE for
  *                      per-limb bilateral exercises: `metricValues` carries
  *                      worst-side compensation values, and which side's
  *                      primary a coupled metric should pair with is a
@@ -774,10 +775,14 @@ export function computeCompensationScore(
   if (scored.length === 0) return null;
 
   // Filter to compensation metrics that have a non-null reading this frame.
-  const active = scored.filter((c) => {
-    const v = metricValues[c.name];
-    return typeof v === "number";
-  });
+  const active = scored.filter(
+    (metric) =>
+      compensationDeviation(
+        metric,
+        metricValues[metric.name],
+        primaryValue,
+      ) !== null,
+  );
 
   if (active.length === 0) return null;
 
@@ -787,22 +792,14 @@ export function computeCompensationScore(
 
   let totalDeduction = 0;
   for (const c of active) {
-    const value = metricValues[c.name] as number;
     const bands = getCompensationBands(c) as Band[];
-    const scoring = getCompensationScoring(c);
-    // "primary-coupled": deduct on the residual from the expected value at
-    // the current primary reading. Without a primary reading this frame,
-    // fall back to the static |value| deduction rather than skipping the
-    // metric (skipping would inflate the score exactly when tracking is
-    // poorest).
-    const deductionInput =
-      scoring.mode === "primary-coupled" && typeof primaryValue === "number"
-        ? Math.abs(
-            value -
-              (scoring.intercept +
-                scoring.slopePerPrimaryUnit * Math.abs(primaryValue)),
-          )
-        : Math.abs(value);
+    const deviation = compensationDeviation(
+      c,
+      metricValues[c.name],
+      primaryValue,
+    );
+    if (deviation === null) continue;
+    const deductionInput = Math.abs(deviation);
     const rawDeduction = bandedDeduction(deductionInput, bands);
     // rawDeduction is on a 0–100 per-metric scale; scale to its weight share.
     totalDeduction += (rawDeduction / 100) * weightPerMetric;
@@ -1818,11 +1815,10 @@ export type ExerciseFrameMetrics = {
 export function computePoseMetricsForExercise(
   landmarks: LM[],
   definition: ExerciseDefinition,
-  // Optional pre-resolved tilt reference. When provided (e.g. a smoothed
-  // camera-tilt estimate), metrics are tilt-corrected against it instead of
-  // the raw per-frame consensus tilt. Callers use this to get a less jittery
-  // display/warning value while keeping a separate raw-tilt call for the
-  // ML/log pipeline. Backward compatible: omit for the original behavior.
+  // Optional pre-resolved tilt reference. The camera supplies its frozen
+  // neutral-calibration reference so display, coaching, rule aggregates, and
+  // raw feature traces all use the same correction. Omit only for callers that
+  // intentionally want the current frame's consensus tilt.
   tiltOverride?: TiltReference
 ): ExerciseFrameMetrics {
   const tiltReference = tiltOverride ?? computeTiltReference(landmarks);
@@ -1921,6 +1917,31 @@ export function computePoseMetricsForExercise(
     perSideCompensationMetrics,
     compensationScore,
   };
+}
+
+/**
+ * The signal whose magnitude is compared with warning/deduction bands.
+ *
+ * A coupled metric is unavailable without its anatomically paired primary;
+ * treating the raw metric as a fallback would recreate the false warnings the
+ * coupling is intended to prevent.
+ */
+export function compensationDeviation(
+  spec: CompensationMetricSpec,
+  value: number | null | undefined,
+  primaryValue?: number | null,
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const scoring = getCompensationScoring(spec);
+  if (scoring.mode !== "primary-coupled") return value;
+  if (typeof primaryValue !== "number" || !Number.isFinite(primaryValue)) {
+    return null;
+  }
+  return (
+    value -
+    (scoring.intercept +
+      scoring.slopePerPrimaryUnit * Math.abs(primaryValue))
+  );
 }
 
 /**

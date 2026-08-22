@@ -145,3 +145,13 @@ ml/**/out/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# 3D exercise demonstration assets
+# Editable Blender sources and rendered outputs are large and are regenerable
+# from the pinned build scripts under tools/blender/. Those scripts, the asset
+# README, the third-party attribution file, and the pinned kinematics reference
+# JSON stay tracked so a build can be reproduced.
+assets/blender/*.blend
+assets/blender/*.blend[0-9]
+assets/blender/previews/
+web/public/demos/

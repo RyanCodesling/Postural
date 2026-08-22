@@ -93,7 +93,11 @@
 ### *Remaining follow-up*
 
 - Obtain clinician-approved `ex_004` assisted-hold parameters and retain the deferred `ex_005` threshold decision until its required live-protocol input exists
-- Collect a new untouched multi-subject evaluation set only after the protocol is frozen; researcher sessions 168–174 remain calibration evidence
+- Before new evaluation recordings, version richer in-session measurement: effective compensation exposure and movement phase, capture confidence/missingness, coaching exposure/response, and a validated isometric hold-quality contract. Preserve legacy readers and the raw-analytics-versus-smoothed-live-display boundary
+- Surface those measurements first as cautious set/session therapist summaries, then evaluate one phase-aware prioritized cue in non-visible shadow mode on `ex_001` and `ex_006`. Patient-visible rollout requires replay tests, live-webcam evidence, clinician-reviewed wording/priority, and no incidental threshold changes
+- Decide whether the calibrated Random Forest remains an offline thesis-feasibility artifact or becomes an application feature; real-session feature ingestion, prediction provenance/persistence, and dashboard ML scoring are not implemented
+- Resolve the remaining prescription/result contracts before claiming a complete rehabilitation product: patient-specific ROM/counter intent is not prescribable, `pairedReps` is a minimum-of-sides aggregate rather than time-window pairing, and prescribed rest still exposes a skip override
+- Collect a new untouched multi-subject evaluation set only after the exercise and measurement protocols are frozen; keep baseline and feedback-assisted recordings explicitly separable, and do not treat cue response as a clinical label. Researcher sessions 168–174 remain calibration evidence
 
 ## 📌 Update-7-22-26
 

@@ -2,9 +2,11 @@
 
 Offline/batch machine-learning code for the postural monitoring system. This layer
 trains a single **form-quality model**: a calibrated good-vs-compensated classifier
-whose probability is surfaced as a **0–100 quality score** for the clinician dashboard.
-It runs offline in Python (scikit-learn / XGBoost) on engineered features — it is **not**
-part of the live browser pipeline.
+whose probability is expressed as a **0–100 quality score** within the synthetic
+evaluation distribution. It runs offline in Python (scikit-learn / XGBoost) on
+engineered features — it is **not** part of the live browser pipeline, and no
+real-session inference, prediction persistence/provenance, or clinician-dashboard ML
+score is implemented.
 
 The model was proven end-to-end on one exercise (Lateral Arm Raises, `ex_001`) first, then
 replicated across the other active exercises. All six active exercises and all
@@ -66,6 +68,16 @@ There is currently no real-session model evaluator and no reported real-data per
 figure. A future empirical evaluation must freeze the protocol first, collect a new
 untouched subject-independent set, and keep it separate from all threshold, generator, and
 scoring decisions. The current reported model results are synthetic-only.
+
+Before that collection, the application measurement contract must also be frozen and
+versioned. Raw/unsmoothed analytical features must remain separate from smoothed live
+coaching. Effective compensation exposure, movement phase, capture confidence/missingness,
+and whether a cue was shown or resolved are study context; they must not be silently folded
+into the existing `rep-v1` feature definition or treated as automatic labels. Baseline and
+feedback-assisted sessions must remain explicitly separable. Any later feature expansion or
+real-session evaluation requires clinician-defined reference labels and subject-level data
+splits. More recorded fields can strengthen a future model, but they can also increase
+overfitting, rule/label circularity, and feedback leakage when the real sample is small.
 
 ## Baselines
 

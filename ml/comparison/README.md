@@ -107,6 +107,49 @@ python -m pytest comparison/tests        # metric parity + segmentation/decompos
   practical speed/noise choice for the historical `ex_004` clip, and the variance
   decomposition did not identify the backend as the dominant bottleneck.
 
+## Targeted Face Landmarker screening
+
+`face_landmarker_ex004.py` is a separate, narrower experiment that reuses the
+local `ex_004` recordings to screen a face-derived head-roll signal. It compares
+the facial transformation-matrix roll with the existing pose ear-line signal in
+three conditions: the unchanged full-body frame, a fixed Pose-initialized head
+crop with MediaPipe's single-face smoothing, and that crop with `num_faces=2`
+so the documented single-face smoothing is disabled. Version 2 also extracts
+neutral-centered yaw and pitch and reports their descriptive association with
+the Face-minus-Pose roll residual. Those old, unmarked clips cannot establish a
+yaw/pitch rejection threshold; that requires dedicated phase-labeled controls.
+Run it from `ml/` with:
+
+```
+python -m comparison.face_landmarker_ex004
+```
+
+It writes numerical JSON/Markdown results and a signal plot under the gitignored
+`comparison/out/` directory. This can establish detection coverage, neutral
+jitter, motion concordance, and offline CPU cost. It cannot establish clinical
+angle accuracy: the old clips have no independent ground truth and predate the
+current assisted isometric protocol, with no assisting-hand occlusion or isolated
+yaw/pitch controls. The opt-in staff browser shadow diagnostic can record all
+three Face matrix components, named trial-phase markers, and timestamped optional
+reference-angle marks while Pose stays authoritative. Clinical thresholds,
+patient feedback, persistence, and ML remain unchanged.
+
+### Known-angle roll calibration
+
+`face_landmarker_roll_calibration.py` follows the recording screen with a
+controlled calibration. It rotates several fixed crops from the neutral clip by
+known image-plane angles, measures independent IMAGE-mode scale/bias/error, and
+runs smoothed and unsmoothed VIDEO-mode sweeps to quantify tracking lag:
+
+```
+python -m comparison.face_landmarker_roll_calibration
+```
+
+The resulting JSON, Markdown, and plot remain under `comparison/out/`. This is
+exact ground truth for the digitally injected 2D roll only. It does not prove
+anatomical cervical-angle accuracy or replace the required assisted-hold,
+yaw/pitch, occlusion, mirroring, and live-browser tests.
+
 ## Files
 
 | File | Role |
@@ -120,3 +163,5 @@ python -m pytest comparison/tests        # metric parity + segmentation/decompos
 | `fetch_models.py` | MediaPipe model download |
 | `smoke_backends.py` | plumbing check (loads + runs each backend) |
 | `record_guide.md` | recording protocol |
+| `face_landmarker_ex004.py` | targeted Face roll/yaw/pitch screening on local ex_004 clips |
+| `face_landmarker_roll_calibration.py` | known-angle 2D roll scale/bias and tracking calibration |

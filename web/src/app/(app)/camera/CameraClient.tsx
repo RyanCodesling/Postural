@@ -13,6 +13,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
 import {
+  FaceLandmarker,
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
@@ -93,6 +94,13 @@ import {
   type CompensationWarningSignal,
 } from "@/lib/pose/compensationSignals";
 import { EventOutbox } from "@/lib/pose/eventOutbox";
+import {
+  angleDeltaDegrees,
+  faceOrientationDegrees,
+  fixedFaceRoiFromPose,
+  type FaceOrientationDegrees,
+  type FixedFaceRoi,
+} from "@/lib/pose/faceLandmarkerShadow";
 import {
   formatResistanceContext,
   type PainTiming,
@@ -662,6 +670,115 @@ type NeckRepDebugDump = {
   records: NeckRepDebugRecord[];
 };
 
+type Ex004FaceShadowModelState =
+  | "disabled"
+  | "waiting"
+  | "loading"
+  | "ready"
+  | "error";
+
+type Ex004FaceShadowFrameStatus =
+  | "model-not-ready"
+  | "roi-unavailable"
+  | "detected"
+  | "no-face"
+  | "multiple-faces"
+  | "invalid-matrix"
+  | "inference-error";
+
+type Ex004FaceShadowPhase =
+  | "neutral"
+  | "yaw-left"
+  | "yaw-right"
+  | "pitch-up"
+  | "pitch-down"
+  | "lateral-left"
+  | "lateral-right"
+  | "mixed"
+  | "assisted-left"
+  | "assisted-right"
+  | "other";
+
+type Ex004FaceShadowMark = {
+  version: "ex004_face_shadow_mark_v2";
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  kind: "phase" | "reference";
+  phase: Ex004FaceShadowPhase;
+  referenceAngleDeg: number | null;
+  note: string | null;
+};
+
+type Ex004FaceShadowRecord = {
+  version: "ex004_face_shadow_v2";
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  trialPhase: Ex004FaceShadowPhase;
+  sessionState: SessionState;
+  baselinePhase: "not-needed" | "capturing" | "captured";
+  modelState: Ex004FaceShadowModelState;
+  status: Ex004FaceShadowFrameStatus;
+  faceCount: number | null;
+  matrixCount: number | null;
+  roi: FixedFaceRoi | null;
+  poseSignedDeg: number | null;
+  faceRawRollDeg: number | null;
+  faceRawYawDeg: number | null;
+  faceRawPitchDeg: number | null;
+  faceBaselineRollDeg: number | null;
+  faceBaselineYawDeg: number | null;
+  faceBaselinePitchDeg: number | null;
+  faceSignedDeg: number | null;
+  faceYawDeltaDeg: number | null;
+  facePitchDeltaDeg: number | null;
+  faceMinusPoseDeg: number | null;
+  inferenceMs: number | null;
+  authoritativeSource: "pose";
+};
+
+type Ex004FaceShadowDump = {
+  version: "ex004_face_shadow_dump_v2";
+  generatedAt: string;
+  enabled: boolean;
+  modelState: Ex004FaceShadowModelState;
+  modelAssetPath: "/models/face_landmarker.task";
+  authoritativeSource: "pose";
+  attemptedFrames: number;
+  detectedFrames: number;
+  coverage: number | null;
+  currentPhase: Ex004FaceShadowPhase;
+  faceBaselineRollDeg: number | null;
+  faceBaselineYawDeg: number | null;
+  faceBaselinePitchDeg: number | null;
+  roi: FixedFaceRoi | null;
+  markCount: number;
+  marks: Ex004FaceShadowMark[];
+  recordCount: number;
+  records: Ex004FaceShadowRecord[];
+};
+
+type Ex004FaceShadowInference = {
+  status: Ex004FaceShadowFrameStatus;
+  faceCount: number | null;
+  matrixCount: number | null;
+  rawOrientation: FaceOrientationDegrees | null;
+  inferenceMs: number | null;
+};
+
+type Ex004FaceShadowLive = {
+  status: Ex004FaceShadowFrameStatus | null;
+  poseSignedDeg: number | null;
+  faceSignedDeg: number | null;
+  faceYawDeltaDeg: number | null;
+  facePitchDeltaDeg: number | null;
+  faceMinusPoseDeg: number | null;
+  inferenceMs: number | null;
+  attemptedFrames: number;
+  detectedFrames: number;
+};
+
 type Ex005DebugLandmark = {
   x: number | null;
   y: number | null;
@@ -743,12 +860,60 @@ declare global {
     disableEx005Debug?: () => void;
     clearEx005Debug?: () => void;
     dumpEx005Debug?: (limit?: number) => string;
+    __ex004FaceShadow?: Ex004FaceShadowRecord[];
+    enableEx004FaceShadow?: () => void;
+    disableEx004FaceShadow?: () => void;
+    clearEx004FaceShadow?: () => void;
+    dumpEx004FaceShadow?: (limit?: number) => string;
+    setEx004FaceShadowPhase?: (phase: Ex004FaceShadowPhase) => boolean;
+    markEx004FaceShadowReference?: (
+      angleDeg: number,
+      note?: string,
+    ) => boolean;
   }
 }
 
 const MAX_NECK_REP_DEBUG_RECORDS = 3000;
 const MAX_EX005_DEBUG_RECORDS = 2000;
+const MAX_EX004_FACE_SHADOW_RECORDS = 3000;
+const MAX_EX004_FACE_SHADOW_MARKS = 300;
 const EX005_DEBUG_THROTTLE_MS = 250;
+const EX004_FACE_SHADOW_UI_THROTTLE_MS = 250;
+const EX004_FACE_SHADOW_INFERENCE_INTERVAL_MS = 200;
+const EX004_FACE_SHADOW_MODEL_PATH = "/models/face_landmarker.task" as const;
+const EX004_FACE_SHADOW_MIN_BASELINE_SAMPLES = 10;
+const EX004_FACE_SHADOW_PHASE_OPTIONS: readonly {
+  value: Ex004FaceShadowPhase;
+  label: string;
+}[] = [
+  { value: "neutral", label: "Neutral" },
+  { value: "yaw-left", label: "Yaw left" },
+  { value: "yaw-right", label: "Yaw right" },
+  { value: "pitch-up", label: "Pitch up" },
+  { value: "pitch-down", label: "Pitch down" },
+  { value: "lateral-left", label: "Lateral left" },
+  { value: "lateral-right", label: "Lateral right" },
+  { value: "mixed", label: "Mixed axes" },
+  { value: "assisted-left", label: "Assisted left" },
+  { value: "assisted-right", label: "Assisted right" },
+  { value: "other", label: "Other" },
+];
+
+function isEx004FaceShadowPhase(value: string): value is Ex004FaceShadowPhase {
+  return EX004_FACE_SHADOW_PHASE_OPTIONS.some((option) => option.value === value);
+}
+
+function isEx004FaceShadowAttempt(
+  status: Ex004FaceShadowFrameStatus,
+): boolean {
+  return (
+    status === "detected" ||
+    status === "no-face" ||
+    status === "multiple-faces" ||
+    status === "invalid-matrix" ||
+    status === "inference-error"
+  );
+}
 const RAW_FRAME_UPLOAD_BATCH_SIZE = 120;
 // Tuning traces are retried a few times and then given up on — see flushRawFrames.
 const RAW_FRAME_UPLOAD_ATTEMPTS = 3;
@@ -993,6 +1158,11 @@ export default function CameraClient() {
 
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
+  const visionFilesetRef = useRef<
+    Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null
+  >(null);
+  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const faceCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Footer telemetry (resolution + processing FPS). Both are driven from the
   // rAF loop via refs to avoid per-frame setState: resolution commits only when
@@ -1086,6 +1256,25 @@ export default function CameraClient() {
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
+  const ex004FaceShadowEnabledRef = useRef(false);
+  const ex004FaceShadowModelStateRef = useRef<Ex004FaceShadowModelState>("disabled");
+  const ex004FaceShadowRoiRef = useRef<FixedFaceRoi | null>(null);
+  const ex004FaceShadowBaselineSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselineYawSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselinePitchSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselineRollRef = useRef<number | null>(null);
+  const ex004FaceShadowBaselineYawRef = useRef<number | null>(null);
+  const ex004FaceShadowBaselinePitchRef = useRef<number | null>(null);
+  const ex004FaceShadowRecordsRef = useRef<Ex004FaceShadowRecord[]>([]);
+  const ex004FaceShadowMarksRef = useRef<Ex004FaceShadowMark[]>([]);
+  const ex004FaceShadowPhaseRef = useRef<Ex004FaceShadowPhase>("neutral");
+  const ex004FaceShadowSeqRef = useRef(0);
+  const ex004FaceShadowMarkSeqRef = useRef(0);
+  const ex004FaceShadowStartMsRef = useRef<number | null>(null);
+  const ex004FaceShadowAttemptedFramesRef = useRef(0);
+  const ex004FaceShadowDetectedFramesRef = useRef(0);
+  const ex004FaceShadowLastUiUpdateMsRef = useRef(0);
+  const ex004FaceShadowLastInferenceMsRef = useRef<number | null>(null);
   const ex005DebugRef = useRef<Ex005DebugRecord[]>([]);
   const ex005DebugStartMsRef = useRef<number | null>(null);
   const ex005DebugSeqRef = useRef(0);
@@ -1194,6 +1383,117 @@ export default function CameraClient() {
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelLoaded, setModelLoaded] = useState(false);
+  const [ex004FaceShadowEnabled, setEx004FaceShadowEnabledState] = useState(false);
+  const [ex004FaceShadowModelState, setEx004FaceShadowModelState] =
+    useState<Ex004FaceShadowModelState>("disabled");
+  const [ex004FaceShadowModelError, setEx004FaceShadowModelError] =
+    useState<string | null>(null);
+  const [ex004FaceShadowPhase, setEx004FaceShadowPhaseState] =
+    useState<Ex004FaceShadowPhase>("neutral");
+  const [ex004FaceShadowReferenceInput, setEx004FaceShadowReferenceInput] =
+    useState("");
+  const [ex004FaceShadowLive, setEx004FaceShadowLive] =
+    useState<Ex004FaceShadowLive>({
+      status: null,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+      inferenceMs: null,
+      attemptedFrames: 0,
+      detectedFrames: 0,
+    });
+
+  const appendEx004FaceShadowMark = useCallback((
+    kind: Ex004FaceShadowMark["kind"],
+    phase: Ex004FaceShadowPhase,
+    referenceAngleDeg: number | null = null,
+    note: string | null = null,
+  ): Ex004FaceShadowMark => {
+    const tNow = performance.now();
+    if (ex004FaceShadowStartMsRef.current === null) {
+      ex004FaceShadowStartMsRef.current = tNow;
+    }
+    const mark: Ex004FaceShadowMark = {
+      version: "ex004_face_shadow_mark_v2",
+      seq: ++ex004FaceShadowMarkSeqRef.current,
+      tMs: Math.round(tNow),
+      elapsedMs: Math.round(tNow - ex004FaceShadowStartMsRef.current),
+      kind,
+      phase,
+      referenceAngleDeg,
+      note,
+    };
+    ex004FaceShadowMarksRef.current.push(mark);
+    if (ex004FaceShadowMarksRef.current.length > MAX_EX004_FACE_SHADOW_MARKS) {
+      ex004FaceShadowMarksRef.current.shift();
+    }
+    return mark;
+  }, []);
+
+  const setEx004FaceShadowPhase = useCallback((phase: Ex004FaceShadowPhase) => {
+    ex004FaceShadowPhaseRef.current = phase;
+    setEx004FaceShadowPhaseState(phase);
+    appendEx004FaceShadowMark("phase", phase);
+  }, [appendEx004FaceShadowMark]);
+
+  const markEx004FaceShadowReference = useCallback((
+    angleDeg: number,
+    note: string | null = null,
+  ): boolean => {
+    if (!Number.isFinite(angleDeg)) return false;
+    appendEx004FaceShadowMark(
+      "reference",
+      ex004FaceShadowPhaseRef.current,
+      angleDeg,
+      note,
+    );
+    return true;
+  }, [appendEx004FaceShadowMark]);
+
+  const setEx004FaceShadowEnabled = useCallback((enabled: boolean) => {
+    ex004FaceShadowEnabledRef.current = enabled;
+    setEx004FaceShadowEnabledState(enabled);
+  }, []);
+
+  const commitEx004FaceShadowModelState = useCallback((
+    state: Ex004FaceShadowModelState,
+    message: string | null = null,
+  ) => {
+    ex004FaceShadowModelStateRef.current = state;
+    setEx004FaceShadowModelState(state);
+    setEx004FaceShadowModelError(message);
+  }, []);
+
+  const clearEx004FaceShadow = useCallback(() => {
+    ex004FaceShadowRecordsRef.current = [];
+    ex004FaceShadowMarksRef.current = [];
+    ex004FaceShadowSeqRef.current = 0;
+    ex004FaceShadowMarkSeqRef.current = 0;
+    ex004FaceShadowStartMsRef.current = null;
+    ex004FaceShadowPhaseRef.current = "neutral";
+    setEx004FaceShadowPhaseState("neutral");
+    setEx004FaceShadowReferenceInput("");
+    ex004FaceShadowAttemptedFramesRef.current = 0;
+    ex004FaceShadowDetectedFramesRef.current = 0;
+    ex004FaceShadowLastUiUpdateMsRef.current = 0;
+    ex004FaceShadowLastInferenceMsRef.current = null;
+    setEx004FaceShadowLive({
+      status: null,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+      inferenceMs: null,
+      attemptedFrames: 0,
+      detectedFrames: 0,
+    });
+    if (typeof window !== "undefined") {
+      window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    }
+  }, []);
 
   // Capture readiness (HTML overlay, never mirrored)
   const [captureOk, setCaptureOk] = useState(true);
@@ -2544,6 +2844,7 @@ export default function CameraClient() {
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
     repCountsRef.current = { left: 0, right: 0 };
     setRepCounts({ left: 0, right: 0 });
     leftRepCounterRef.current = counters.left;
@@ -2595,6 +2896,7 @@ export default function CameraClient() {
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
 
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
@@ -2862,6 +3164,84 @@ export default function CameraClient() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    window.enableEx004FaceShadow = () => {
+      clearEx004FaceShadow();
+      setEx004FaceShadowEnabled(true);
+      console.info(
+        "[ex004-face-shadow] enabled; select ex_004 and wait for Face ready before starting",
+      );
+    };
+    window.disableEx004FaceShadow = () => {
+      setEx004FaceShadowEnabled(false);
+      console.info("[ex004-face-shadow] disabled; buffered records retained");
+    };
+    window.clearEx004FaceShadow = () => {
+      clearEx004FaceShadow();
+      console.info("[ex004-face-shadow] cleared");
+    };
+    window.dumpEx004FaceShadow = (limit = 1200) => {
+      const records = ex004FaceShadowRecordsRef.current.slice(-limit);
+      const attemptedFrames = records.filter((record) =>
+        isEx004FaceShadowAttempt(record.status)
+      ).length;
+      const detectedFrames = records.filter(
+        (record) => record.status === "detected",
+      ).length;
+      const dump: Ex004FaceShadowDump = {
+        version: "ex004_face_shadow_dump_v2",
+        generatedAt: new Date().toISOString(),
+        enabled: ex004FaceShadowEnabledRef.current,
+        modelState: ex004FaceShadowModelStateRef.current,
+        modelAssetPath: EX004_FACE_SHADOW_MODEL_PATH,
+        authoritativeSource: "pose",
+        attemptedFrames,
+        detectedFrames,
+        coverage: attemptedFrames > 0 ? detectedFrames / attemptedFrames : null,
+        currentPhase: ex004FaceShadowPhaseRef.current,
+        faceBaselineRollDeg: ex004FaceShadowBaselineRollRef.current,
+        faceBaselineYawDeg: ex004FaceShadowBaselineYawRef.current,
+        faceBaselinePitchDeg: ex004FaceShadowBaselinePitchRef.current,
+        roi: ex004FaceShadowRoiRef.current,
+        markCount: ex004FaceShadowMarksRef.current.length,
+        marks: [...ex004FaceShadowMarksRef.current],
+        recordCount: records.length,
+        records,
+      };
+      const text = JSON.stringify(dump, null, 2);
+      console.info(text);
+      return text;
+    };
+    window.setEx004FaceShadowPhase = (phase) => {
+      if (!isEx004FaceShadowPhase(phase)) return false;
+      setEx004FaceShadowPhase(phase);
+      return true;
+    };
+    window.markEx004FaceShadowReference = (angleDeg, note) =>
+      markEx004FaceShadowReference(angleDeg, note ?? null);
+    console.info(
+      "[ex004-face-shadow] available: enableEx004FaceShadow(); setEx004FaceShadowPhase(phase); markEx004FaceShadowReference(angleDeg, note); dumpEx004FaceShadow(limit); disableEx004FaceShadow()",
+    );
+
+    return () => {
+      delete window.__ex004FaceShadow;
+      delete window.enableEx004FaceShadow;
+      delete window.disableEx004FaceShadow;
+      delete window.clearEx004FaceShadow;
+      delete window.dumpEx004FaceShadow;
+      delete window.setEx004FaceShadowPhase;
+      delete window.markEx004FaceShadowReference;
+    };
+  }, [
+    clearEx004FaceShadow,
+    markEx004FaceShadowReference,
+    setEx004FaceShadowEnabled,
+    setEx004FaceShadowPhase,
+  ]);
+
   function roundDebugNumber(
     value: number | null | undefined,
     digits = 3,
@@ -2869,6 +3249,269 @@ export default function CameraClient() {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
     const scale = 10 ** digits;
     return Math.round(value * scale) / scale;
+  }
+
+  function inferEx004FaceShadow(
+    video: HTMLVideoElement,
+    landmarks: readonly NormalizedLandmark[],
+    tNow: number,
+  ): Ex004FaceShadowInference | null {
+    if (
+      !ex004FaceShadowEnabledRef.current ||
+      activeDefinitionRef.current?.id !== "ex_004"
+    ) {
+      return null;
+    }
+
+    const landmarker = faceLandmarkerRef.current;
+    if (
+      !landmarker ||
+      ex004FaceShadowModelStateRef.current !== "ready"
+    ) {
+      return {
+        status: "model-not-ready",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: null,
+      };
+    }
+
+    let roi = ex004FaceShadowRoiRef.current;
+    if (!roi) {
+      roi = fixedFaceRoiFromPose(
+        landmarks,
+        video.videoWidth,
+        video.videoHeight,
+      );
+      if (roi) ex004FaceShadowRoiRef.current = roi;
+    }
+    if (!roi) {
+      return {
+        status: "roi-unavailable",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: null,
+      };
+    }
+
+    const lastInferenceMs = ex004FaceShadowLastInferenceMsRef.current;
+    if (
+      lastInferenceMs !== null &&
+      tNow - lastInferenceMs < EX004_FACE_SHADOW_INFERENCE_INTERVAL_MS
+    ) {
+      return null;
+    }
+    ex004FaceShadowLastInferenceMsRef.current = tNow;
+
+    const startedAt = performance.now();
+    try {
+      // FaceLandmarker.detectForVideo does not accept the Tasks ROI option.
+      // Materialize the fixed Pose-guided region in a reusable in-memory canvas
+      // instead. The canvas is overwritten every frame and is never persisted.
+      let cropCanvas = faceCropCanvasRef.current;
+      if (!cropCanvas) {
+        cropCanvas = document.createElement("canvas");
+        faceCropCanvasRef.current = cropCanvas;
+      }
+      const cropWidth = roi.pixel.x1 - roi.pixel.x0;
+      const cropHeight = roi.pixel.y1 - roi.pixel.y0;
+      if (cropCanvas.width !== cropWidth) cropCanvas.width = cropWidth;
+      if (cropCanvas.height !== cropHeight) cropCanvas.height = cropHeight;
+      const cropContext = cropCanvas.getContext("2d", { alpha: false });
+      if (!cropContext) {
+        throw new Error("Face crop canvas 2D context is unavailable.");
+      }
+      cropContext.drawImage(
+        video,
+        roi.pixel.x0,
+        roi.pixel.y0,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight,
+      );
+      const result = landmarker.detectForVideo(cropCanvas, tNow);
+      const inferenceMs = performance.now() - startedAt;
+      const faceCount = result.faceLandmarks.length;
+      const matrixCount = result.facialTransformationMatrixes.length;
+
+      if (faceCount === 0) {
+        return {
+          status: "no-face",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+      if (faceCount !== 1) {
+        return {
+          status: "multiple-faces",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+      if (matrixCount !== 1) {
+        return {
+          status: "invalid-matrix",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+
+      const rawOrientation = faceOrientationDegrees(
+        result.facialTransformationMatrixes[0],
+      );
+      if (rawOrientation === null) {
+        return {
+          status: "invalid-matrix",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+
+      if (baselinePhaseRef.current === "capturing") {
+        ex004FaceShadowBaselineSamplesRef.current.push(
+          rawOrientation.rollImageDeg,
+        );
+        ex004FaceShadowBaselineYawSamplesRef.current.push(
+          rawOrientation.yawDeg,
+        );
+        ex004FaceShadowBaselinePitchSamplesRef.current.push(
+          rawOrientation.pitchDeg,
+        );
+        if (ex004FaceShadowBaselineSamplesRef.current.length > 300) {
+          ex004FaceShadowBaselineSamplesRef.current.shift();
+          ex004FaceShadowBaselineYawSamplesRef.current.shift();
+          ex004FaceShadowBaselinePitchSamplesRef.current.shift();
+        }
+      }
+
+      return {
+        status: "detected",
+        faceCount,
+        matrixCount,
+        rawOrientation,
+        inferenceMs,
+      };
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      console.error("[ex004-face-shadow] inference failed", reason);
+      commitEx004FaceShadowModelState("error", message);
+      return {
+        status: "inference-error",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: performance.now() - startedAt,
+      };
+    }
+  }
+
+  function recordEx004FaceShadow(
+    inference: Ex004FaceShadowInference | null,
+    poseSignedDeg: number | null,
+    tNow: number,
+  ): void {
+    if (!inference) return;
+    if (ex004FaceShadowStartMsRef.current === null) {
+      ex004FaceShadowStartMsRef.current = tNow;
+    }
+
+    if (isEx004FaceShadowAttempt(inference.status)) {
+      ex004FaceShadowAttemptedFramesRef.current += 1;
+      if (inference.status === "detected") {
+        ex004FaceShadowDetectedFramesRef.current += 1;
+      }
+    }
+
+    const rollBaseline = ex004FaceShadowBaselineRollRef.current;
+    const yawBaseline = ex004FaceShadowBaselineYawRef.current;
+    const pitchBaseline = ex004FaceShadowBaselinePitchRef.current;
+    const rawOrientation = inference.rawOrientation;
+    const faceSignedDeg =
+      rawOrientation !== null && rollBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.rollImageDeg, rollBaseline)
+        : null;
+    const faceYawDeltaDeg =
+      rawOrientation !== null && yawBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.yawDeg, yawBaseline)
+        : null;
+    const facePitchDeltaDeg =
+      rawOrientation !== null && pitchBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.pitchDeg, pitchBaseline)
+        : null;
+    const faceMinusPoseDeg =
+      faceSignedDeg !== null && poseSignedDeg !== null
+        ? faceSignedDeg - poseSignedDeg
+        : null;
+    const record: Ex004FaceShadowRecord = {
+      version: "ex004_face_shadow_v2",
+      seq: ++ex004FaceShadowSeqRef.current,
+      tMs: Math.round(tNow),
+      elapsedMs: Math.round(tNow - ex004FaceShadowStartMsRef.current),
+      trialPhase: ex004FaceShadowPhaseRef.current,
+      sessionState: sessionStateRef.current,
+      baselinePhase: baselinePhaseRef.current,
+      modelState: ex004FaceShadowModelStateRef.current,
+      status: inference.status,
+      faceCount: inference.faceCount,
+      matrixCount: inference.matrixCount,
+      roi: ex004FaceShadowRoiRef.current,
+      poseSignedDeg: roundDebugNumber(poseSignedDeg),
+      faceRawRollDeg: roundDebugNumber(rawOrientation?.rollImageDeg),
+      faceRawYawDeg: roundDebugNumber(rawOrientation?.yawDeg),
+      faceRawPitchDeg: roundDebugNumber(rawOrientation?.pitchDeg),
+      faceBaselineRollDeg: roundDebugNumber(rollBaseline),
+      faceBaselineYawDeg: roundDebugNumber(yawBaseline),
+      faceBaselinePitchDeg: roundDebugNumber(pitchBaseline),
+      faceSignedDeg: roundDebugNumber(faceSignedDeg),
+      faceYawDeltaDeg: roundDebugNumber(faceYawDeltaDeg),
+      facePitchDeltaDeg: roundDebugNumber(facePitchDeltaDeg),
+      faceMinusPoseDeg: roundDebugNumber(faceMinusPoseDeg),
+      inferenceMs: roundDebugNumber(inference.inferenceMs),
+      authoritativeSource: "pose",
+    };
+
+    ex004FaceShadowRecordsRef.current.push(record);
+    if (
+      ex004FaceShadowRecordsRef.current.length >
+      MAX_EX004_FACE_SHADOW_RECORDS
+    ) {
+      ex004FaceShadowRecordsRef.current.shift();
+    }
+    if (typeof window !== "undefined") {
+      window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    }
+
+    if (
+      tNow - ex004FaceShadowLastUiUpdateMsRef.current >=
+        EX004_FACE_SHADOW_UI_THROTTLE_MS ||
+      inference.status !== "detected"
+    ) {
+      ex004FaceShadowLastUiUpdateMsRef.current = tNow;
+      setEx004FaceShadowLive({
+        status: inference.status,
+        poseSignedDeg: record.poseSignedDeg,
+        faceSignedDeg: record.faceSignedDeg,
+        faceYawDeltaDeg: record.faceYawDeltaDeg,
+        facePitchDeltaDeg: record.facePitchDeltaDeg,
+        faceMinusPoseDeg: record.faceMinusPoseDeg,
+        inferenceMs: record.inferenceMs,
+        attemptedFrames: ex004FaceShadowAttemptedFramesRef.current,
+        detectedFrames: ex004FaceShadowDetectedFramesRef.current,
+      });
+    }
   }
 
   function landmarkDebug(
@@ -2947,6 +3590,13 @@ export default function CameraClient() {
     neutralCalibrationClockRef.current = newNeutralCalibrationClock();
     neutralCalibrationSamplesRef.current = [];
     frozenTiltDegRef.current = null;
+    ex004FaceShadowRoiRef.current = null;
+    ex004FaceShadowBaselineSamplesRef.current = [];
+    ex004FaceShadowBaselineYawSamplesRef.current = [];
+    ex004FaceShadowBaselinePitchSamplesRef.current = [];
+    ex004FaceShadowBaselineRollRef.current = null;
+    ex004FaceShadowBaselineYawRef.current = null;
+    ex004FaceShadowBaselinePitchRef.current = null;
     leftBaselineRef.current = { samples: [], value: null };
     rightBaselineRef.current = { samples: [], value: null };
     bidirectionalBaselineRef.current = { samples: [], value: null };
@@ -2958,6 +3608,14 @@ export default function CameraClient() {
     leftPrimaryFilterRef.current.reset();
     rightPrimaryFilterRef.current.reset();
     setDisplayPerSidePrimary(null);
+    setEx004FaceShadowLive((previous) => ({
+      ...previous,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+    }));
     setBaselineProgress({ samples: 0, validElapsedMs: 0 });
     setBaselinePhase(phase);
   }, [setBaselinePhase]);
@@ -3061,6 +3719,27 @@ export default function CameraClient() {
       if (leftMedian === null || rightMedian === null) return false;
       leftScapBaselineRef.current = { samples: left, value: leftMedian };
       rightScapBaselineRef.current = { samples: right, value: rightMedian };
+    }
+
+    if (
+      definition.id === "ex_004" &&
+      ex004FaceShadowEnabledRef.current &&
+      ex004FaceShadowBaselineSamplesRef.current.length >=
+        EX004_FACE_SHADOW_MIN_BASELINE_SAMPLES
+    ) {
+      ex004FaceShadowBaselineRollRef.current = medianFinite(
+        ex004FaceShadowBaselineSamplesRef.current,
+      );
+      ex004FaceShadowBaselineYawRef.current = medianFinite(
+        ex004FaceShadowBaselineYawSamplesRef.current,
+      );
+      ex004FaceShadowBaselinePitchRef.current = medianFinite(
+        ex004FaceShadowBaselinePitchSamplesRef.current,
+      );
+    } else {
+      ex004FaceShadowBaselineRollRef.current = null;
+      ex004FaceShadowBaselineYawRef.current = null;
+      ex004FaceShadowBaselinePitchRef.current = null;
     }
 
     frozenTiltDegRef.current = frozenTiltDeg;
@@ -3325,7 +4004,7 @@ export default function CameraClient() {
         unit: primaryUnit,
       });
     }
-  
+
     for (const comp of activeDefinition.compensationMetrics) {
       const signal = compensationWarningSignalsRef.current.get(comp.name);
       const coupled =
@@ -3435,6 +4114,7 @@ export default function CameraClient() {
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
+        visionFilesetRef.current = vision;
         const landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: "/models/pose_landmarker_full.task",
@@ -3452,6 +4132,82 @@ export default function CameraClient() {
     };
     initLandmarker();
   }, []);
+
+  // Opt-in staff diagnostic only. Face Landmarker is loaded lazily for
+  // ex_004 and is never consulted by feedback, hold timing, scoring, storage,
+  // or ML. numFaces=2 intentionally disables MediaPipe's single-face temporal
+  // smoothing; frames with zero or multiple faces are rejected below.
+  useEffect(() => {
+    const staffAllowed = user?.role === "admin" || user?.role === "therapist";
+    const shouldLoad =
+      staffAllowed &&
+      ex004FaceShadowEnabled &&
+      activeDefinition?.id === "ex_004";
+
+    if (!shouldLoad) {
+      faceLandmarkerRef.current?.close();
+      faceLandmarkerRef.current = null;
+      commitEx004FaceShadowModelState(
+        ex004FaceShadowEnabled ? "waiting" : "disabled",
+      );
+      return;
+    }
+
+    const vision = visionFilesetRef.current;
+    if (!modelLoaded || !vision) {
+      commitEx004FaceShadowModelState("waiting");
+      return;
+    }
+
+    let cancelled = false;
+    let created: FaceLandmarker | null = null;
+    commitEx004FaceShadowModelState("loading");
+
+    void FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: EX004_FACE_SHADOW_MODEL_PATH,
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numFaces: 2,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: true,
+    })
+      .then((landmarker) => {
+        created = landmarker;
+        if (cancelled) {
+          landmarker.close();
+          return;
+        }
+        faceLandmarkerRef.current = landmarker;
+        commitEx004FaceShadowModelState("ready");
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        const message = reason instanceof Error ? reason.message : String(reason);
+        console.error("[ex004-face-shadow] model load failed", reason);
+        commitEx004FaceShadowModelState("error", message);
+      });
+
+    return () => {
+      cancelled = true;
+      if (created) {
+        if (faceLandmarkerRef.current === created) {
+          faceLandmarkerRef.current = null;
+        }
+        created.close();
+      }
+    };
+  }, [
+    activeDefinition?.id,
+    commitEx004FaceShadowModelState,
+    ex004FaceShadowEnabled,
+    modelLoaded,
+    user?.role,
+  ]);
 
   // Load exercises from database.
   // Admin/therapist: fetch all exercises and show ex_001–ex_006 for troubleshooting.
@@ -3761,6 +4517,7 @@ export default function CameraClient() {
       if (typeof window !== "undefined") {
         window.__neckRepDebug = neckRepDebugRef.current;
       }
+      clearEx004FaceShadow();
       setRepCounts({ left: 0, right: 0 });
       lastMetricsUpdateRef.current = 0;
       compensationWarningSignalsRef.current.clear();
@@ -3846,6 +4603,7 @@ export default function CameraClient() {
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
     setRepCounts({ left: 0, right: 0 });
 
     // Calibration starts only after the user presses Start. Idle camera
@@ -3856,7 +4614,12 @@ export default function CameraClient() {
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
-  }, [selectedExercise, resetCompensationWarnings, resetNeutralCalibration]);
+  }, [
+    clearEx004FaceShadow,
+    resetCompensationWarnings,
+    resetNeutralCalibration,
+    selectedExercise,
+  ]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
@@ -4037,6 +4800,11 @@ export default function CameraClient() {
             } else {
               const tNow = performance.now();
               const observedTilt = computeTiltReference(landmarks);
+              const ex004FaceShadowInference = inferEx004FaceShadow(
+                video,
+                landmarks,
+                tNow,
+              );
 
               if (baselinePhaseRef.current === "capturing") {
                 const clock = advanceNeutralCalibrationClock(
@@ -4070,6 +4838,7 @@ export default function CameraClient() {
                   compensationScore: null,
                 });
                 setDisplayPerSidePrimary(null);
+                recordEx004FaceShadow(ex004FaceShadowInference, null, tNow);
               } else {
               const effectiveTilt = frozenNeutralTiltReference(
                 observedTilt,
@@ -4083,6 +4852,14 @@ export default function CameraClient() {
               const metricInputs: Partial<Record<MetricName, number | null>> = {
                 ...raw.metrics,
               };
+              recordEx004FaceShadow(
+                ex004FaceShadowInference,
+                activeDefinition.id === "ex_004" &&
+                  typeof raw.metrics.neckLateralFlexion === "number"
+                  ? raw.metrics.neckLateralFlexion
+                  : null,
+                tNow,
+              );
               let ex005PerFrameCorrectedSignedDeg: number | null = null;
 
               // Durable tuning trace (opt-in, any active exercise): record
@@ -5225,6 +6002,13 @@ export default function CameraClient() {
   }
 
   const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+  const ex004FaceShadowStaffAllowed =
+    user?.role === "admin" || user?.role === "therapist";
+  const ex004FaceShadowCoverage =
+    ex004FaceShadowLive.attemptedFrames > 0
+      ? ex004FaceShadowLive.detectedFrames /
+        ex004FaceShadowLive.attemptedFrames
+      : null;
   // "Already completed" recap: the selected exercise finished in a prior visit.
   // Status stays "completed" across redos (a restart only moves pending →
   // in_progress server-side), so this keeps showing. Gated on idle so it never
@@ -5566,6 +6350,285 @@ export default function CameraClient() {
               <ClinicalMetricRow key={card.id} card={card} />
             ))}
 
+            {ex004FaceShadowStaffAllowed && activeDefinition?.id === "ex_004" && (
+              <div
+                data-testid="ex004-face-shadow"
+                style={{
+                  margin: "10px 12px 0",
+                  padding: 10,
+                  border: "1px solid oklch(0.88 0.02 250)",
+                  borderRadius: 6,
+                  background: "oklch(0.975 0.01 250)",
+                }}
+              >
+                <label
+                  htmlFor="ex004-face-shadow-toggle"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 7,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    id="ex004-face-shadow-toggle"
+                    type="checkbox"
+                    checked={ex004FaceShadowEnabled}
+                    onChange={(event) => {
+                      if (event.target.checked) clearEx004FaceShadow();
+                      setEx004FaceShadowEnabled(event.target.checked);
+                    }}
+                    style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                  />
+                  <span>
+                    <span
+                      style={{
+                        display: "block",
+                        fontFamily: "var(--mono)",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: ".12em",
+                        textTransform: "uppercase",
+                        color: "oklch(0.30 0.05 250)",
+                      }}
+                    >
+                      Face shadow comparison
+                    </span>
+                    <span
+                      style={{
+                        display: "block",
+                        marginTop: 2,
+                        fontSize: 10,
+                        lineHeight: 1.35,
+                        color: "oklch(0.48 0.02 250)",
+                      }}
+                    >
+                      Diagnostic only. Pose remains authoritative.
+                    </span>
+                  </span>
+                </label>
+
+                {ex004FaceShadowEnabled && (
+                  <div
+                    style={{
+                      marginTop: 9,
+                      paddingTop: 8,
+                      borderTop: "1px solid oklch(0.90 0.01 250)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 10,
+                      lineHeight: 1.55,
+                      color: "oklch(0.32 0.02 250)",
+                    }}
+                  >
+                    <div>
+                      Status: {ex004FaceShadowModelState}
+                      {ex004FaceShadowLive.status
+                        ? ` / ${ex004FaceShadowLive.status}`
+                        : ""}
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto",
+                        gap: 6,
+                        alignItems: "end",
+                        margin: "6px 0",
+                      }}
+                    >
+                      <label style={{ display: "grid", gap: 3 }}>
+                        <span>Trial phase</span>
+                        <select
+                          aria-label="Face shadow trial phase"
+                          value={ex004FaceShadowPhase}
+                          onChange={(event) => {
+                            if (isEx004FaceShadowPhase(event.target.value)) {
+                              setEx004FaceShadowPhase(event.target.value);
+                            }
+                          }}
+                          style={{
+                            minWidth: 0,
+                            padding: "4px 5px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "inherit",
+                            font: "inherit",
+                          }}
+                        >
+                          {EX004_FACE_SHADOW_PHASE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          appendEx004FaceShadowMark(
+                            "phase",
+                            ex004FaceShadowPhaseRef.current,
+                          );
+                          showToast({
+                            variant: "success",
+                            message: "Face trial phase marked.",
+                          });
+                        }}
+                        style={{
+                          padding: "5px 7px",
+                          border: "1px solid oklch(0.82 0.03 250)",
+                          borderRadius: 4,
+                          background: "white",
+                          color: "inherit",
+                          font: "inherit",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Mark phase
+                      </button>
+                    </div>
+                    <div>
+                      Face baseline: {baselinePhase === "capturing"
+                        ? "calibrating"
+                        : baselinePhase === "captured"
+                          ? ex004FaceShadowBaselineRollRef.current !== null
+                            ? "ready"
+                            : "unavailable — restart after Face is ready"
+                          : "not started"}
+                    </div>
+                    <div>
+                      Pose / Face roll: {ex004FaceShadowLive.poseSignedDeg?.toFixed(1) ?? "—"}
+                      {"° / "}
+                      {ex004FaceShadowLive.faceSignedDeg?.toFixed(1) ?? "—"}°
+                    </div>
+                    <div>
+                      Face yaw / pitch: {ex004FaceShadowLive.faceYawDeltaDeg?.toFixed(1) ?? "—"}
+                      {"° / "}
+                      {ex004FaceShadowLive.facePitchDeltaDeg?.toFixed(1) ?? "—"}°
+                    </div>
+                    <div>
+                      Face − Pose: {ex004FaceShadowLive.faceMinusPoseDeg?.toFixed(1) ?? "—"}°
+                    </div>
+                    <div>
+                      Coverage: {ex004FaceShadowCoverage !== null
+                        ? `${(ex004FaceShadowCoverage * 100).toFixed(1)}%`
+                        : "—"}
+                    </div>
+                    <div>
+                      Face inference: {ex004FaceShadowLive.inferenceMs?.toFixed(1) ?? "—"} ms
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto",
+                        gap: 6,
+                        alignItems: "end",
+                        marginTop: 7,
+                      }}
+                    >
+                      <label style={{ display: "grid", gap: 3 }}>
+                        <span>Reference angle (optional)</span>
+                        <input
+                          aria-label="Independent reference angle in degrees"
+                          type="number"
+                          step="0.1"
+                          inputMode="decimal"
+                          value={ex004FaceShadowReferenceInput}
+                          onChange={(event) =>
+                            setEx004FaceShadowReferenceInput(event.target.value)
+                          }
+                          placeholder="degrees"
+                          style={{
+                            minWidth: 0,
+                            padding: "4px 5px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "inherit",
+                            font: "inherit",
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={
+                          ex004FaceShadowReferenceInput.trim() === "" ||
+                          !Number.isFinite(Number(ex004FaceShadowReferenceInput))
+                        }
+                        onClick={() => {
+                          const angle = Number(ex004FaceShadowReferenceInput);
+                          if (!markEx004FaceShadowReference(angle)) return;
+                          setEx004FaceShadowReferenceInput("");
+                          showToast({
+                            variant: "success",
+                            message: "Reference angle marked.",
+                          });
+                        }}
+                        style={{
+                          padding: "5px 7px",
+                          border: "1px solid oklch(0.82 0.03 250)",
+                          borderRadius: 4,
+                          background: "white",
+                          color: "inherit",
+                          font: "inherit",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Mark reference
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dump = window.dumpEx004FaceShadow?.();
+                        if (!dump) return;
+                        void navigator.clipboard.writeText(dump)
+                          .then(() => {
+                            showToast({
+                              variant: "success",
+                              message: "Face shadow diagnostics copied.",
+                            });
+                          })
+                          .catch((reason: unknown) => {
+                            console.error(
+                              "[ex004-face-shadow] clipboard copy failed",
+                              reason,
+                            );
+                            showToast({
+                              variant: "error",
+                              message: "Could not copy Face diagnostics.",
+                            });
+                          });
+                      }}
+                      style={{
+                        marginTop: 7,
+                        padding: "5px 8px",
+                        border: "1px solid oklch(0.82 0.03 250)",
+                        borderRadius: 4,
+                        background: "white",
+                        color: "oklch(0.30 0.05 250)",
+                        fontFamily: "var(--mono)",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: ".08em",
+                        textTransform: "uppercase",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Copy diagnostics
+                    </button>
+                    {ex004FaceShadowModelError && (
+                      <div style={{ color: "oklch(0.45 0.14 25)" }}>
+                        {ex004FaceShadowModelError}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ flex: 1 }} />
 
             {/* Opt-in tuning-trace recording (patient sessions only persist) */}
@@ -5618,7 +6681,7 @@ export default function CameraClient() {
                 <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{fps !== null ? `${fps} fps` : "—"}</div>
               </div>
               <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Inference</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Pose infer</div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"}</div>
               </div>
               <div>

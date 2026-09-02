@@ -244,10 +244,57 @@ export type CompensationScoring =
  * logic could not express. Defaulting to "above" preserves existing
  * behavior for all pre-2026-05-21 compensation declarations.
  */
+/**
+ * The coaching cue for one compensation metric on one exercise.
+ *
+ * Only ONE cue is surfaced at a time — `web/src/lib/pose/coachingCue.ts` picks
+ * it from the already-latched warnings. This declaration supplies the data that
+ * arbitration needs; it holds no thresholds and does not decide whether a
+ * compensation is present.
+ *
+ * `id` must be unique across the whole registry (enforced by
+ * `validateRegistry()`), so a logged decision identifies its exercise and
+ * metric without a join. Use `<exerciseId>.<metric-in-kebab-case>`.
+ *
+ * `priority` orders simultaneous cues, LOWEST NUMBER FIRST. The values in this
+ * file restate the order the compensation metrics are already declared in,
+ * which each exercise's comments reason about ("textbook compensation",
+ * "second-most-common"). Ties fall to the larger threshold-normalized excess.
+ *
+ * `message` is patient-facing wording. It is carried through the selector and
+ * the shadow log but is NOT rendered yet — the canvas overlay keeps its
+ * existing labels until a clinician has reviewed these strings. Both the
+ * wording and the priority ordering are ENGINEERING DEFAULTS pending that
+ * review; neither is a clinical parameter.
+ *
+ * The timing fields override the selector's defaults for this cue alone. They
+ * are display-behaviour values in milliseconds, not clinical durations:
+ *   - `minActiveMs`  how long the warning must stay latched before the cue may
+ *                    appear (on top of the latch's own debounce)
+ *   - `minDisplayMs` how long the cue keeps the slot before a higher-priority
+ *                    cue may replace it
+ *   - `cooldownMs`   how long the cue stays out of the running after it clears
+ */
+export type CompensationCueSpec = {
+  id: string;
+  message: string;
+  priority: number;
+  minActiveMs?: number;
+  minDisplayMs?: number;
+  cooldownMs?: number;
+};
+
 export type CompensationMetricSpec = {
   name: MetricName;
   warningThreshold: number;
   compareDirection?: "above" | "below";
+  /**
+   * Coaching-cue declaration for this metric on this exercise. Optional: a
+   * metric without one still warns, using a synthesized fallback cue at the
+   * lowest priority (see `resolveCoachingCue`), so adding a compensation
+   * metric can never silently remove its patient-visible warning.
+   */
+  cue?: CompensationCueSpec;
   /**
    * When true, this compensation is only meaningful at the PEAK of the
    * movement, so its warning must NOT surface during the rest of the rep.
@@ -563,7 +610,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // patients shift their torso away from the working arm to assist
       // the lift. Trunk lean ≥ 5° during the rep should flag. Unbraced-floor
       // band override (6° vs the global 2°): clean standing sway here is 3–5°.
-      { name: "trunkLean", warningThreshold: 5, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_001.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+        },
+        warningThreshold: 5, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
       // Shoulder shrug (scapular elevation) is the second-most-common
       // compensation — patients hike the trapezius to substitute for
       // weak deltoid. Surfaced as a warning when shrug exceeds the
@@ -572,14 +625,26 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // rhythm), so the deduction runs on the residual from the expected
       // elevation at the current abduction, not the raw value. Fit: expected
       // ≈ -0.0077 + 0.00124·|abduction°| (clean-rep recording, n≈930).
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_001.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
         scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" } },
       // Uneven shoulder line during the raise — one whole shoulder rides
       // higher than the other (distinct from a symmetric shrug). Drives the
       // per-shoulder overlay boxes + "LOWER" arrow. Starting threshold 5°
       // (above the 3° landmark noise floor); tune live. Band override raises
       // the score floor to 7° (resting asymmetry here is ~3.6°).
-      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_001.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 30,
+        },
+        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
   },
 
@@ -627,8 +692,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // weak shoulder flexion. We don't have a sagittal-plane trunk angle
       // metric yet; trunkLean (lateral) catches asymmetric leans only.
       // TODO: add `trunkExtension` metric for sagittal compensation.
-      { name: "trunkLean", warningThreshold: 5 },
-      { name: "scapularElevation", warningThreshold: 0.04 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_002.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_002.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+        },
+        warningThreshold: 0.04 },
     ],
   },
 
@@ -710,7 +787,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Asymmetric shrug (one trap dominates) is the main quality issue.
       // shoulderSymmetry > 5° during the held position flags this.
-      { name: "shoulderSymmetry", warningThreshold: 5 },
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_003.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
     ],
   },
 
@@ -773,7 +856,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // band override (6° vs global 2°): clean assisted holds sway 1.8–3.4° and
       // the global floor deducted on ~54% of clean-hold frames. The warning
       // threshold stays the tighter 3° (warning ≠ score deduction here).
-      { name: "trunkLean", warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_004.trunk-lean",
+          message: "Keep your torso upright — tilt only your head.",
+          priority: 10,
+        },
+        warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
       // NOTE 2026-06-11: `shoulderSymmetry` was REMOVED from this
       // compensation list. The exercise is the assisted stretch, where a
       // sloped shoulder line is PRESCRIBED technique (the opposite shoulder
@@ -844,13 +933,25 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // current trunk flexion. Fit: expected ≈ 11.71 + 1.505·|trunkFlexion°|
       // (clean-rep recording, n≈1299; the intercept is an in-rep envelope
       // extrapolation, not an anatomical resting claim).
-      { name: "neckTilt", warningThreshold: 5,
+      { name: "neckTilt",
+        cue: {
+          id: "ex_005.neck-tilt",
+          message: "Bend from your waist, not your neck.",
+          priority: 10,
+        },
+        warningThreshold: 5,
         scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" } },
       // Shoulder shrug during side bend = bracing through the shoulder
       // girdle instead of moving from the spine. Also `primary-coupled`: the
       // shoulder line necessarily rises on the lengthening side of a clean
       // bend. Fit: expected ≈ -0.0230 + 0.01306·|trunkFlexion°|.
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_005.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
         scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" } },
     ],
   },
@@ -887,16 +988,34 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // baseline scapular elevation, so the deduction runs on the residual
       // from the expected elevation at the current abduction. Fit: expected
       // ≈ -0.0142 + 0.00093·|abduction°| (clean-hold recording, n≈3348).
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_006.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 10,
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
         scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" } },
       // Trunk lean during T-pose hold = unbalanced load between arms. Keeps the
       // global floor — clean T-pose trunk lean is ~1° (mean deduction ~2.8).
-      { name: "trunkLean", warningThreshold: 5 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_006.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 20,
+        },
+        warningThreshold: 5 },
       // Uneven shoulder line during the hold — one shoulder rides higher than
       // the other. Drives the per-shoulder overlay boxes + "LOWER" arrow.
       // Starting threshold 5° (above the 3° landmark noise floor); tune live.
       // Band override raises the score floor to 7° (resting asymmetry ~3.6°).
-      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_006.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 30,
+        },
+        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
   },
 
@@ -974,7 +1093,18 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     },
     compensationMetrics: [
       // Trunk lean (esp. backward lean) is the classic shoulder press cheat.
-      { name: "trunkLean", warningThreshold: 5 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_007.trunk-lean",
+          // Deliberately direction-neutral, matching every other trunkLean cue.
+          // The comment above describes the compensation this metric is meant to
+          // CATCH, but `computeTrunkLateralLean` measures image-plane left/right
+          // lean only — it cannot see sagittal backward lean. Earlier wording said
+          // "don't lean back", which named an axis the metric does not detect.
+          message: "Keep your torso upright.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list. The metric returns a raw signed projection that
       // is ~0.30 positive at rest (ear naturally sits above shoulder along
@@ -998,7 +1128,18 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // direction-aware ("below") banded deduction tuned from live data —
       // until that exists this metric must not score, and must not dilute
       // the weight of the metrics that do.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+      { name: "elbowFlexion",
+        cue: {
+          id: "ex_007.elbow-flexion",
+          message: "Straighten your arms at the top.",
+          priority: 20,
+          // Shorter windows than the defaults: this cue only surfaces inside
+          // the brief near-peak gate, so the standard 600 ms promote / 3 s
+          // cooldown would skip most repetitions entirely.
+          minActiveMs: 250,
+          cooldownMs: 1200,
+        },
+        warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
     ],
   },
 
@@ -1069,7 +1210,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Trunk lean = patient is using torso shift to slide arms up the wall
       // instead of recruiting shoulder muscles.
-      { name: "trunkLean", warningThreshold: 5 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_008.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list for the same reason as ex_007 — see that comment
       // for full rationale. Trapezius-hiking is partially caught by
@@ -1087,7 +1234,18 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // direction-aware ("below") banded deduction tuned from live data —
       // until that exists this metric must not score, and must not dilute
       // the weight of the metrics that do.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+      { name: "elbowFlexion",
+        cue: {
+          id: "ex_008.elbow-flexion",
+          message: "Straighten your arms at the top.",
+          priority: 20,
+          // Shorter windows than the defaults: this cue only surfaces inside
+          // the brief near-peak gate, so the standard 600 ms promote / 3 s
+          // cooldown would skip most repetitions entirely.
+          minActiveMs: 250,
+          cooldownMs: 1200,
+        },
+        warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
       // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
       // elbow-off-wall detection) was REMOVED from this compensation list
       // after live-tuning iter #4. The metric was designed to flag an elbow
@@ -1187,6 +1345,59 @@ function validateRegistry(): void {
   // Global band-table shape (see validateBandList for the invariants).
   for (const [metric, bands] of Object.entries(COMPENSATION_BANDS)) {
     validateBandList(bands, `COMPENSATION_BANDS["${metric}"]`);
+  }
+
+  // Coaching cue ids must be unique across the WHOLE registry, not just within
+  // one exercise. The single-cue selector keys its per-cue timing state by id,
+  // and a shadow-log decision is read back by id alone — a reused id would
+  // silently share cooldown state between two exercises and make a logged
+  // decision ambiguous about which exercise produced it.
+  const seenCueIds = new Map<string, string>();
+  for (const def of Object.values(EXERCISE_REGISTRY)) {
+    for (const comp of def.compensationMetrics) {
+      if (!comp.cue) continue;
+      const owner = `${def.id} compensation metric "${comp.name}"`;
+      const previousOwner = seenCueIds.get(comp.cue.id);
+      if (previousOwner !== undefined) {
+        throw new Error(
+          `Registry invariant violated: coaching cue id "${comp.cue.id}" is ` +
+          `declared by both ${previousOwner} and ${owner}. Cue ids must be ` +
+          `unique across the registry — use "<exerciseId>.<metric-in-kebab-case>".`
+        );
+      }
+      if (comp.cue.id.trim() === "") {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue id must not be empty.`
+        );
+      }
+      if (comp.cue.message.trim() === "") {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue "${comp.cue.id}" ` +
+          `must declare a non-empty message.`
+        );
+      }
+      if (!Number.isFinite(comp.cue.priority)) {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue ` +
+          `"${comp.cue.id}" priority (${comp.cue.priority}) must be a finite ` +
+          `number. Lower numbers are surfaced first.`
+        );
+      }
+      for (const [field, value] of [
+        ["minActiveMs", comp.cue.minActiveMs],
+        ["minDisplayMs", comp.cue.minDisplayMs],
+        ["cooldownMs", comp.cue.cooldownMs],
+      ] as const) {
+        if (value !== undefined && !(Number.isFinite(value) && value >= 0)) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: coaching cue ` +
+            `"${comp.cue.id}" ${field} (${value}) must be a non-negative ` +
+            `finite number of milliseconds.`
+          );
+        }
+      }
+      seenCueIds.set(comp.cue.id, owner);
+    }
   }
 
   for (const def of Object.values(EXERCISE_REGISTRY)) {

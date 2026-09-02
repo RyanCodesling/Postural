@@ -50,6 +50,16 @@ import {
   type CompensationWarningLatch,
 } from "@/lib/pose/compensationWarningState";
 import {
+  COACHING_SHADOW_SCHEMA,
+  newCoachingCueState,
+  resolveCoachingCue,
+  resolveCoachingCueTiming,
+  selectCoachingCue,
+  type CoachingCueCandidate,
+  type CoachingCueReason,
+  type CoachingCueState,
+} from "@/lib/pose/coachingCue";
+import {
   getCompensationScoring,
   getExerciseDefinition,
   type ExerciseDefinition,
@@ -670,6 +680,234 @@ type NeckRepDebugDump = {
   records: NeckRepDebugRecord[];
 };
 
+/**
+ * One logged coaching-cue arbitration decision.
+ *
+ * Written only while the staff-only coaching shadow mode is on. The selector
+ * itself runs regardless — shadow mode adds the recording, it does not change
+ * which cue the patient sees. Nothing here is persisted or transmitted; the
+ * ring lives in memory until it is exported to a local file or dropped.
+ */
+/**
+ * What the operator was TRYING to do during a labelled segment.
+ *
+ * This is the one thing the selector cannot infer and the log cannot recover
+ * afterwards: a quiet tick looks identical whether the movement was clean, the
+ * patient was resting, or a cue was suppressed. Recording intent at capture
+ * time is what makes a false-positive rate computable instead of guessed.
+ */
+type CoachingShadowIntent = "clean" | "faulty" | "transition";
+
+type CoachingShadowRecord = {
+  seq: number;
+  /** `performance.now()` at the decision, matching every other camera clock. */
+  tMs: number;
+  /** Milliseconds since shadow recording was switched on. */
+  tShadowMs: number;
+  /** Wall clock, for lining a session up against an external observation log. */
+  wallIso: string;
+  exerciseId: string;
+  prescribedSide: PrescribedSide;
+  // ── Readiness / calibration context. A decision is only interpretable
+  // alongside the gates that were open when it was made.
+  sessionState: SessionState;
+  captureOk: boolean;
+  captureMessage: string;
+  baselinePhase: "not-needed" | "capturing" | "captured";
+  frozenTiltDeg: number | null;
+  tiltConfidence: TiltReference["confidence"];
+  nearPeak: boolean;
+  // ── Selector input and output.
+  activeLatches: MetricName[];
+  suppressedMetrics: MetricName[];
+  // ── Operator-declared ground truth. Free-text label (a capture or segment
+  // id) plus what the movement was meant to be. Both are whatever was set when
+  // the record was written, so a mid-capture segment change splits cleanly.
+  segmentLabel: string | null;
+  segmentIntent: CoachingShadowIntent;
+  selectedCueId: string | null;
+  selectedMetric: MetricName | null;
+  /**
+   * The cue's registry wording at the moment of the decision. Recorded even
+   * though it is not rendered: cue text is not covered by any persisted
+   * configuration version, so without it an old export cannot prove which
+   * wording produced a decision after the registry changes.
+   */
+  selectedMessage: string | null;
+  reason: CoachingCueReason;
+  displayedForMs: number | null;
+  clearedCueId: string | null;
+  /** Every latched warning the selector ranked, plus its anatomical side. */
+  candidates: (CoachingCueCandidate & { side: "left" | "right" | null })[];
+};
+
+/**
+ * Export envelope for the coaching shadow log.
+ *
+ * `droppedRecords` is why this is a file download rather than a clipboard copy:
+ * the ring is finite, and an export that silently omitted its overflow would
+ * repeat the failure recorded against the Face diagnostic export. `records`
+ * always contains the ENTIRE retained ring — it is never truncated further at
+ * export time — and `droppedRecords` states exactly how many older decisions
+ * the ring discarded.
+ */
+type CoachingShadowExport = {
+  schema: typeof COACHING_SHADOW_SCHEMA;
+  generatedAt: string;
+  /**
+   * Every exercise represented in `records`, in first-seen order. The ring is
+   * not cleared on an exercise change, so one export can legitimately span
+   * several exercises; a single `exerciseId` here would have labelled such a
+   * file as whichever exercise happened to be last.
+   */
+  exerciseIds: string[];
+  mixedExercises: boolean;
+  /**
+   * The cue configuration in force at export time, for every exercise in
+   * `exerciseIds`: ids, wording, priority, and the EFFECTIVE timing after the
+   * module defaults are applied. Read from the registry when the file is
+   * written, so it describes the configuration that produced these decisions
+   * only while the registry is unchanged — this is a diagnostic snapshot, not
+   * a persisted configuration version (see the coaching-config gap in
+   * `versioning.ts`).
+   */
+  cueConfiguration: {
+    exerciseId: string;
+    metric: MetricName;
+    cueId: string;
+    message: string;
+    priority: number;
+    minActiveMs: number;
+    minDisplayMs: number;
+    cooldownMs: number;
+  }[];
+  /**
+   * Derived index of the operator-declared segments in `records`, in the order
+   * they occurred, so analysis does not have to re-group by hand. A segment
+   * breaks whenever the label or the intent changes.
+   */
+  segments: {
+    label: string | null;
+    intent: CoachingShadowIntent;
+    firstSeq: number;
+    lastSeq: number;
+    startMs: number;
+    endMs: number;
+    durationMs: number;
+    recordCount: number;
+    cueActiveRecords: number;
+  }[];
+  ringCapacity: number;
+  recordCount: number;
+  droppedRecords: number;
+  notes: string[];
+  records: CoachingShadowRecord[];
+};
+
+/**
+ * One planned step of the live-verification session.
+ *
+ * The protocol asks the operator to declare a label and an intent before every
+ * segment. Typing those by hand mid-session is the step most likely to be
+ * skipped or mistyped, and a mislabelled segment is only discovered during
+ * analysis when it is too late to redo. This table pre-writes them.
+ *
+ * It deliberately does NOT drive the session lifecycle. Stop/Start stays manual
+ * so the proven session state machine is untouched by anything added here —
+ * `startsCapture` only tells the panel to remind the operator to do it.
+ */
+type CoachingSessionStep = {
+  captureId: string;
+  exerciseId: string;
+  label: string;
+  intent: CoachingShadowIntent;
+  hint: string;
+  /** First step of a capture: Stop/Start, confirm the reset, clear the buffer. */
+  startsCapture?: boolean;
+};
+
+/**
+ * The twelve captures of protocol v2.3, expanded into labelled segments.
+ *
+ * Every capture opens with a `transition` step so the interval between baseline
+ * capture and the first deliberate movement is excluded from both the clean and
+ * the faulty counts instead of polluting one of them.
+ */
+const COACHING_SESSION_PLAN: readonly CoachingSessionStep[] = [
+  { captureId: "A1", exerciseId: "ex_001", label: "A1-setup", intent: "transition", hint: "Settle into position. Nothing recorded as clean or faulty yet.", startsCapture: true },
+  { captureId: "A1", exerciseId: "ex_001", label: "A1-clean", intent: "clean", hint: "8 deliberately clean lateral raises. Expect no cue at all." },
+
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm set 1 / 0 reps / baseline captured, clear the buffer.", startsCapture: true },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-trunk", intent: "faulty", hint: "3 reps: SHIFT the torso sideways, do not tip. Keep the shoulder line level with the floor and let your head travel with the torso." },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-shrug", intent: "faulty", hint: "3 reps: shrug BOTH shoulders equally. A one-sided shrug also trips shoulderSymmetry." },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-asymmetry", intent: "faulty", hint: "3 reps RAISING one shoulder. Scapular will almost certainly co-fire and outranks symmetry here — symmetry appearing as a ranked candidate is enough." },
+
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-shrug", intent: "faulty", hint: "Reps 1-2 of 8: establish a shrug, hold until its cue appears." },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-both", intent: "faulty", hint: "Reps 3-5 of 8: add trunk lean, keep the shrug. Watch the switch." },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-trunk-corrected", intent: "faulty", hint: "Reps 6-8 of 8: correct the trunk lean only. Shrug should return on the same tick." },
+
+  { captureId: "B1", exerciseId: "ex_006", label: "B1-setup", intent: "transition", hint: "New capture on ex_006. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "B1", exerciseId: "ex_006", label: "B1-clean", intent: "clean", hint: "One clean T-pose hold, about 20 s. Expect silence." },
+
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-shrug", intent: "faulty", hint: "Hold, then shrug ONE shoulder upward. Not dropping the other." },
+  // `transition`, not `clean`: this window opens the instant the fault is
+  // corrected, so it necessarily contains the cue's legitimate clear latency.
+  // Counting that as clean-window cue activity would inflate the false-positive
+  // figure with correct behaviour.
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-corrected", intent: "transition", hint: "Correct it and hold on for the rest of the 25 s. Recovery window, counted as neither clean nor faulty." },
+
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-setup", intent: "transition", hint: "New capture on ex_008. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-normal-tempo", intent: "faulty", hint: "5 bent-elbow reps at normal tempo. Silence here is a result, not a failure." },
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-slow-tempo", intent: "faulty", hint: "5 slow reps, pausing at the top." },
+
+  { captureId: "C2", exerciseId: "ex_008", label: "C2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C2", exerciseId: "ex_008", label: "C2-asymmetric", intent: "faulty", hint: "6 reps: one arm straight and high, the other bent and lower." },
+
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-setup", intent: "transition", hint: "New capture on ex_007. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-slow", intent: "faulty", hint: "5 slow bent-elbow presses." },
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-asymmetric", intent: "faulty", hint: "5 asymmetric presses." },
+
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-setup", intent: "transition", hint: "New capture on ex_005. Stop/Start, confirm reset, clear.", startsCapture: true },
+  // Split by direction: side attribution is the observation under test here, so
+  // one combined label would make it unrecoverable from the JSON.
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-clean-left", intent: "clean", hint: "2 clean bends to the LEFT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-clean-right", intent: "clean", hint: "2 clean bends to the RIGHT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-head-led-left", intent: "faulty", hint: "2 head-led bends to the LEFT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-head-led-right", intent: "faulty", hint: "2 head-led bends to the RIGHT." },
+
+  { captureId: "E1", exerciseId: "ex_001", label: "E1-setup", intent: "transition", hint: "New capture on ex_001. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "E1", exerciseId: "ex_001", label: "E1-ex001", intent: "faulty", hint: "3 reps with a fault. Then switch to ex_006 and press Start again — do NOT clear the buffer." },
+  { captureId: "E1", exerciseId: "ex_006", label: "E1-ex006", intent: "faulty", hint: "After Start and recalibration: 15 s hold with a fault. Then export WITHOUT clearing." },
+
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-setup", intent: "transition", hint: "New capture. Select ex_001, Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-pre-reset", intent: "faulty", hint: "Short A3-style sequence as the pre-reset reference. Note what happened." },
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-post-reset", intent: "faulty", hint: "After recalibrating: the SAME sequence again. Compare against pre-reset." },
+  // Separate label: recalibration evidence and dropout evidence answer different
+  // questions and must be separable in the export.
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-dropout", intent: "faulty", hint: "Get a cue active, step out of frame until capture drops, step back. Then export." },
+];
+
+/**
+ * Ring capacity for the shadow log. The selector runs on the 150 ms metrics
+ * tick, so this retains roughly 12 minutes of continuous decisions. Overflow is
+ * counted and reported in the export rather than hidden.
+ */
+const COACHING_SHADOW_RING_LIMIT = 5000;
+
+/**
+ * How many automated checks the export runs: ring overflow, unlabelled records,
+ * all-transition capture, wrong-exercise segments, mixed captures, missing
+ * planned segments, and implausibly thin segments.
+ *
+ * Reported to the operator so a clean result never reads as a blanket "valid".
+ * These checks do NOT confirm that a session was reset, that the movement was
+ * performed correctly, or that the segments were declared at the right moment.
+ * The protocol's manual checks remain required, not optional.
+ */
+const COACHING_SHADOW_CHECKS_RUN = 7;
+
 type Ex004FaceShadowModelState =
   | "disabled"
   | "waiting"
@@ -1228,9 +1466,39 @@ export default function CameraClient() {
   const [activeCompensationWarnings, setActiveCompensationWarnings] = useState<Set<MetricName>>(
     new Set(),
   );
+  // Single-cue arbitration state. Lives beside the warning latches and is
+  // cleared with them: a cue's minimum-active clock, display clock and
+  // cooldown all describe one continuous stretch of coaching, so carrying any
+  // of it across an exercise change, a calibration restart or a capture
+  // dropout would suppress or promote a cue on evidence from a different run.
+  const coachingCueStateRef = useRef<CoachingCueState>(newCoachingCueState());
+  // Read by the per-frame overlay path, which runs faster than the 150 ms
+  // metrics tick that produces the decision.
+  const selectedCoachingCueMetricRef = useRef<MetricName | null>(null);
+  const [selectedCoachingCueMetric, setSelectedCoachingCueMetric] =
+    useState<MetricName | null>(null);
   const resetCompensationWarnings = useCallback(() => {
     compensationWarningLatchesRef.current.clear();
     setActiveCompensationWarnings(new Set());
+    coachingCueStateRef.current = newCoachingCueState();
+    selectedCoachingCueMetricRef.current = null;
+    setSelectedCoachingCueMetric(null);
+  }, []);
+  /**
+   * Whether anything in the warning/cue layer still carries state from an
+   * earlier run. The render loop's "clear stale state" paths test this rather
+   * than the latch map alone: a cue can hold a live cooldown after every latch
+   * has dropped, and carrying that across a calibration restart would suppress
+   * a cue on evidence from before the restart.
+   */
+  const compensationWarningStateIsDirty = useCallback(() => {
+    const cue = coachingCueStateRef.current;
+    return (
+      compensationWarningLatchesRef.current.size > 0 ||
+      cue.currentCueId !== null ||
+      cue.activeSinceMs.size > 0 ||
+      cue.clearedAtMs.size > 0
+    );
   }, []);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
@@ -1256,6 +1524,36 @@ export default function CameraClient() {
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
+  // ── Staff-only coaching shadow log ────────────────────────────────────────
+  // Records what the cue selector decided and why. Unlike the Face diagnostic,
+  // the runtime gate is the staff role itself, not just the panel: both refs
+  // below are checked inside the render loop before a record is written, and
+  // no console helper is registered, so a patient cannot start recording from
+  // developer tools on their own device.
+  const coachingShadowEnabledRef = useRef(false);
+  const coachingShadowStaffAllowedRef = useRef(false);
+  const coachingShadowRecordsRef = useRef<CoachingShadowRecord[]>([]);
+  const coachingShadowSeqRef = useRef(0);
+  const coachingShadowDroppedRef = useRef(0);
+  const coachingShadowStartMsRef = useRef<number | null>(null);
+  const coachingShadowSegmentLabelRef = useRef<string | null>(null);
+  const coachingShadowSegmentIntentRef = useRef<CoachingShadowIntent>("transition");
+  const [coachingShadowSegmentLabel, setCoachingShadowSegmentLabel] = useState("");
+  const [coachingShadowSegmentIntent, setCoachingShadowSegmentIntent] =
+    useState<CoachingShadowIntent>("transition");
+  const [coachingShadowActiveSegment, setCoachingShadowActiveSegment] =
+    useState<{ label: string; intent: CoachingShadowIntent } | null>(null);
+  const [coachingPlanIndex, setCoachingPlanIndex] = useState(0);
+  const [coachingRemoteCollapsed, setCoachingRemoteCollapsed] = useState(false);
+  // True once the current ring contents have been written to a file. Cleared by
+  // the next recorded decision, so "exported" always describes what is in the
+  // ring right now rather than something that was exported two captures ago.
+  const coachingShadowExportedRef = useRef(false);
+  const [coachingShadowExported, setCoachingShadowExported] = useState(false);
+  const [coachingShadowEnabled, setCoachingShadowEnabledState] = useState(false);
+  const [coachingShadowCount, setCoachingShadowCount] = useState(0);
+  const coachingShadowLastUiUpdateMsRef = useRef(0);
+
   const ex004FaceShadowEnabledRef = useRef(false);
   const ex004FaceShadowModelStateRef = useRef<Ex004FaceShadowModelState>("disabled");
   const ex004FaceShadowRoiRef = useRef<FixedFaceRoi | null>(null);
@@ -1456,6 +1754,343 @@ export default function CameraClient() {
     ex004FaceShadowEnabledRef.current = enabled;
     setEx004FaceShadowEnabledState(enabled);
   }, []);
+
+  const clearCoachingShadow = useCallback(() => {
+    coachingShadowRecordsRef.current = [];
+    coachingShadowSeqRef.current = 0;
+    coachingShadowDroppedRef.current = 0;
+    coachingShadowStartMsRef.current = null;
+    coachingShadowLastUiUpdateMsRef.current = 0;
+    coachingShadowSegmentLabelRef.current = null;
+    coachingShadowSegmentIntentRef.current = "transition";
+    coachingShadowExportedRef.current = false;
+    setCoachingShadowCount(0);
+    setCoachingShadowActiveSegment(null);
+    setCoachingShadowExported(false);
+  }, []);
+
+  /**
+   * Starts a labelled segment. Every record written from now until the next
+   * call carries this label and intent, so the export is self-describing and
+   * no separate written timestamp sheet has to be kept in sync with it.
+   */
+  const markCoachingShadowSegment = useCallback(
+    (label: string, intent: CoachingShadowIntent): boolean => {
+      const trimmed = label.trim();
+      if (trimmed === "") return false;
+      coachingShadowSegmentLabelRef.current = trimmed;
+      coachingShadowSegmentIntentRef.current = intent;
+      setCoachingShadowActiveSegment({ label: trimmed, intent });
+      return true;
+    },
+    [],
+  );
+
+  /**
+   * Closes the current segment by dropping back to an unlabelled `transition`.
+   *
+   * A label with a start but no end runs until the next one begins, so it
+   * absorbs the rest after the last repetition and the time spent reaching for
+   * the export button. Those ticks are not movement, and there is no rep
+   * boundary or primary value in the record to trim them afterwards. Ending the
+   * segment explicitly is the only way to bound the window.
+   */
+  const endCoachingShadowSegment = useCallback(() => {
+    // Keep a LABEL — `after:<segment>` — rather than dropping to null. Recording
+    // continues while the operator reaches for Download, and nulling the label
+    // would have made those ordinary between-segment ticks trip the
+    // unlabelled-record warning on every single capture. A warning that fires
+    // when the workflow is being followed correctly trains people to ignore
+    // warnings. The intent still drops to `transition`, so these ticks stay out
+    // of both the clean and the faulty counts.
+    const previous = coachingShadowSegmentLabelRef.current;
+    // Idempotent: `Next` also ends any open segment, so pressing End then Next
+    // would otherwise produce `after:after:<segment>`.
+    const label =
+      previous === null
+        ? "idle"
+        : previous === "idle" || previous.startsWith("after:")
+          ? previous
+          : `after:${previous}`;
+    coachingShadowSegmentLabelRef.current = label;
+    coachingShadowSegmentIntentRef.current = "transition";
+    setCoachingShadowActiveSegment({ label, intent: "transition" });
+  }, []);
+
+  const setCoachingShadowEnabled = useCallback((enabled: boolean) => {
+    coachingShadowEnabledRef.current = enabled;
+    setCoachingShadowEnabledState(enabled);
+  }, []);
+
+  /**
+   * Writes the whole retained shadow ring to a local JSON file.
+   *
+   * A FILE DOWNLOAD, deliberately, not a clipboard copy: the Face diagnostic's
+   * clipboard export lost a session's raw dump and silently truncated the ring
+   * it did copy. Everything the ring still holds is written, and any overflow
+   * the ring already discarded is stated as a count in the envelope rather than
+   * being papered over.
+   *
+   * Nothing leaves the device. The blob is created, saved, and revoked locally.
+   */
+  const downloadCoachingShadow = useCallback((): {
+    warnings: string[];
+    checksRun: number;
+  } | null => {
+    if (typeof window === "undefined") return null;
+    const records = coachingShadowRecordsRef.current;
+    if (records.length === 0) return null;
+
+    const exerciseIds = [...new Set(records.map((record) => record.exerciseId))];
+    const cueConfiguration: CoachingShadowExport["cueConfiguration"] = [];
+    for (const exerciseId of exerciseIds) {
+      const definition = getExerciseDefinition(exerciseId);
+      if (!definition) continue;
+      for (const comp of definition.compensationMetrics) {
+        const cue = resolveCoachingCue(comp);
+        const timing = resolveCoachingCueTiming(cue);
+        cueConfiguration.push({
+          exerciseId,
+          metric: comp.name,
+          cueId: cue.id,
+          message: cue.message,
+          priority: cue.priority,
+          ...timing,
+        });
+      }
+    }
+
+    const segments: CoachingShadowExport["segments"] = [];
+    for (const record of records) {
+      const open = segments[segments.length - 1];
+      if (
+        open &&
+        open.label === record.segmentLabel &&
+        open.intent === record.segmentIntent
+      ) {
+        open.lastSeq = record.seq;
+        open.endMs = record.tMs;
+        open.durationMs = open.endMs - open.startMs;
+        open.recordCount += 1;
+        if (record.selectedCueId !== null) open.cueActiveRecords += 1;
+        continue;
+      }
+      segments.push({
+        label: record.segmentLabel,
+        intent: record.segmentIntent,
+        firstSeq: record.seq,
+        lastSeq: record.seq,
+        startMs: record.tMs,
+        endMs: record.tMs,
+        durationMs: 0,
+        recordCount: 1,
+        cueActiveRecords: record.selectedCueId !== null ? 1 : 0,
+      });
+    }
+
+    const payload: CoachingShadowExport = {
+      schema: COACHING_SHADOW_SCHEMA,
+      generatedAt: new Date().toISOString(),
+      exerciseIds,
+      mixedExercises: exerciseIds.length > 1,
+      cueConfiguration,
+      segments,
+      ringCapacity: COACHING_SHADOW_RING_LIMIT,
+      recordCount: records.length,
+      droppedRecords: coachingShadowDroppedRef.current,
+      notes: [
+        "Coaching cue arbitration decisions. Diagnostic record of which cue was selected and why.",
+        "Records the selector's own decisions, not clinical outcomes. Cue wording and priority ordering are engineering defaults and are not clinician-approved.",
+        "Every record the in-memory ring still held is included. droppedRecords counts decisions the ring discarded before this export.",
+        "tMs is performance.now() milliseconds since page load; tShadowMs is milliseconds since recording started.",
+        "The ring is not cleared on an exercise change, so one export can span several exercises. Every record carries its own exerciseId; exerciseIds lists them all.",
+        "cueConfiguration is read from the registry at export time, not at decision time. It describes these decisions only if the registry has not changed since they were made.",
+        "segmentLabel and segmentIntent are operator-declared ground truth, set in the panel before each segment. intent=clean marks movement that was MEANT to be clean; intent=transition marks setup, recovery, and between-segment time and belongs in neither count.",
+        "cueActiveRecords/recordCount on a clean segment is a DESCRIPTIVE TICK SHARE, not a false-positive rate and not a bound on one. A segment still contains the pauses between repetitions, and a pause can push the share either way depending on whether a cue was active across it. The record carries no rep boundary or primary value, so those ticks cannot be removed afterwards.",
+      ],
+      records: [...records],
+    };
+
+    const exerciseLabel = exerciseIds.length === 1 ? exerciseIds[0] : "mixed";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+    );
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `coaching-shadow-${exerciseLabel}-${stamp}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+
+    // Self-validation. The protocol asks the operator to open every file and
+    // check these before clearing; doing it here means a bad capture is caught
+    // in the room rather than during analysis, when it cannot be redone.
+    const warnings: string[] = [];
+
+    // Cross-check the capture against the plan. Without this the validator can
+    // only see the envelope's own consistency, and a single record recorded on
+    // the wrong exercise would pass.
+    const planByLabel = new Map(
+      COACHING_SESSION_PLAN.map((step) => [step.label, step] as const),
+    );
+    const misplaced = payload.segments.filter((segment) => {
+      const step = segment.label === null ? undefined : planByLabel.get(segment.label);
+      if (!step) return false;
+      return records.some(
+        (record) =>
+          record.segmentLabel === segment.label &&
+          record.exerciseId !== step.exerciseId,
+      );
+    });
+    if (misplaced.length > 0) {
+      warnings.push(
+        `${misplaced.length} segment(s) were recorded on the wrong exercise: ${misplaced
+          .map((segment) => segment.label)
+          .join(", ")}.`,
+      );
+    }
+    const capturesPresent = new Set(
+      payload.segments
+        .map((segment) => planByLabel.get(segment.label ?? "")?.captureId)
+        .filter((id): id is string => id !== undefined),
+    );
+    // A valid E1 file holds ONE capture id spanning two EXERCISES. Nothing is
+    // meant to hold two capture ids, so there is no exception here — the earlier
+    // `!capturesPresent.has("E1")` guard confused exercises with captures and
+    // let an E1 + A1 contamination through unreported.
+    if (capturesPresent.size > 1) {
+      warnings.push(
+        `This file holds ${capturesPresent.size} captures (${[...capturesPresent].join(", ")}). Each capture belongs in its own file; only E1 spans two exercises, and it is still one capture.`,
+      );
+    }
+    for (const captureId of capturesPresent) {
+      // Exclude only the auto-generated capture-boundary setup steps. Filtering
+      // on `intent !== "transition"` also dropped genuinely required segments
+      // that happen to be transition-classified — `B2-corrected` is the
+      // recovery window and its absence must be reported.
+      const expected = COACHING_SESSION_PLAN.filter(
+        (step) => step.captureId === captureId && step.startsCapture !== true,
+      ).map((step) => step.label);
+      const missing = expected.filter(
+        (label) => !payload.segments.some((segment) => segment.label === label),
+      );
+      if (missing.length > 0) {
+        warnings.push(`${captureId} is missing segment(s): ${missing.join(", ")}.`);
+      }
+    }
+    const thin = payload.segments.filter(
+      (segment) => segment.intent !== "transition" && segment.recordCount < 10,
+    );
+    if (thin.length > 0) {
+      warnings.push(
+        `${thin.length} segment(s) hold fewer than 10 records (under ~1.5 s): ${thin
+          .map((segment) => segment.label)
+          .join(", ")}.`,
+      );
+    }
+
+    if (payload.droppedRecords > 0) {
+      warnings.push(
+        `${payload.droppedRecords} decisions were evicted from the ring before this export — the capture ran past about 12 minutes.`,
+      );
+    }
+    // Only records written BEFORE anything was ever declared land here — ending
+    // a segment keeps an `after:` label, so the normal gap between segments does
+    // not trip this.
+    const undeclared = records.filter((record) => record.segmentLabel === null).length;
+    if (undeclared > 0) {
+      warnings.push(
+        `${undeclared} of ${records.length} records were written before any segment was declared — press "Start this step" before moving.`,
+      );
+    }
+    const transitionOnly =
+      payload.segments.length > 0 &&
+      payload.segments.every((segment) => segment.intent === "transition");
+    if (transitionOnly) {
+      warnings.push(
+        "Every segment is still 'transition' — no clean or faulty intent was declared, so this capture cannot contribute to the clean-window measure.",
+      );
+    }
+    return { warnings, checksRun: COACHING_SHADOW_CHECKS_RUN };
+  }, []);
+
+  // Runtime staff gate for the shadow log, kept in a ref so the render loop can
+  // check it without re-subscribing. Losing the staff role stops recording and
+  // discards what was captured, so the panel disappearing and the recording
+  // stopping are the same event.
+  const coachingShadowStaffAllowed =
+    user?.role === "admin" || user?.role === "therapist";
+  useEffect(() => {
+    coachingShadowStaffAllowedRef.current = coachingShadowStaffAllowed;
+    if (!coachingShadowStaffAllowed) {
+      coachingShadowEnabledRef.current = false;
+      setCoachingShadowEnabledState(false);
+      clearCoachingShadow();
+    }
+  }, [coachingShadowStaffAllowed, clearCoachingShadow]);
+
+  /**
+   * Remote segment control for an operator standing away from the keyboard.
+   *
+   * WHY THIS EXISTS
+   * `End step` is what flips the recorded label to `transition`. Every tick
+   * between the movement stopping and that click is still labelled clean or
+   * faulty, and at the ~150 ms tick a few seconds of walking back to the desk
+   * writes tens of mislabelled records that cannot be repaired afterwards. The
+   * boundary has to be markable from where the exercise is performed.
+   *
+   * MOUSE THUMB BUTTONS DO NOT WORK AND ARE NOT BOUND. Tested 2026-08-23 on the
+   * operator's hardware: the browser services Back/Forward at the chrome layer
+   * and never dispatches `mousedown` to the page, so a handler cannot see them
+   * and `preventDefault()` never runs. Binding them is worse than useless — the
+   * navigation still happens, and navigating away from a live capture destroys
+   * the only copy of it. Do not re-add this without retesting.
+   *
+   * What works instead: the large on-screen remote below (park the cursor on it
+   * and left-click from anywhere in the room), and the F8/F9 keys for anything
+   * that can send a real keystroke.
+   */
+  useEffect(() => {
+    if (!coachingShadowEnabled || !coachingShadowStaffAllowed) return;
+
+    const typingInAField = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      const tag = el?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable === true;
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (typingInAField(event.target)) return;
+      if (event.key === "F8") {
+        event.preventDefault();
+        const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+        if (!step) return;
+        if (!markCoachingShadowSegment(step.label, step.intent)) return;
+        setCoachingShadowSegmentLabel(step.label);
+        setCoachingShadowSegmentIntent(step.intent);
+        showToast({ variant: "success", message: `Recording ${step.label} (${step.intent}).` });
+      } else if (event.key === "F9") {
+        event.preventDefault();
+        endCoachingShadowSegment();
+        showToast({ variant: "success", message: "Segment ended." });
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [
+    coachingShadowEnabled,
+    coachingShadowStaffAllowed,
+    coachingPlanIndex,
+    markCoachingShadowSegment,
+    endCoachingShadowSegment,
+    showToast,
+  ]);
 
   const commitEx004FaceShadowModelState = useCallback((
     state: Ex004FaceShadowModelState,
@@ -4019,7 +4654,14 @@ export default function CameraClient() {
         unit: metricUsesDegrees(comp.name) ? "°" : "",
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
-        warningActive: activeCompensationWarnings.has(comp.name),
+        // Single-cue consumption: only the metric the selector promoted is
+        // highlighted, so the card list and the canvas overlay agree on the one
+        // thing the patient is being asked to correct. Every metric still shows
+        // its live value and threshold; the other latched warnings are simply
+        // not highlighted while another cue holds the slot.
+        warningActive:
+          selectedCoachingCueMetric === comp.name &&
+          activeCompensationWarnings.has(comp.name),
         // peakRelevant comps (elbowFlexion on ex_007/ex_008) only warn near
         // peak ROM — bent elbows are correct form lower in the movement.
         suppressWarning:
@@ -4789,7 +5431,7 @@ export default function CameraClient() {
           if (r.ok) {
             if (!activeDefinition) {
               // No exercise selected — nothing to compute. Clear stale state.
-              if (compensationWarningLatchesRef.current.size > 0) {
+              if (compensationWarningStateIsDirty()) {
                 resetCompensationWarnings();
               }
               setFrameMetrics({
@@ -4829,7 +5471,7 @@ export default function CameraClient() {
                 baselinePhaseRef.current !== "captured" ||
                 frozenTiltDegRef.current === null
               ) {
-                if (compensationWarningLatchesRef.current.size > 0) {
+                if (compensationWarningStateIsDirty()) {
                   resetCompensationWarnings();
                 }
                 setFrameMetrics({
@@ -5753,6 +6395,81 @@ export default function CameraClient() {
                   tNow,
                   suppressedWarningNames,
                 );
+
+                // Arbitrate the latched warnings down to the single cue the
+                // patient is shown. This decides WHICH warning surfaces; it
+                // does not decide whether one exists, and it owns no
+                // thresholds. Runs on the metrics tick, not per frame, so the
+                // per-cue timing is measured on one consistent clock.
+                const cueDecision = selectCoachingCue(
+                  coachingCueStateRef.current,
+                  activeDefinition.compensationMetrics,
+                  activeWarningNames,
+                  warningDisplayMetrics,
+                  tNow,
+                );
+                coachingCueStateRef.current = cueDecision.state;
+                if (selectedCoachingCueMetricRef.current !== cueDecision.metric) {
+                  selectedCoachingCueMetricRef.current = cueDecision.metric;
+                  setSelectedCoachingCueMetric(cueDecision.metric);
+                }
+
+                if (
+                  coachingShadowEnabledRef.current &&
+                  coachingShadowStaffAllowedRef.current
+                ) {
+                  const startedAt =
+                    coachingShadowStartMsRef.current ??
+                    (coachingShadowStartMsRef.current = tNow);
+                  coachingShadowSeqRef.current += 1;
+                  const records = coachingShadowRecordsRef.current;
+                  records.push({
+                    seq: coachingShadowSeqRef.current,
+                    tMs: tNow,
+                    tShadowMs: tNow - startedAt,
+                    wallIso: new Date().toISOString(),
+                    exerciseId: activeDefinition.id,
+                    prescribedSide: prescriptionRef.current.prescribedSide,
+                    sessionState: sessionStateRef.current,
+                    captureOk: lastCaptureOkRef.current,
+                    captureMessage: lastCaptureMsgRef.current,
+                    baselinePhase: baselinePhaseRef.current,
+                    frozenTiltDeg: frozenTiltDegRef.current,
+                    tiltConfidence: raw.tiltReference.confidence,
+                    nearPeak: nearPeakNow,
+                    activeLatches: [...activeWarningNames],
+                    suppressedMetrics: [...suppressedWarningNames],
+                    segmentLabel: coachingShadowSegmentLabelRef.current,
+                    segmentIntent: coachingShadowSegmentIntentRef.current,
+                    selectedCueId: cueDecision.cueId,
+                    selectedMetric: cueDecision.metric,
+                    selectedMessage: cueDecision.message,
+                    reason: cueDecision.reason,
+                    displayedForMs: cueDecision.displayedForMs,
+                    clearedCueId: cueDecision.clearedCueId,
+                    candidates: cueDecision.candidates.map((candidate) => ({
+                      ...candidate,
+                      side:
+                        compensationWarningSignalsRef.current.get(candidate.metric)
+                          ?.side ?? null,
+                    })),
+                  });
+                  // Bounded ring. Overflow is counted, never silently dropped —
+                  // the export reports it.
+                  while (records.length > COACHING_SHADOW_RING_LIMIT) {
+                    records.shift();
+                    coachingShadowDroppedRef.current += 1;
+                  }
+                  if (coachingShadowExportedRef.current) {
+                    coachingShadowExportedRef.current = false;
+                  }
+                  if (tNow - coachingShadowLastUiUpdateMsRef.current > 500) {
+                    coachingShadowLastUiUpdateMsRef.current = tNow;
+                    setCoachingShadowCount(coachingShadowSeqRef.current);
+                    setCoachingShadowExported(false);
+                  }
+                }
+
                 setFrameMetrics({
                   tiltReference: raw.tiltReference,
                   metrics: warningDisplayMetrics,
@@ -5782,11 +6499,21 @@ export default function CameraClient() {
                   });
                 }
               }
-              // Suppress `peakRelevant` compensation warnings (elbowFlexion
-              // "Straighten arms" on ex_007/ex_008) unless the movement is near
-              // peak ROM — drawn every frame, so gate with the per-frame value.
+              // Draw at most ONE cue. The selector already chose it on the
+              // metrics tick; this per-frame path re-applies the same
+              // suppression gates the latch layer uses, because `nearPeak` and
+              // capture readiness move between ticks and a stale cue must not
+              // survive them. `peakRelevant` warnings (elbowFlexion
+              // "Straighten arms" on ex_007/ex_008) are the reason that matters
+              // in practice.
+              //
+              // `drawCompensationOverlay` keeps its existing signature: it is
+              // handed a one-entry spec list and a one-entry active-name set
+              // rather than the whole compensation list, so nothing about how
+              // it draws (or its tests) changes.
               const overlayWarningNames = new Set<MetricName>();
               const overlayComps = activeDefinition.compensationMetrics.filter((comp) => {
+                if (comp.name !== selectedCoachingCueMetricRef.current) return false;
                 if (
                   sessionStateRef.current !== "active" ||
                   !lastCaptureOkRef.current ||
@@ -6624,6 +7351,578 @@ export default function CameraClient() {
                         {ex004FaceShadowModelError}
                       </div>
                     )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Floating segment remote. The operator stands 2-3 m away, so the
+                boundary has to be clickable without returning to the desk: park
+                the pointer on this control before stepping back and a single
+                LEFT click marks the boundary. Left click is the only pointer
+                input the page reliably receives — thumb buttons are serviced by
+                the browser and never reach it (see the keydown effect above). */}
+            {coachingShadowStaffAllowed && coachingShadowEnabled && !!activeDefinition && (() => {
+              const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+              const recording = coachingShadowActiveSegment !== null &&
+                !coachingShadowActiveSegment.label.startsWith("after:") &&
+                coachingShadowActiveSegment.label !== "idle";
+              return (
+                <div
+                  data-testid="coaching-remote"
+                  style={{
+                    position: "fixed",
+                    // Bottom-LEFT on purpose: the session Start/Stop controls live in
+                    // the right-hand sidebar, and an earlier bottom-right placement
+                    // covered them so the session could not be started at all.
+                    left: 18,
+                    bottom: 18,
+                    zIndex: 60,
+                    width: coachingRemoteCollapsed ? 200 : 260,
+                    padding: coachingRemoteCollapsed ? "8px 12px" : 14,
+                    borderRadius: 10,
+                    border: "2px solid oklch(0.30 0.05 250)",
+                    background: "oklch(0.99 0.004 250)",
+                    boxShadow: "0 10px 30px -12px rgba(0,0,0,.45)",
+                    fontFamily: "var(--mono)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.45 0.02 250)" }}>
+                      {step
+                        ? `Step ${coachingPlanIndex + 1}/${COACHING_SESSION_PLAN.length} · ${step.captureId}`
+                        : "Plan complete"}
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={coachingRemoteCollapsed ? "Expand segment remote" : "Collapse segment remote"}
+                      onClick={() => setCoachingRemoteCollapsed((v) => !v)}
+                      style={{
+                        border: "1px solid oklch(0.82 0.03 250)",
+                        borderRadius: 4,
+                        background: "white",
+                        color: "oklch(0.30 0.05 250)",
+                        fontFamily: "var(--mono)",
+                        fontSize: 11,
+                        lineHeight: 1,
+                        padding: "3px 7px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {coachingRemoteCollapsed ? "▴" : "▾"}
+                    </button>
+                  </div>
+                  {!coachingRemoteCollapsed && (<>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: "oklch(0.20 0.03 250)", wordBreak: "break-word" }}>
+                    {recording
+                      ? coachingShadowActiveSegment.label
+                      : step?.label ?? "—"}
+                  </div>
+                  <div style={{ fontSize: 11, marginTop: 2, color: "oklch(0.45 0.02 250)" }}>
+                    {recording ? `recording · ${coachingShadowActiveSegment.intent}` : "not recording"}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!step && !recording}
+                    onClick={() => {
+                      if (recording) {
+                        endCoachingShadowSegment();
+                        return;
+                      }
+                      if (!step) return;
+                      if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                      setCoachingShadowSegmentLabel(step.label);
+                      setCoachingShadowSegmentIntent(step.intent);
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      marginTop: 10,
+                      padding: "20px 8px",
+                      borderRadius: 8,
+                      border: "none",
+                      cursor: !step && !recording ? "default" : "pointer",
+                      background: recording ? "oklch(0.52 0.17 25)" : ACCENT.hex,
+                      color: "white",
+                      fontFamily: "var(--mono)",
+                      fontSize: 17,
+                      fontWeight: 700,
+                      letterSpacing: ".06em",
+                    }}
+                  >
+                    {recording ? "END SEGMENT" : "START SEGMENT"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!step}
+                    onClick={() => {
+                      if (recording) endCoachingShadowSegment();
+                      setCoachingPlanIndex((i) => i + 1);
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      marginTop: 6,
+                      padding: "8px",
+                      borderRadius: 6,
+                      border: "1px solid oklch(0.82 0.03 250)",
+                      background: "white",
+                      color: "oklch(0.30 0.05 250)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: ".08em",
+                      cursor: step ? "pointer" : "default",
+                    }}
+                  >
+                    NEXT STEP →
+                  </button>
+                  <div style={{ fontSize: 9.5, marginTop: 7, lineHeight: 1.4, color: "oklch(0.48 0.02 250)" }}>
+                    {step?.hint ?? "Export this capture, then run E3 unrecorded."}
+                  </div>
+                  </>)}
+                </div>
+              );
+            })()}
+
+            {/* Staff-only coaching shadow log. Records what the single-cue
+                selector decided and why; it does not change the cue itself, so
+                turning it on is invisible to the patient. */}
+            {coachingShadowStaffAllowed && !!activeDefinition && (
+              <div
+                data-testid="coaching-shadow"
+                style={{
+                  margin: "10px 12px 0",
+                  padding: 10,
+                  border: "1px solid oklch(0.88 0.02 250)",
+                  borderRadius: 6,
+                  background: "oklch(0.975 0.01 250)",
+                }}
+              >
+                <label
+                  htmlFor="coaching-shadow-toggle"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 7,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    id="coaching-shadow-toggle"
+                    type="checkbox"
+                    checked={coachingShadowEnabled}
+                    onChange={(event) => {
+                      if (event.target.checked) clearCoachingShadow();
+                      setCoachingShadowEnabled(event.target.checked);
+                    }}
+                    style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                  />
+                  <span>
+                    <span
+                      style={{
+                        display: "block",
+                        fontFamily: "var(--mono)",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: ".12em",
+                        textTransform: "uppercase",
+                        color: "oklch(0.30 0.05 250)",
+                      }}
+                    >
+                      Coaching shadow log
+                    </span>
+                    <span
+                      style={{
+                        display: "block",
+                        marginTop: 2,
+                        fontSize: 10,
+                        lineHeight: 1.35,
+                        color: "oklch(0.48 0.02 250)",
+                      }}
+                    >
+                      Records cue decisions. Does not change what the patient sees.
+                    </span>
+                  </span>
+                </label>
+
+                {coachingShadowEnabled && (
+                  <div
+                    style={{
+                      marginTop: 9,
+                      paddingTop: 8,
+                      borderTop: "1px solid oklch(0.90 0.01 250)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 10,
+                      lineHeight: 1.55,
+                      color: "oklch(0.32 0.02 250)",
+                    }}
+                  >
+                    <div>Schema: {COACHING_SHADOW_SCHEMA}</div>
+                    <div style={{ color: "oklch(0.45 0.02 250)" }}>
+                      Remote: <strong>F8</strong> starts the step · <strong>F9</strong> ends it ·
+                      or park the cursor on the big control and left-click
+                    </div>
+                    <div>
+                      Recording as: {coachingShadowActiveSegment
+                        ? `${coachingShadowActiveSegment.label} · ${coachingShadowActiveSegment.intent}`
+                        : "— not declared"}
+                    </div>
+                    {(() => {
+                      const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+                      if (!step) {
+                        return (
+                          <div
+                            style={{
+                              marginTop: 7,
+                              padding: "7px 8px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                            }}
+                          >
+                            <div style={{ fontWeight: 700 }}>Plan complete</div>
+                            <div style={{ marginTop: 2 }}>
+                              Export this capture, then run E3 (patient login) unrecorded.
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setCoachingPlanIndex(0)}
+                              style={{
+                                marginTop: 6,
+                                padding: "4px 7px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Restart plan
+                            </button>
+                          </div>
+                        );
+                      }
+                      const wrongExercise = activeDefinition?.id !== step.exerciseId;
+                      return (
+                        <div
+                          style={{
+                            marginTop: 7,
+                            padding: "7px 8px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderLeft: step.startsCapture
+                              ? "3px solid oklch(0.65 0.16 60)"
+                              : "3px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                          }}
+                        >
+                          <div style={{ fontWeight: 700 }}>
+                            Step {coachingPlanIndex + 1}/{COACHING_SESSION_PLAN.length}
+                            {" · "}{step.captureId}{" · "}{step.exerciseId}
+                          </div>
+                          <div style={{ marginTop: 2 }}>
+                            {step.label}{" · "}{step.intent}
+                          </div>
+                          <div style={{ marginTop: 3, color: "oklch(0.45 0.02 250)" }}>
+                            {step.hint}
+                          </div>
+                          {step.startsCapture && (
+                            <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.50 0.14 45)" }}>
+                              Stop/Start first, confirm set 1 · 0 reps · baseline captured, then Clear.
+                            </div>
+                          )}
+                          {wrongExercise && (
+                            <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                              Selected exercise is {activeDefinition?.id ?? "none"} — this step needs {step.exerciseId}.
+                            </div>
+                          )}
+                          {(() => {
+                            const recordingThis =
+                              coachingShadowActiveSegment?.label === step.label;
+                            const nextStep = COACHING_SESSION_PLAN[coachingPlanIndex + 1];
+                            // Advancing past the last step of a capture means the
+                            // next Clear discards this capture. Refuse to move on
+                            // while the ring still holds unexported decisions.
+                            const advanceEndsCapture =
+                              !nextStep || nextStep.startsCapture === true;
+                            const blockAdvance =
+                              advanceEndsCapture &&
+                              coachingShadowCount > 0 &&
+                              !coachingShadowExported;
+                            return (
+                              <>
+                                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                                  <button
+                                    type="button"
+                                    disabled={coachingPlanIndex === 0}
+                                    onClick={() => setCoachingPlanIndex((i) => Math.max(0, i - 1))}
+                                    style={{
+                                      padding: "4px 7px",
+                                      border: "1px solid oklch(0.82 0.03 250)",
+                                      borderRadius: 4,
+                                      background: "white",
+                                      color: "inherit",
+                                      font: "inherit",
+                                      cursor: coachingPlanIndex === 0 ? "default" : "pointer",
+                                    }}
+                                  >
+                                    Back
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={recordingThis}
+                                    onClick={() => {
+                                      if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                                      setCoachingShadowSegmentLabel(step.label);
+                                      setCoachingShadowSegmentIntent(step.intent);
+                                      showToast({
+                                        variant: "success",
+                                        message: `Recording ${step.label} (${step.intent}).`,
+                                      });
+                                    }}
+                                    style={{
+                                      padding: "4px 8px",
+                                      border: "1px solid oklch(0.82 0.03 250)",
+                                      borderRadius: 4,
+                                      background: recordingThis ? "white" : ACCENT.hex,
+                                      color: recordingThis ? "oklch(0.55 0.02 250)" : "white",
+                                      font: "inherit",
+                                      fontWeight: 700,
+                                      cursor: recordingThis ? "default" : "pointer",
+                                    }}
+                                  >
+                                    {recordingThis ? "Recording…" : "Start this step"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!recordingThis}
+                                    onClick={() => {
+                                      endCoachingShadowSegment();
+                                      showToast({
+                                        variant: "success",
+                                        message: `Ended ${step.label}.`,
+                                      });
+                                    }}
+                                    style={{
+                                      padding: "4px 7px",
+                                      border: "1px solid oklch(0.82 0.03 250)",
+                                      borderRadius: 4,
+                                      background: "white",
+                                      color: "inherit",
+                                      font: "inherit",
+                                      fontWeight: 700,
+                                      cursor: recordingThis ? "pointer" : "default",
+                                    }}
+                                  >
+                                    End step
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={blockAdvance}
+                                    onClick={() => {
+                                      if (coachingShadowActiveSegment) endCoachingShadowSegment();
+                                      setCoachingPlanIndex((i) => i + 1);
+                                    }}
+                                    style={{
+                                      padding: "4px 7px",
+                                      border: "1px solid oklch(0.82 0.03 250)",
+                                      borderRadius: 4,
+                                      background: "white",
+                                      color: blockAdvance ? "oklch(0.60 0.02 250)" : "inherit",
+                                      font: "inherit",
+                                      cursor: blockAdvance ? "default" : "pointer",
+                                    }}
+                                  >
+                                    Next →
+                                  </button>
+                                </div>
+                                {blockAdvance && (
+                                  <div style={{ marginTop: 4, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                                    This capture has {coachingShadowCount} unexported decisions. Download the log before moving on.
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      );
+                    })()}
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                        gap: 6,
+                        alignItems: "end",
+                        margin: "6px 0",
+                      }}
+                    >
+                      <label style={{ display: "grid", gap: 3 }}>
+                        <span>Capture / segment</span>
+                        <input
+                          aria-label="Capture or segment label"
+                          type="text"
+                          value={coachingShadowSegmentLabel}
+                          onChange={(event) =>
+                            setCoachingShadowSegmentLabel(event.target.value)
+                          }
+                          placeholder="A2-trunk"
+                          style={{
+                            minWidth: 0,
+                            padding: "4px 5px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "inherit",
+                            font: "inherit",
+                          }}
+                        />
+                      </label>
+                      <label style={{ display: "grid", gap: 3 }}>
+                        <span>Intent</span>
+                        <select
+                          aria-label="Declared movement intent for this segment"
+                          value={coachingShadowSegmentIntent}
+                          onChange={(event) =>
+                            setCoachingShadowSegmentIntent(
+                              event.target.value as CoachingShadowIntent,
+                            )
+                          }
+                          style={{
+                            padding: "4px 5px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "inherit",
+                            font: "inherit",
+                          }}
+                        >
+                          <option value="clean">clean</option>
+                          <option value="faulty">faulty</option>
+                          <option value="transition">transition</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={coachingShadowSegmentLabel.trim() === ""}
+                        onClick={() => {
+                          if (
+                            !markCoachingShadowSegment(
+                              coachingShadowSegmentLabel,
+                              coachingShadowSegmentIntent,
+                            )
+                          ) {
+                            return;
+                          }
+                          showToast({
+                            variant: "success",
+                            message: `Segment ${coachingShadowSegmentLabel.trim()} started.`,
+                          });
+                        }}
+                        style={{
+                          padding: "5px 7px",
+                          border: "1px solid oklch(0.82 0.03 250)",
+                          borderRadius: 4,
+                          background: "white",
+                          color: "inherit",
+                          font: "inherit",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Mark
+                      </button>
+                    </div>
+                    <div>
+                      Selected cue: {selectedCoachingCueMetric ?? "—"}
+                    </div>
+                    <div>
+                      Active latches: {activeCompensationWarnings.size > 0
+                        ? [...activeCompensationWarnings].join(", ")
+                        : "—"}
+                    </div>
+                    <div>
+                      Decisions: {coachingShadowCount} recorded
+                      {coachingShadowDroppedRef.current > 0
+                        ? ` · ${coachingShadowDroppedRef.current} dropped from the ring`
+                        : ""}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 7 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const result = downloadCoachingShadow();
+                          if (!result) {
+                            showToast({
+                              variant: "error",
+                              message: "No coaching decisions recorded yet.",
+                            });
+                            return;
+                          }
+                          coachingShadowExportedRef.current = true;
+                          setCoachingShadowExported(true);
+                          if (result.warnings.length > 0) {
+                            for (const warning of result.warnings) {
+                              console.warn("[coaching-shadow] " + warning);
+                            }
+                            showToast({
+                              variant: "error",
+                              message: `Downloaded with ${result.warnings.length} issue(s): ${result.warnings[0]}`,
+                            });
+                            return;
+                          }
+                          showToast({
+                            variant: "success",
+                            message: `Downloaded. ${result.checksRun} automated checks passed — still open the file.`,
+                          });
+                        }}
+                        style={{
+                          padding: "5px 8px",
+                          border: "1px solid oklch(0.82 0.03 250)",
+                          borderRadius: 4,
+                          background: "white",
+                          color: "oklch(0.30 0.05 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: ".08em",
+                          textTransform: "uppercase",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Download log
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (coachingShadowCount > 0 && !coachingShadowExported) {
+                            showToast({
+                              variant: "error",
+                              message: `${coachingShadowCount} decisions have not been exported. Download first, or press Clear again to discard.`,
+                            });
+                            setCoachingShadowExported(true);
+                            return;
+                          }
+                          clearCoachingShadow();
+                        }}
+                        style={{
+                          padding: "5px 8px",
+                          border: "1px solid oklch(0.82 0.03 250)",
+                          borderRadius: 4,
+                          background: "white",
+                          color: "oklch(0.30 0.05 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: ".08em",
+                          textTransform: "uppercase",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

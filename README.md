@@ -1,6 +1,6 @@
 # Sprint Updates 
 
-## 📌 Update-7-31-26
+## 📌 Update-7-31-26 | *RyanCodesling*
 
 - Consolidated the complete post–July 22 clinical-context and patient-workflow batch: typed prescription side/load, immutable runtime context, pain reporting, therapist review labels, occurrence-driven session starts, therapist-controlled order, and explicit completion acknowledgement
 - Preserved completed, started, missed, cancelled, pain-stopped, and otherwise historical occurrences without rewriting their durable prescription/session context; active camera work now locks and navigates by one exact actionable occurrence
@@ -95,7 +95,7 @@
 - Obtain clinician-approved `ex_004` assisted-hold parameters and retain the deferred `ex_005` threshold decision until its required live-protocol input exists
 - Collect a new untouched multi-subject evaluation set only after the protocol is frozen; researcher sessions 168–174 remain calibration evidence
 
-## 📌 Update-7-22-26
+## 📌 Update-7-22-26 | *RyanCodesling*
 
 - Preserved prescription, occurrence, session, set, repetition, and raw-trace history by replacing exercise and assignment hard deletion with archival and cancellation workflows
 - Reworked patient and therapist read models so prescription lifecycle, adherence, schedule status, completed outcomes, capture quality, and form quality remain separate and auditable
@@ -161,7 +161,7 @@
 - Complete a real-person webcam pass for prescribed-side repetition/timing behavior; automated mirrored-wrist gating coverage already passes, but pose-dependent behavior cannot be claimed from an API-only session
 - Obtain clinician-approved decisions for the `ex_004` assisted-hold target and the deferred `ex_005` threshold retune
 
-## 📌 Update-7-11-26
+## 📌 Update-7-11-26 | *RyanCodesling*
 
 - Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline
 - Extended the offline synthetic-feasibility pipeline across all six active exercises while keeping the browser's rule-based feedback as the live coaching layer
@@ -255,7 +255,7 @@
 - Collect future model evaluation data only after the protocol is frozen; do not reuse sessions 168–174 as held-out evidence
 - Review and disposition the dependency-audit findings before deployment rather than applying a blind breaking upgrade
 
-## 📌 Update-6-8-26
+## 📌 Update-6-8-26 | *RyanCodesling*
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
 - Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
 - Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app
@@ -364,7 +364,7 @@
 
 ---
 
-## 📌 Update-6-7-26
+## 📌 Update-6-7-26 | *RyanCodesling*
 - Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
 - Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged
 - Kept peak-only warnings, such as elbow extension cues near overhead ROM, gated to the relevant movement phase while adding temporal persistence to the final warning display state
@@ -698,7 +698,7 @@
 
 ---
 
-## 📌 Update-6-6-26
+## 📌 Update-6-6-26 | *RyanCodesling*
 
 - Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
 - Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
@@ -819,7 +819,7 @@
 
 --- 
 
-## 📌 Update-6-4-26
+## 📌 Update-6-4-26 | *RyanCodesling*
 
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
 - Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
@@ -988,7 +988,7 @@
 
 ---
 
-## 📌 Update-5-31-26
+## 📌 Update-5-31-26 | *RyanCodesling*
 
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
 - Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
@@ -1073,7 +1073,7 @@
 
 ---
 
-## 📌 Update-5-29-26
+## 📌 Update-5-29-26 | *RyanCodesling*
 
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
 - Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
@@ -1119,7 +1119,7 @@
 
 ---
 
-## 📌 Update-5-28-26
+## 📌 Update-5-28-26 | *RyanCodesling*
 
 - Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
 - Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
@@ -1400,7 +1400,7 @@
 
 --- 
 
-## 📌 Update-5-22-26
+## 📌 Update-5-22-26 | *RyanCodesling*
 
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
 - **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
@@ -1620,7 +1620,7 @@
 
 --- 
 
-## 📌 Update-5-19-26
+## 📌 Update-5-19-26 | *RyanCodesling*
 Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_004` bidirectional rep counting was iterated heavily and is now **frozen** as a proof-of-concept-adequate mitigation (see Current Status).
 
 - Implemented shoulder flexion (`ex_002`) and scapular elevation + baseline capture (`ex_003`) — both now code-complete
@@ -1938,7 +1938,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-11-26
+## 📌 Update-5-11-26 | *RyanCodesling*
 - Implemented the real shoulder abduction metric for Lateral Arm Raises (`ex_001`)
 - Added per-side shoulder abduction calculation for left and right arms
 - Fixed cross-body arm movement being mistaken as valid lateral arm raise motion
@@ -2160,7 +2160,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-4-26
+## 📌 Update-5-4-26 | *RyanCodesling*
 
 ### *web\src\lib\exercises\registry.ts*
 - Added exercise registry as the source of truth for the six thesis exercises (`ex_001` to `ex_006`)
@@ -2219,7 +2219,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-30-26
+## 📌 Update-4-30-26 | *RyanCodesling*
 ### *web\src\lib\pose\poseMetrics.ts*
 - Added trunkLean as a third metric
 - Added a wrapper to handle the left-right convention, instead of having to swap out every left-right to right-left
@@ -2262,7 +2262,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-24-26
+## 📌 Update-4-24-26 | *RyanCodesling*
 ### *web\src\lib\pose*
 - Added oneEuroFilter.ts for landmarker smoothing
 
@@ -2336,7 +2336,7 @@ Added 2 new database tables: therapist, patients
 
 ---
 
-## 📌 Update-4-09-26
+## 📌 Update-4-09-26  | *RyanCodesling*
 
 ### *web/source/lib/pose*
 - Added poseMetrics.tsx for math engine

@@ -1,5 +1,4 @@
 -- Exercises table for the admin dashboard.
--- Run this in pgAdmin after alter_users_pg.sql.
 
 CREATE TABLE IF NOT EXISTS exercises (
   id                   VARCHAR(50)  PRIMARY KEY,

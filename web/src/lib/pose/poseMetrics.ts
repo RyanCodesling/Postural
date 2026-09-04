@@ -617,11 +617,12 @@ function signedTrunkLeanAngle(
  * The metric itself stays in raw image space.
  *
  * ── TILT CORRECTION ──────────────────────────────────────────────────────────
- * Camera roll rotates ALL lines in the image by the same angular amount,
- * including both horizontal references AND vertical references. So the
- * same cameraTiltDeg subtraction that corrects shoulder symmetry (a
- * horizontal-reference metric) also correctly adjusts trunk lean (a
- * vertical-reference metric). The geometry is symmetric.
+ * The current landmarks and tilt reference are expressed in anisotropically
+ * normalized image coordinates. When frame width and height differ, that
+ * representation does not preserve physical line angles, so subtracting the
+ * horizontal-reference cameraTiltDeg cannot be assumed to correct this
+ * vertical-reference metric symmetrically. The normalization audit documents
+ * the resulting residual; this comment does not change the current algorithm.
  */
 export function computeTrunkLateralLean(
   landmarks: LM[],

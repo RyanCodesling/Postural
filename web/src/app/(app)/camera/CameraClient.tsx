@@ -59,6 +59,7 @@ import {
   type CoachingCueReason,
   type CoachingCueState,
 } from "@/lib/pose/coachingCue";
+import { shouldBlockCoachingShadowPlanAdvance } from "@/lib/pose/coachingShadowPlan";
 import {
   getCompensationScoring,
   getExerciseDefinition,
@@ -1816,6 +1817,43 @@ export default function CameraClient() {
     coachingShadowSegmentIntentRef.current = "transition";
     setCoachingShadowActiveSegment({ label, intent: "transition" });
   }, []);
+
+  const coachingShadowAdvanceBlocked = shouldBlockCoachingShadowPlanAdvance(
+    COACHING_SESSION_PLAN,
+    coachingPlanIndex,
+    coachingShadowCount,
+    coachingShadowExported,
+  );
+
+  /**
+   * The floating remote and the main panel must share this path. Re-check the
+   * refs here because the visible count/export state is updated asynchronously;
+   * a click inside that brief lag must still preserve the retained capture.
+   */
+  const advanceCoachingShadowPlan = useCallback((): boolean => {
+    const retainedRecordCount = coachingShadowRecordsRef.current.length;
+    const blocked = shouldBlockCoachingShadowPlanAdvance(
+      COACHING_SESSION_PLAN,
+      coachingPlanIndex,
+      retainedRecordCount,
+      coachingShadowExportedRef.current,
+    );
+    if (blocked) {
+      showToast({
+        variant: "error",
+        message: `This capture has ${retainedRecordCount} unexported decisions. Download the log before moving on.`,
+      });
+      return false;
+    }
+    if (coachingShadowActiveSegment) endCoachingShadowSegment();
+    setCoachingPlanIndex((i) => i + 1);
+    return true;
+  }, [
+    coachingPlanIndex,
+    coachingShadowActiveSegment,
+    endCoachingShadowSegment,
+    showToast,
+  ]);
 
   const setCoachingShadowEnabled = useCallback((enabled: boolean) => {
     coachingShadowEnabledRef.current = enabled;
@@ -7454,11 +7492,8 @@ export default function CameraClient() {
                   </button>
                   <button
                     type="button"
-                    disabled={!step}
-                    onClick={() => {
-                      if (recording) endCoachingShadowSegment();
-                      setCoachingPlanIndex((i) => i + 1);
-                    }}
+                    disabled={!step || coachingShadowAdvanceBlocked}
+                    onClick={advanceCoachingShadowPlan}
                     style={{
                       display: "block",
                       width: "100%",
@@ -7472,13 +7507,15 @@ export default function CameraClient() {
                       fontSize: 11,
                       fontWeight: 700,
                       letterSpacing: ".08em",
-                      cursor: step ? "pointer" : "default",
+                      cursor: step && !coachingShadowAdvanceBlocked ? "pointer" : "default",
                     }}
                   >
-                    NEXT STEP →
+                    {coachingShadowAdvanceBlocked ? "DOWNLOAD LOG FIRST" : "NEXT STEP →"}
                   </button>
                   <div style={{ fontSize: 9.5, marginTop: 7, lineHeight: 1.4, color: "oklch(0.48 0.02 250)" }}>
-                    {step?.hint ?? "Export this capture, then run E3 unrecorded."}
+                    {coachingShadowAdvanceBlocked
+                      ? `This capture has ${coachingShadowCount} unexported decisions.`
+                      : step?.hint ?? "Export this capture, then run E3 unrecorded."}
                   </div>
                   </>)}
                 </div>
@@ -7641,16 +7678,7 @@ export default function CameraClient() {
                           {(() => {
                             const recordingThis =
                               coachingShadowActiveSegment?.label === step.label;
-                            const nextStep = COACHING_SESSION_PLAN[coachingPlanIndex + 1];
-                            // Advancing past the last step of a capture means the
-                            // next Clear discards this capture. Refuse to move on
-                            // while the ring still holds unexported decisions.
-                            const advanceEndsCapture =
-                              !nextStep || nextStep.startsCapture === true;
-                            const blockAdvance =
-                              advanceEndsCapture &&
-                              coachingShadowCount > 0 &&
-                              !coachingShadowExported;
+                            const blockAdvance = coachingShadowAdvanceBlocked;
                             return (
                               <>
                                 <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -7721,10 +7749,7 @@ export default function CameraClient() {
                                   <button
                                     type="button"
                                     disabled={blockAdvance}
-                                    onClick={() => {
-                                      if (coachingShadowActiveSegment) endCoachingShadowSegment();
-                                      setCoachingPlanIndex((i) => i + 1);
-                                    }}
+                                    onClick={advanceCoachingShadowPlan}
                                     style={{
                                       padding: "4px 7px",
                                       border: "1px solid oklch(0.82 0.03 250)",

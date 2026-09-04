@@ -1,5 +1,52 @@
 # Sprint Updates 
 
+## 📌 Update-9-4-26 | *RyanCodesling*
+
+- Added an opt-in Face Landmarker comparison path and offline calibration tools for `ex_004` diagnostics while keeping Pose authoritative for readiness, timing, coaching, scoring, persistence, and ML inputs
+- Added deterministic single-cue arbitration downstream of the existing warning latches so the patient sees at most one active compensation label without changing any metric computation, threshold, target, band, or coupled-fit constant
+- Added a staff-only `coaching_shadow_v2` recorder with labelled session steps, bounded local evidence, automated export checks, and file-download export for replay and false-cue review
+- Added a reproducible offline audit showing that the current normalized-coordinate angle pipeline is aspect-ratio dependent; the product correction and threshold re-derivation remain separate work
+- Closed the alternate-control evidence-loss path by routing both coaching-shadow Next controls through one capture-boundary export guard
+
+### *web\src\lib\pose\faceLandmarkerShadow.ts*, *web\src\app\(app)\camera\CameraClient.tsx*, *web\public\models*, and *ml\comparison*
+
+- Kept Face output inside the diagnostic record and staff panel; no Face value affects the live Pose path or becomes patient-visible behavior
+- Added fixed face-region tracking, baseline-relative roll/yaw/pitch records, controlled marks, coverage reporting, saved-clip comparison, and roll-calibration tooling
+- Retained the known Face boundary: the UI is staff-only, while enabled console/inference helpers are not role-gated, and `Copy diagnostics` still defaults to the most recent 1,200 records from a 3,000-record ring
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\exercises\versioning.ts*, and *web\src\lib\pose\coachingCue.ts*
+
+- Declared one cue for every compensation metric, validated cue identifiers and timing values, and selected by priority, threshold-normalized excess, and deterministic cue identifier
+- Added minimum-active, minimum-display, immediate-clear, and per-cue cooldown behavior without re-testing warning thresholds or mutating the warning-latch state
+- Excluded cue presentation data from `exerciseConfigVersion` so a presentation-only change cannot split therapist-visible measurement trends; a separate persisted coaching-configuration version remains future work
+
+### *web\src\lib\pose\coachingShadowPlan.ts*, *web\src\lib\pose\coachingShadowPlan.test.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Centralized the capture-boundary rule used by both the floating remote and main coaching-shadow panel
+- Allowed movement between labels inside one capture, but blocked entry into another capture or plan completion while retained decisions remain unexported
+- Re-checked the live record ring and export refs inside the shared callback so a delayed UI-state refresh cannot bypass the guard
+
+### *ml\comparison\normalization_audit.py*, *ml\comparison\tests\test_normalization_audit.py*, and *web\src\lib\pose\poseMetrics.ts*
+
+- Reproduced the normalized-coordinate distortion and its square-frame controls without changing product metric behavior
+- Corrected the trunk-lean source comment that previously claimed horizontal and vertical tilt correction were geometrically symmetric
+- Kept every surfaced and persisted angle described as a pipeline value rather than an anatomical degree until the approved aspect correction and affected-threshold re-derivation are complete
+
+### *Validation*
+
+- All 38 framework-free TypeScript suites passed, including 5 capture-boundary guard checks, 18 cue-arbitration checks, and 13 measurement-version checks
+- `npx tsc --noEmit --pretty false`, `npm run lint`, and `npm run build` completed successfully
+- The documented comparison virtual environment passed all 62 Python comparison tests
+- `git diff --check` passed; the pending licence and 3D asset/tool work remains outside this sprint package
+
+### *Remaining boundaries*
+
+- Cue wording and priority are engineering defaults with only partial live verification; clinician review and the remaining isometric, near-peak, bidirectional, mixed-export, and reset checks are still owed
+- The normalization audit is evidence, not the product fix. Current thresholds were fitted in the existing pipeline space and must not be silently reused after a coordinate correction
+- `ml\config\registry.json` retains stale whole-file metadata, while its cue-excluded measurement payload and exported exercise configuration versions remain unchanged
+
+---
+
 ## 📌 Update-7-31-26 | *RyanCodesling*
 
 - Consolidated the complete post–July 22 clinical-context and patient-workflow batch: typed prescription side/load, immutable runtime context, pain reporting, therapist review labels, occurrence-driven session starts, therapist-controlled order, and explicit completion acknowledgement

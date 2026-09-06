@@ -37,9 +37,13 @@ Mapping notes (mirrors the live camera loop / scoring semantics):
     matching side (per-limb) or any rep (bidirectional). Frames outside every
     window keep rep_index = NaN — rest frames, used for noise statistics and
     dropped before feature extraction.
-  - all persisted trace generations are accepted. v3 (`upper_body_v3`) adds
-    frozen-neutral-tilt provenance but keeps the raw feature field names used
-    here; v2 (`upper_body_v2`) remains readable. v1
+  - all persisted trace generations are accepted; nothing here filters on
+    `trace_kind`, so a new generation is readable as long as it keeps the raw
+    feature field names. v4 (`upper_body_v4`) adds the per-frame source frame
+    size and the retained neutral-calibration samples; both are ignored here
+    and exist for re-deriving baselines under a changed coordinate convention.
+    v3 (`upper_body_v3`) adds frozen-neutral-tilt provenance but keeps the raw
+    feature field names used here; v2 (`upper_body_v2`) remains readable. v1
     (`ex_007_upper_body_v1`, the original ex_007-only trace) carries no
     baselines, so the scapularElevation channel is NaN.
 

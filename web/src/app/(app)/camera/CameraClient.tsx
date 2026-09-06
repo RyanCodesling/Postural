@@ -2745,8 +2745,14 @@ export default function CameraClient() {
     // captured frame after calibration finalizes. Repeating a ring of up to 300
     // samples on every frame would multiply the trace size for no information,
     // and emitting during "capturing" would persist an incomplete set.
-    // `finalizeNeutralCalibration` does not clear the ring — only
-    // `resetNeutralCalibration` does — so the samples are still intact here.
+    // The raw ring is NOT readable here. `finalizeNeutralCalibration` frees it
+    // as soon as it has taken its medians, and only then flips the phase to
+    // "captured" that gates this block — so by the time this runs the ring is
+    // always empty. It snapshots the samples into `calibrationTraceSamplesRef`
+    // immediately before freeing them, and that snapshot is what this reads.
+    // Reading the ring instead wrote `samples: []` and still marked the set
+    // emitted, so no later frame retried; that is how the first v4
+    // implementation shipped completely inert.
     let calibrationSamples: CalibrationSample[] | undefined;
     if (
       baselinePhaseRef.current === "captured" &&

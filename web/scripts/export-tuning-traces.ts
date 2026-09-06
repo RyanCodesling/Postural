@@ -19,10 +19,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 
+// Every kind the camera has ever written. Rows are never migrated, so this
+// list only grows — and it MUST gain each new kind the client starts writing,
+// or those sessions become invisible to the exporter. That is not theoretical:
+// `upper_body_v4` shipped without being added here, and the v4 rows it wrote
+// were silently excluded from both session discovery and frame retrieval.
 const TRACE_KINDS = [
   "ex_007_upper_body_v1",
   "upper_body_v2",
   "upper_body_v3",
+  "upper_body_v4",
 ];
 
 // ── DATABASE_URL (from env, else parse web/.env.local — same as seedDemo.ts) ─

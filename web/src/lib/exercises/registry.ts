@@ -625,6 +625,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // rhythm), so the deduction runs on the residual from the expected
       // elevation at the current abduction, not the raw value. Fit: expected
       // ≈ -0.0077 + 0.00124·|abduction°| (clean-rep recording, n≈930).
+      // Added 2026-09-06, matching the caveat ex_005 already carries: the
+      // intercept is an IN-REP ENVELOPE EXTRAPOLATION back to zero abduction,
+      // not an anatomical resting claim — no frames near 0° informed it.
+      // Single-subject pilot fit; not clinician-reviewed.
+      // ── `warningThreshold: 0.04` — provenance, recorded 2026-09-06 ──────────
+      // An ENGINEERING DEFAULT from a single-subject observation, not a
+      // published value. Basis: the raw trunk-up projection sits at ~0.30 at
+      // rest, and a deliberate shrug was observed to change it by only
+      // ~0.03–0.05 (observed during live tuning, 2026-05-21). 0.04 is the
+      // midpoint of that observed delta. It is therefore a "smallest shrug
+      // worth flagging" figure for ONE subject on one setup, and carries no
+      // normative claim about scapular elevation in any population.
+      // The same 0.04 appears on ex_002/ex_005/ex_006; this is the origin note
+      // for all of them. No published source has been found for it.
       { name: "scapularElevation",
         cue: {
           id: "ex_001.scapular-elevation",
@@ -675,8 +689,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Same noise-floor logic as abduction.
         startThreshold: 20,
         repCompleteThreshold: 10,
-        // Forward elevation above 90° engages full deltoid + serratus
-        // recruitment; below this counts as partial.
+        // Forward elevation above 90° was taken as the partial/complete
+        // boundary; below this counts as partial.
+        // NOTE 2026-09-06: the original comment here asserted that this angle
+        // "engages full deltoid + serratus recruitment". That is a
+        // physiological claim with NO cited source, so it is WITHDRAWN rather
+        // than sourced — this exercise is deprecated and no re-derivation is
+        // planned. Treat 90 as an unvalidated engineering default.
         minimumPeakThreshold: 90,
         // Clinical full ROM for shoulder flexion is ~180°. For front-camera
         // 2D estimation, foreshortening means the apparent measured angle
@@ -787,6 +806,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Asymmetric shrug (one trap dominates) is the main quality issue.
       // shoulderSymmetry > 5° during the held position flags this.
+      // `warningThreshold: 5`: the shared shoulderSymmetry warning boundary.
+      // Engineering default set above the documented ~3° landmark noise floor;
+      // published CONTEXT, not grounding: inter-rater minimal detectable change
+      // for clinical goniometry on human shoulders is 5–11° (Kiatkulanusorn et
+      // al., Sci Rep 2023, PMID 38017058), so 5° sits at the lower edge of what
+      // the reference method can resolve.
       { name: "shoulderSymmetry",
         cue: {
           id: "ex_003.shoulder-symmetry",
@@ -945,6 +970,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // girdle instead of moving from the spine. Also `primary-coupled`: the
       // shoulder line necessarily rises on the lengthening side of a clean
       // bend. Fit: expected ≈ -0.0230 + 0.01306·|trunkFlexion°|.
+      // `warningThreshold: 0.04`: engineering default, single-subject origin —
+      // see the provenance note on ex_001's scapularElevation entry.
       { name: "scapularElevation",
         cue: {
           id: "ex_005.scapular-elevation",
@@ -988,6 +1015,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // baseline scapular elevation, so the deduction runs on the residual
       // from the expected elevation at the current abduction. Fit: expected
       // ≈ -0.0142 + 0.00093·|abduction°| (clean-hold recording, n≈3348).
+      // Added 2026-09-06, matching the caveat ex_005 already carries: the
+      // intercept is an IN-REP ENVELOPE EXTRAPOLATION back to zero abduction,
+      // not an anatomical resting claim — an isometric hold supplies almost no
+      // frames away from the target band. Single-subject pilot fit.
+      // `warningThreshold: 0.04`: engineering default, single-subject origin —
+      // see the provenance note on ex_001's scapularElevation entry.
       { name: "scapularElevation",
         cue: {
           id: "ex_006.scapular-elevation",
@@ -1104,6 +1137,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           message: "Keep your torso upright.",
           priority: 10,
         },
+        // `warningThreshold: 5`: the shared trunkLean warning boundary.
+        // Engineering default set above the documented ~3° landmark noise
+        // floor. Published CONTEXT, not grounding: inter-rater minimal
+        // detectable change for clinical goniometry on human shoulders is
+        // 5–11° (Kiatkulanusorn et al., Sci Rep 2023, PMID 38017058), so 5°
+        // sits at the lower edge of what the reference method can resolve.
         warningThreshold: 5 },
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list. The metric returns a raw signed projection that

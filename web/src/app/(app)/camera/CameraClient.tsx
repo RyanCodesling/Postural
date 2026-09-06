@@ -59,7 +59,10 @@ import {
   type CoachingCueReason,
   type CoachingCueState,
 } from "@/lib/pose/coachingCue";
-import { shouldBlockCoachingShadowPlanAdvance } from "@/lib/pose/coachingShadowPlan";
+import {
+  shouldBlockCoachingShadowPlanAdvance,
+  shouldBlockCoachingShadowPlanTransition,
+} from "@/lib/pose/coachingShadowPlan";
 import {
   getCompensationScoring,
   getExerciseDefinition,
@@ -447,14 +450,50 @@ type RawTraceLandmark = {
 };
 
 /**
- * Raw per-frame metric payload for the tuning trace (`upper_body_v3`).
- * V3 keeps the cross-exercise fields introduced by V2 and records both the
+ * One retained neutral-calibration sample, as V4 persists it.
+ *
+ * The live baseline is a MEDIAN over these, so recomputing a baseline under any
+ * changed measurement needs the samples themselves — a stored median cannot be
+ * re-derived into a different coordinate convention.
+ */
+type CalibrationSample = {
+  landmarks: Record<string, RawTraceLandmark | null>;
+  observedCameraTiltDeg: number | null;
+  confidence: TiltReference["confidence"];
+};
+
+/**
+ * Raw per-frame metric payload for the tuning trace (`upper_body_v4`).
+ * V3 kept the cross-exercise fields introduced by V2 and recorded both the
  * observed per-frame tilt diagnostic and the frozen effective correction.
  * The offline analysis can reproduce the values the live score sees:
  *   - scapularElevation as scored = baseline − raw (per side)
  *   - ex_005 primary as counted   = |uncorrected signed − bidirectional baseline|
  * All metric values are RAW/unsmoothed (pre One Euro), captured only on
  * capture-ready frames. No image/video data, ever.
+ *
+ * ── WHAT V4 ADDS, AND WHY ────────────────────────────────────────────────────
+ *
+ * Two things the app already knew and then discarded, each of which blocked a
+ * later reanalysis of sessions that had already been recorded:
+ *
+ * 1. `frame` — the SOURCE FRAME SIZE. MediaPipe normalizes landmarks as
+ *    `x / frameWidth` and `y / frameHeight`, so without the divisors a stored
+ *    landmark cannot be returned to an isotropic space and no angle in the
+ *    trace can be reinterpreted. Recovering it for the 2026-06 sessions meant
+ *    reading the number off a screen recording of the app's own footer, which
+ *    is not a repeatable analysis path. It is recorded PER FRAME rather than
+ *    per session because the device picker can change resolution mid-session.
+ *
+ * 2. `calibration.samples` — the RETAINED NEUTRAL-CALIBRATION SAMPLES. The
+ *    frozen tilt and every per-side baseline are medians over a ring of up to
+ *    300 of these; V3 persisted only the resulting scalars and the sample
+ *    COUNT. A median cannot be recomputed under a changed measurement, so the
+ *    2026-06 sessions cannot have their baselines re-derived at all — the
+ *    calibration frames mostly predate the first exported frame, and one set
+ *    retained none. That is the blocker on re-fitting the four primary-coupled
+ *    scoring constants. Emitted ONCE PER SET, on the first captured frame after
+ *    calibration finalizes, rather than repeated on every frame.
  */
 type UpperBodyTraceMetrics = {
   metricAlgorithmVersion: typeof POSE_METRIC_ALGORITHM_VERSION;
@@ -502,21 +541,33 @@ type UpperBodyTraceMetrics = {
     sampleCount: number;
     validElapsedMs: number;
     frozenCameraTiltDeg: number;
+    /**
+     * V4. Present on exactly ONE frame per set — the first captured frame after
+     * calibration finalizes — and absent on every other frame. Consumers must
+     * therefore scan a set for the frame that carries it rather than expecting
+     * it per frame.
+     */
+    samples?: CalibrationSample[];
   };
+  /**
+   * V4. Source frame size the landmarks in THIS frame were normalized against.
+   * Null when the video element has not reported a size yet.
+   */
+  frame: { width: number; height: number } | null;
 };
 
 /**
  * One raw metric-only frame shaped for the `/raw-frames` write API. The
  * landmark payload is deliberately limited to upper-body analysis points plus
  * hips (needed for the trunk-relative coordinate frame); no image/video data.
- * Existing V1/V2 rows remain in the table; this client writes V3.
+ * Existing V1/V2/V3 rows remain in the table; this client writes V4.
  */
 type RawFramePayload = {
   frameIndex: number;
   setIndex: number;
   elapsedMs: number;
   capturedAt: string;
-  traceKind: "upper_body_v3";
+  traceKind: "upper_body_v4";
   metrics: UpperBodyTraceMetrics;
   landmarks: Record<string, RawTraceLandmark | null>;
 };
@@ -1202,6 +1253,8 @@ function upperBodyTraceMetrics(
   baselines: UpperBodyTraceMetrics["baselines"],
   baselinePhase: UpperBodyTraceMetrics["baselinePhase"],
   calibrationClock: NeutralCalibrationClock,
+  frame: UpperBodyTraceMetrics["frame"],
+  calibrationSamples: CalibrationSample[] | undefined,
 ): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
   const trunkLean = computeTrunkLateralLean(landmarks, tilt);
@@ -1303,7 +1356,9 @@ function upperBodyTraceMetrics(
       sampleCount: calibrationClock.sampleCount,
       validElapsedMs: Math.round(calibrationClock.validElapsedMs),
       frozenCameraTiltDeg: tilt.cameraTiltDeg,
+      ...(calibrationSamples ? { samples: calibrationSamples } : {}),
     },
+    frame,
   };
 }
 
@@ -1545,6 +1600,24 @@ export default function CameraClient() {
   const [coachingShadowActiveSegment, setCoachingShadowActiveSegment] =
     useState<{ label: string; intent: CoachingShadowIntent } | null>(null);
   const [coachingPlanIndex, setCoachingPlanIndex] = useState(0);
+  /**
+   * Set index whose neutral-calibration samples have already been written to
+   * the trace. V4 emits them once per set; this is what makes it once.
+   */
+  const calibrationSamplesEmittedSetRef = useRef<number | null>(null);
+  /**
+   * Neutral-calibration samples SERIALIZED FOR THE TRACE, snapshotted at
+   * finalize time.
+   *
+   * `finalizeNeutralCalibration` deliberately frees the raw sample ring once
+   * the medians are computed, and it does so BEFORE flipping the phase to
+   * "captured". The trace writer runs after that flip, so reading the raw ring
+   * there yields an empty array — the v4 trace shipped writing `samples: []`
+   * for exactly this reason. Snapshotting into the compact trace shape keeps
+   * the memory saving (10 landmarks per sample rather than the full set) while
+   * preserving what a later reprocessing actually needs.
+   */
+  const calibrationTraceSamplesRef = useRef<CalibrationSample[] | null>(null);
   const [coachingRemoteCollapsed, setCoachingRemoteCollapsed] = useState(false);
   // True once the current ring contents have been written to a file. Cleared by
   // the next recorded decision, so "exported" always describes what is in the
@@ -1830,11 +1903,12 @@ export default function CameraClient() {
    * refs here because the visible count/export state is updated asynchronously;
    * a click inside that brief lag must still preserve the retained capture.
    */
-  const advanceCoachingShadowPlan = useCallback((): boolean => {
+  const moveCoachingShadowPlanTo = useCallback((targetIndex: number): boolean => {
     const retainedRecordCount = coachingShadowRecordsRef.current.length;
-    const blocked = shouldBlockCoachingShadowPlanAdvance(
+    const blocked = shouldBlockCoachingShadowPlanTransition(
       COACHING_SESSION_PLAN,
       coachingPlanIndex,
+      targetIndex,
       retainedRecordCount,
       coachingShadowExportedRef.current,
     );
@@ -1846,7 +1920,7 @@ export default function CameraClient() {
       return false;
     }
     if (coachingShadowActiveSegment) endCoachingShadowSegment();
-    setCoachingPlanIndex((i) => i + 1);
+    setCoachingPlanIndex(Math.max(0, Math.min(targetIndex, COACHING_SESSION_PLAN.length)));
     return true;
   }, [
     coachingPlanIndex,
@@ -1854,6 +1928,27 @@ export default function CameraClient() {
     endCoachingShadowSegment,
     showToast,
   ]);
+
+  const advanceCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(coachingPlanIndex + 1),
+    [coachingPlanIndex, moveCoachingShadowPlanTo],
+  );
+
+  /**
+   * Back and restart go through the SAME guard as advance. Both previously set
+   * the index directly, so either could cross a capture boundary while the ring
+   * held unexported decisions, and both skipped `endCoachingShadowSegment()` so
+   * an open segment kept recording under its old label after the step moved.
+   */
+  const stepBackCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(coachingPlanIndex - 1),
+    [coachingPlanIndex, moveCoachingShadowPlanTo],
+  );
+
+  const restartCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(0),
+    [moveCoachingShadowPlanTo],
+  );
 
   const setCoachingShadowEnabled = useCallback((enabled: boolean) => {
     coachingShadowEnabledRef.current = enabled;
@@ -2630,7 +2725,7 @@ export default function CameraClient() {
    * landmarks only — never image data. Opt-in: gated on the "Record tuning
    * trace" toggle (default OFF), so ordinary patient sessions write nothing.
    * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
-   * now covers every active exercise with the versioned V3 payload.
+   * now covers every active exercise with the versioned V4 payload.
    */
   const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
@@ -2644,12 +2739,29 @@ export default function CameraClient() {
     if (!def || DEPRECATED_EXERCISE_IDS.has(def.id)) return;
     if (sessionStateRef.current !== "active") return;
 
+    const setIndex = completedSetsRef.current + 1;
+
+    // V4: emit the retained calibration samples ONCE per set, on the first
+    // captured frame after calibration finalizes. Repeating a ring of up to 300
+    // samples on every frame would multiply the trace size for no information,
+    // and emitting during "capturing" would persist an incomplete set.
+    // `finalizeNeutralCalibration` does not clear the ring — only
+    // `resetNeutralCalibration` does — so the samples are still intact here.
+    let calibrationSamples: CalibrationSample[] | undefined;
+    if (
+      baselinePhaseRef.current === "captured" &&
+      calibrationSamplesEmittedSetRef.current !== setIndex
+    ) {
+      calibrationSamples = calibrationTraceSamplesRef.current ?? undefined;
+      if (calibrationSamples) calibrationSamplesEmittedSetRef.current = setIndex;
+    }
+
     pendingRawFramesRef.current.push({
       frameIndex: ++rawFrameIndexRef.current,
-      setIndex: completedSetsRef.current + 1,
+      setIndex,
       elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
       capturedAt: perfToIso(tNow),
-      traceKind: "upper_body_v3",
+      traceKind: "upper_body_v4",
       metrics: upperBodyTraceMetrics(
         landmarks,
         raw,
@@ -2662,6 +2774,13 @@ export default function CameraClient() {
         },
         baselinePhaseRef.current,
         neutralCalibrationClockRef.current,
+        videoResolutionRef.current
+          ? {
+              width: videoResolutionRef.current.width,
+              height: videoResolutionRef.current.height,
+            }
+          : null,
+        calibrationSamples,
       ),
       landmarks: upperBodyTraceLandmarks(landmarks),
     });
@@ -4262,6 +4381,10 @@ export default function CameraClient() {
   ): void => {
     neutralCalibrationClockRef.current = newNeutralCalibrationClock();
     neutralCalibrationSamplesRef.current = [];
+    // Recalibrating discards the retained samples, so the next captured
+    // frame must write the NEW ones even if this set already emitted a set.
+    calibrationSamplesEmittedSetRef.current = null;
+    calibrationTraceSamplesRef.current = null;
     frozenTiltDegRef.current = null;
     ex004FaceShadowRoiRef.current = null;
     ex004FaceShadowBaselineSamplesRef.current = [];
@@ -4416,6 +4539,16 @@ export default function CameraClient() {
     }
 
     frozenTiltDegRef.current = frozenTiltDeg;
+    // Snapshot BEFORE the ring is freed on the next line. Order matters: the
+    // trace writer only runs once the phase below flips to "captured", by
+    // which point the ring is gone.
+    calibrationTraceSamplesRef.current = neutralCalibrationSamplesRef.current.map(
+      (sample) => ({
+        landmarks: upperBodyTraceLandmarks(sample.landmarks),
+        observedCameraTiltDeg: finiteNumberOrNull(sample.observedTilt.cameraTiltDeg),
+        confidence: sample.observedTilt.confidence,
+      }),
+    );
     neutralCalibrationSamplesRef.current = [];
     metricFiltersRef.current.clear();
     leftCompensationFiltersRef.current.clear();
@@ -7624,7 +7757,7 @@ export default function CameraClient() {
                             </div>
                             <button
                               type="button"
-                              onClick={() => setCoachingPlanIndex(0)}
+                              onClick={restartCoachingShadowPlan}
                               style={{
                                 marginTop: 6,
                                 padding: "4px 7px",
@@ -7685,7 +7818,7 @@ export default function CameraClient() {
                                   <button
                                     type="button"
                                     disabled={coachingPlanIndex === 0}
-                                    onClick={() => setCoachingPlanIndex((i) => Math.max(0, i - 1))}
+                                    onClick={stepBackCoachingShadowPlan}
                                     style={{
                                       padding: "4px 7px",
                                       border: "1px solid oklch(0.82 0.03 250)",

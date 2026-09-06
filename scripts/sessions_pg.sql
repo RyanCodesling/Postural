@@ -11,8 +11,8 @@
 --
 -- Scope note: raw_frames is intentionally metric-only. The camera writer
 -- records upper-body tuning traces for any active exercise (current trace_kind
--- upper_body_v3), gated behind an opt-in "Record tuning trace" toggle in the
--- patient camera UI. Earlier rows use upper_body_v2 or the ex_007-only
+-- upper_body_v4), gated behind an opt-in "Record tuning trace" toggle in the
+-- patient camera UI. Earlier rows use upper_body_v3/v2 or the ex_007-only
 -- ex_007_upper_body_v1 payload; all kinds coexist because trace_kind versioning
 -- is this table's design.
 
@@ -215,7 +215,11 @@ CREATE TABLE IF NOT EXISTS raw_frames (
   set_index     INT          NOT NULL CHECK (set_index >= 1),
   elapsed_ms    INT          NOT NULL CHECK (elapsed_ms >= 0),
   captured_at   TIMESTAMPTZ  NOT NULL,
-  -- Payload contract identifier, e.g. upper_body_v3.
+  -- Payload contract identifier, e.g. upper_body_v4. v4 adds the source frame
+  -- size per frame and the retained neutral-calibration samples once per set;
+  -- without those, a recorded session cannot be reprocessed under a changed
+  -- coordinate convention, because landmark normalization divisors and the
+  -- medians every baseline is built from are otherwise unrecoverable.
   trace_kind    TEXT         NOT NULL,
   -- Derived RAW/unsmoothed metrics. Never write One Euro filtered UI values.
   metrics       JSONB        NOT NULL,

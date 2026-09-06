@@ -1,5 +1,51 @@
 # Sprint Updates 
 
+## 📌 Update-9-6-26 | *RyanCodesling*
+
+- Added an opt-in aspect-ratio correction to the clinical angle pipeline, default-disabled, so no patient-visible measurement changes until the affected thresholds are re-derived against it
+- Generalized the coaching-shadow capture-boundary guard from forward steps to any plan transition, closing two paths that could leave a capture while retained decisions were unexported
+- Extended the tuning trace to `upper_body_v4`, persisting the source frame size and the retained neutral-calibration samples so a recorded session can be reprocessed under a changed coordinate convention
+- Recorded the provenance of several clinical values that previously carried none, and the requirements any future live activation of the correction must satisfy together
+- No metric computation, threshold, target, band, coupled-fit constant, schema, persistence path, or exercise definition changed; every `exerciseConfigVersion` hash is unchanged
+
+### *web\src\lib\pose\poseMetrics.ts* and *web\src\lib\pose\poseNormalization.test.ts*
+
+- Added an optional frame-aspect parameter to every metric, scaling each horizontal delta so image-plane angles no longer depend on the frame's width-to-height ratio
+- Kept the correction in the geometry rather than in a landmark transform: rescaling landmark coordinates would shrink the in-frame guard's usable width and silently null one side's primary metric for most of its range
+- Defaulted the parameter to no correction, so the existing pipeline and every prior reading are reproduced exactly; the camera passes no aspect and the live path is unchanged
+- Added 53 product-level checks covering the uncorrected behaviour, the corrected behaviour, square-frame controls, the in-frame guard budget, and a case pinning that the frozen neutral tilt cannot be switched separately from the geometry
+
+### *web\src\lib\pose\coachingShadowPlan.ts*, *web\src\lib\pose\coachingShadowPlan.test.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Replaced the forward-step guard with a direction-agnostic transition check, since the invariant is about leaving a capture rather than about the direction of travel
+- Routed the main-panel Back control and the plan-complete restart through the same guarded mover as both Next controls; each previously set the plan index directly and skipped the segment-end call
+- Extended the suite to 12 checks covering backward and reset transitions, and added a source check that no control writes the plan index outside the guarded path
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\scripts\export-tuning-traces.ts*, *web\src\lib\pose\tuningTraceV4.test.ts*, and *scripts\sessions_pg.sql*
+
+- Recorded the source frame size per frame, because landmark normalization divisors cannot be recovered afterwards and the device picker can change resolution mid-session
+- Recorded the retained neutral-calibration samples once per set, snapshotted before the sample ring is released, because every baseline is a median over that ring and a median cannot be recomputed under a changed measurement from the stored value alone
+- Added the new payload kind to the offline exporter's accepted list while retaining every legacy kind, since trace rows are never migrated
+- Added 15 checks covering the payload shape, the snapshot-before-release ordering, and agreement between the payload kind the camera writes and the kinds the exporter accepts
+
+### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\metricVersion.ts*
+
+- Recorded the origin of the scapular-elevation warning threshold as a single-subject engineering default with no published source, and added the same in-rep envelope caveat to two coupled-fit intercepts that already carried their fit and sample count
+- Withdrew an unsourced physiological assertion attached to a deprecated exercise's peak threshold rather than citing a source for it
+- Recorded what a future live activation of the aspect correction must move together: the frozen neutral tilt, every direct metric caller, the persisted frame size, the affected coupled fits, and the pose metric algorithm version
+
+### *Validation*
+
+- 40 framework-free TypeScript suites pass, including 53 normalization checks, 15 tuning-trace checks, and 12 coaching-shadow guard checks
+- Type check, lint, and a clean production build all pass with all static pages generated; 62 offline comparison tests pass
+- Registry changes verified comment-only by comparing every `exerciseConfigVersion` hash before and after, and by confirming no non-comment line changed
+
+### *Remaining boundaries*
+
+- The aspect correction is enabled nowhere and no threshold has been re-derived against it; four primary-coupled scoring fits regress a compensation channel on a primary the correction changes and would need re-fitting first
+- The trace additions apply to future recordings only; earlier sessions cannot be reprocessed because the frame size and calibration inputs they would need were never recorded
+- Angle values are image-plane estimates from a single camera, not validated anatomical joint measurements, and every single-subject pilot threshold remains exactly that
+
 ## 📌 Update-9-4-26 | *RyanCodesling*
 
 - Added an opt-in Face Landmarker comparison path and offline calibration tools for `ex_004` diagnostics while keeping Pose authoritative for readiness, timing, coaching, scoring, persistence, and ML inputs

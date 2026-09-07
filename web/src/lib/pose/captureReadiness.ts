@@ -108,7 +108,19 @@ function headYBounds(mode: FramingMode): { min: number; max: number } {
   if (mode === "lateral")  return { min: 0.00, max: 0.92 };
   return mode === "overhead"
     ? { min: 0.10, max: 0.45 }
-    : { min: 0.05, max: 0.25 };
+    // Default ceiling relaxed 0.25 -> 0.35 (2026-09-07), on measurement rather
+    // than preference. In a recorded ex_006 session a deliberate backward lean
+    // put the ear line at y = 0.250 — flush against the old 0.25 ceiling with
+    // no margin at all — and the transitions in and out of it crossed the gate.
+    // Each crossing was a sustained readiness dropout, and at the time a
+    // dropout re-ran neutral calibration, so the session silently re-captured
+    // its "neutral" baseline while the subject was leaning and again while
+    // slouching. The bound was rejecting ordinary postural movement, not bad
+    // framing. 0.35 leaves roughly 0.10 of margin over that measured worst case
+    // and stays well inside the overhead mode's 0.45. It is safe to relax
+    // because it was only ever a proxy for "does the body still fit below the
+    // head" — the knee-visibility gate tests that directly, and still does.
+    : { min: 0.05, max: 0.35 };
 }
 
 /**

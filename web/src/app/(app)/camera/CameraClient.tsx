@@ -1705,6 +1705,25 @@ export default function CameraClient() {
    */
   const calibrationTraceSamplesRef = useRef<CalibrationSample[] | null>(null);
   /**
+   * True when a capture dropout interrupted a session that had ALREADY captured
+   * its neutral baseline.
+   *
+   * Until 2026-09-07 a sustained dropout re-ran calibration automatically. That
+   * is worse than it sounds: calibration captures "neutral" from whatever
+   * posture the patient happens to hold at that moment, so an interruption
+   * while they are slouched adopts the slouch as their reference, and every
+   * later deduction is measured against a compensated posture. A recorded
+   * session did exactly this twice, silently.
+   *
+   * The baseline is now KEPT and this flag is raised instead, so the choice to
+   * re-anchor is explicit. That trades one risk for a visible one: if the
+   * CAMERA moved rather than the patient, the frozen tilt is now stale until
+   * somebody recalibrates — which is why the prompt says so rather than just
+   * offering a button.
+   */
+  const calibrationStaleRef = useRef(false);
+  const [calibrationStale, setCalibrationStale] = useState(false);
+  /**
    * The on-screen trace sync readout. Held as a DOM node rather than state on
    * purpose: the camera loop deliberately avoids per-frame `setState` (fps and
    * the timing split commit once a second, resolution only on change), and
@@ -4498,6 +4517,10 @@ export default function CameraClient() {
   ): void => {
     neutralCalibrationClockRef.current = newNeutralCalibrationClock();
     neutralCalibrationSamplesRef.current = [];
+    // Whatever prompted this, the baseline is being taken again, so the stale
+    // warning has been answered.
+    calibrationStaleRef.current = false;
+    setCalibrationStale(false);
     // Recalibrating discards the retained samples, so the next captured
     // frame must write the NEW ones even if this set already emitted a set.
     calibrationSamplesEmittedSetRef.current = null;
@@ -4705,12 +4728,18 @@ export default function CameraClient() {
       rightInBand: false,
     });
     resetCompensationWarnings();
+    // Deliberately does NOT recalibrate. Counters, filters and hold accrual are
+    // reset because they describe movement that was interrupted; the neutral
+    // baseline describes the BODY, and re-capturing it here would silently
+    // re-anchor it to whatever posture the interruption happened in.
     if (
       definition &&
+      baselinePhaseRef.current === "captured" &&
       (sessionStateRef.current === "active" ||
         sessionStateRef.current === "countdown")
     ) {
-      resetNeutralCalibration("capturing");
+      calibrationStaleRef.current = true;
+      setCalibrationStale(true);
     }
     captureDropoutResetDoneRef.current = true;
   }
@@ -8479,6 +8508,61 @@ export default function CameraClient() {
                       {baselineProgressPct}% READY
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Stale-baseline prompt. Raised when tracking was interrupted
+                  AFTER the neutral baseline was captured. The baseline is kept
+                  rather than re-taken, because re-taking it here would anchor
+                  "neutral" to whatever posture the interruption happened in.
+                  Recalibrating is offered, never performed automatically. */}
+              {calibrationStale && !baselineVisible && (
+                <div style={{
+                  position: "absolute",
+                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  background: "white",
+                  border: "1px solid oklch(0.86 0.06 75)",
+                  borderRadius: 8,
+                  padding: "10px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
+                  maxWidth: "calc(100% - 32px)",
+                  zIndex: 5,
+                }}>
+                  <div style={{
+                    width: 6, height: 6, borderRadius: 999, background: "oklch(0.70 0.14 75)",
+                    boxShadow: "0 0 0 4px oklch(0.95 0.04 75)",
+                    display: "inline-block",
+                  }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{
+                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+                      textTransform: "uppercase", color: "oklch(0.48 0.10 75)", fontWeight: 600, marginBottom: 2,
+                    }}>Tracking was interrupted</div>
+                    <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
+                      Your setup baseline is still the one taken at the start. Recalibrate
+                      only if you or the camera moved.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => resetNeutralCalibration("capturing")}
+                    style={{
+                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".1em",
+                      textTransform: "uppercase", fontWeight: 600,
+                      color: "oklch(0.40 0.10 75)",
+                      background: "oklch(0.97 0.02 75)",
+                      border: "1px solid oklch(0.86 0.06 75)",
+                      borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Recalibrate
+                  </button>
                 </div>
               )}
 

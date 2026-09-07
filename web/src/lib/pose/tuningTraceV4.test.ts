@@ -461,5 +461,77 @@ test("a world landmark with no usable depth is stored as null, not as a hole", (
   );
 });
 
+// ── A DROPOUT MUST NOT RE-ANCHOR THE NEUTRAL BASELINE ───────────────────────
+// Neutral calibration captures "neutral" from whatever posture the patient is
+// holding. Re-running it after an interruption therefore adopts that posture as
+// the reference every later deduction is measured against. A recorded session
+// did exactly this twice — once while the subject was leaning, once while
+// slouching — and nothing surfaced it, because the residual it produces looks
+// perfectly normal. These guard the fix rather than the symptom.
+
+/** The body of `resetAfterSustainedCaptureDropout`. */
+function dropoutHandlerBody(): string {
+  const start = camera.indexOf("function resetAfterSustainedCaptureDropout(");
+  if (start === -1) throw new Error("could not locate resetAfterSustainedCaptureDropout");
+  const end = camera.indexOf("captureDropoutResetDoneRef.current = true;", start);
+  if (end === -1) throw new Error("could not locate the end of the dropout handler");
+  return camera.slice(start, end);
+}
+
+test("a capture dropout does NOT re-run neutral calibration", () => {
+  const body = dropoutHandlerBody();
+  assert(
+    !/resetNeutralCalibration\(/.test(body),
+    "the dropout handler must not recalibrate — that silently re-anchors the " +
+      "baseline to whatever posture the interruption happened in",
+  );
+});
+
+test("a dropout after calibration raises the stale flag instead", () => {
+  const body = dropoutHandlerBody();
+  assert(
+    /calibrationStaleRef\.current = true;/.test(body),
+    "the dropout handler must mark the baseline stale",
+  );
+  assert(
+    /baselinePhaseRef\.current === "captured"/.test(body),
+    "the flag must only be raised once a baseline actually exists — a dropout " +
+      "during calibration itself is not a stale baseline",
+  );
+});
+
+test("recalibrating clears the stale flag", () => {
+  const start = camera.indexOf("const resetNeutralCalibration = useCallback(");
+  assert(start !== -1, "could not locate resetNeutralCalibration");
+  const body = camera.slice(start, camera.indexOf("}, [", start));
+  assert(
+    /calibrationStaleRef\.current = false;/.test(body),
+    "taking the baseline again must answer the stale warning",
+  );
+  // BOTH have to be cleared, and the state is the load-bearing one: the prompt
+  // renders from it, so clearing only the ref leaves the banner on screen
+  // forever with no way to dismiss it. Mutation testing caught exactly that.
+  assert(
+    /setCalibrationStale\(false\);/.test(body),
+    "the rendered state must be cleared too, or the prompt can never be dismissed",
+  );
+});
+
+test("recalibration is offered to the operator, never performed for them", () => {
+  // The prompt is the whole mechanism: without it the baseline would silently
+  // stay stale after a genuine camera move, which is the opposite failure.
+  const marker = camera.indexOf("{calibrationStale && !baselineVisible && (");
+  assert(marker !== -1, "the stale-baseline prompt was not found in the rendered tree");
+  const block = camera.slice(marker, marker + 3000);
+  assert(
+    /onClick=\{\(\) => resetNeutralCalibration\("capturing"\)\}/.test(block),
+    "the prompt must offer a manual recalibration control",
+  );
+  assert(
+    /camera moved/.test(block),
+    "the prompt must say why recalibrating might be needed, not just offer a button",
+  );
+});
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

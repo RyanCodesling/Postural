@@ -17,6 +17,7 @@ import {
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
+  type Landmark,
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
@@ -454,6 +455,30 @@ type RawTraceLandmark = {
 };
 
 /**
+ * One landmark from MediaPipe's SECOND output, `worldLandmarks`.
+ *
+ * The pose task emits two coordinate sets per frame. `landmarks` is normalized
+ * to the image (x/width, y/height) with a depth estimate on roughly the same
+ * scale; `worldLandmarks` is hip-centred in approximate metres and is the
+ * better-conditioned of the two for FORWARD-BACKWARD position specifically.
+ *
+ * Neither is used by any metric — every scored value in this system is computed
+ * in the image plane. This is recorded so that one question can be answered
+ * offline from a session rather than by recording a second one: can either
+ * depth signal separate sagittal faults (leaning back, slouching, an elbow
+ * drifting off a wall) that the image plane cannot see at all?
+ *
+ * No `visibility` field: it carries the same value as the normalized landmark
+ * at the same key, which is already stored, and duplicating it would grow every
+ * row for nothing.
+ */
+type RawTraceWorldLandmark = {
+  x: number;
+  y: number;
+  z: number;
+};
+
+/**
  * One retained neutral-calibration sample, as V4 persists it.
  *
  * The live baseline is a MEDIAN over these, so recomputing a baseline under any
@@ -558,6 +583,21 @@ type UpperBodyTraceMetrics = {
    * Null when the video element has not reported a size yet.
    */
   frame: { width: number; height: number } | null;
+  /**
+   * V4. The same ten points from MediaPipe's `worldLandmarks` output, or null
+   * when the pose task did not emit them for this frame.
+   *
+   * It lives in the METRICS envelope rather than beside `landmarks` on the
+   * payload for a mechanical reason: the write route allowlists the columns it
+   * persists, so an unrecognised top-level key is dropped without an error.
+   * `metrics` is stored whole, and V4 already carries landmark data inside it
+   * (`calibration.samples`), so this is consistent rather than a special case.
+   *
+   * Non-optional: an absent depth channel must be an explicit null, not a
+   * missing key, or a reprocessing months later cannot tell "not recorded"
+   * from "not detected".
+   */
+  worldLandmarks: Record<string, RawTraceWorldLandmark | null> | null;
 };
 
 /**
@@ -1234,6 +1274,46 @@ function traceLandmark(
   };
 }
 
+/**
+ * Serialize one `worldLandmarks` entry. Unlike `traceLandmark` this requires a
+ * finite z: a world landmark whose depth is unusable carries no information for
+ * the only question this channel exists to answer, so it is stored as null
+ * rather than as a point with a hole in it.
+ */
+function traceWorldLandmark(
+  landmark: Landmark | undefined,
+): RawTraceWorldLandmark | null {
+  const x = finiteNumberOrNull(landmark?.x);
+  const y = finiteNumberOrNull(landmark?.y);
+  const z = finiteNumberOrNull(landmark?.z);
+  if (x === null || y === null || z === null) return null;
+  return { x, y, z };
+}
+
+/**
+ * The same ten indices as `upperBodyTraceLandmarks`, from the world-coordinate
+ * output. Kept deliberately in lockstep with that function: a depth channel for
+ * a point whose image-plane position was not retained could not be compared
+ * against anything.
+ */
+function upperBodyTraceWorldLandmarks(
+  worldLandmarks: Landmark[] | undefined,
+): Record<string, RawTraceWorldLandmark | null> | null {
+  if (!worldLandmarks || worldLandmarks.length === 0) return null;
+  return {
+    leftEar:       traceWorldLandmark(worldLandmarks[7]),
+    rightEar:      traceWorldLandmark(worldLandmarks[8]),
+    leftShoulder:  traceWorldLandmark(worldLandmarks[11]),
+    rightShoulder: traceWorldLandmark(worldLandmarks[12]),
+    leftElbow:     traceWorldLandmark(worldLandmarks[13]),
+    rightElbow:    traceWorldLandmark(worldLandmarks[14]),
+    leftWrist:     traceWorldLandmark(worldLandmarks[15]),
+    rightWrist:    traceWorldLandmark(worldLandmarks[16]),
+    leftHip:       traceWorldLandmark(worldLandmarks[23]),
+    rightHip:      traceWorldLandmark(worldLandmarks[24]),
+  };
+}
+
 function upperBodyTraceLandmarks(landmarks: NormalizedLandmark[]) {
   return {
     leftEar:       traceLandmark(landmarks[7]),
@@ -1259,6 +1339,7 @@ function upperBodyTraceMetrics(
   calibrationClock: NeutralCalibrationClock,
   frame: UpperBodyTraceMetrics["frame"],
   calibrationSamples: CalibrationSample[] | undefined,
+  worldLandmarks: UpperBodyTraceMetrics["worldLandmarks"],
 ): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
   const trunkLean = computeTrunkLateralLean(landmarks, tilt);
@@ -1363,6 +1444,7 @@ function upperBodyTraceMetrics(
       ...(calibrationSamples ? { samples: calibrationSamples } : {}),
     },
     frame,
+    worldLandmarks,
   };
 }
 
@@ -2741,6 +2823,7 @@ export default function CameraClient() {
    */
   const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
+    worldLandmarks: Landmark[] | undefined,
     raw: ExerciseFrameMetrics,
     observedTilt: TiltReference,
     tNow: number,
@@ -2814,6 +2897,7 @@ export default function CameraClient() {
             }
           : null,
         calibrationSamples,
+        upperBodyTraceWorldLandmarks(worldLandmarks),
       ),
       landmarks: upperBodyTraceLandmarks(landmarks),
     });
@@ -5714,7 +5798,13 @@ export default function CameraClient() {
               // capture-readiness `r.ok`, so unreliable frames remain
               // excluded per the logging discipline. Baseline values read
               // from the refs are the medians captured in earlier frames.
-              bufferTuningRawFrame(landmarks, raw, observedTilt, tNow);
+              bufferTuningRawFrame(
+                landmarks,
+                results.worldLandmarks?.[0],
+                raw,
+                observedTilt,
+                tNow,
+              );
 
               // Direction strings for compensation overlay labels.
               // computePoseMetricsForExercise only surfaces absolute values in

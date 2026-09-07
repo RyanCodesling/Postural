@@ -216,10 +216,14 @@ CREATE TABLE IF NOT EXISTS raw_frames (
   elapsed_ms    INT          NOT NULL CHECK (elapsed_ms >= 0),
   captured_at   TIMESTAMPTZ  NOT NULL,
   -- Payload contract identifier, e.g. upper_body_v4. v4 adds the source frame
-  -- size per frame and the retained neutral-calibration samples once per set;
-  -- without those, a recorded session cannot be reprocessed under a changed
-  -- coordinate convention, because landmark normalization divisors and the
-  -- medians every baseline is built from are otherwise unrecoverable.
+  -- size per frame, the retained neutral-calibration samples once per set, and
+  -- the world-coordinate landmarks; without those, a recorded session cannot be
+  -- reprocessed under a changed coordinate convention, because landmark
+  -- normalization divisors and the medians every baseline is built from are
+  -- otherwise unrecoverable. All three live inside `metrics` rather than in
+  -- their own columns: the write route allowlists what it persists, and
+  -- `metrics` is stored whole, so a nested field survives where a new top-level
+  -- one would be dropped without an error.
   trace_kind    TEXT         NOT NULL,
   -- Derived RAW/unsmoothed metrics. Never write One Euro filtered UI values.
   metrics       JSONB        NOT NULL,

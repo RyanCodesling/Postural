@@ -369,5 +369,97 @@ test("an unusable reading falls back to a placeholder, never to a partial number
   );
 });
 
+// ── THE WORLD-COORDINATE DEPTH CHANNEL ──────────────────────────────────────
+// Recorded so one question can be answered offline instead of by recording a
+// second session: can either depth signal separate sagittal faults — leaning
+// back, slouching, an elbow drifting off a wall — that the image plane cannot
+// see at all? Nothing reads it at runtime, so a regression here is silent until
+// somebody tries the analysis and finds the column empty. That is exactly how
+// the frame size and the calibration samples were lost twice already.
+
+test("the payload carries world landmarks, and they are not optional", () => {
+  assert(
+    /worldLandmarks:\s*Record<string,\s*RawTraceWorldLandmark \| null> \| null;/.test(camera),
+    "the metrics envelope must declare a nullable, non-optional worldLandmarks",
+  );
+  assert(
+    !/worldLandmarks\?:/.test(camera),
+    "worldLandmarks must not be optional — a missing key is indistinguishable " +
+      "from a frame where the pose task emitted nothing",
+  );
+});
+
+test("world landmarks travel inside `metrics`, not beside `landmarks`", () => {
+  // The write route allowlists the fields it persists. A new TOP-LEVEL key on
+  // the payload is dropped silently, with no error anywhere — the same failure
+  // that made the v4 trace inert. `metrics` is stored whole, so nesting it
+  // there is what actually survives the round trip.
+  const payloadType = camera.slice(
+    camera.indexOf("type RawFramePayload = {"),
+    camera.indexOf("};", camera.indexOf("type RawFramePayload = {")),
+  );
+  assert(payloadType.length > 0, "could not locate RawFramePayload");
+  assert(
+    !/worldLandmarks/.test(payloadType),
+    "worldLandmarks must NOT sit at the payload top level, where the route drops it",
+  );
+
+  const route = readFileSync(
+    fileURLToPath(new URL("../../app/api/sessions/[id]/raw-frames/route.ts", import.meta.url)),
+    "utf8",
+  );
+  const persisted = route.slice(route.indexOf("rows.push({"), route.indexOf("return rows;"));
+  assert(
+    /metrics:\s*item\.metrics/.test(persisted),
+    "the route must persist `metrics` whole, which is what carries this field",
+  );
+});
+
+test("world landmarks come from the pose task's OWN world output", () => {
+  // Deriving them from the normalized landmarks would produce a depth channel
+  // that is a copy of the image plane — and would answer the question with a
+  // guaranteed null result while looking like it worked.
+  assert(
+    /results\.worldLandmarks\?\.\[0\]/.test(camera),
+    "the writer must be fed results.worldLandmarks[0]",
+  );
+  const body = camera.slice(
+    camera.indexOf("function upperBodyTraceWorldLandmarks("),
+    camera.indexOf("function upperBodyTraceLandmarks("),
+  );
+  assert(body.length > 0, "could not locate upperBodyTraceWorldLandmarks");
+  assert(
+    !/NormalizedLandmark/.test(body),
+    "the world serializer must not touch the normalized landmark type",
+  );
+});
+
+test("the two landmark sets stay in lockstep on the same ten points", () => {
+  // A depth reading for a point whose image-plane position was not retained
+  // could not be compared against anything.
+  const indicesIn = (fnName: string): string[] => {
+    const start = camera.indexOf(`function ${fnName}(`);
+    assert(start !== -1, `could not locate ${fnName}`);
+    const body = camera.slice(start, camera.indexOf("\n}", start));
+    return (body.match(/\[(\d+)\]/g) ?? []).sort();
+  };
+  const normalized = indicesIn("upperBodyTraceLandmarks");
+  const world = indicesIn("upperBodyTraceWorldLandmarks");
+  assert(normalized.length === 10, `expected 10 normalized indices, got ${normalized.length}`);
+  assertEq(world.join(","), normalized.join(","), "world indices must match normalized");
+});
+
+test("a world landmark with no usable depth is stored as null, not as a hole", () => {
+  const body = camera.slice(
+    camera.indexOf("function traceWorldLandmark("),
+    camera.indexOf("function upperBodyTraceWorldLandmarks("),
+  );
+  assert(body.length > 0, "could not locate traceWorldLandmark");
+  assert(
+    /z === null/.test(body),
+    "a non-finite z must reject the whole point — depth is the only reason this channel exists",
+  );
+});
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

@@ -91,6 +91,10 @@ import {
 } from "@/lib/pose/repQuality";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import {
+  formatTraceSyncReadout,
+  TRACE_SYNC_PLACEHOLDER,
+} from "@/lib/pose/traceSyncClock";
+import {
   NEUTRAL_CALIBRATION_DURATION_MS,
   NEUTRAL_CALIBRATION_MIN_SAMPLES,
   advanceNeutralCalibrationClock,
@@ -1618,6 +1622,14 @@ export default function CameraClient() {
    * preserving what a later reprocessing actually needs.
    */
   const calibrationTraceSamplesRef = useRef<CalibrationSample[] | null>(null);
+  /**
+   * The on-screen trace sync readout. Held as a DOM node rather than state on
+   * purpose: the camera loop deliberately avoids per-frame `setState` (fps and
+   * the timing split commit once a second, resolution only on change), and
+   * reconciling a readout every frame would add render cost to the exact frame
+   * budget this recording is trying to protect.
+   */
+  const traceSyncElRef = useRef<HTMLDivElement | null>(null);
   const [coachingRemoteCollapsed, setCoachingRemoteCollapsed] = useState(false);
   // True once the current ring contents have been written to a file. Cleared by
   // the next recorded decision, so "exported" always describes what is in the
@@ -2762,10 +2774,25 @@ export default function CameraClient() {
       if (calibrationSamples) calibrationSamplesEmittedSetRef.current = setIndex;
     }
 
+    const frameIndex = ++rawFrameIndexRef.current;
+    const elapsedMs = Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current));
+
+    // Screen-recording sync readout, written from the SAME two locals that go
+    // into the payload below rather than from a clock of its own. That is the
+    // whole guarantee: a value read off a paused video frame names a row that
+    // EXISTS in the export, instead of one that is merely close to it. Any
+    // parallel time source here would quietly reintroduce the drift this
+    // readout exists to remove.
+    const syncEl = traceSyncElRef.current;
+    if (syncEl) {
+      syncEl.textContent =
+        formatTraceSyncReadout(frameIndex, elapsedMs) ?? TRACE_SYNC_PLACEHOLDER;
+    }
+
     pendingRawFramesRef.current.push({
-      frameIndex: ++rawFrameIndexRef.current,
+      frameIndex,
       setIndex,
-      elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
+      elapsedMs,
       capturedAt: perfToIso(tNow),
       traceKind: "upper_body_v4",
       metrics: upperBodyTraceMetrics(
@@ -8121,6 +8148,44 @@ export default function CameraClient() {
                     Saves raw movement metrics (no video) for threshold tuning.
                   </div>
                 </label>
+              </div>
+            )}
+
+            {/* Trace sync readout — the join key between a screen recording and
+                the exported trace. Rendered only while a patient session is
+                actually recording, so an ordinary session never shows it: the
+                toggle above defaults OFF. `bufferTuningRawFrame` writes the
+                text directly to this node from the same values it persists. */}
+            {user?.role === "patient" && tuningTraceEnabled && (
+              <div style={{
+                padding: "10px 16px",
+                borderTop: "1px solid oklch(0.93 0.003 240)",
+                background: "oklch(0.97 0.004 240)",
+              }}>
+                <div style={{
+                  fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+                  textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 3,
+                }}>
+                  Trace sync — frame / elapsed
+                </div>
+                <div
+                  ref={traceSyncElRef}
+                  aria-live="off"
+                  style={{
+                    // Deliberately larger than the telemetry below it: this is
+                    // read back off compressed video, where 12px monospace
+                    // digits smear. Tabular figures keep the field from
+                    // shifting as digits change.
+                    fontFamily: "var(--mono)",
+                    fontSize: 20,
+                    fontWeight: 600,
+                    letterSpacing: ".02em",
+                    fontVariantNumeric: "tabular-nums",
+                    color: "oklch(0.20 0.01 240)",
+                  }}
+                >
+                  {TRACE_SYNC_PLACEHOLDER}
+                </div>
               </div>
             )}
 

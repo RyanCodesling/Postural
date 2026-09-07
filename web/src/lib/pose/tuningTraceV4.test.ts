@@ -279,5 +279,95 @@ test("the offline exporter accepts the trace kind the client writes", () => {
   }
 });
 
+// ── THE SCREEN-RECORDING SYNC READOUT ───────────────────────────────────────
+// The readout's whole value is that a number transcribed off a paused video
+// frame names a row that EXISTS in the export. That holds only while it is
+// driven by the values actually persisted. A readout fed by its own clock would
+// look identical on screen, drift silently, and send every offline lookup to a
+// neighbouring row — so these guard the plumbing, not the appearance.
+// `traceSyncClock.test.ts` covers the format behaviourally.
+
+/** The body of `bufferTuningRawFrame`, from its signature to the batch flush. */
+function traceWriterBody(): string {
+  const start = camera.indexOf("const bufferTuningRawFrame = (");
+  if (start === -1) throw new Error("could not locate bufferTuningRawFrame");
+  const end = camera.indexOf("RAW_FRAME_UPLOAD_BATCH_SIZE", start);
+  if (end === -1) throw new Error("could not locate the end of bufferTuningRawFrame");
+  return camera.slice(start, end);
+}
+
+test("the persisted frame index and elapsed time are single locals, not inline expressions", () => {
+  // If the payload recomputed either value inline, the readout could not
+  // reference the same one, and the two could diverge with no test noticing.
+  const body = traceWriterBody();
+  assert(
+    /const frameIndex = \+\+rawFrameIndexRef\.current;/.test(body),
+    "frameIndex must be hoisted to a local so the readout can share it",
+  );
+  assert(
+    /const elapsedMs = Math\.max\(/.test(body),
+    "elapsedMs must be hoisted to a local so the readout can share it",
+  );
+  assert(
+    !/frameIndex:\s*\+\+rawFrameIndexRef/.test(body),
+    "the payload must use the hoisted frameIndex, not recompute it inline",
+  );
+  assert(
+    !/elapsedMs:\s*Math\.max\(/.test(body),
+    "the payload must use the hoisted elapsedMs, not recompute it inline",
+  );
+});
+
+test("the readout is written from those same two locals", () => {
+  const body = traceWriterBody();
+  const write = body.match(/syncEl\.textContent\s*=[\s\S]{0,220}?;/)?.[0];
+  assert(!!write, "the readout write was not found");
+  assert(
+    /formatTraceSyncReadout\(\s*frameIndex\s*,\s*elapsedMs\s*\)/.test(write!),
+    "the readout must be built from the hoisted frameIndex and elapsedMs",
+  );
+});
+
+test("the readout is written BEFORE the payload, from values the payload then persists", () => {
+  // Ordering is the evidence that the displayed number and the stored number
+  // are one value rather than two that happen to agree.
+  const body = traceWriterBody();
+  const declared = body.indexOf("const frameIndex = ");
+  const shown = body.indexOf("syncEl.textContent");
+  const pushed = body.indexOf("pendingRawFramesRef.current.push({");
+  assert(declared !== -1 && shown !== -1 && pushed !== -1, "could not locate all three sites");
+  assert(declared < shown, "the values must be computed before they are displayed");
+  assert(shown < pushed, "the readout must be written before the payload is queued");
+});
+
+test("the trace writer reads no clock of its own for the readout", () => {
+  // The one permitted time source is `tNow`, passed in by the camera loop and
+  // used for BOTH the stored row and the readout. Anything else reintroduces
+  // exactly the drift this readout exists to remove.
+  const body = traceWriterBody();
+  assert(!/performance\.now\(/.test(body), "must not call performance.now()");
+  assert(!/Date\.now\(/.test(body), "must not call Date.now()");
+});
+
+test("the readout is rendered only while a session is actually recording", () => {
+  // It must never appear in an ordinary patient session. The tuning-trace
+  // toggle is patient-only and defaults OFF; the readout inherits both.
+  const marker = camera.indexOf("traceSyncElRef}");
+  assert(marker !== -1, "the readout element was not found in the rendered tree");
+  const preceding = camera.slice(Math.max(0, marker - 1400), marker);
+  assert(
+    /user\?\.role === "patient" && tuningTraceEnabled &&/.test(preceding),
+    "the readout must be gated on a patient session with tracing enabled",
+  );
+});
+
+test("an unusable reading falls back to a placeholder, never to a partial number", () => {
+  const body = traceWriterBody();
+  assert(
+    /\?\?\s*TRACE_SYNC_PLACEHOLDER/.test(body),
+    "the readout must fall back to TRACE_SYNC_PLACEHOLDER",
+  );
+});
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

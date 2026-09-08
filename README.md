@@ -1,5 +1,53 @@
 # Sprint Updates 
 
+## 📌 Update-9-8-26 | *RyanCodesling*
+
+- Stopped a capture dropout from silently re-capturing the neutral baseline, which could adopt a compensated posture as the reference every later deduction is measured against
+- Relaxed the default head-position ceiling that was rejecting ordinary postural movement rather than bad framing, on measurements taken from a recorded session
+- Added an on-screen trace sync readout so a screen recording can be matched to an exact exported row instead of an approximate one
+- Recorded the pose task's world-coordinate landmarks, which were previously computed on every frame and discarded, so a recorded session can be checked for whether either depth signal separates forward-backward faults the image plane cannot see
+- Corrected a comment that described the opposite of the calibration lifecycle it annotated, at the site where believing it had already cost two recordings
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Removed the automatic recalibration that followed a sustained capture dropout; counters, filters and hold accrual still reset, because they describe interrupted movement, while the neutral baseline describes the body and is now kept
+- Added a prompt offering manual recalibration when a dropout interrupts a session that had already captured its baseline, stating why it might be needed rather than only presenting a control, because the remaining risk is a moved camera leaving a stale reference
+- Corrected the trace writer's comment, which stated that calibration does not release its sample ring; it does, immediately before the phase flip that gates the writer, which is why the first version of that trace recorded empty samples
+
+### *web\src\lib\pose\captureReadiness.ts* and *web\src\lib\pose\captureReadiness.test.ts*
+
+- Raised the default head-position ceiling from the top quarter of the frame to just over the top third, measured against a recorded session in which a deliberate backward lean put the ear line flush against the old bound with no margin, and the transitions in and out of it crossed the gate
+- Kept the new bound clearly inside the overhead mode's, and left the top-of-frame guard unchanged
+- Added five checks, including one that asserts the rejection of a head that has dropped too far without pinning which gate rejects it, since the body-fit gate legitimately fires first at that depth
+
+### *web\src\lib\pose\traceSyncClock.ts* and *web\src\lib\pose\traceSyncClock.test.ts*
+
+- Added the formatting and parsing for an on-screen readout carrying the frame index and elapsed time of the row being written, with an exact inverse so a value transcribed from a paused video frame resolves to the stored integer rather than near it
+- Held no time source in the module: the caller supplies the value it is about to persist, which is what makes the readout and the stored row one number rather than two that agree
+- Rendered the readout from the same two locals the payload is queued from, and only while a patient session is recording, so an ordinary session shows nothing new
+- Added 15 checks that run the functions and round-trip every claim, including a dense sweep rather than only the rollover boundaries
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\tuningTraceV4.test.ts*, and *scripts\sessions_pg.sql*
+
+- Recorded the world-coordinate landmarks for the same ten points already retained, or an explicit null where the pose task emitted none
+- Placed them inside the metrics envelope rather than beside the landmarks on the payload, because the write route allowlists the fields it persists and an unrecognised top-level key is dropped without an error
+- Required a finite depth value for a world point to be stored at all, since depth is the only reason the channel exists
+- Extended the suite to 30 checks covering the field's shape, its placement, its source, the two landmark sets covering the same indices, and the calibration and readout guards
+
+### *Validation*
+
+- 41 framework-free TypeScript suites pass, including 30 tuning-trace checks, 15 trace-clock checks, and 13 capture-readiness checks
+- Type check, lint, and a clean production build all pass; 62 offline comparison tests pass
+- Both changed behaviours were mutation-tested by injecting the defects the checks claim to prevent and requiring each to fail: 8 of 8 for the calibration and readiness work, 6 of 6 for the world-landmark channel, 10 of 10 for the trace clock, with every source restored byte-identical afterwards
+- Two of those injections found real gaps in the checks themselves, which were rewritten rather than the injections dropped
+
+### *Remaining boundaries*
+
+- No metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the pose metric algorithm version is unchanged
+- The aspect correction remains enabled nowhere, and no threshold has been re-derived against it
+- The world-coordinate landmarks are recorded and read by nothing; no score, cue, or therapist surface consumes them
+- Two behaviours are patient-visible by intent: the head-position ceiling is looser, and a dropout no longer recalibrates on its own
+
 ## 📌 Update-9-6-26 | *RyanCodesling*
 
 - Added an opt-in aspect-ratio correction to the clinical angle pipeline, default-disabled, so no patient-visible measurement changes until the affected thresholds are re-derived against it

@@ -1,7 +1,9 @@
 /**
  * tuningTraceV4.test.ts
  *
- * Guards the two things the `upper_body_v4` tuning trace exists to persist.
+ * Guards what the `upper_body_v4` tuning trace exists to persist, and — since
+ * the recording work grew into them — the calibration and sync-readout
+ * behaviours a recording session depends on.
  * Run with: npx tsx src/lib/pose/tuningTraceV4.test.ts
  *
  * ── WHY THIS SUITE EXISTS ────────────────────────────────────────────────────
@@ -19,17 +21,38 @@
  *      baseline is a MEDIAN over it, and a median cannot be recomputed under a
  *      changed measurement from the stored scalar alone.
  *
- * This suite reads `CameraClient.tsx` as source text rather than mounting it.
- * The emission path sits inside a React component behind a live camera loop, so
- * a behavioural test would need a mounted component and a fake MediaPipe. The
- * source assertions below are deliberately written against the INVARIANT
- * ("something writes the frame size into the payload", "the samples are gated
- * to once per set") rather than against one exact spelling, because a check
- * shaped to the current patch cannot fail on a path the patch never considered.
+ * Most of this suite reads `CameraClient.tsx` as source text rather than
+ * mounting it. The emission path sits inside a React component behind a live
+ * camera loop, so a full behavioural test would need a mounted component and a
+ * fake MediaPipe. The source assertions are deliberately written against the
+ * INVARIANT ("something writes the frame size into the payload", "the samples
+ * are gated to once per set") rather than against one exact spelling, because a
+ * check shaped to the current patch cannot fail on a path the patch never
+ * considered.
+ *
+ * ── AND WHERE THAT IS NOT ENOUGH ────────────────────────────────────────────
+ * A source assertion proves the wiring exists, not that the wiring does
+ * anything. The tests marked BEHAVIOURAL drive the real `RepCounter` through
+ * the recalibration defect end to end, because that one is about what the
+ * state machine EMITS across an unmeasured gap — a property no amount of
+ * reading the camera source can establish.
+ *
+ * Two source assertions here were previously wrong in a way worth remembering.
+ * One forbade any `resetNeutralCalibration(` call inside the dropout handler,
+ * which made the handler's two phases indistinguishable and would have blocked
+ * a legitimate fix — a test protecting a defect. The other was named for a
+ * guarantee it did not check. Both were found by review rather than by failing.
  */
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { RepCounter } from "./repCounter";
+import {
+  applyTraceSyncReadout,
+  parseTraceSyncReadout,
+  TRACE_SYNC_PAUSED,
+  TRACE_SYNC_PLACEHOLDER,
+} from "./traceSyncClock";
 
 let passed = 0;
 let failed = 0;
@@ -58,6 +81,10 @@ function assertEq(actual: unknown, expected: unknown, label: string): void {
 
 const camera = readFileSync(
   fileURLToPath(new URL("../../app/(app)/camera/CameraClient.tsx", import.meta.url)),
+  "utf8",
+);
+const clock = readFileSync(
+  fileURLToPath(new URL("./traceSyncClock.ts", import.meta.url)),
   "utf8",
 );
 const schema = readFileSync(
@@ -320,7 +347,7 @@ test("the persisted frame index and elapsed time are single locals, not inline e
 
 test("the readout is written from those same two locals", () => {
   const body = traceWriterBody();
-  const write = body.match(/syncEl\.textContent\s*=[\s\S]{0,220}?;/)?.[0];
+  const write = body.match(/writeTraceSyncReadout\([\s\S]{0,220}?\);/)?.[0];
   assert(!!write, "the readout write was not found");
   assert(
     /formatTraceSyncReadout\(\s*frameIndex\s*,\s*elapsedMs\s*\)/.test(write!),
@@ -333,7 +360,7 @@ test("the readout is written BEFORE the payload, from values the payload then pe
   // are one value rather than two that happen to agree.
   const body = traceWriterBody();
   const declared = body.indexOf("const frameIndex = ");
-  const shown = body.indexOf("syncEl.textContent");
+  const shown = body.indexOf("writeTraceSyncReadout(");
   const pushed = body.indexOf("pendingRawFramesRef.current.push({");
   assert(declared !== -1 && shown !== -1 && pushed !== -1, "could not locate all three sites");
   assert(declared < shown, "the values must be computed before they are displayed");
@@ -349,15 +376,147 @@ test("the trace writer reads no clock of its own for the readout", () => {
   assert(!/Date\.now\(/.test(body), "must not call Date.now()");
 });
 
-test("the readout is rendered only while a session is actually recording", () => {
-  // It must never appear in an ordinary patient session. The tuning-trace
-  // toggle is patient-only and defaults OFF; the readout inherits both.
-  const marker = camera.indexOf("traceSyncElRef}");
+test("the readout is not rendered outside a patient tuning session", () => {
+  // Renamed, because the name it used to carry — "only while a session is
+  // actually recording" — described a guarantee this check does not make. The
+  // render gate is the toggle, not the recording state; whether a reading is
+  // SHOWN while recording is stopped is a separate property, guarded below.
+  const marker = camera.indexOf("ref={traceSyncElRef}");
   assert(marker !== -1, "the readout element was not found in the rendered tree");
   const preceding = camera.slice(Math.max(0, marker - 1400), marker);
   assert(
     /user\?\.role === "patient" && tuningTraceEnabled &&/.test(preceding),
     "the readout must be gated on a patient session with tracing enabled",
+  );
+});
+
+test("a frame that is not traced BLANKS the readout", () => {
+  // The defect this closes: the readout was written only on traced frames, so
+  // a gap left the last good reading on screen. Pausing a screen recording
+  // inside that gap reads a value that names a real row — an OLDER one — and
+  // the label is then attached to the wrong posture, silently and plausibly.
+  const start = camera.indexOf("const predictWebcam = () => {");
+  assert(start !== -1, "could not locate predictWebcam");
+  const loop = camera.slice(start);
+  const cleared = loop.indexOf("traceSyncWroteThisFrameRef.current = false;");
+  const checked = loop.search(/if \(!traceSyncWroteThisFrameRef\.current\) \{/);
+  assert(cleared !== -1, "the per-frame trace flag must be cleared each frame");
+  assert(checked !== -1, "the loop must check whether this frame was traced");
+  assert(cleared < checked, "the flag must be cleared before it is read");
+  assert(
+    /writeTraceSyncReadout\(TRACE_SYNC_PAUSED\)/.test(loop.slice(checked, checked + 300)),
+    "an untraced frame must blank the readout, not leave the last value up",
+  );
+});
+
+test("the paused marker cannot be mistaken for a reading", () => {
+  // Both fallbacks have to fail `parseTraceSyncReadout`, or offline tooling
+  // that transcribes one resolves it to a real row instead of rejecting it.
+  assert(
+    parseTraceSyncReadout(TRACE_SYNC_PAUSED) === null,
+    "TRACE_SYNC_PAUSED must not parse as a readout",
+  );
+  assert(
+    parseTraceSyncReadout(TRACE_SYNC_PLACEHOLDER) === null,
+    "TRACE_SYNC_PLACEHOLDER must not parse as a readout",
+  );
+  // Compared as plain strings: both are literal-typed consts, and tsc rejects
+  // the direct comparison as provably false rather than checking it. Widening
+  // is what makes this a runtime guard against the two being made equal.
+  assert(
+    (TRACE_SYNC_PAUSED as string) !== (TRACE_SYNC_PLACEHOLDER as string),
+    "paused and not-yet-started must be distinguishable on screen — they mean " +
+      "different things to someone scrubbing the recording",
+  );
+});
+
+test("only one function writes the readout node", () => {
+  // The guarantee is "a reading on screen belongs to the frame showing it".
+  // That is checkable while every update goes through one place, and stops
+  // being checkable the moment a second writer exists.
+  const inCamera = camera.match(/\.textContent\s*=[^=]/g) ?? [];
+  assertEq(inCamera.length, 0, "the camera must not write the node directly");
+  const inClock = clock.match(/\.textContent\s*=[^=]/g) ?? [];
+  assertEq(inClock.length, 1, "traceSyncClock must hold exactly one writer");
+});
+
+test("BEHAVIOURAL: the writer compares the NODE, never a remembered value", () => {
+  // The regression. A cache of the last string written can disagree with the
+  // node, and when it does the skip leaves a STALE READING on screen — which
+  // is the one failure this readout exists to prevent.
+  //
+  // It happened: the cache lived in a ref reset from the element's `ref`
+  // callback, on the assumption that receiving a node meant a fresh one. React
+  // calls an inline ref callback on ordinary rerenders too, reattaching the
+  // SAME node with its text unchanged, so a rerender desynchronised the cache
+  // and the next write of that value was skipped while the old reading stayed
+  // visible. Source assertions passed the whole time.
+  const node: { textContent: string | null } = { textContent: null };
+
+  assert(applyTraceSyncReadout(node, "#12  00:01.234"), "first write must land");
+  assertEq(node.textContent, "#12  00:01.234", "node text");
+
+  // Unchanged value: skipped, and that is the only skip allowed.
+  assert(!applyTraceSyncReadout(node, "#12  00:01.234"), "an identical write must be skipped");
+
+  // The desync itself. Anything that changes the node behind the writer's back
+  // — a rerender, a remount, React repainting the JSX default — must not be
+  // able to make a needed write look redundant.
+  node.textContent = TRACE_SYNC_PLACEHOLDER;
+  assert(
+    applyTraceSyncReadout(node, "#12  00:01.234"),
+    "a write must land whenever the NODE disagrees, however the node got that way",
+  );
+  assertEq(node.textContent, "#12  00:01.234", "node text after re-write");
+
+  // And the reverse direction, which is the session-reset case that was broken.
+  node.textContent = "#99  00:09.999";
+  assert(
+    applyTraceSyncReadout(node, TRACE_SYNC_PLACEHOLDER),
+    "clearing must land even after the node changed behind the writer",
+  );
+  assertEq(node.textContent, TRACE_SYNC_PLACEHOLDER, "node text after clear");
+
+  assert(!applyTraceSyncReadout(null, TRACE_SYNC_PLACEHOLDER), "a missing node is a no-op");
+});
+
+test("no cached last-write value survives anywhere", () => {
+  // Structural counterpart: the desync is impossible only while there is
+  // nothing to desynchronise. A reintroduced cache would pass every other
+  // test here.
+  assert(
+    !/traceSyncLastWriteRef/.test(camera),
+    "the camera must not cache the last readout write",
+  );
+  assert(
+    !/\blet\s+last\w*\s*[:=]|\bconst\s+last\w*\s*=\s*\{/.test(clock),
+    "traceSyncClock must hold no module-level last-write cache",
+  );
+});
+
+test("stopping the camera clears the readout", () => {
+  // stopCamera cancels the animation frame, so the per-frame blanking that
+  // repairs a stale reading everywhere else is exactly what is no longer
+  // running. Without a clear here an old row key survives the lifecycle gap.
+  const start = camera.indexOf("const stopCamera = useCallback(");
+  assert(start !== -1, "could not locate stopCamera");
+  const body = camera.slice(start, camera.indexOf("\n  }, [", start));
+  const cancel = body.indexOf("cancelAnimationFrame");
+  const clear = body.indexOf("applyTraceSyncReadout(");
+  assert(cancel !== -1, "stopCamera must cancel the frame loop");
+  assert(clear !== -1, "stopCamera must clear the sync readout");
+  assert(cancel < clear, "the clear must come after the loop is cancelled");
+});
+
+test("a new session resets the readout", () => {
+  // Frame indices restart at 1, so a reading left over from the previous
+  // session names a row number that now belongs to different data.
+  const start = camera.indexOf("const resetSessionPersistence = () => {");
+  assert(start !== -1, "could not locate resetSessionPersistence");
+  const body = camera.slice(start, camera.indexOf("\n  };", start));
+  assert(
+    /writeTraceSyncReadout\(TRACE_SYNC_PLACEHOLDER\)/.test(body),
+    "starting a session must clear the previous session's reading",
   );
 });
 
@@ -478,25 +637,62 @@ function dropoutHandlerBody(): string {
   return camera.slice(start, end);
 }
 
-test("a capture dropout does NOT re-run neutral calibration", () => {
+test("a dropout branches on whether the baseline was FINISHED", () => {
+  // An earlier version of this test forbade any `resetNeutralCalibration(` in
+  // the handler at all. That was wrong, and it was wrong in a way that would
+  // have PROTECTED a defect: it made the handler's two cases indistinguishable,
+  // so the fix for the finished-baseline case was silently applied to the
+  // unfinished one too. The two cases need opposite handling, so the test has
+  // to know they exist.
   const body = dropoutHandlerBody();
   assert(
-    !/resetNeutralCalibration\(/.test(body),
-    "the dropout handler must not recalibrate — that silently re-anchors the " +
-      "baseline to whatever posture the interruption happened in",
+    /baselinePhaseRef\.current === "captured"/.test(body),
+    "the handler must branch on the baseline phase",
+  );
+  assert(
+    /}\s*else\s*{/.test(body),
+    "the unfinished-baseline case must be handled, not fall through",
   );
 });
 
-test("a dropout after calibration raises the stale flag instead", () => {
+test("a dropout after a FINISHED baseline keeps it and raises the stale flag", () => {
   const body = dropoutHandlerBody();
+  const captured = body.slice(body.indexOf('baselinePhaseRef.current === "captured"'));
+  const elseAt = captured.search(/}\s*else\s*{/);
+  assert(elseAt !== -1, "could not split the captured branch from the else");
+  const branch = captured.slice(0, elseAt);
   assert(
-    /calibrationStaleRef\.current = true;/.test(body),
-    "the dropout handler must mark the baseline stale",
+    !/resetNeutralCalibration\(/.test(branch),
+    "a finished baseline must NOT be re-taken here — that silently re-anchors " +
+      "it to whatever posture the interruption happened in",
   );
   assert(
-    /baselinePhaseRef\.current === "captured"/.test(body),
-    "the flag must only be raised once a baseline actually exists — a dropout " +
-      "during calibration itself is not a stale baseline",
+    /calibrationStaleRef\.current = true;/.test(branch) &&
+      /setCalibrationStale\(true\);/.test(branch),
+    "it must mark the baseline stale instead, in both the ref and the state " +
+      "the prompt renders from",
+  );
+});
+
+test("a dropout during an UNFINISHED calibration discards the partial samples", () => {
+  // The opposite case, and a regression the phase gate introduced. Before the
+  // gate, the handler restarted calibration unconditionally. Adding
+  // `=== "captured"` was right for the finished case and left this one with no
+  // handling at all, so samples taken before an interruption were silently
+  // carried into the same median as samples taken after it — across a camera
+  // move, which is a common cause of the interruption in the first place.
+  const body = dropoutHandlerBody();
+  const elseAt = body.search(/}\s*else\s*{/);
+  assert(elseAt !== -1, "could not locate the unfinished-baseline branch");
+  const branch = body.slice(elseAt);
+  assert(
+    /resetNeutralCalibration\(/.test(branch),
+    "an unfinished calibration must be restarted, not resumed across the gap",
+  );
+  assert(
+    !/calibrationStaleRef\.current = true;/.test(branch),
+    "there is nothing to warn about here — no baseline was ever presented as " +
+      "good, so calibration simply starts over",
   );
 });
 
@@ -524,12 +720,150 @@ test("recalibration is offered to the operator, never performed for them", () =>
   assert(marker !== -1, "the stale-baseline prompt was not found in the rendered tree");
   const block = camera.slice(marker, marker + 3000);
   assert(
-    /onClick=\{\(\) => resetNeutralCalibration\("capturing"\)\}/.test(block),
+    /onClick=\{handleManualRecalibration\}/.test(block),
     "the prompt must offer a manual recalibration control",
   );
   assert(
     /camera moved/.test(block),
     "the prompt must say why recalibrating might be needed, not just offer a button",
+  );
+});
+
+// ── RECALIBRATING IS A MEASUREMENT BOUNDARY ─────────────────────────────────
+// Pressing Recalibrate mid-movement does two things at once: it pauses metric
+// updates while the new baseline is captured, and it replaces the frozen tilt
+// and every per-side baseline. A repetition already in progress survives both
+// unless something discards it, and is then completed afterwards — carrying a
+// duration that spans the unmeasured interval, and having accumulated its peak
+// under the OLD reference while its completion threshold is evaluated under the
+// NEW one. It is then credited toward set progress and can close the set.
+//
+// The first test below is behavioural: it drives the real `RepCounter` through
+// that exact sequence. The rest check that the camera actually routes the
+// button through the discard, which is the half a unit test cannot see.
+
+/** Thresholds shaped like a lateral-raise exercise, in metric units. */
+const RECAL_THRESHOLDS = {
+  repCompleteThreshold: 15,
+  startThreshold: 20,
+  minimumPeakThreshold: 25,
+  targetROM: 70,
+};
+
+test("BEHAVIOURAL: a rep in progress survives a calibration gap unless discarded", () => {
+  // Arm at rest, then ascending, then descending — a rep is now in flight.
+  const counter = new RepCounter(RECAL_THRESHOLDS);
+  for (const [angle, t] of [[0, 100], [30, 150], [90, 200], [80, 250]] as const) {
+    assert(counter.update(angle, t) === null, `unexpected event at t=${t}`);
+  }
+  assert(counter.getState() === "DESCENDING", "setup failed: expected DESCENDING");
+
+  // Now the operator recalibrates. Three seconds pass with no updates, because
+  // the metric path is skipped for as long as the baseline is not captured.
+  // The arm comes back down and the rep completes.
+  const leaked = counter.update(0, 3400);
+  assert(leaked !== null, "setup failed: expected the rep to complete");
+  assert(
+    leaked!.totalDurationMs === 3250,
+    `the surviving rep spans the calibration gap: ${leaked!.totalDurationMs}ms`,
+  );
+  assert(
+    leaked!.classification === "complete",
+    "and it is credited as complete, so it counts toward the set",
+  );
+  // The long-gap check is not a substitute. It clears `armAtRest` only, which
+  // gates STARTING a rep — it does nothing to one already in flight.
+
+  // Same sequence, with the discard the fix performs.
+  const fixed = new RepCounter(RECAL_THRESHOLDS);
+  for (const [angle, t] of [[0, 100], [30, 150], [90, 200], [80, 250]] as const) {
+    fixed.update(angle, t);
+  }
+  fixed.reset();
+  assert(
+    fixed.update(0, 3400) === null,
+    "after the discard, nothing may be emitted across the gap",
+  );
+  assert(fixed.getRepCount() === 0, "and nothing may be credited");
+});
+
+test("BEHAVIOURAL: the discard does not touch what was already credited", () => {
+  // The other half of the requirement. Discarding must lose the unobserved
+  // repetition and NOTHING else — a fix that also wiped completed reps would
+  // pass the test above and be worse than the defect.
+  const counter = new RepCounter(RECAL_THRESHOLDS);
+  for (const [angle, t] of [[0, 100], [30, 150], [90, 200], [80, 250], [0, 300]] as const) {
+    counter.update(angle, t);
+  }
+  assert(counter.getRepCount() === 1, "setup failed: expected one credited rep");
+  counter.reset();
+  assert(
+    counter.getRepCount() === 1,
+    "a discard must not revoke a repetition that was already observed end to end",
+  );
+});
+
+/** The body of `discardInProgressMovement`. */
+function discardBody(): string {
+  const start = camera.indexOf("function discardInProgressMovement(): void {");
+  if (start === -1) throw new Error("could not locate discardInProgressMovement");
+  const end = camera.indexOf("\n  }", start);
+  if (end === -1) throw new Error("could not locate the end of discardInProgressMovement");
+  return camera.slice(start, end);
+}
+
+test("the manual Recalibrate button discards in-progress movement FIRST", () => {
+  const start = camera.indexOf("function handleManualRecalibration(): void {");
+  assert(start !== -1, "could not locate handleManualRecalibration");
+  const body = camera.slice(start, camera.indexOf("\n  }", start));
+  const discardAt = body.indexOf("discardInProgressMovement()");
+  const recalAt = body.indexOf("resetNeutralCalibration(");
+  assert(discardAt !== -1, "the handler must discard the movement in progress");
+  assert(recalAt !== -1, "the handler must then open a new calibration");
+  assert(
+    discardAt < recalAt,
+    "the discard must come first — recalibrating first leaves a window in " +
+      "which the surviving rep is adjudicated against the new reference",
+  );
+});
+
+test("the discard covers every accumulator a repetition is built from", () => {
+  // Each of these spans frames. Any one left behind lets some part of the
+  // unobserved movement reach the completed event.
+  const body = discardBody();
+  for (const [what, pattern] of [
+    ["the rep state machines", /leftRepCounterRef\.current\?\.reset\(\)/],
+    ["the right rep counter", /rightRepCounterRef\.current\?\.reset\(\)/],
+    ["the bidirectional counter", /bidirectionalRepCounterRef\.current\?\.reset\(\)/],
+    ["the rep quality buffer", /dynamicRepQualityBufferRef\.current\.reset\(\)/],
+    ["the isometric dt anchor", /lastIsometricTickMsRef\.current = null/],
+    ["the hold-quality accumulator", /resetHoldQualityAccum\(\)/],
+    ["accrued hold time", /pairedHoldMsRef\.current = 0/],
+  ] as const) {
+    assert(pattern.test(body), `the discard must clear ${what}`);
+  }
+});
+
+test("the discard does NOT revoke credited reps or sets", () => {
+  // The source-level counterpart of the behavioural test above.
+  const body = discardBody();
+  assert(
+    !/repCountsRef/.test(body),
+    "credited repetition counts must survive a discard",
+  );
+  assert(
+    !/completedSetsRef/.test(body),
+    "closed sets must survive a discard",
+  );
+});
+
+test("the capture-dropout handler and the button share one discard", () => {
+  // They are the same requirement — an interrupted movement cannot be scored —
+  // and the defect was that only one of them implemented it.
+  const dropout = dropoutHandlerBody();
+  assert(
+    /discardInProgressMovement\(\)/.test(dropout),
+    "the dropout handler must route through the shared discard",
   );
 });
 

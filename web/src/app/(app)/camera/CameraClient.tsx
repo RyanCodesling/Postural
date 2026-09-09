@@ -92,7 +92,9 @@ import {
 } from "@/lib/pose/repQuality";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import {
+  applyTraceSyncReadout,
   formatTraceSyncReadout,
+  TRACE_SYNC_PAUSED,
   TRACE_SYNC_PLACEHOLDER,
 } from "@/lib/pose/traceSyncClock";
 import {
@@ -1731,6 +1733,17 @@ export default function CameraClient() {
    * budget this recording is trying to protect.
    */
   const traceSyncElRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Whether THIS processed frame produced a trace row. Cleared at the top of
+   * each frame's work and read at the bottom, which is what lets the readout
+   * be blanked on a frame that was not traced.
+   *
+   * It has to be per-frame rather than per-rAF-tick: the loop is scheduled on
+   * every animation frame but only does this work when the video has advanced,
+   * so a tick-level flag would blank the readout between video frames and
+   * strobe it at display rate.
+   */
+  const traceSyncWroteThisFrameRef = useRef(false);
   const [coachingRemoteCollapsed, setCoachingRemoteCollapsed] = useState(false);
   // True once the current ring contents have been written to a file. Cleared by
   // the next recorded decision, so "exported" always describes what is in the
@@ -2701,6 +2714,9 @@ export default function CameraClient() {
     rawFrameIndexRef.current = 0;
     pendingRawFramesRef.current = [];
     dynamicRepQualityBufferRef.current.reset();
+    // Frame indices restart at 1, so a readout left over from the previous
+    // session names a row number that now belongs to a different session.
+    writeTraceSyncReadout(TRACE_SYNC_PLACEHOLDER);
   };
 
   /**
@@ -2840,6 +2856,17 @@ export default function CameraClient() {
    * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
    * now covers every active exercise with the versioned V4 payload.
    */
+  /**
+   * Write the sync readout, skipping the DOM when the text has not changed.
+   *
+   * The only writer of that node. Routing every update through one function is
+   * what makes "a reading on screen belongs to the frame you are looking at"
+   * checkable rather than a property spread across the loop's branches.
+   */
+  const writeTraceSyncReadout = (text: string): void => {
+    applyTraceSyncReadout(traceSyncElRef.current, text);
+  };
+
   const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
     worldLandmarks: Landmark[] | undefined,
@@ -2885,11 +2912,15 @@ export default function CameraClient() {
     // EXISTS in the export, instead of one that is merely close to it. Any
     // parallel time source here would quietly reintroduce the drift this
     // readout exists to remove.
-    const syncEl = traceSyncElRef.current;
-    if (syncEl) {
-      syncEl.textContent =
-        formatTraceSyncReadout(frameIndex, elapsedMs) ?? TRACE_SYNC_PLACEHOLDER;
-    }
+    //
+    // Reaching this line is also what marks the frame as traced. Everything
+    // above returns early, and the caller only calls at all once capture is
+    // readable and a baseline is frozen, so any frame that does not get here
+    // is blanked at the bottom of the loop instead of keeping this value.
+    writeTraceSyncReadout(
+      formatTraceSyncReadout(frameIndex, elapsedMs) ?? TRACE_SYNC_PLACEHOLDER,
+    );
+    traceSyncWroteThisFrameRef.current = true;
 
     pendingRawFramesRef.current.push({
       frameIndex,
@@ -4701,9 +4732,25 @@ export default function CameraClient() {
     return true;
   }
 
-  function resetAfterSustainedCaptureDropout(
-    definition: ExerciseDefinition | null,
-  ): void {
+  /**
+   * Throw away the movement currently in progress, and nothing else.
+   *
+   * Every repetition, hold and quality figure here is an accumulator over a
+   * stretch of frames. If that stretch is interrupted — by a capture dropout,
+   * or by the patient recalibrating mid-movement — the accumulator now spans
+   * an interval nobody measured, and finishing it produces a repetition whose
+   * duration, peak and quality describe two different things joined together.
+   * Discarding is the only honest option: a repetition that was not observed
+   * end to end cannot be scored.
+   *
+   * Deliberately does NOT touch what has already been credited.
+   * `RepCounter.reset()` clears in-progress state and leaves `repIndex` alone,
+   * and `repCountsRef`/`completedSetsRef` are untouched here, so finished
+   * repetitions and closed sets survive. Nor does it touch the neutral
+   * baseline: the baseline describes the BODY, and every caller of this
+   * function has its own answer to whether the baseline is still good.
+   */
+  function discardInProgressMovement(): void {
     metricFiltersRef.current.forEach((filter) => filter.reset());
     leftCompensationFiltersRef.current.forEach((filter) => filter.reset());
     rightCompensationFiltersRef.current.forEach((filter) => filter.reset());
@@ -4728,20 +4775,57 @@ export default function CameraClient() {
       rightInBand: false,
     });
     resetCompensationWarnings();
-    // Deliberately does NOT recalibrate. Counters, filters and hold accrual are
-    // reset because they describe movement that was interrupted; the neutral
-    // baseline describes the BODY, and re-capturing it here would silently
-    // re-anchor it to whatever posture the interruption happened in.
-    if (
-      definition &&
-      baselinePhaseRef.current === "captured" &&
-      (sessionStateRef.current === "active" ||
-        sessionStateRef.current === "countdown")
-    ) {
-      calibrationStaleRef.current = true;
-      setCalibrationStale(true);
+  }
+
+  function resetAfterSustainedCaptureDropout(
+    definition: ExerciseDefinition | null,
+  ): void {
+    discardInProgressMovement();
+
+    if (baselinePhaseRef.current === "captured") {
+      // A FINISHED baseline is kept. It describes the body, and re-capturing it
+      // here would silently re-anchor "neutral" to whatever posture the
+      // interruption happened in — which is exactly the defect a recorded
+      // session hit, calibrating three times in eighty seconds and adopting a
+      // lean and then a slouch as the reference. Offer recalibration instead.
+      if (
+        definition &&
+        (sessionStateRef.current === "active" ||
+          sessionStateRef.current === "countdown")
+      ) {
+        calibrationStaleRef.current = true;
+        setCalibrationStale(true);
+      }
+    } else {
+      // An UNFINISHED baseline is discarded, and this is the opposite case for
+      // the same reason. The samples taken before the interruption describe a
+      // setup that has now been interrupted; the camera may have been moved,
+      // which is a common cause of the dropout in the first place. Keeping them
+      // would let one calibration straddle two setups and silently blend them
+      // into a median. There is nothing to warn about here, because no baseline
+      // was ever presented as good — calibration simply starts over.
+      resetNeutralCalibration("capturing");
     }
     captureDropoutResetDoneRef.current = true;
+  }
+
+  /**
+   * The Recalibrate button. Recalibrating mid-movement is a measurement
+   * boundary, not just a new baseline, so the movement in progress is thrown
+   * away first.
+   *
+   * Without the discard, a repetition that began before the button was pressed
+   * survives the calibration pause and is completed afterwards. It is then
+   * credited toward set progress and can close the set, carrying a duration
+   * that spans the unmeasured calibration interval. Worse, it accumulated its
+   * peak under the OLD frozen tilt and baselines and has its completion
+   * threshold evaluated under the NEW ones — so whenever recalibration actually
+   * moves the reference, which is the only reason to press this button, that
+   * repetition is adjudicated across two different measurement frames.
+   */
+  function handleManualRecalibration(): void {
+    discardInProgressMovement();
+    resetNeutralCalibration("capturing");
   }
 
   function ex005CounterSide(
@@ -5660,6 +5744,11 @@ export default function CameraClient() {
         // which must be monotonically increasing.
         const frameStart = performance.now();
         const inferStart = frameStart;
+        // Cleared here and read after the pipeline below. `bufferTuningRawFrame`
+        // sets it on the one path that persists a row; every other path — no
+        // person, capture unreadable, baseline not yet frozen, session not
+        // active, tracing off — leaves it false and blanks the readout.
+        traceSyncWroteThisFrameRef.current = false;
         const results = landmarker.detectForVideo(video, inferStart);
         const inferMs = performance.now() - inferStart;
 
@@ -6918,6 +7007,14 @@ export default function CameraClient() {
 
         ctx.restore();
 
+        // Blank the sync readout on any frame that produced no trace row, so a
+        // reading on screen always belongs to the video frame showing it.
+        // Leaving the last good value up instead is what would let someone
+        // pause inside a gap and label an older row with a later posture.
+        if (!traceSyncWroteThisFrameRef.current) {
+          writeTraceSyncReadout(TRACE_SYNC_PAUSED);
+        }
+
         // Tally this frame's timing for the rolling average (flushed when the
         // FPS window closes above).
         inferMsSumRef.current += inferMs;
@@ -6945,6 +7042,13 @@ export default function CameraClient() {
         cancelAnimationFrame(requestRef.current);
         requestRef.current = null;
       }
+
+      // Clear the sync readout here specifically because the frame loop is the
+      // thing that normally repairs it, and the line above just cancelled it.
+      // Without this a stopped camera keeps the last traced row on screen with
+      // nothing left running to blank it. Called through the module helper
+      // rather than the local wrapper so this callback needs no extra dep.
+      applyTraceSyncReadout(traceSyncElRef.current, TRACE_SYNC_PLACEHOLDER);
 
       // Drop footer telemetry so a stopped/restarting camera doesn't show a
       // stale resolution or FPS.
@@ -8550,7 +8654,7 @@ export default function CameraClient() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => resetNeutralCalibration("capturing")}
+                    onClick={handleManualRecalibration}
                     style={{
                       fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".1em",
                       textTransform: "uppercase", fontWeight: 600,

@@ -9,8 +9,24 @@
  * means fitting a mapping and hoping it does not drift.
  *
  * The alternative is to put the trace's OWN row key on screen. Pause the
- * recording anywhere, read the value, and look that row up directly — no
+ * recording on a frame that shows a reading, look that row up directly — no
  * mapping, no drift, no nearest-neighbour search.
+ *
+ * ── WHAT THE READOUT DOES AND DOES NOT PROMISE ──────────────────────────────
+ * It promises exactly one thing: a displayed reading names a row that was
+ * QUEUED for export. It does not promise that every video frame has a row —
+ * most do not. Tracing is gated on capture readiness, a captured baseline and
+ * an active session, and a frame failing any of those is never traced.
+ *
+ * An earlier revision of this comment said the recording could be paused
+ * "anywhere". That was too broad, and it was wrong in a way that would have
+ * produced silently mismatched labels: because the readout was only ever
+ * written on traced frames, a gap left the LAST good reading on screen, and
+ * pausing inside that gap would associate a later posture with an older row.
+ * `TRACE_SYNC_PAUSED` closes it — the readout is now blanked on any frame that
+ * is not traced, so a reading on screen is always this frame's own.
+ *
+ * Still outside the promise: a queued row is not an acknowledged upload.
  *
  * ── WHY THE FORMAT IS LOSSLESS ──────────────────────────────────────────────
  * `elapsedMs` is stored in the trace as a whole number of milliseconds, and
@@ -131,3 +147,50 @@ export function parseTraceSyncReadout(
 
 /** Shown before the first traced frame, and whenever a value is unusable. */
 export const TRACE_SYNC_PLACEHOLDER = "#—  --:--.---";
+
+/**
+ * Shown on any processed frame that was NOT traced — capture unreadable, no
+ * baseline yet, session not active, or tracing off.
+ *
+ * A word rather than more dashes, deliberately. This is read back off
+ * compressed video, often while scrubbing, and the reader's question at that
+ * moment is "does this frame have a row?". "PAUSED" answers it at a glance
+ * where a second dash-filled field would be mistaken for the placeholder or
+ * for a smeared reading.
+ *
+ * Neither this nor `TRACE_SYNC_PLACEHOLDER` parses as a readout, so offline
+ * tooling that transcribes one gets null rather than a plausible wrong row.
+ */
+export const TRACE_SYNC_PAUSED = "#—  PAUSED";
+
+/**
+ * Write `text` into the readout node, skipping the DOM when it already says
+ * that. Returns whether a write actually happened.
+ *
+ * ── WHY IT COMPARES THE NODE AND NOT A REMEMBERED VALUE ─────────────────────
+ * The obvious implementation caches the last string written and compares
+ * against that. It is wrong here, and wrong in the one direction that matters:
+ * a cache can disagree with the node, and when it does, the skip leaves a STALE
+ * READING on screen — the exact failure this readout exists to prevent.
+ *
+ * That is not hypothetical. An earlier version kept the cache in a ref and
+ * reset it from the element's `ref` callback, on the assumption that receiving
+ * a node meant a fresh one. React invokes an inline `ref` callback on ordinary
+ * rerenders too, detaching and reattaching the SAME node whose text is
+ * unchanged — so an ordinary rerender desynchronised the cache, and the next
+ * write of that value was skipped as redundant while the old reading stayed
+ * visible.
+ *
+ * The node is the only thing that knows what the node says. Reading
+ * `textContent` is a cheap string read that forces no layout, so there is
+ * nothing to buy by caching it.
+ */
+export function applyTraceSyncReadout(
+  node: { textContent: string | null } | null | undefined,
+  text: string,
+): boolean {
+  if (!node) return false;
+  if (node.textContent === text) return false;
+  node.textContent = text;
+  return true;
+}

@@ -23,7 +23,23 @@ const METRIC_LABEL: Partial<Record<MetricName, string>> = {
   neckTilt:          "Neck tilted",
   shoulderSymmetry:  "Asymmetric shoulders",
   trunkLean:         "Trunk lean",
-  scapularElevation: "Shoulder elevated",
+  // Deliberately names the REGION and not the movement. `scapularElevation` is
+  // an ear-to-shoulder vector over trunk length, so a shoulder rising toward
+  // the ear and a head descending toward the shoulder produce the SAME
+  // reading. The metric cannot tell them apart, so a label asserting either
+  // one claims more than the measurement supports.
+  //
+  // This previously read "Shoulder elevated". A recorded session showed it on
+  // screen while the subject was slouching, where the head coming forward and
+  // down is at least as likely an explanation as any shoulder movement — and
+  // nothing in the pipeline can say which. Naming the region the box already
+  // encloses (indices 7, 11, 8, 12 — both ears and both shoulders) is the most
+  // the reading justifies.
+  //
+  // Do not "improve" this back into a directional instruction without a metric
+  // that can distinguish the two movements. Under-specifying is the honest
+  // failure here; misdirecting a patient is not.
+  scapularElevation: "Shoulder / head position",
   elbowFlexion:      "Straighten arms",
 };
 

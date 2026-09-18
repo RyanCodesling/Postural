@@ -76,6 +76,23 @@ const DEFAULT_MAX_PERSISTED_ITEMS = 500;
 export const outboxStorageKey = (sessionId: number): string =>
   `${OUTBOX_STORAGE_PREFIX}.${sessionId}`;
 
+/**
+ * Session ids of the outboxes held in storage, read back from its keys. Keys
+ * that are not an outbox key for a positive integer session id are ignored.
+ */
+export function persistedOutboxSessionIds(keys: Iterable<string>): number[] {
+  const prefix = `${OUTBOX_STORAGE_PREFIX}.`;
+  const ids: number[] = [];
+  for (const key of keys) {
+    if (!key.startsWith(prefix)) continue;
+    const suffix = key.slice(prefix.length);
+    if (!/^[1-9]\d*$/.test(suffix)) continue;
+    const id = Number(suffix);
+    if (Number.isSafeInteger(id)) ids.push(id);
+  }
+  return ids.sort((a, b) => a - b);
+}
+
 const KIND_PATH: Record<OutboxKind, string> = {
   rep: "rep-events",
   set: "set-events",
@@ -416,4 +433,54 @@ export class EventOutbox<
     this.ackedRepIndices.clear();
     this.ackedSetIndices.clear();
   }
+}
+
+export type OutboxRecovery = {
+  sessionId: number;
+  /** Items reloaded from storage for this session. */
+  restored: number;
+  /** Items the server did not accept; they stay in storage for the next call. */
+  remaining: number;
+};
+
+/**
+ * Deliver the outboxes that sessions left in storage.
+ *
+ * Session end waits a bounded time for the queue and then unbinds the live
+ * outbox, so anything still pending survives only in storage. Resuming an
+ * interrupted session re-adopts it, but a session that ended, or can no longer
+ * be resumed, never is, and without this its repetitions and sets would stay on
+ * the device indefinitely.
+ *
+ * Each session gets one delivery attempt per call, one session at a time. A
+ * stored item is removed only when the server acknowledges it. Any refusal —
+ * another patient's session, an unknown session, a server that is down — leaves
+ * the stored copy as it was for the next call. Re-sending an event that already
+ * landed is harmless, because the inserts ignore a repeated (session, index).
+ *
+ * Callers must leave out any session that is bound to a live outbox or can
+ * still be resumed: both of those manage the same storage key.
+ */
+export async function recoverPersistedOutboxes(options: {
+  sessionIds: number[];
+  fetchFn: OutboxFetch;
+  storage: OutboxStorage;
+  onError?: (kind: OutboxKind, message: string) => void;
+}): Promise<OutboxRecovery[]> {
+  const recovered: OutboxRecovery[] = [];
+  for (const sessionId of options.sessionIds) {
+    const outbox = new EventOutbox<{ repIndex: number }, { setIndex: number }>({
+      fetchFn: options.fetchFn,
+      storage: options.storage,
+      // No background retries: a refused batch waits for the next call instead
+      // of retrying on a page that may not be recording anything.
+      schedule: () => undefined,
+      onError: options.onError,
+    });
+    const restored = outbox.restoreFor(sessionId);
+    if (restored === 0) continue;
+    await outbox.flushAll();
+    recovered.push({ sessionId, restored, remaining: outbox.pendingCount() });
+  }
+  return recovered;
 }

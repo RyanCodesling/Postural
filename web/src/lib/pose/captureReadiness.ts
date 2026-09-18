@@ -249,7 +249,7 @@ export function evaluateCaptureReadiness(
     return {
       ok: false,
       status: "MOVE_BACK",
-      message: "Step back or lower the camera so your full body is visible.",
+      message: "Step back or lower the camera so you are visible from head to knees.",
       target,
       person,
       score01: vis(nose),
@@ -260,12 +260,12 @@ export function evaluateCaptureReadiness(
     // Head too low in frame — patient is too far or camera angled down.
     // In overhead mode the head is meant to sit in the upper-middle (not the
     // top quarter), so "near the top" would contradict the framing the patient
-    // was told to adopt — phrase it as full-body framing instead.
+    // was told to adopt — phrase it as head-to-knees framing instead.
     return {
       ok: false,
       status: "MOVE_CLOSER",
       message: isOverhead
-        ? "Step closer or raise the camera so your whole body is in frame."
+        ? "Step closer or raise the camera so you are in frame from head to knees."
         : "Step closer or raise the camera so your head is near the top.",
       target,
       person,

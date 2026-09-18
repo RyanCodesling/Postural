@@ -120,5 +120,22 @@ test("camera queue uses only actionable occurrences and clears old telemetry", (
   }
 });
 
+test("outcome events left undelivered at End are sent on the next camera load", () => {
+  const camera = source("../app/(app)/camera/CameraClient.tsx");
+  assert(
+    camera.includes("recoverPersistedOutboxes({"),
+    "the camera page must send stored outboxes, not only re-adopt them on resume",
+  );
+  assert(
+    /persistedOutboxSessionIds\(\w+\)\.filter\(/.test(camera) &&
+      camera.includes("resumableSessionIds("),
+    "sessions that can still be resumed must be left to the resume path",
+  );
+  assert(
+    !camera.includes("still uploading"),
+    "the end message must not promise an upload that stops when the session ends",
+  );
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exitCode = 1;

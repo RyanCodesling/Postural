@@ -98,6 +98,12 @@ import {
   TRACE_SYNC_PLACEHOLDER,
 } from "@/lib/pose/traceSyncClock";
 import {
+  recordTraceBatchLoss,
+  traceUploadLossLabel,
+  traceUploadLossToast,
+  type TraceUploadLoss,
+} from "@/lib/pose/traceUploadLoss";
+import {
   NEUTRAL_CALIBRATION_DURATION_MS,
   NEUTRAL_CALIBRATION_MIN_SAMPLES,
   advanceNeutralCalibrationClock,
@@ -114,7 +120,11 @@ import {
   singleCompensationWarningSignal,
   type CompensationWarningSignal,
 } from "@/lib/pose/compensationSignals";
-import { EventOutbox } from "@/lib/pose/eventOutbox";
+import {
+  EventOutbox,
+  persistedOutboxSessionIds,
+  recoverPersistedOutboxes,
+} from "@/lib/pose/eventOutbox";
 import {
   angleDeltaDegrees,
   faceOrientationDegrees,
@@ -311,8 +321,10 @@ type ResumeSnapshot = {
 // avoids resuming a days-old still-open session.
 const RESUME_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
+const RESUME_KEY_PREFIX = "postural.resume.v1.";
+
 const resumeKey = (patientExerciseId: number) =>
-  `postural.resume.v1.${patientExerciseId}`;
+  `${RESUME_KEY_PREFIX}${patientExerciseId}`;
 
 /** Read + validate the resume snapshot for an assignment. Null if absent/invalid. */
 function readResumeSnapshot(
@@ -339,6 +351,23 @@ function clearResumeSnapshot(patientExerciseId: number | undefined): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Sessions a stored resume snapshot can still offer to resume, by the same age
+ * rule as the resume prompt. Resuming re-adopts their queued outcome events, so
+ * outbox recovery leaves them alone.
+ */
+function resumableSessionIds(storageKeys: string[]): Set<number> {
+  const ids = new Set<number>();
+  for (const key of storageKeys) {
+    if (!key.startsWith(RESUME_KEY_PREFIX)) continue;
+    const snap = readResumeSnapshot(Number(key.slice(RESUME_KEY_PREFIX.length)));
+    if (snap && Date.now() - snap.updatedAtWallMs < RESUME_MAX_AGE_MS) {
+      ids.add(snap.sessionId);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -1470,13 +1499,179 @@ const ACCENT = {
   text: "oklch(0.35 0.06 200)",
 };
 
-// Bright "glowing neon" palette, used only by the session progress strip
-// (set pips + overall progress bar) to make completion state pop. Kept
+// Bright "glowing neon" palette for completion: the session progress strip
+// (set pips + overall progress bar) and counts that reach their target. Kept
 // separate from ACCENT so the rest of the clinical UI stays restrained.
 const NEON = {
   hex:  "oklch(0.82 0.20 195)",        // bright neon cyan fill
   glow: "oklch(0.82 0.20 195 / 0.7)",  // box-shadow glow color
   dim:  "oklch(0.90 0.08 195)",        // current/upcoming set tint
+};
+
+// Layout tokens for the camera screen. The type ramp is sized for the 2-3 m the
+// patient stands at, so it runs larger than the dashboard's.
+
+const CARD_STYLE: CSSProperties = {
+  background: "white",
+  border: "1px solid oklch(0.93 0.003 240)",
+  borderRadius: 12,
+};
+
+const EYEBROW_STYLE: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: ".14em",
+  textTransform: "uppercase",
+  color: "oklch(0.42 0.01 240)",
+};
+
+const STAFF_HEADING_STYLE: CSSProperties = {
+  fontFamily: "var(--mono)",
+  fontSize: 10,
+  letterSpacing: ".14em",
+  textTransform: "uppercase",
+  color: "oklch(0.30 0.01 240)",
+  fontWeight: 600,
+};
+
+const PRIMARY_BUTTON_STYLE: CSSProperties = {
+  padding: "14px 18px",
+  borderRadius: 10,
+  border: `1px solid ${ACCENT.hex}`,
+  background: ACCENT.hex,
+  color: "white",
+  fontFamily: "var(--sans)",
+  fontSize: 18,
+  fontWeight: 600,
+  textAlign: "center",
+  cursor: "pointer",
+};
+
+const SECONDARY_BUTTON_STYLE: CSSProperties = {
+  padding: "14px 18px",
+  borderRadius: 10,
+  border: "1px solid oklch(0.90 0.003 240)",
+  background: "white",
+  color: "oklch(0.30 0.01 240)",
+  fontFamily: "var(--sans)",
+  fontSize: 18,
+  fontWeight: 500,
+  textAlign: "center",
+  textDecoration: "none",
+  cursor: "pointer",
+};
+
+const DANGER_BUTTON_STYLE: CSSProperties = {
+  padding: "11px 12px",
+  borderRadius: 10,
+  border: "1px solid oklch(0.55 0.17 25)",
+  background: "oklch(0.55 0.17 25)",
+  color: "white",
+  fontFamily: "var(--sans)",
+  fontSize: 15,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const FIELD_STYLE: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "9px 10px",
+  border: "1px solid oklch(0.88 0.01 240)",
+  borderRadius: 8,
+  background: "white",
+  color: "oklch(0.25 0.01 240)",
+  fontFamily: "var(--sans)",
+  fontSize: 14,
+};
+
+const CHIP_STYLE: CSSProperties = {
+  padding: "7px 12px",
+  borderRadius: 6,
+  background: "oklch(0.96 0.003 240)",
+  fontSize: 15,
+  fontWeight: 600,
+};
+
+const ICON_BUTTON_STYLE: CSSProperties = {
+  width: 36,
+  height: 36,
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid oklch(0.90 0.003 240)",
+  borderRadius: 8,
+  background: "white",
+  color: "oklch(0.35 0.01 240)",
+  cursor: "pointer",
+};
+
+const MODAL_BACKDROP_STYLE: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 35,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  background: "oklch(0.18 0.01 240 / 0.62)",
+};
+
+const MODAL_CARD_STYLE: CSSProperties = {
+  position: "relative",
+  width: "min(600px, 100%)",
+  maxHeight: "100%",
+  overflowY: "auto",
+  padding: "30px 32px",
+  borderRadius: 16,
+  background: "white",
+  boxShadow: "0 12px 40px oklch(0 0 0 / 0.3)",
+};
+
+const MODAL_DISMISS_STYLE: CSSProperties = {
+  ...ICON_BUTTON_STYLE,
+  position: "absolute",
+  top: 14,
+  right: 14,
+  width: 32,
+  height: 32,
+  fontSize: 15,
+  lineHeight: 1,
+  color: "oklch(0.40 0.01 240)",
+};
+
+const MODAL_ROW_STYLE: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "baseline",
+  gap: 16,
+  fontSize: 20,
+};
+
+const FEED_CHIP_STYLE: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 36,
+  padding: "0 12px",
+  borderRadius: 999,
+  background: "oklch(0.16 0.01 240 / 0.72)",
+  border: "1px solid oklch(1 0 0 / 0.14)",
+  color: "white",
+  fontFamily: "var(--mono)",
+  fontSize: 13,
+  fontWeight: 600,
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+};
+
+const MODAL_LABEL_STYLE: CSSProperties = { color: "oklch(0.45 0.01 240)" };
+
+const MODAL_VALUE_STYLE: CSSProperties = {
+  fontWeight: 700,
+  color: "oklch(0.18 0.01 240)",
+  fontVariantNumeric: "tabular-nums",
+  textAlign: "right",
 };
 
 type ScoreTier = { hex: string; soft: string; text: string; label: string };
@@ -1487,21 +1682,6 @@ function scoreTier(score: number | null): ScoreTier {
   if (score >= 60)   return { hex: "oklch(0.70 0.12 80)",  soft: "oklch(0.96 0.04 80)",  text: "oklch(0.42 0.09 75)",  label: "borderline" };
   if (score >= 40)   return { hex: "oklch(0.65 0.15 50)",  soft: "oklch(0.96 0.05 50)",  text: "oklch(0.43 0.12 45)",  label: "compensating" };
   return             { hex: "oklch(0.58 0.17 25)",  soft: "oklch(0.96 0.04 25)",  text: "oklch(0.45 0.14 25)",  label: "poor form" };
-}
-
-function clinicalNavBtnStyle(): CSSProperties {
-  return {
-    width: 36,
-    border: "1px solid oklch(0.90 0.003 240)",
-    background: "white",
-    borderRadius: 8,
-    color: "oklch(0.35 0.01 240)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    flexShrink: 0,
-  };
 }
 
 type CardSpec = {
@@ -1530,7 +1710,6 @@ export default function CameraClient() {
     : user?.role === "therapist" ? "/dashboard/therapist"
     : "/dashboard/patient";
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
 
@@ -1780,7 +1959,7 @@ export default function CameraClient() {
   // TEMPORARY (2026-05-26): throttle anchor for the ex_005 head-lean console
   // diagnostic below. Remove once ex_005 thresholds/framing are tuned.
   const lastEx005DebugMsRef = useRef(0);
-  
+
   // In-memory per-rep event log, keyed by side. Cleared when the exercise
   // changes. This is the buffer that will eventually feed Postgres in a later
   // step — for now, console.log on each rep is the only output beyond the
@@ -1879,6 +2058,9 @@ export default function CameraClient() {
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [cameraStreamActive, setCameraStreamActive] = useState(false);
+  const [staffDrawerOpen, setStaffDrawerOpen] = useState(false);
+  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelLoaded, setModelLoaded] = useState(false);
   const [ex004FaceShadowEnabled, setEx004FaceShadowEnabledState] = useState(false);
@@ -2432,8 +2614,8 @@ export default function CameraClient() {
   const [useFrontCameraHint, setUseFrontCameraHint] = useState(true);
   const [mirror, setMirror] = useState(true);
 
-  const [currentTime, setCurrentTime] = useState<string>("");
   const [viewportWidth, setViewportWidth] = useState(1280);
+  const [viewportHeight, setViewportHeight] = useState(900);
 
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -2649,10 +2831,57 @@ export default function CameraClient() {
         console.warn(`${kind}-events delivery failed (will retry):`, message),
     }),
   );
+  // A session that ends before its outcome events are delivered leaves them in
+  // localStorage (see endSessionPersistence), and only resuming used to read
+  // them back, so an ended session's events never left the device. Send them
+  // once per camera page load for the signed-in patient. Resumable sessions are
+  // skipped because resuming re-adopts the same queue. The routes refuse other
+  // patients' sessions, and anything refused stays stored.
+  const outboxRecoveryStartedRef = useRef(false);
+  useEffect(() => {
+    if (user?.role !== "patient" || outboxRecoveryStartedRef.current) return;
+    outboxRecoveryStartedRef.current = true;
+    let storageKeys: string[];
+    try {
+      storageKeys = Object.keys(window.localStorage);
+    } catch {
+      return; // storage unavailable, so nothing was persisted either
+    }
+    const resumable = resumableSessionIds(storageKeys);
+    const sessionIds = persistedOutboxSessionIds(storageKeys).filter(
+      (id) => !resumable.has(id),
+    );
+    if (sessionIds.length === 0) return;
+    void recoverPersistedOutboxes({
+      sessionIds,
+      fetchFn: (url, init) => fetch(url, init),
+      storage: window.localStorage,
+      onError: (kind, message) =>
+        console.warn(`${kind}-events recovery failed (kept for the next load):`, message),
+    })
+      .then((recovered) => {
+        const delivered = recovered.reduce(
+          (sum, session) => sum + session.restored - session.remaining,
+          0,
+        );
+        if (delivered > 0) {
+          showToast({
+            variant: "success",
+            message: `Uploaded ${delivered} saved result${delivered === 1 ? "" : "s"} from an earlier session.`,
+          });
+        }
+      })
+      .catch((err) => console.warn("outbox recovery failed:", err));
+  }, [user?.role, showToast]);
   const rawFrameIndexRef = useRef<number>(0);
   const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
   /** Trace batches abandoned after exhausting retries, for honest reporting. */
   const rawFrameDroppedBatchesRef = useRef<number>(0);
+  // The same losses per session, for the warning under the trace sync readout.
+  // The upload chain outlives the render that queued it, so it reads the ref;
+  // the state is what draws the warning.
+  const traceUploadLossRef = useRef<TraceUploadLoss | null>(null);
+  const [traceUploadLoss, setTraceUploadLoss] = useState<TraceUploadLoss | null>(null);
   // Opt-in tuning-trace recording (patient mode only, default OFF). The ref
   // mirrors the state for the rAF loop — same stale-closure pattern as
   // lastCaptureOkRef. Flipping mid-session simply starts/stops buffering;
@@ -2727,6 +2956,10 @@ export default function CameraClient() {
    */
   const startSessionPersistence = async (): Promise<boolean> => {
     resetSessionPersistence();
+    // Cleared here, not in resetSessionPersistence: that also runs at End, and
+    // a save warning has to stay on screen after the session it describes.
+    traceUploadLossRef.current = null;
+    setTraceUploadLoss(null);
     reportSessionIdRef.current = null;
     showCompletionRecapAfterReportRef.current = false;
     terminalOccurrenceAfterReportRef.current = null;
@@ -2965,7 +3198,8 @@ export default function CameraClient() {
    * outcome data, so they are retried a bounded number of times and then given
    * up on rather than persisted across reloads — a trace batch is large enough
    * that queueing it in localStorage risks the storage quota. Dropped batches
-   * are counted and surfaced instead of vanishing into a lone console warning.
+   * are counted and drawn under the trace sync readout, because a console
+   * warning alone let whole sessions record while every upload was refused.
    */
   const flushRawFrames = () => {
     const sessionId = sessionIdRef.current;
@@ -2980,6 +3214,8 @@ export default function CameraClient() {
         .catch(() => undefined)
         .then(async () => {
           for (let attempt = 1; attempt <= RAW_FRAME_UPLOAD_ATTEMPTS; attempt += 1) {
+            // This attempt's HTTP status for the warning; null if no response came.
+            let failedStatus: number | null = null;
             try {
               const response = await fetch(
                 `/api/sessions/${sessionId}/raw-frames`,
@@ -2991,6 +3227,7 @@ export default function CameraClient() {
               );
               // `fetch` resolves for 4xx/5xx, so the status must be checked.
               if (!response.ok) {
+                failedStatus = response.status;
                 throw new Error(`raw-frames upload returned ${response.status}`);
               }
               return;
@@ -3002,6 +3239,17 @@ export default function CameraClient() {
                     `(${rawFrameDroppedBatchesRef.current} total this session):`,
                   err,
                 );
+                const loss = recordTraceBatchLoss(
+                  traceUploadLossRef.current,
+                  sessionId,
+                  failedStatus,
+                );
+                traceUploadLossRef.current = loss;
+                setTraceUploadLoss(loss);
+                // Toast once per session; the line under the readout keeps count.
+                if (loss.droppedBatches === 1) {
+                  showToast({ variant: "error", message: traceUploadLossToast(loss) });
+                }
                 return;
               }
               await new Promise((resolve) =>
@@ -3221,12 +3469,13 @@ export default function CameraClient() {
       if (result === "saved") {
         showToast({ variant: "success", message: "Session saved." });
       } else if (result === "partial") {
-        // The session row closed but some reps/sets are still queued. They are
-        // persisted locally and retried, so this is a delay, not a loss.
+        // The session row closed but some reps/sets were not delivered. Nothing
+        // retries them once the session ends; they stay in localStorage, and the
+        // next camera page load sends them (outbox recovery).
         showToast({
           variant: "info",
           message:
-            "Session saved. Some repetitions are still uploading — reopen the camera to finish.",
+            "Session saved. Some results haven't uploaded yet — they're kept on this device and will be sent the next time you open the camera.",
         });
       } else if (result === "pending") {
         showToast({
@@ -3834,7 +4083,9 @@ export default function CameraClient() {
    * attempt recalibrates before returning to `active`.
    */
   const resumeSession = () => {
-    if (!activeDefinition) return;
+    // Like Start, Resume must wait for inference readiness before restoring
+    // progress or starting a camera whose first frame could arrive too early.
+    if (!modelLoaded || !activeDefinition) return;
     const snap = readResumeSnapshot(prescriptionRef.current.patientExerciseId);
     if (!snap || snap.exerciseId !== activeDefinition.id) return;
 
@@ -4971,7 +5222,7 @@ export default function CameraClient() {
     }
     console.log(`[ex005-debug] ${JSON.stringify(record)}`);
   }
-  
+
   const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>(
     emptyFrameMetrics,
   );
@@ -4980,10 +5231,10 @@ export default function CameraClient() {
   // on ex_007 / ex_008) so they only surface near full extension. Updated on
   // the same throttled cadence as `frameMetrics`.
   const [nearPeak, setNearPeak] = useState(false);
- 
+
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
- 
+
   // Low tilt confidence has two meanings:
   // 1. One reference line is missing (divergenceDeg === null): actionable
   //    camera/framing issue, so show the patient-facing banner.
@@ -4991,15 +5242,15 @@ export default function CameraClient() {
   //    exercises and retained as an internal metric flag, not a persistent
   //    patient warning.
   const showTiltWarning = hasMissingTiltReferenceLine(frameMetrics.tiltReference);
- 
+
   // `metricCards` is the list of cards to render in the left rail.
   // Built dynamically from the active exercise definition. Primary metric
   // renders first, then each compensation metric.
-  
+
   const metricCards: CardSpec[] = (() => {
     if (!activeDefinition) return [];
     const cards: CardSpec[] = [];
-  
+
     const primaryMetric =
       activeDefinition.kind === "dynamic"
         ? activeDefinition.primaryMetric.name
@@ -5076,9 +5327,9 @@ export default function CameraClient() {
     }
     return cards;
   })();
- 
- 
-  
+
+
+
   // Derived stat-panel values (replacing the hardcoded
   // placeholders that lived here pre-2026-05-22).
 
@@ -7037,6 +7288,7 @@ export default function CameraClient() {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      setCameraStreamActive(false);
 
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
@@ -7101,6 +7353,7 @@ export default function CameraClient() {
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+      setCameraStreamActive(true);
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -7130,21 +7383,14 @@ export default function CameraClient() {
   }, [stopCamera]);
 
   useEffect(() => {
-    const updateDateTime = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleTimeString());
-    };
-    updateDateTime();
-    const interval = setInterval(updateDateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
     if (typeof window === "undefined") return;
-    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
-    updateViewportWidth();
-    window.addEventListener("resize", updateViewportWidth);
-    return () => window.removeEventListener("resize", updateViewportWidth);
+    const updateViewportSize = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
+    updateViewportSize();
+    window.addEventListener("resize", updateViewportSize);
+    return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
 
   if (!mounted) {
@@ -7234,7 +7480,6 @@ export default function CameraClient() {
   const cameraBg = "oklch(0.20 0.008 240)";
   const currentSetIdx = Math.min(completedSets + 1, prescription.sets);
   const showTiltBanner = captureOk && showTiltWarning;
-  const patientAlertVisible = !captureOk || showTiltBanner;
   const compactLayout = viewportWidth < 1024;
   const tightLayout = viewportWidth < 720;
   const prescriptionTargetText =
@@ -7252,72 +7497,160 @@ export default function CameraClient() {
           }`
         : `${prescription.reps} reps`;
 
-  return (
-    <>
-      {/* Sidebar overlay backdrop */}
-      {sidebarOpen && (
-        <div
-          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, background: "rgba(0,0,0,0.4)" }}
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+  const cameraOn = cameraStreamActive;
+  // The frame loop records a video size on its first frame; until then the
+  // readiness state still describes the previous stream.
+  const cameraFramesFlowing = cameraOn && videoResolution !== null;
+  const trackingPaused = cameraFramesFlowing && !captureOk;
+  const cameraStatus: CameraStatus =
+    isStarting || (cameraOn && videoResolution === null)
+      ? "starting"
+      : cameraOn
+        ? "on"
+        : "off";
+  // A tour step can hold the camera menu open so its tray can be pointed out.
+  const cameraMenuShown =
+    cameraMenuOpen || (showTutorial && TOUR_STEPS[tutorialStep]?.opensCameraMenu === true);
+  const exerciseQueueLabel =
+    selectedExerciseIndex >= 0
+      ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length} today`
+      : `${assignedExercises.length} exercises today`;
+  // The form-check card may only point at a highlight the overlay is actually
+  // drawing, so it reads the same gates as the metric rows: the selector's one
+  // promoted cue, latched, and not suppressed this tick.
+  const formCheckWarning =
+    cameraFramesFlowing &&
+    metricCards.some(
+      (card) =>
+        card.kind === "compensation" &&
+        card.warningActive === true &&
+        !card.suppressWarning &&
+        card.value !== null,
+    );
+  const formCheckState: FormCheckState = formCheckWarning
+    ? "warning"
+    : cameraFramesFlowing && captureOk && baselinePhase === "captured"
+      ? "clear"
+      : baselineVisible
+        ? "setup"
+        : "paused";
+  const restElapsedPct =
+    prescription.restSeconds > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round((1 - restRemainingSec / prescription.restSeconds) * 100),
+          ),
+        )
+      : 0;
+  // As a rest period opens, the camera view keeps the finished set's count for
+  // two seconds, then rolls it back to zero and moves the set number on. The
+  // counters themselves reset in the same frame as a set's last rep, so the
+  // final count would otherwise never be drawn. Display only: the values come
+  // from the set record just logged, and Skip rest or the next set ends the hold.
+  const REST_HOLD_SEC = 2;
+  const finishedSet =
+    sessionState === "resting" &&
+    restRemainingSec > prescription.restSeconds - REST_HOLD_SEC
+      ? completedSetsLogRef.current[completedSetsLogRef.current.length - 1]
+      : undefined;
+  const hudRepCounts = finishedSet
+    ? { left: finishedSet.leftReps, right: finishedSet.rightReps }
+    : repCounts;
+  const hudHoldState =
+    finishedSet && activeDefinition?.kind === "isometric"
+      ? {
+          pairedSec: (finishedSet.pairedHoldMs ?? 0) / 1000,
+          leftSec: (finishedSet.leftHoldMs ?? 0) / 1000,
+          rightSec: (finishedSet.rightHoldMs ?? 0) / 1000,
+          leftInBand: false,
+          rightInBand: false,
+        }
+      : holdState;
+  const hudSetIdx = finishedSet ? finishedSet.setIndex : currentSetIdx;
+  // A wider right column on tall screens, where the demonstration would otherwise
+  // stay small; the camera view keeps at least 70% of the width.
+  const asideWidth = compactLayout
+    ? "100%"
+    : Math.round(Math.min(480, viewportWidth * 0.3, Math.max(340, (viewportHeight - 420) * 0.62)));
+  // A session started with no camera running would count nothing, so bring the
+  // camera up first, as resuming already does. Never before the pose model is
+  // ready: `predictWebcam` returns without scheduling another frame when the
+  // first frame arrives before the model, and nothing restarts the loop when
+  // the model finishes loading. The buttons that call this stay disabled too,
+  // matching the Start camera buttons.
+  const startSessionWithCamera = () => {
+    if (!modelLoaded) return;
+    if (!streamRef.current && !isStarting) {
+      void startCamera(selectedDeviceId || undefined);
+    }
+    void handleSessionStart();
+  };
 
-      {/* Slide-in navigation sidebar */}
-      <aside
+  // Trace sync readout — the join key between a screen recording and the
+  // exported trace. Gated on a patient with tracing switched on; the toggle
+  // defaults OFF, so an ordinary session never shows it. The session card of
+  // whichever state is showing renders it, with the label stacked above the
+  // reading so the reading keeps its full width in a narrow column.
+  // `bufferTuningRawFrame` writes the text directly to this node from the same
+  // values it persists.
+  const traceSyncReadout = user?.role === "patient" && tuningTraceEnabled && (
+    <div style={{
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid oklch(0.92 0.003 240)",
+      background: "oklch(0.97 0.004 240)",
+    }}>
+      <div style={{
+        marginBottom: 3,
+        fontFamily: "var(--mono)",
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: ".14em",
+        textTransform: "uppercase",
+        color: "oklch(0.45 0.01 240)",
+      }}>
+        Trace sync — frame / elapsed
+      </div>
+      <div
+        ref={traceSyncElRef}
+        aria-live="off"
         style={{
-          position: "fixed",
-          top: 0,
-          bottom: 0,
-          left: 0,
-          zIndex: 40,
-          width: 256,
-          background: "white",
-          borderRight: "1px solid oklch(0.93 0.003 240)",
-          display: "flex",
-          flexDirection: "column",
-          padding: 24,
-          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-          transition: "transform 0.2s",
-          boxShadow: sidebarOpen ? "4px 0 16px oklch(0 0 0 / 0.08)" : "none",
+          // Read back off compressed video, where small monospace digits
+          // smear; tabular figures keep the field from shifting as digits change.
+          fontFamily: "var(--mono)",
+          fontSize: 20,
+          fontWeight: 600,
+          letterSpacing: ".02em",
+          fontVariantNumeric: "tabular-nums",
+          color: "oklch(0.20 0.01 240)",
         }}
       >
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>Postural</span>
-          </div>
-          {user?.name && (
-            <div style={{ fontSize: 12, color: "oklch(0.50 0.01 240)", marginTop: 4 }}>{user.name}</div>
-          )}
-        </div>
+        {TRACE_SYNC_PLACEHOLDER}
+      </div>
+      {traceUploadLoss && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 4,
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      lineHeight: 1.35,
+                      color: "oklch(0.55 0.17 25)",
+                    }}
+                  >
+                    {traceUploadLossLabel(traceUploadLoss)}
+                  </div>
+                )}
+    </div>
+  );
 
-        <nav>
-          <Link
-            href={dashboardHref}
-            style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "8px 10px", borderRadius: 6,
-              fontSize: 13, color: "oklch(0.30 0.01 240)",
-              textDecoration: "none",
-            }}
-            onClick={() => setSidebarOpen(false)}
-          >
-            <CameraHomeIcon /> Back to Dashboard
-          </Link>
-        </nav>
-
-        <div style={{ marginTop: "auto", paddingTop: 24 }}>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            style={{
-              width: "100%", padding: "8px 12px", borderRadius: 6,
-              border: "1px solid oklch(0.90 0.003 240)", background: "white",
-              fontSize: 13, color: "oklch(0.35 0.01 240)", cursor: "pointer",
-            }}
-          >
-            ✕ Close
-          </button>
-        </div>
-      </aside>
+  return (
+    <>
+      {/* Wheel animation for the rolling set and rep counts */}
+      <style>{ROLLING_NUMBER_CSS}</style>
 
       {/* Full page wrapper */}
       <div style={{
@@ -7326,1407 +7659,1450 @@ export default function CameraClient() {
         background: "oklch(0.985 0.003 90)",
         height: compactLayout ? "auto" : "100vh",
         minHeight: "100vh",
-        width: "100vw",
-        overflow: compactLayout ? "auto" : "hidden",
+        width: "100%",
+        overflow: compactLayout ? "visible" : "hidden",
         display: "flex",
         flexDirection: "column",
       }}>
         {/* HEADER */}
         <header style={{
-          height: 56,
+          minHeight: 68,
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           flexWrap: compactLayout ? "wrap" : "nowrap",
-          gap: compactLayout ? 12 : 0,
-          padding: compactLayout ? "10px 12px" : "0 24px",
+          gap: 12,
+          padding: compactLayout ? "10px 16px" : "0 28px",
           background: "white",
           borderBottom: "1px solid oklch(0.93 0.003 240)",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 20 }}>
-            <button
-              id="cam-tour-sidebar"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
-              style={{
-                width: 28, height: 28, border: "1px solid oklch(0.90 0.003 240)",
-                background: "white", borderRadius: 6, cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                color: "oklch(0.35 0.01 240)",
-              }}
+          <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 16, minWidth: 0 }}>
+            <Link
+              href={dashboardHref}
+              aria-label="Back to Dashboard"
+              title="Back to Dashboard"
+              style={ICON_BUTTON_STYLE}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="6" x2="21" y2="6"/>
-                <line x1="3" y1="12" x2="21" y2="12"/>
-                <line x1="3" y1="18" x2="21" y2="18"/>
-              </svg>
-            </button>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em" }}>Postural</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-              <span style={{ color: "oklch(0.75 0.01 240)" }}>/</span>
-              <span style={{ color: "oklch(0.20 0.01 240)" }}>Camera</span>
-            </div>
+              <CameraHomeIcon />
+            </Link>
+            <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Postural</span>
+            <span style={{ color: "oklch(0.80 0.01 240)" }}>/</span>
+            <span style={{ fontSize: 15, color: "oklch(0.25 0.01 240)", whiteSpace: "nowrap" }}>Camera</span>
           </div>
 
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: compactLayout ? "flex-start" : "flex-end",
-            flexWrap: "wrap",
-            gap: compactLayout ? 10 : 16,
-          }}>
-            <div id="cam-tour-status" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ClinicalStatusDot ok={modelLoaded} />
-              <span style={{ fontSize: 12, color: "oklch(0.30 0.01 240)" }}>
-                {modelLoaded ? "AI ready" : "Loading model"}
-              </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {/* The camera menu: the dot beside the camera icon shows whether the
+                camera is on, and a click opens the device and display settings.
+                Pose-model readiness has its own "AI" indicator on the camera view. */}
+            <div id="cam-tour-camera" style={{ position: "relative" }}>
+              <CameraStatusButton
+                status={cameraStatus}
+                open={cameraMenuShown}
+                onToggle={() => setCameraMenuOpen((open) => !open)}
+              />
+
+              {cameraMenuShown && (
+                <>
+                  <div
+                    aria-hidden="true"
+                    onClick={() => setCameraMenuOpen(false)}
+                    style={{ position: "fixed", inset: 0, zIndex: 49 }}
+                  />
+                  <div id="cam-tour-camera-menu" role="dialog" aria-label="Camera settings" style={{
+                    position: "absolute",
+                    top: "calc(100% + 10px)",
+                    // Aligned to the button's right edge: the button sits near the right
+                    // of the header, and a left-aligned tray ran past the window edge.
+                    right: 0,
+                    zIndex: 50,
+                    width: 320,
+                    maxWidth: "calc(100vw - 24px)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                    padding: 16,
+                    borderRadius: 12,
+                    background: "white",
+                    border: "1px solid oklch(0.90 0.004 240)",
+                    boxShadow: "0 14px 40px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <div style={STAFF_HEADING_STYLE}>Capture</div>
+                    <div>
+                      <label htmlFor="camera-device-select" style={{ display: "block", marginBottom: 4, fontSize: 11, color: "oklch(0.45 0.01 240)" }}>
+                        Device
+                      </label>
+                      <select
+                        id="camera-device-select"
+                        value={selectedDeviceId}
+                        onChange={(e) => setSelectedDeviceId(e.target.value)}
+                        style={FIELD_STYLE}
+                      >
+                        {devices.length === 0 ? (
+                          <option value="">(Allow camera access to list devices)</option>
+                        ) : (
+                          devices.map((d) => (
+                            <option key={d.deviceId} value={d.deviceId}>
+                              {d.label || `Camera ${d.deviceId.slice(0, 6)}…`}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    {cameraOn ? (
+                      <button
+                        type="button"
+                        onClick={() => { void stopCamera(); setCameraMenuOpen(false); }}
+                        style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "11px 14px", fontSize: 15 }}
+                      >
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { void startCamera(selectedDeviceId || undefined); setCameraMenuOpen(false); }}
+                        disabled={isStarting || !modelLoaded}
+                        style={{
+                          ...PRIMARY_BUTTON_STYLE,
+                          width: "100%",
+                          padding: "11px 14px",
+                          fontSize: 15,
+                          opacity: isStarting || !modelLoaded ? 0.5 : 1,
+                        }}
+                      >
+                        {isStarting ? "Starting…" : "Start camera"}
+                      </button>
+                    )}
+                    <div style={{ paddingTop: 6, borderTop: "1px solid oklch(0.93 0.003 240)" }}>
+                      <ClinicalSettingRow
+                        label="Mirror"
+                        sub="Front cam feel"
+                        on={mirror}
+                        onChange={setMirror}
+                      />
+                      <ClinicalSettingRow
+                        label="Prefer front camera"
+                        sub="When no device selected"
+                        on={useFrontCameraHint}
+                        onChange={setUseFrontCameraHint}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ClinicalStatusDot ok={captureOk} />
-              <span
-                title={captureMessage}
-                style={{
-                  fontSize: 12,
-                  color: "oklch(0.30 0.01 240)",
-                  maxWidth: 220,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {captureOk ? "Capture OK" : captureMessage}
-              </span>
-            </div>
-            </div>{/* end cam-tour-status */}
-            <div style={{ width: 1, height: 20, background: "oklch(0.92 0.003 240)", display: tightLayout ? "none" : "block" }} />
-            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)", display: tightLayout ? "none" : "inline" }}>
-              {currentTime}
-            </span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                id="cam-tour-stop"
-                onClick={stopCamera}
-                style={{
-                  padding: "6px 14px", border: "1px solid oklch(0.90 0.003 240)",
-                  background: "white", borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                }}
-              >Stop</button>
-              <button
-                id="cam-tour-start"
-                onClick={() => startCamera(selectedDeviceId || undefined)}
-                disabled={isStarting || !modelLoaded}
-                style={{
-                  padding: "6px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex,
-                  borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: "white", cursor: "pointer",
-                  opacity: (isStarting || !modelLoaded) ? 0.5 : 1,
-                }}
-              >
-                {isStarting ? "Starting…" : "Start camera"}
-              </button>
-              <button
-                onClick={() => { setTutorialStep(0); setShowTutorial(true); }}
-                style={{
-                  padding: "6px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: "white",
-                  borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: ACCENT.text, cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 5,
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <line x1="12" y1="8" x2="12" y2="12"/>
-                  <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                How to Use
-              </button>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => { setCameraMenuOpen(false); setTutorialStep(0); setShowTutorial(true); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "9px 16px", borderRadius: 8,
+                border: `1px solid ${ACCENT.hex}`, background: "white",
+                fontFamily: "var(--sans)", fontSize: 14, fontWeight: 600,
+                color: ACCENT.text, cursor: "pointer",
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              How to Use
+            </button>
           </div>
         </header>
 
         {/* Error bar */}
         {error && (
-          <div style={{
-            padding: "8px 24px",
+          <div role="alert" style={{
+            padding: compactLayout ? "10px 16px" : "10px 28px",
             background: "oklch(0.96 0.04 25)",
             borderBottom: "1px solid oklch(0.88 0.06 25)",
-            fontSize: 12,
+            fontSize: 14,
             color: "oklch(0.40 0.12 25)",
           }}>
             {error}
           </div>
         )}
 
-        {/* BODY: 3-column grid */}
+        {/* BODY: [staff panel] camera view | exercise and demonstration column */}
         <div style={{
           flex: 1,
-          display: "grid",
-          gridTemplateColumns: compactLayout ? "1fr" : "240px minmax(0, 1fr) 300px",
+          display: "flex",
+          flexDirection: compactLayout ? "column" : "row",
           minHeight: 0,
+          padding: compactLayout ? 12 : 20,
+          gap: compactLayout ? 12 : 16,
         }}>
-          {/* LEFT RAIL — live metrics */}
-          <aside id="cam-tour-metrics" style={{
-            background: "white",
-            borderRight: compactLayout ? "none" : "1px solid oklch(0.93 0.003 240)",
-            borderTop: compactLayout ? "1px solid oklch(0.93 0.003 240)" : "none",
-            display: "flex",
-            flexDirection: "column",
+          <main style={{
+            flex: 1,
+            minWidth: 0,
             minHeight: 0,
-            overflow: compactLayout ? "visible" : "hidden",
-            order: compactLayout ? 2 : 0,
+            display: "flex",
+            flexDirection: compactLayout ? "column" : "row",
+            gap: 14,
           }}>
-            <div style={{
-              padding: "14px 16px",
-              borderBottom: "1px solid oklch(0.93 0.003 240)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}>
-              <span style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
-              }}>Live Metrics</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "oklch(0.55 0.01 240)" }}>°</span>
-            </div>
-
-            <ClinicalScoreRow score={score} tier={tier} />
-
-            {metricCards.map((card) => (
-              <ClinicalMetricRow key={card.id} card={card} />
-            ))}
-
-            {ex004FaceShadowStaffAllowed && activeDefinition?.id === "ex_004" && (
-              <div
-                data-testid="ex004-face-shadow"
-                style={{
-                  margin: "10px 12px 0",
-                  padding: 10,
-                  border: "1px solid oklch(0.88 0.02 250)",
-                  borderRadius: 6,
-                  background: "oklch(0.975 0.01 250)",
-                }}
-              >
-                <label
-                  htmlFor="ex004-face-shadow-toggle"
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 7,
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    id="ex004-face-shadow-toggle"
-                    type="checkbox"
-                    checked={ex004FaceShadowEnabled}
-                    onChange={(event) => {
-                      if (event.target.checked) clearEx004FaceShadow();
-                      setEx004FaceShadowEnabled(event.target.checked);
-                    }}
-                    style={{ marginTop: 2, accentColor: ACCENT.hex }}
-                  />
-                  <span>
-                    <span
-                      style={{
-                        display: "block",
-                        fontFamily: "var(--mono)",
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: ".12em",
-                        textTransform: "uppercase",
-                        color: "oklch(0.30 0.05 250)",
-                      }}
-                    >
-                      Face shadow comparison
-                    </span>
-                    <span
-                      style={{
-                        display: "block",
-                        marginTop: 2,
-                        fontSize: 10,
-                        lineHeight: 1.35,
-                        color: "oklch(0.48 0.02 250)",
-                      }}
-                    >
-                      Diagnostic only. Pose remains authoritative.
-                    </span>
-                  </span>
-                </label>
-
-                {ex004FaceShadowEnabled && (
-                  <div
-                    style={{
-                      marginTop: 9,
-                      paddingTop: 8,
-                      borderTop: "1px solid oklch(0.90 0.01 250)",
-                      fontFamily: "var(--mono)",
-                      fontSize: 10,
-                      lineHeight: 1.55,
-                      color: "oklch(0.32 0.02 250)",
-                    }}
+            {/* STAFF DIAGNOSTICS. Opened from the (i) button on the camera view;
+                it docks on the left and the camera view narrows beside it. */}
+            {staffDrawerOpen && (
+              <aside aria-label="Staff diagnostics" style={{
+                width: compactLayout ? "100%" : 360,
+                flexShrink: 0,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                overflowY: compactLayout ? "visible" : "auto",
+                padding: 12,
+                borderRadius: 12,
+                background: "oklch(0.985 0.003 240)",
+                border: "1px solid oklch(0.93 0.003 240)",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ ...STAFF_HEADING_STYLE, fontSize: 11 }}>Staff diagnostics</span>
+                  <button
+                    type="button"
+                    onClick={() => setStaffDrawerOpen(false)}
+                    aria-label="Close staff diagnostics"
+                    style={{ ...ICON_BUTTON_STYLE, width: 30, height: 30 }}
                   >
-                    <div>
-                      Status: {ex004FaceShadowModelState}
-                      {ex004FaceShadowLive.status
-                        ? ` / ${ex004FaceShadowLive.status}`
-                        : ""}
-                    </div>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) auto",
-                        gap: 6,
-                        alignItems: "end",
-                        margin: "6px 0",
-                      }}
-                    >
-                      <label style={{ display: "grid", gap: 3 }}>
-                        <span>Trial phase</span>
-                        <select
-                          aria-label="Face shadow trial phase"
-                          value={ex004FaceShadowPhase}
-                          onChange={(event) => {
-                            if (isEx004FaceShadowPhase(event.target.value)) {
-                              setEx004FaceShadowPhase(event.target.value);
-                            }
-                          }}
-                          style={{
-                            minWidth: 0,
-                            padding: "4px 5px",
-                            border: "1px solid oklch(0.82 0.03 250)",
-                            borderRadius: 4,
-                            background: "white",
-                            color: "inherit",
-                            font: "inherit",
-                          }}
-                        >
-                          {EX004_FACE_SHADOW_PHASE_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          appendEx004FaceShadowMark(
-                            "phase",
-                            ex004FaceShadowPhaseRef.current,
-                          );
-                          showToast({
-                            variant: "success",
-                            message: "Face trial phase marked.",
-                          });
-                        }}
-                        style={{
-                          padding: "5px 7px",
-                          border: "1px solid oklch(0.82 0.03 250)",
-                          borderRadius: 4,
-                          background: "white",
-                          color: "inherit",
-                          font: "inherit",
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Mark phase
-                      </button>
-                    </div>
-                    <div>
-                      Face baseline: {baselinePhase === "capturing"
-                        ? "calibrating"
-                        : baselinePhase === "captured"
-                          ? ex004FaceShadowBaselineRollRef.current !== null
-                            ? "ready"
-                            : "unavailable — restart after Face is ready"
-                          : "not started"}
-                    </div>
-                    <div>
-                      Pose / Face roll: {ex004FaceShadowLive.poseSignedDeg?.toFixed(1) ?? "—"}
-                      {"° / "}
-                      {ex004FaceShadowLive.faceSignedDeg?.toFixed(1) ?? "—"}°
-                    </div>
-                    <div>
-                      Face yaw / pitch: {ex004FaceShadowLive.faceYawDeltaDeg?.toFixed(1) ?? "—"}
-                      {"° / "}
-                      {ex004FaceShadowLive.facePitchDeltaDeg?.toFixed(1) ?? "—"}°
-                    </div>
-                    <div>
-                      Face − Pose: {ex004FaceShadowLive.faceMinusPoseDeg?.toFixed(1) ?? "—"}°
-                    </div>
-                    <div>
-                      Coverage: {ex004FaceShadowCoverage !== null
-                        ? `${(ex004FaceShadowCoverage * 100).toFixed(1)}%`
-                        : "—"}
-                    </div>
-                    <div>
-                      Face inference: {ex004FaceShadowLive.inferenceMs?.toFixed(1) ?? "—"} ms
-                    </div>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) auto",
-                        gap: 6,
-                        alignItems: "end",
-                        marginTop: 7,
-                      }}
-                    >
-                      <label style={{ display: "grid", gap: 3 }}>
-                        <span>Reference angle (optional)</span>
-                        <input
-                          aria-label="Independent reference angle in degrees"
-                          type="number"
-                          step="0.1"
-                          inputMode="decimal"
-                          value={ex004FaceShadowReferenceInput}
-                          onChange={(event) =>
-                            setEx004FaceShadowReferenceInput(event.target.value)
-                          }
-                          placeholder="degrees"
-                          style={{
-                            minWidth: 0,
-                            padding: "4px 5px",
-                            border: "1px solid oklch(0.82 0.03 250)",
-                            borderRadius: 4,
-                            background: "white",
-                            color: "inherit",
-                            font: "inherit",
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={
-                          ex004FaceShadowReferenceInput.trim() === "" ||
-                          !Number.isFinite(Number(ex004FaceShadowReferenceInput))
-                        }
-                        onClick={() => {
-                          const angle = Number(ex004FaceShadowReferenceInput);
-                          if (!markEx004FaceShadowReference(angle)) return;
-                          setEx004FaceShadowReferenceInput("");
-                          showToast({
-                            variant: "success",
-                            message: "Reference angle marked.",
-                          });
-                        }}
-                        style={{
-                          padding: "5px 7px",
-                          border: "1px solid oklch(0.82 0.03 250)",
-                          borderRadius: 4,
-                          background: "white",
-                          color: "inherit",
-                          font: "inherit",
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Mark reference
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const dump = window.dumpEx004FaceShadow?.();
-                        if (!dump) return;
-                        void navigator.clipboard.writeText(dump)
-                          .then(() => {
-                            showToast({
-                              variant: "success",
-                              message: "Face shadow diagnostics copied.",
-                            });
-                          })
-                          .catch((reason: unknown) => {
-                            console.error(
-                              "[ex004-face-shadow] clipboard copy failed",
-                              reason,
-                            );
-                            showToast({
-                              variant: "error",
-                              message: "Could not copy Face diagnostics.",
-                            });
-                          });
-                      }}
-                      style={{
-                        marginTop: 7,
-                        padding: "5px 8px",
-                        border: "1px solid oklch(0.82 0.03 250)",
-                        borderRadius: 4,
-                        background: "white",
-                        color: "oklch(0.30 0.05 250)",
-                        fontFamily: "var(--mono)",
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: ".08em",
-                        textTransform: "uppercase",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Copy diagnostics
-                    </button>
-                    {ex004FaceShadowModelError && (
-                      <div style={{ color: "oklch(0.45 0.14 25)" }}>
-                        {ex004FaceShadowModelError}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Live Metrics */}
+                <div style={{ ...CARD_STYLE, flexShrink: 0, overflow: "hidden" }}>
+                  <div style={{ ...STAFF_HEADING_STYLE, padding: "12px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+                    Live Metrics
+                  </div>
+                  <ClinicalScoreRow score={score} tier={tier} />
+                  {metricCards.map((card) => (
+                    <ClinicalMetricRow key={card.id} card={card} />
+                  ))}
+                </div>
+
+                {/* Capture telemetry */}
+                <div style={{ ...CARD_STYLE, flexShrink: 0, padding: "12px 16px" }}>
+                  <div style={{ ...STAFF_HEADING_STYLE, marginBottom: 10 }}>Capture</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <StaffStat label="Pose model" value={modelLoaded ? "AI ready" : "Loading model"} />
+                    <StaffStat label="Capture" value={!cameraFramesFlowing ? "—" : captureOk ? "Capture OK" : captureMessage} />
+                    <StaffStat label="Resolution" value={videoResolution ? `${videoResolution.width} × ${videoResolution.height}` : "—"} />
+                    <StaffStat label="Frame rate" value={fps !== null ? `${fps} fps` : "—"} />
+                    <StaffStat label="Pose infer" value={perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"} />
+                    <StaffStat label="Frame total" value={perfMs ? `${perfMs.frame.toFixed(1)} ms` : "—"} />
+                    <StaffStat label="Session progress" value={`${progressPct}%`} />
+                  </div>
+                </div>
+
+                {/* Opt-in tuning-trace recording (patient sessions only persist) */}
+                {user?.role === "patient" && (
+                  <div style={{ ...CARD_STYLE, flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 16px" }}>
+                    <input
+                      type="checkbox"
+                      id="tuning-trace-toggle"
+                      checked={tuningTraceEnabled}
+                      onChange={(e) => setTuningTraceEnabled(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
+                      <div style={STAFF_HEADING_STYLE}>Record tuning trace</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "oklch(0.50 0.01 240)" }}>
+                        Saves raw movement metrics (no video) for threshold tuning.
                       </div>
-                    )}
+                    </label>
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Floating segment remote. The operator stands 2-3 m away, so the
-                boundary has to be clickable without returning to the desk: park
-                the pointer on this control before stepping back and a single
-                LEFT click marks the boundary. Left click is the only pointer
-                input the page reliably receives — thumb buttons are serviced by
-                the browser and never reach it (see the keydown effect above). */}
-            {coachingShadowStaffAllowed && coachingShadowEnabled && !!activeDefinition && (() => {
-              const step = COACHING_SESSION_PLAN[coachingPlanIndex];
-              const recording = coachingShadowActiveSegment !== null &&
-                !coachingShadowActiveSegment.label.startsWith("after:") &&
-                coachingShadowActiveSegment.label !== "idle";
-              return (
-                <div
-                  data-testid="coaching-remote"
-                  style={{
-                    position: "fixed",
-                    // Bottom-LEFT on purpose: the session Start/Stop controls live in
-                    // the right-hand sidebar, and an earlier bottom-right placement
-                    // covered them so the session could not be started at all.
-                    left: 18,
-                    bottom: 18,
-                    zIndex: 60,
-                    width: coachingRemoteCollapsed ? 200 : 260,
-                    padding: coachingRemoteCollapsed ? "8px 12px" : 14,
-                    borderRadius: 10,
-                    border: "2px solid oklch(0.30 0.05 250)",
-                    background: "oklch(0.99 0.004 250)",
-                    boxShadow: "0 10px 30px -12px rgba(0,0,0,.45)",
-                    fontFamily: "var(--mono)",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.45 0.02 250)" }}>
-                      {step
-                        ? `Step ${coachingPlanIndex + 1}/${COACHING_SESSION_PLAN.length} · ${step.captureId}`
-                        : "Plan complete"}
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={coachingRemoteCollapsed ? "Expand segment remote" : "Collapse segment remote"}
-                      onClick={() => setCoachingRemoteCollapsed((v) => !v)}
+                {ex004FaceShadowStaffAllowed && activeDefinition?.id === "ex_004" && (
+                  <div
+                    data-testid="ex004-face-shadow"
+                    style={{
+                      margin: 0,
+                      padding: 10,
+                      border: "1px solid oklch(0.88 0.02 250)",
+                      borderRadius: 6,
+                      background: "oklch(0.975 0.01 250)",
+                    }}
+                  >
+                    <label
+                      htmlFor="ex004-face-shadow-toggle"
                       style={{
-                        border: "1px solid oklch(0.82 0.03 250)",
-                        borderRadius: 4,
-                        background: "white",
-                        color: "oklch(0.30 0.05 250)",
-                        fontFamily: "var(--mono)",
-                        fontSize: 11,
-                        lineHeight: 1,
-                        padding: "3px 7px",
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 7,
                         cursor: "pointer",
                       }}
                     >
-                      {coachingRemoteCollapsed ? "▴" : "▾"}
-                    </button>
-                  </div>
-                  {!coachingRemoteCollapsed && (<>
-                  <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: "oklch(0.20 0.03 250)", wordBreak: "break-word" }}>
-                    {recording
-                      ? coachingShadowActiveSegment.label
-                      : step?.label ?? "—"}
-                  </div>
-                  <div style={{ fontSize: 11, marginTop: 2, color: "oklch(0.45 0.02 250)" }}>
-                    {recording ? `recording · ${coachingShadowActiveSegment.intent}` : "not recording"}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!step && !recording}
-                    onClick={() => {
-                      if (recording) {
-                        endCoachingShadowSegment();
-                        return;
-                      }
-                      if (!step) return;
-                      if (!markCoachingShadowSegment(step.label, step.intent)) return;
-                      setCoachingShadowSegmentLabel(step.label);
-                      setCoachingShadowSegmentIntent(step.intent);
-                    }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      marginTop: 10,
-                      padding: "20px 8px",
-                      borderRadius: 8,
-                      border: "none",
-                      cursor: !step && !recording ? "default" : "pointer",
-                      background: recording ? "oklch(0.52 0.17 25)" : ACCENT.hex,
-                      color: "white",
-                      fontFamily: "var(--mono)",
-                      fontSize: 17,
-                      fontWeight: 700,
-                      letterSpacing: ".06em",
-                    }}
-                  >
-                    {recording ? "END SEGMENT" : "START SEGMENT"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!step || coachingShadowAdvanceBlocked}
-                    onClick={advanceCoachingShadowPlan}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      marginTop: 6,
-                      padding: "8px",
-                      borderRadius: 6,
-                      border: "1px solid oklch(0.82 0.03 250)",
-                      background: "white",
-                      color: "oklch(0.30 0.05 250)",
-                      fontFamily: "var(--mono)",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      letterSpacing: ".08em",
-                      cursor: step && !coachingShadowAdvanceBlocked ? "pointer" : "default",
-                    }}
-                  >
-                    {coachingShadowAdvanceBlocked ? "DOWNLOAD LOG FIRST" : "NEXT STEP →"}
-                  </button>
-                  <div style={{ fontSize: 9.5, marginTop: 7, lineHeight: 1.4, color: "oklch(0.48 0.02 250)" }}>
-                    {coachingShadowAdvanceBlocked
-                      ? `This capture has ${coachingShadowCount} unexported decisions.`
-                      : step?.hint ?? "Export this capture, then run E3 unrecorded."}
-                  </div>
-                  </>)}
-                </div>
-              );
-            })()}
+                      <input
+                        id="ex004-face-shadow-toggle"
+                        type="checkbox"
+                        checked={ex004FaceShadowEnabled}
+                        onChange={(event) => {
+                          if (event.target.checked) clearEx004FaceShadow();
+                          setEx004FaceShadowEnabled(event.target.checked);
+                        }}
+                        style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                      />
+                      <span>
+                        <span
+                          style={{
+                            display: "block",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".12em",
+                            textTransform: "uppercase",
+                            color: "oklch(0.30 0.05 250)",
+                          }}
+                        >
+                          Face shadow comparison
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: 2,
+                            fontSize: 10,
+                            lineHeight: 1.35,
+                            color: "oklch(0.48 0.02 250)",
+                          }}
+                        >
+                          Diagnostic only. Pose remains authoritative.
+                        </span>
+                      </span>
+                    </label>
 
-            {/* Staff-only coaching shadow log. Records what the single-cue
-                selector decided and why; it does not change the cue itself, so
-                turning it on is invisible to the patient. */}
-            {coachingShadowStaffAllowed && !!activeDefinition && (
-              <div
-                data-testid="coaching-shadow"
-                style={{
-                  margin: "10px 12px 0",
-                  padding: 10,
-                  border: "1px solid oklch(0.88 0.02 250)",
-                  borderRadius: 6,
-                  background: "oklch(0.975 0.01 250)",
-                }}
-              >
-                <label
-                  htmlFor="coaching-shadow-toggle"
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 7,
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    id="coaching-shadow-toggle"
-                    type="checkbox"
-                    checked={coachingShadowEnabled}
-                    onChange={(event) => {
-                      if (event.target.checked) clearCoachingShadow();
-                      setCoachingShadowEnabled(event.target.checked);
-                    }}
-                    style={{ marginTop: 2, accentColor: ACCENT.hex }}
-                  />
-                  <span>
-                    <span
-                      style={{
-                        display: "block",
-                        fontFamily: "var(--mono)",
-                        fontSize: 9,
-                        fontWeight: 700,
-                        letterSpacing: ".12em",
-                        textTransform: "uppercase",
-                        color: "oklch(0.30 0.05 250)",
-                      }}
-                    >
-                      Coaching shadow log
-                    </span>
-                    <span
-                      style={{
-                        display: "block",
-                        marginTop: 2,
-                        fontSize: 10,
-                        lineHeight: 1.35,
-                        color: "oklch(0.48 0.02 250)",
-                      }}
-                    >
-                      Records cue decisions. Does not change what the patient sees.
-                    </span>
-                  </span>
-                </label>
-
-                {coachingShadowEnabled && (
-                  <div
-                    style={{
-                      marginTop: 9,
-                      paddingTop: 8,
-                      borderTop: "1px solid oklch(0.90 0.01 250)",
-                      fontFamily: "var(--mono)",
-                      fontSize: 10,
-                      lineHeight: 1.55,
-                      color: "oklch(0.32 0.02 250)",
-                    }}
-                  >
-                    <div>Schema: {COACHING_SHADOW_SCHEMA}</div>
-                    <div style={{ color: "oklch(0.45 0.02 250)" }}>
-                      Remote: <strong>F8</strong> starts the step · <strong>F9</strong> ends it ·
-                      or park the cursor on the big control and left-click
-                    </div>
-                    <div>
-                      Recording as: {coachingShadowActiveSegment
-                        ? `${coachingShadowActiveSegment.label} · ${coachingShadowActiveSegment.intent}`
-                        : "— not declared"}
-                    </div>
-                    {(() => {
-                      const step = COACHING_SESSION_PLAN[coachingPlanIndex];
-                      if (!step) {
-                        return (
-                          <div
-                            style={{
-                              marginTop: 7,
-                              padding: "7px 8px",
-                              border: "1px solid oklch(0.82 0.03 250)",
-                              borderRadius: 4,
-                              background: "white",
-                            }}
-                          >
-                            <div style={{ fontWeight: 700 }}>Plan complete</div>
-                            <div style={{ marginTop: 2 }}>
-                              Export this capture, then run E3 (patient login) unrecorded.
-                            </div>
-                            <button
-                              type="button"
-                              onClick={restartCoachingShadowPlan}
+                    {ex004FaceShadowEnabled && (
+                      <div
+                        style={{
+                          marginTop: 9,
+                          paddingTop: 8,
+                          borderTop: "1px solid oklch(0.90 0.01 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 10,
+                          lineHeight: 1.55,
+                          color: "oklch(0.32 0.02 250)",
+                        }}
+                      >
+                        <div>
+                          Status: {ex004FaceShadowModelState}
+                          {ex004FaceShadowLive.status
+                            ? ` / ${ex004FaceShadowLive.status}`
+                            : ""}
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto",
+                            gap: 6,
+                            alignItems: "end",
+                            margin: "6px 0",
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Trial phase</span>
+                            <select
+                              aria-label="Face shadow trial phase"
+                              value={ex004FaceShadowPhase}
+                              onChange={(event) => {
+                                if (isEx004FaceShadowPhase(event.target.value)) {
+                                  setEx004FaceShadowPhase(event.target.value);
+                                }
+                              }}
                               style={{
-                                marginTop: 6,
-                                padding: "4px 7px",
+                                minWidth: 0,
+                                padding: "4px 5px",
                                 border: "1px solid oklch(0.82 0.03 250)",
                                 borderRadius: 4,
                                 background: "white",
                                 color: "inherit",
                                 font: "inherit",
-                                cursor: "pointer",
                               }}
                             >
-                              Restart plan
-                            </button>
-                          </div>
-                        );
-                      }
-                      const wrongExercise = activeDefinition?.id !== step.exerciseId;
-                      return (
+                              {EX004_FACE_SHADOW_PHASE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              appendEx004FaceShadowMark(
+                                "phase",
+                                ex004FaceShadowPhaseRef.current,
+                              );
+                              showToast({
+                                variant: "success",
+                                message: "Face trial phase marked.",
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark phase
+                          </button>
+                        </div>
+                        <div>
+                          Face baseline: {baselinePhase === "capturing"
+                            ? "calibrating"
+                            : baselinePhase === "captured"
+                              ? ex004FaceShadowBaselineRollRef.current !== null
+                                ? "ready"
+                                : "unavailable — restart after Face is ready"
+                              : "not started"}
+                        </div>
+                        <div>
+                          Pose / Face roll: {ex004FaceShadowLive.poseSignedDeg?.toFixed(1) ?? "—"}
+                          {"° / "}
+                          {ex004FaceShadowLive.faceSignedDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Face yaw / pitch: {ex004FaceShadowLive.faceYawDeltaDeg?.toFixed(1) ?? "—"}
+                          {"° / "}
+                          {ex004FaceShadowLive.facePitchDeltaDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Face − Pose: {ex004FaceShadowLive.faceMinusPoseDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Coverage: {ex004FaceShadowCoverage !== null
+                            ? `${(ex004FaceShadowCoverage * 100).toFixed(1)}%`
+                            : "—"}
+                        </div>
+                        <div>
+                          Face inference: {ex004FaceShadowLive.inferenceMs?.toFixed(1) ?? "—"} ms
+                        </div>
                         <div
                           style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto",
+                            gap: 6,
+                            alignItems: "end",
                             marginTop: 7,
-                            padding: "7px 8px",
-                            border: "1px solid oklch(0.82 0.03 250)",
-                            borderLeft: step.startsCapture
-                              ? "3px solid oklch(0.65 0.16 60)"
-                              : "3px solid oklch(0.82 0.03 250)",
-                            borderRadius: 4,
-                            background: "white",
                           }}
                         >
-                          <div style={{ fontWeight: 700 }}>
-                            Step {coachingPlanIndex + 1}/{COACHING_SESSION_PLAN.length}
-                            {" · "}{step.captureId}{" · "}{step.exerciseId}
-                          </div>
-                          <div style={{ marginTop: 2 }}>
-                            {step.label}{" · "}{step.intent}
-                          </div>
-                          <div style={{ marginTop: 3, color: "oklch(0.45 0.02 250)" }}>
-                            {step.hint}
-                          </div>
-                          {step.startsCapture && (
-                            <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.50 0.14 45)" }}>
-                              Stop/Start first, confirm set 1 · 0 reps · baseline captured, then Clear.
-                            </div>
-                          )}
-                          {wrongExercise && (
-                            <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
-                              Selected exercise is {activeDefinition?.id ?? "none"} — this step needs {step.exerciseId}.
-                            </div>
-                          )}
-                          {(() => {
-                            const recordingThis =
-                              coachingShadowActiveSegment?.label === step.label;
-                            const blockAdvance = coachingShadowAdvanceBlocked;
-                            return (
-                              <>
-                                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                                  <button
-                                    type="button"
-                                    disabled={coachingPlanIndex === 0}
-                                    onClick={stepBackCoachingShadowPlan}
-                                    style={{
-                                      padding: "4px 7px",
-                                      border: "1px solid oklch(0.82 0.03 250)",
-                                      borderRadius: 4,
-                                      background: "white",
-                                      color: "inherit",
-                                      font: "inherit",
-                                      cursor: coachingPlanIndex === 0 ? "default" : "pointer",
-                                    }}
-                                  >
-                                    Back
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={recordingThis}
-                                    onClick={() => {
-                                      if (!markCoachingShadowSegment(step.label, step.intent)) return;
-                                      setCoachingShadowSegmentLabel(step.label);
-                                      setCoachingShadowSegmentIntent(step.intent);
-                                      showToast({
-                                        variant: "success",
-                                        message: `Recording ${step.label} (${step.intent}).`,
-                                      });
-                                    }}
-                                    style={{
-                                      padding: "4px 8px",
-                                      border: "1px solid oklch(0.82 0.03 250)",
-                                      borderRadius: 4,
-                                      background: recordingThis ? "white" : ACCENT.hex,
-                                      color: recordingThis ? "oklch(0.55 0.02 250)" : "white",
-                                      font: "inherit",
-                                      fontWeight: 700,
-                                      cursor: recordingThis ? "default" : "pointer",
-                                    }}
-                                  >
-                                    {recordingThis ? "Recording…" : "Start this step"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={!recordingThis}
-                                    onClick={() => {
-                                      endCoachingShadowSegment();
-                                      showToast({
-                                        variant: "success",
-                                        message: `Ended ${step.label}.`,
-                                      });
-                                    }}
-                                    style={{
-                                      padding: "4px 7px",
-                                      border: "1px solid oklch(0.82 0.03 250)",
-                                      borderRadius: 4,
-                                      background: "white",
-                                      color: "inherit",
-                                      font: "inherit",
-                                      fontWeight: 700,
-                                      cursor: recordingThis ? "pointer" : "default",
-                                    }}
-                                  >
-                                    End step
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={blockAdvance}
-                                    onClick={advanceCoachingShadowPlan}
-                                    style={{
-                                      padding: "4px 7px",
-                                      border: "1px solid oklch(0.82 0.03 250)",
-                                      borderRadius: 4,
-                                      background: "white",
-                                      color: blockAdvance ? "oklch(0.60 0.02 250)" : "inherit",
-                                      font: "inherit",
-                                      cursor: blockAdvance ? "default" : "pointer",
-                                    }}
-                                  >
-                                    Next →
-                                  </button>
-                                </div>
-                                {blockAdvance && (
-                                  <div style={{ marginTop: 4, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
-                                    This capture has {coachingShadowCount} unexported decisions. Download the log before moving on.
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      );
-                    })()}
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(0, 1fr) auto auto",
-                        gap: 6,
-                        alignItems: "end",
-                        margin: "6px 0",
-                      }}
-                    >
-                      <label style={{ display: "grid", gap: 3 }}>
-                        <span>Capture / segment</span>
-                        <input
-                          aria-label="Capture or segment label"
-                          type="text"
-                          value={coachingShadowSegmentLabel}
-                          onChange={(event) =>
-                            setCoachingShadowSegmentLabel(event.target.value)
-                          }
-                          placeholder="A2-trunk"
-                          style={{
-                            minWidth: 0,
-                            padding: "4px 5px",
-                            border: "1px solid oklch(0.82 0.03 250)",
-                            borderRadius: 4,
-                            background: "white",
-                            color: "inherit",
-                            font: "inherit",
-                          }}
-                        />
-                      </label>
-                      <label style={{ display: "grid", gap: 3 }}>
-                        <span>Intent</span>
-                        <select
-                          aria-label="Declared movement intent for this segment"
-                          value={coachingShadowSegmentIntent}
-                          onChange={(event) =>
-                            setCoachingShadowSegmentIntent(
-                              event.target.value as CoachingShadowIntent,
-                            )
-                          }
-                          style={{
-                            padding: "4px 5px",
-                            border: "1px solid oklch(0.82 0.03 250)",
-                            borderRadius: 4,
-                            background: "white",
-                            color: "inherit",
-                            font: "inherit",
-                          }}
-                        >
-                          <option value="clean">clean</option>
-                          <option value="faulty">faulty</option>
-                          <option value="transition">transition</option>
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        disabled={coachingShadowSegmentLabel.trim() === ""}
-                        onClick={() => {
-                          if (
-                            !markCoachingShadowSegment(
-                              coachingShadowSegmentLabel,
-                              coachingShadowSegmentIntent,
-                            )
-                          ) {
-                            return;
-                          }
-                          showToast({
-                            variant: "success",
-                            message: `Segment ${coachingShadowSegmentLabel.trim()} started.`,
-                          });
-                        }}
-                        style={{
-                          padding: "5px 7px",
-                          border: "1px solid oklch(0.82 0.03 250)",
-                          borderRadius: 4,
-                          background: "white",
-                          color: "inherit",
-                          font: "inherit",
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Mark
-                      </button>
-                    </div>
-                    <div>
-                      Selected cue: {selectedCoachingCueMetric ?? "—"}
-                    </div>
-                    <div>
-                      Active latches: {activeCompensationWarnings.size > 0
-                        ? [...activeCompensationWarnings].join(", ")
-                        : "—"}
-                    </div>
-                    <div>
-                      Decisions: {coachingShadowCount} recorded
-                      {coachingShadowDroppedRef.current > 0
-                        ? ` · ${coachingShadowDroppedRef.current} dropped from the ring`
-                        : ""}
-                    </div>
-                    <div style={{ display: "flex", gap: 6, marginTop: 7 }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const result = downloadCoachingShadow();
-                          if (!result) {
-                            showToast({
-                              variant: "error",
-                              message: "No coaching decisions recorded yet.",
-                            });
-                            return;
-                          }
-                          coachingShadowExportedRef.current = true;
-                          setCoachingShadowExported(true);
-                          if (result.warnings.length > 0) {
-                            for (const warning of result.warnings) {
-                              console.warn("[coaching-shadow] " + warning);
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Reference angle (optional)</span>
+                            <input
+                              aria-label="Independent reference angle in degrees"
+                              type="number"
+                              step="0.1"
+                              inputMode="decimal"
+                              value={ex004FaceShadowReferenceInput}
+                              onChange={(event) =>
+                                setEx004FaceShadowReferenceInput(event.target.value)
+                              }
+                              placeholder="degrees"
+                              style={{
+                                minWidth: 0,
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            disabled={
+                              ex004FaceShadowReferenceInput.trim() === "" ||
+                              !Number.isFinite(Number(ex004FaceShadowReferenceInput))
                             }
-                            showToast({
-                              variant: "error",
-                              message: `Downloaded with ${result.warnings.length} issue(s): ${result.warnings[0]}`,
-                            });
-                            return;
-                          }
-                          showToast({
-                            variant: "success",
-                            message: `Downloaded. ${result.checksRun} automated checks passed — still open the file.`,
-                          });
-                        }}
-                        style={{
-                          padding: "5px 8px",
-                          border: "1px solid oklch(0.82 0.03 250)",
-                          borderRadius: 4,
-                          background: "white",
-                          color: "oklch(0.30 0.05 250)",
-                          fontFamily: "var(--mono)",
-                          fontSize: 9,
-                          fontWeight: 700,
-                          letterSpacing: ".08em",
-                          textTransform: "uppercase",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Download log
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (coachingShadowCount > 0 && !coachingShadowExported) {
-                            showToast({
-                              variant: "error",
-                              message: `${coachingShadowCount} decisions have not been exported. Download first, or press Clear again to discard.`,
-                            });
-                            setCoachingShadowExported(true);
-                            return;
-                          }
-                          clearCoachingShadow();
-                        }}
-                        style={{
-                          padding: "5px 8px",
-                          border: "1px solid oklch(0.82 0.03 250)",
-                          borderRadius: 4,
-                          background: "white",
-                          color: "oklch(0.30 0.05 250)",
-                          fontFamily: "var(--mono)",
-                          fontSize: 9,
-                          fontWeight: 700,
-                          letterSpacing: ".08em",
-                          textTransform: "uppercase",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Clear
-                      </button>
-                    </div>
+                            onClick={() => {
+                              const angle = Number(ex004FaceShadowReferenceInput);
+                              if (!markEx004FaceShadowReference(angle)) return;
+                              setEx004FaceShadowReferenceInput("");
+                              showToast({
+                                variant: "success",
+                                message: "Reference angle marked.",
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark reference
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const dump = window.dumpEx004FaceShadow?.();
+                            if (!dump) return;
+                            void navigator.clipboard.writeText(dump)
+                              .then(() => {
+                                showToast({
+                                  variant: "success",
+                                  message: "Face shadow diagnostics copied.",
+                                });
+                              })
+                              .catch((reason: unknown) => {
+                                console.error(
+                                  "[ex004-face-shadow] clipboard copy failed",
+                                  reason,
+                                );
+                                showToast({
+                                  variant: "error",
+                                  message: "Could not copy Face diagnostics.",
+                                });
+                              });
+                          }}
+                          style={{
+                            marginTop: 7,
+                            padding: "5px 8px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "oklch(0.30 0.05 250)",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".08em",
+                            textTransform: "uppercase",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Copy diagnostics
+                        </button>
+                        {ex004FaceShadowModelError && (
+                          <div style={{ color: "oklch(0.45 0.14 25)" }}>
+                            {ex004FaceShadowModelError}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            <div style={{ flex: 1 }} />
+                {/* Staff-only coaching shadow log. Records what the single-cue
+                    selector decided and why; it does not change the cue itself, so
+                    turning it on is invisible to the patient. */}
+                {coachingShadowStaffAllowed && !!activeDefinition && (
+                  <div
+                    data-testid="coaching-shadow"
+                    style={{
+                      margin: 0,
+                      padding: 10,
+                      border: "1px solid oklch(0.88 0.02 250)",
+                      borderRadius: 6,
+                      background: "oklch(0.975 0.01 250)",
+                    }}
+                  >
+                    <label
+                      htmlFor="coaching-shadow-toggle"
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 7,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        id="coaching-shadow-toggle"
+                        type="checkbox"
+                        checked={coachingShadowEnabled}
+                        onChange={(event) => {
+                          if (event.target.checked) clearCoachingShadow();
+                          setCoachingShadowEnabled(event.target.checked);
+                        }}
+                        style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                      />
+                      <span>
+                        <span
+                          style={{
+                            display: "block",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".12em",
+                            textTransform: "uppercase",
+                            color: "oklch(0.30 0.05 250)",
+                          }}
+                        >
+                          Coaching shadow log
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: 2,
+                            fontSize: 10,
+                            lineHeight: 1.35,
+                            color: "oklch(0.48 0.02 250)",
+                          }}
+                        >
+                          Records cue decisions. Does not change what the patient sees.
+                        </span>
+                      </span>
+                    </label>
 
-            {/* Opt-in tuning-trace recording (patient sessions only persist) */}
-            {user?.role === "patient" && (
-              <div style={{
-                padding: "10px 16px",
-                borderTop: "1px solid oklch(0.93 0.003 240)",
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-              }}>
-                <input
-                  type="checkbox"
-                  id="tuning-trace-toggle"
-                  checked={tuningTraceEnabled}
-                  onChange={(e) => setTuningTraceEnabled(e.target.checked)}
-                  style={{ marginTop: 2, accentColor: ACCENT.hex }}
-                />
-                <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
-                  <div style={{
-                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                    textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
-                  }}>
-                    Record tuning trace
+                    {coachingShadowEnabled && (
+                      <div
+                        style={{
+                          marginTop: 9,
+                          paddingTop: 8,
+                          borderTop: "1px solid oklch(0.90 0.01 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 10,
+                          lineHeight: 1.55,
+                          color: "oklch(0.32 0.02 250)",
+                        }}
+                      >
+                        <div>Schema: {COACHING_SHADOW_SCHEMA}</div>
+                        <div style={{ color: "oklch(0.45 0.02 250)" }}>
+                          Remote: <strong>F8</strong> starts the step · <strong>F9</strong> ends it ·
+                          or park the cursor on the big control and left-click
+                        </div>
+                        <div>
+                          Recording as: {coachingShadowActiveSegment
+                            ? `${coachingShadowActiveSegment.label} · ${coachingShadowActiveSegment.intent}`
+                            : "— not declared"}
+                        </div>
+                        {(() => {
+                          const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+                          if (!step) {
+                            return (
+                              <div
+                                style={{
+                                  marginTop: 7,
+                                  padding: "7px 8px",
+                                  border: "1px solid oklch(0.82 0.03 250)",
+                                  borderRadius: 4,
+                                  background: "white",
+                                }}
+                              >
+                                <div style={{ fontWeight: 700 }}>Plan complete</div>
+                                <div style={{ marginTop: 2 }}>
+                                  Export this capture, then run E3 (patient login) unrecorded.
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={restartCoachingShadowPlan}
+                                  style={{
+                                    marginTop: 6,
+                                    padding: "4px 7px",
+                                    border: "1px solid oklch(0.82 0.03 250)",
+                                    borderRadius: 4,
+                                    background: "white",
+                                    color: "inherit",
+                                    font: "inherit",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Restart plan
+                                </button>
+                              </div>
+                            );
+                          }
+                          const wrongExercise = activeDefinition?.id !== step.exerciseId;
+                          return (
+                            <div
+                              style={{
+                                marginTop: 7,
+                                padding: "7px 8px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderLeft: step.startsCapture
+                                  ? "3px solid oklch(0.65 0.16 60)"
+                                  : "3px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>
+                                Step {coachingPlanIndex + 1}/{COACHING_SESSION_PLAN.length}
+                                {" · "}{step.captureId}{" · "}{step.exerciseId}
+                              </div>
+                              <div style={{ marginTop: 2 }}>
+                                {step.label}{" · "}{step.intent}
+                              </div>
+                              <div style={{ marginTop: 3, color: "oklch(0.45 0.02 250)" }}>
+                                {step.hint}
+                              </div>
+                              {step.startsCapture && (
+                                <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.50 0.14 45)" }}>
+                                  Stop/Start first, confirm set 1 · 0 reps · baseline captured, then Clear.
+                                </div>
+                              )}
+                              {wrongExercise && (
+                                <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                                  Selected exercise is {activeDefinition?.id ?? "none"} — this step needs {step.exerciseId}.
+                                </div>
+                              )}
+                              {(() => {
+                                const recordingThis =
+                                  coachingShadowActiveSegment?.label === step.label;
+                                const blockAdvance = coachingShadowAdvanceBlocked;
+                                return (
+                                  <>
+                                    <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        disabled={coachingPlanIndex === 0}
+                                        onClick={stepBackCoachingShadowPlan}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: "inherit",
+                                          font: "inherit",
+                                          cursor: coachingPlanIndex === 0 ? "default" : "pointer",
+                                        }}
+                                      >
+                                        Back
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={recordingThis}
+                                        onClick={() => {
+                                          if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                                          setCoachingShadowSegmentLabel(step.label);
+                                          setCoachingShadowSegmentIntent(step.intent);
+                                          showToast({
+                                            variant: "success",
+                                            message: `Recording ${step.label} (${step.intent}).`,
+                                          });
+                                        }}
+                                        style={{
+                                          padding: "4px 8px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: recordingThis ? "white" : ACCENT.hex,
+                                          color: recordingThis ? "oklch(0.55 0.02 250)" : "white",
+                                          font: "inherit",
+                                          fontWeight: 700,
+                                          cursor: recordingThis ? "default" : "pointer",
+                                        }}
+                                      >
+                                        {recordingThis ? "Recording…" : "Start this step"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={!recordingThis}
+                                        onClick={() => {
+                                          endCoachingShadowSegment();
+                                          showToast({
+                                            variant: "success",
+                                            message: `Ended ${step.label}.`,
+                                          });
+                                        }}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: "inherit",
+                                          font: "inherit",
+                                          fontWeight: 700,
+                                          cursor: recordingThis ? "pointer" : "default",
+                                        }}
+                                      >
+                                        End step
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={blockAdvance}
+                                        onClick={advanceCoachingShadowPlan}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: blockAdvance ? "oklch(0.60 0.02 250)" : "inherit",
+                                          font: "inherit",
+                                          cursor: blockAdvance ? "default" : "pointer",
+                                        }}
+                                      >
+                                        Next →
+                                      </button>
+                                    </div>
+                                    {blockAdvance && (
+                                      <div style={{ marginTop: 4, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                                        This capture has {coachingShadowCount} unexported decisions. Download the log before moving on.
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          );
+                        })()}
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                            gap: 6,
+                            alignItems: "end",
+                            margin: "6px 0",
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Capture / segment</span>
+                            <input
+                              aria-label="Capture or segment label"
+                              type="text"
+                              value={coachingShadowSegmentLabel}
+                              onChange={(event) =>
+                                setCoachingShadowSegmentLabel(event.target.value)
+                              }
+                              placeholder="A2-trunk"
+                              style={{
+                                minWidth: 0,
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Intent</span>
+                            <select
+                              aria-label="Declared movement intent for this segment"
+                              value={coachingShadowSegmentIntent}
+                              onChange={(event) =>
+                                setCoachingShadowSegmentIntent(
+                                  event.target.value as CoachingShadowIntent,
+                                )
+                              }
+                              style={{
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            >
+                              <option value="clean">clean</option>
+                              <option value="faulty">faulty</option>
+                              <option value="transition">transition</option>
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={coachingShadowSegmentLabel.trim() === ""}
+                            onClick={() => {
+                              if (
+                                !markCoachingShadowSegment(
+                                  coachingShadowSegmentLabel,
+                                  coachingShadowSegmentIntent,
+                                )
+                              ) {
+                                return;
+                              }
+                              showToast({
+                                variant: "success",
+                                message: `Segment ${coachingShadowSegmentLabel.trim()} started.`,
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark
+                          </button>
+                        </div>
+                        <div>
+                          Selected cue: {selectedCoachingCueMetric ?? "—"}
+                        </div>
+                        <div>
+                          Active latches: {activeCompensationWarnings.size > 0
+                            ? [...activeCompensationWarnings].join(", ")
+                            : "—"}
+                        </div>
+                        <div>
+                          Decisions: {coachingShadowCount} recorded
+                          {coachingShadowDroppedRef.current > 0
+                            ? ` · ${coachingShadowDroppedRef.current} dropped from the ring`
+                            : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 7 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const result = downloadCoachingShadow();
+                              if (!result) {
+                                showToast({
+                                  variant: "error",
+                                  message: "No coaching decisions recorded yet.",
+                                });
+                                return;
+                              }
+                              coachingShadowExportedRef.current = true;
+                              setCoachingShadowExported(true);
+                              if (result.warnings.length > 0) {
+                                for (const warning of result.warnings) {
+                                  console.warn("[coaching-shadow] " + warning);
+                                }
+                                showToast({
+                                  variant: "error",
+                                  message: `Downloaded with ${result.warnings.length} issue(s): ${result.warnings[0]}`,
+                                });
+                                return;
+                              }
+                              showToast({
+                                variant: "success",
+                                message: `Downloaded. ${result.checksRun} automated checks passed — still open the file.`,
+                              });
+                            }}
+                            style={{
+                              padding: "5px 8px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "oklch(0.30 0.05 250)",
+                              fontFamily: "var(--mono)",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              letterSpacing: ".08em",
+                              textTransform: "uppercase",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Download log
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (coachingShadowCount > 0 && !coachingShadowExported) {
+                                showToast({
+                                  variant: "error",
+                                  message: `${coachingShadowCount} decisions have not been exported. Download first, or press Clear again to discard.`,
+                                });
+                                setCoachingShadowExported(true);
+                                return;
+                              }
+                              clearCoachingShadow();
+                            }}
+                            style={{
+                              padding: "5px 8px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "oklch(0.30 0.05 250)",
+                              fontFamily: "var(--mono)",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              letterSpacing: ".08em",
+                              textTransform: "uppercase",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 11, color: "oklch(0.50 0.01 240)", marginTop: 2 }}>
-                    Saves raw movement metrics (no video) for threshold tuning.
-                  </div>
-                </label>
-              </div>
+                )}
+              </aside>
             )}
 
-            {/* Trace sync readout — the join key between a screen recording and
-                the exported trace. Rendered only while a patient session is
-                actually recording, so an ordinary session never shows it: the
-                toggle above defaults OFF. `bufferTuningRawFrame` writes the
-                text directly to this node from the same values it persists. */}
-            {user?.role === "patient" && tuningTraceEnabled && (
-              <div style={{
-                padding: "10px 16px",
-                borderTop: "1px solid oklch(0.93 0.003 240)",
-                background: "oklch(0.97 0.004 240)",
-              }}>
-                <div style={{
-                  fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
-                  textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 3,
-                }}>
-                  Trace sync — frame / elapsed
-                </div>
-                <div
-                  ref={traceSyncElRef}
-                  aria-live="off"
-                  style={{
-                    // Deliberately larger than the telemetry below it: this is
-                    // read back off compressed video, where 12px monospace
-                    // digits smear. Tabular figures keep the field from
-                    // shifting as digits change.
-                    fontFamily: "var(--mono)",
-                    fontSize: 20,
-                    fontWeight: 600,
-                    letterSpacing: ".02em",
-                    fontVariantNumeric: "tabular-nums",
-                    color: "oklch(0.20 0.01 240)",
-                  }}
-                >
-                  {TRACE_SYNC_PLACEHOLDER}
-                </div>
-              </div>
-            )}
-
-            {/* Footer: resolution + fps + inference/frame-total timing split */}
-            <div style={{
-              padding: "12px 16px",
-              borderTop: "1px solid oklch(0.93 0.003 240)",
-              background: "oklch(0.985 0.003 240)",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-            }}>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Resolution</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>
-                  {videoResolution ? `${videoResolution.width} × ${videoResolution.height}` : "—"}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame rate</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{fps !== null ? `${fps} fps` : "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Pose infer</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame total</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.frame.toFixed(1)} ms` : "—"}</div>
-              </div>
-            </div>
-          </aside>
-
-          {/* CAMERA CENTER */}
-          <main id="cam-tour-feed" style={{
-            minWidth: 0,
-            padding: compactLayout ? 12 : 16,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: compactLayout ? 560 : 0,
-            order: compactLayout ? 1 : 0,
-          }}>
-            <div style={{
+            {/* CAMERA VIEW */}
+            <div id="cam-tour-feed" style={{
               flex: 1,
               position: "relative",
-              borderRadius: 8,
+              minWidth: 0,
+              minHeight: compactLayout ? (tightLayout ? 380 : 500) : 0,
+              borderRadius: 12,
               overflow: "hidden",
               background: cameraBg,
-              border: "1px solid oklch(0.92 0.003 240)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              minHeight: 0,
+              border: "1px solid oklch(0.90 0.004 240)",
             }}>
-              {/* Subtle radial gradient */}
-              <div style={{
-                position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                background: `radial-gradient(ellipse at center, oklch(0.25 0.008 240) 0%, ${cameraBg} 60%)`,
-                pointerEvents: "none",
-              }} />
-
-              {/* Mirrored video + canvas layer */}
+              {/* Mirrored video + canvas layer. Letterboxed, never cropped, so the
+                  whole frame stays visible whatever width the view is given. */}
               <div style={{
                 position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
                 transform: mirror ? "scaleX(-1)" : "none",
               }}>
-                <video ref={videoRef} playsInline muted style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-                <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                <video ref={videoRef} playsInline muted style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }} />
               </div>
 
-              {/* Corner ticks */}
-              <ClinicalCornerTicks />
-
-              {/* Tilt confidence warning */}
-              {!captureOk && (
-                <div style={{
-                  position: "absolute",
-                  top: 16,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "oklch(0.99 0.02 80)",
-                  border: "2px solid oklch(0.70 0.16 65)",
-                  borderRadius: 8,
-                  padding: "10px 18px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
-                  <span style={{
-                    width: 10,
-                    height: 10,
+              {/* Diagnostics corner: the staff (i) button and the processing
+                  rate. Above the camera-off cover and the countdown, so the rate
+                  is always on screen. The trace sync readout lives in the session
+                  card, where a narrow camera view cannot clip it. */}
+              <div style={{
+                position: "absolute",
+                top: tightLayout ? 10 : 14,
+                left: tightLayout ? 10 : 14,
+                zIndex: 36,
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 8,
+                maxWidth: "calc(100% - 28px)",
+              }}>
+                <button
+                  type="button"
+                  id="cam-tour-metrics"
+                  onClick={() => setStaffDrawerOpen((open) => !open)}
+                  aria-label={staffDrawerOpen ? "Close staff diagnostics" : "Open staff diagnostics"}
+                  aria-pressed={staffDrawerOpen}
+                  title="Staff diagnostics"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     borderRadius: 999,
-                    background: "oklch(0.70 0.16 65)",
-                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: tightLayout ? 13 : 18,
-                    letterSpacing: ".12em",
-                    textTransform: "uppercase",
-                    color: "oklch(0.45 0.10 65)",
-                    fontWeight: 700,
-                    flexShrink: 0,
-                  }}>Paused</span>
-                  <span style={{
-                    fontSize: tightLayout ? 13 : 18,
-                    fontWeight: 500,
-                    color: "oklch(0.25 0.05 65)",
-                    overflowWrap: "anywhere",
-                  }}>
-                    {captureMessage}
-                  </span>
+                    border: "1px solid oklch(1 0 0 / 0.25)",
+                    background: staffDrawerOpen ? "white" : "oklch(0.16 0.01 240 / 0.72)",
+                    color: staffDrawerOpen ? "oklch(0.25 0.01 240)" : "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="11" x2="12" y2="17"/>
+                    <line x1="12" y1="7" x2="12.01" y2="7"/>
+                  </svg>
+                </button>
+                <div title="Frame rate" style={FEED_CHIP_STYLE}>
+                  {fps !== null ? `${fps} fps` : "—"}
                 </div>
-              )}
 
-              {showTiltBanner && (
-                <div style={{
-                  position: "absolute",
-                  top: 16, left: "50%", transform: "translateX(-50%)",
-                  background: "oklch(0.99 0.02 80)",
-                  border: "2px solid oklch(0.70 0.16 65)",
-                  borderRadius: 8,
-                  padding: "10px 18px",
-                  display: "flex", alignItems: "center", gap: 14,
-                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
-                  <span style={{
-                    width: 10, height: 10, borderRadius: 999,
-                    background: "oklch(0.70 0.16 65)",
-                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--mono)", fontSize: 18, letterSpacing: ".12em",
-                    textTransform: "uppercase", color: "oklch(0.45 0.10 65)", fontWeight: 700,
-                    flexShrink: 0,
-                  }}>Tilt</span>
-                  <span style={{ fontSize: 18, fontWeight: 500, color: "oklch(0.25 0.05 65)", whiteSpace: "nowrap" }}>
-                    Keep hips &amp; head visible
-                  </span>
-                </div>
-              )}
+              </div>
 
-              {/* Baseline-capture banner */}
-              {baselineVisible && (
-                <div style={{
+              {/* AI indicator, top right: whether the pose model has loaded.
+                  Above the camera-off cover and the countdown, like the
+                  diagnostics corner opposite. */}
+              <div
+                id="cam-tour-ai"
+                role="img"
+                aria-label={modelLoaded ? "AI ready" : "AI loading"}
+                title={modelLoaded ? "AI ready" : "AI loading"}
+                style={{
+                  ...FEED_CHIP_STYLE,
                   position: "absolute",
-                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "white",
-                  border: "1px solid oklch(0.92 0.003 240)",
-                  borderRadius: 8,
-                  padding: "10px 16px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
+                  top: tightLayout ? 10 : 14,
+                  right: tightLayout ? 10 : 14,
+                  zIndex: 36,
+                  gap: 8,
+                  fontFamily: "var(--sans)",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  letterSpacing: ".04em",
+                }}
+              >
+                AI
+                <span aria-hidden="true" style={{
+                  width: 10,
+                  height: 10,
+                  flexShrink: 0,
+                  borderRadius: 999,
+                  background: modelLoaded ? "oklch(0.72 0.17 145)" : "oklch(0.78 0.15 75)",
+                  boxShadow: modelLoaded
+                    ? "0 0 0 3px oklch(0.72 0.17 145 / 0.28)"
+                    : "0 0 0 3px oklch(0.78 0.15 75 / 0.30)",
+                }} />
+              </div>
+
+              {/* Status, positioning hint and set numbers share one column at
+                  the bottom of the view. The top stays clear: that is where the
+                  capture check draws its head-zone target when framing fails. */}
+              <div style={{
+                position: "absolute",
+                left: tightLayout ? 10 : 16,
+                right: tightLayout ? 10 : 16,
+                bottom: tightLayout ? 10 : 16,
+                zIndex: 22,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+                pointerEvents: "none",
+              }}>
+                {trackingPaused && (sessionState === "idle" || sessionState === "active") && (
                   <div style={{
-                    width: 6, height: 6, borderRadius: 999, background: ACCENT.hex,
-                    boxShadow: `0 0 0 4px ${ACCENT.soft}`,
-                    display: "inline-block",
-                  }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 2,
-                    }}>Baseline capture</div>
-                    <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
-                      {captureOk
-                        ? baselineFinishingSamples
-                          ? "Finishing setup — stand still"
-                          : "Stand naturally, arms relaxed"
-                        : "Paused — improve framing"}
-                    </div>
+                    display: "flex",
+                    alignItems: "center",
+                    gap: tightLayout ? 12 : 16,
+                    maxWidth: 760,
+                    padding: tightLayout ? "12px 16px" : "16px 22px",
+                    borderRadius: 12,
+                    background: "oklch(0.18 0.01 240 / 0.86)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 8px 24px oklch(0 0 0 / 0.25)",
+                  }}>
+                    <span aria-hidden="true" style={{
+                      width: tightLayout ? 36 : 48,
+                      height: tightLayout ? 36 : 48,
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      background: "oklch(0.70 0.16 65)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.6" strokeLinecap="round">
+                        <line x1="12" y1="6" x2="12" y2="14"/>
+                        <line x1="12" y1="18" x2="12.01" y2="18"/>
+                      </svg>
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{
+                        display: "block",
+                        marginBottom: 4,
+                        fontFamily: "var(--mono)",
+                        fontSize: tightLayout ? 13 : 16,
+                        fontWeight: 700,
+                        letterSpacing: ".12em",
+                        textTransform: "uppercase",
+                        color: "oklch(0.82 0.13 70)",
+                      }}>
+                        Paused
+                      </span>
+                      <span style={{
+                        display: "block",
+                        fontSize: tightLayout ? 18 : 26,
+                        fontWeight: 700,
+                        letterSpacing: "-0.01em",
+                        lineHeight: 1.2,
+                        color: "white",
+                        overflowWrap: "anywhere",
+                      }}>
+                        {captureMessage}
+                      </span>
+                    </span>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 500, color: "oklch(0.18 0.01 240)", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
-                      {baselineFinishingSamples
-                        ? `${Math.min(
-                            baselineProgress.samples,
-                            NEUTRAL_CALIBRATION_MIN_SAMPLES,
-                          )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
-                        : baselineRemainingSec}
-                      {!baselineFinishingSamples && (
-                        <span style={{ fontSize: 12, color: "oklch(0.55 0.01 240)", marginLeft: 2 }}>s</span>
-                      )}
+                )}
+
+                {showTiltBanner && cameraFramesFlowing && (
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Tilt</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      Keep hips &amp; head visible
+                    </span>
+                  </div>
+                )}
+
+                {/* Baseline-capture banner. The loudest card on the view, because
+                    the patient has to hold still while it runs. */}
+                {baselineVisible && (
+                  <div style={{
+                    alignSelf: "stretch",
+                    width: "100%",
+                    maxWidth: 820,
+                    margin: "0 auto",
+                    padding: tightLayout ? "14px 16px" : "20px 26px",
+                    borderRadius: 14,
+                    background: "white",
+                    border: `3px solid ${ACCENT.hex}`,
+                    boxShadow: "0 10px 30px oklch(0 0 0 / 0.30)",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 12 : 20 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ ...EYEBROW_STYLE, fontSize: tightLayout ? 13 : 16, color: ACCENT.text, marginBottom: 6 }}>
+                          Baseline capture
+                        </div>
+                        <div style={{ fontSize: tightLayout ? 22 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "oklch(0.18 0.01 240)" }}>
+                          {captureOk
+                            ? baselineFinishingSamples
+                              ? "Finishing setup — stand still"
+                              : "Stand naturally, arms relaxed"
+                            : "Paused — improve framing"}
+                        </div>
+                      </div>
+                      <div style={{ flexShrink: 0, fontFamily: "var(--mono)", fontSize: tightLayout ? 36 : 56, fontWeight: 600, lineHeight: 1, color: ACCENT.text, fontVariantNumeric: "tabular-nums" }}>
+                        {baselineFinishingSamples
+                          ? `${Math.min(
+                              baselineProgress.samples,
+                              NEUTRAL_CALIBRATION_MIN_SAMPLES,
+                            )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
+                          : baselineRemainingSec}
+                        {!baselineFinishingSamples && (
+                          <span style={{ fontSize: tightLayout ? 18 : 24, marginLeft: 2 }}>s</span>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", color: "oklch(0.55 0.01 240)", marginTop: 3 }}>
+                    <div style={{ height: 10, marginTop: 14, borderRadius: 5, overflow: "hidden", background: "oklch(0.93 0.01 200)" }}>
+                      <div style={{ height: "100%", width: `${baselineProgressPct}%`, borderRadius: 5, background: ACCENT.hex, transition: "width .3s" }} />
+                    </div>
+                    <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".14em", color: "oklch(0.50 0.01 240)" }}>
                       {baselineProgressPct}% READY
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Stale-baseline prompt. Raised when tracking was interrupted
-                  AFTER the neutral baseline was captured. The baseline is kept
-                  rather than re-taken, because re-taking it here would anchor
-                  "neutral" to whatever posture the interruption happened in.
-                  Recalibrating is offered, never performed automatically. */}
-              {calibrationStale && !baselineVisible && (
-                <div style={{
-                  position: "absolute",
-                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "white",
-                  border: "1px solid oklch(0.86 0.06 75)",
-                  borderRadius: 8,
-                  padding: "10px 16px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
+                {/* Stale-baseline prompt. Raised when tracking was interrupted
+                    AFTER the neutral baseline was captured. The baseline is kept
+                    rather than re-taken, because re-taking it here would anchor
+                    "neutral" to whatever posture the interruption happened in.
+                    Recalibrating is offered, never performed automatically. */}
+                {calibrationStale && !baselineVisible && (
                   <div style={{
-                    width: 6, height: 6, borderRadius: 999, background: "oklch(0.70 0.14 75)",
-                    boxShadow: "0 0 0 4px oklch(0.95 0.04 75)",
-                    display: "inline-block",
-                  }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: "oklch(0.48 0.10 75)", fontWeight: 600, marginBottom: 2,
-                    }}>Tracking was interrupted</div>
-                    <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
-                      Your setup baseline is still the one taken at the start. Recalibrate
-                      only if you or the camera moved.
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
+                    maxWidth: 640,
+                    padding: "12px 18px",
+                    borderRadius: 12,
+                    background: "white",
+                    border: "1px solid oklch(0.86 0.06 75)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.14)",
+                    pointerEvents: "auto",
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ ...EYEBROW_STYLE, color: "oklch(0.48 0.10 75)", marginBottom: 3 }}>
+                        Tracking was interrupted
+                      </div>
+                      <div style={{ fontSize: 15, lineHeight: 1.4, color: "oklch(0.30 0.01 240)" }}>
+                        Your setup baseline is still the one taken at the start. Recalibrate
+                        only if you or the camera moved.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleManualRecalibration}
+                      style={{
+                        flexShrink: 0,
+                        padding: "10px 16px",
+                        borderRadius: 8,
+                        border: "1px solid oklch(0.86 0.06 75)",
+                        background: "oklch(0.97 0.02 75)",
+                        color: "oklch(0.40 0.10 75)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 15,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Recalibrate
+                    </button>
+                  </div>
+                )}
+
+                {/* Positioning hint before a session starts */}
+                {sessionState === "idle" && cameraFramesFlowing && captureOk && !showResumePrompt && !showCompletedRecap && !!activeDefinition && !blockedBySchedule && (
+                  <div style={{
+                    alignSelf: "flex-start",
+                    maxWidth: 620,
+                    padding: tightLayout ? "14px 18px" : "18px 24px",
+                    borderRadius: 12,
+                    background: "oklch(1 0 0 / 0.96)",
+                    boxShadow: "0 6px 20px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <div style={{ fontSize: tightLayout ? 18 : 24, fontWeight: 600, lineHeight: 1.25 }}>
+                      Stand where the camera can see you from head to knees
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: tightLayout ? 15 : 18, color: "oklch(0.45 0.01 240)" }}>
+                      Then press Start session.
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleManualRecalibration}
-                    style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".1em",
-                      textTransform: "uppercase", fontWeight: 600,
-                      color: "oklch(0.40 0.10 75)",
-                      background: "oklch(0.97 0.02 75)",
-                      border: "1px solid oklch(0.86 0.06 75)",
-                      borderRadius: 6, padding: "7px 12px", cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    Recalibrate
-                  </button>
-                </div>
-              )}
+                )}
 
-              {/* Resting banner */}
+                {/* Set numbers sit on the camera view, where the patient is already
+                    looking. They stay up through rest, so the reset to zero and the
+                    next set number are seen rolling in. */}
+                {(sessionState === "active" || sessionState === "resting") && activeDefinition && (
+                  <CameraSetHud
+                    activeDefinition={activeDefinition}
+                    repCounts={hudRepCounts}
+                    holdState={hudHoldState}
+                    timer={timer}
+                    prescription={prescription}
+                    currentSetIdx={hudSetIdx}
+                    compact={tightLayout}
+                  />
+                )}
+              </div>
+
+              {/* Rest */}
               {sessionState === "resting" && (
                 <div style={{
                   position: "absolute",
-                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16, left: "50%", transform: "translateX(-50%)",
-                  background: "white",
-                  border: `1px solid ${ACCENT.soft}`,
-                  borderRadius: 8,
-                  padding: "8px 16px",
-                  display: "flex", alignItems: "center", gap: 14,
-                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
-                  zIndex: 5,
+                  inset: 0,
+                  zIndex: 20,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  padding: 24,
+                  textAlign: "center",
+                  background: "oklch(0.18 0.01 240 / 0.72)",
                 }}>
-                  <span style={{
-                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                    textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
-                  }}>Rest period</span>
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 16, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ fontSize: tightLayout ? 18 : 24, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.80 0.03 200)" }}>
+                    Rest period
+                  </div>
+                  <div style={{
+                    fontFamily: "var(--mono)",
+                    fontSize: "clamp(88px, 19vh, 170px)",
+                    fontWeight: 600,
+                    lineHeight: 1,
+                    letterSpacing: "-0.03em",
+                    color: "white",
+                    fontVariantNumeric: "tabular-nums",
+                  }}>
                     {formatElapsedTime(restRemainingSec)}
-                  </span>
-                  <span style={{ fontSize: 11, color: "oklch(0.55 0.01 240)" }}>
+                  </div>
+                  <div style={{ fontSize: tightLayout ? 18 : 26, fontWeight: 500, color: "oklch(0.88 0.01 240)" }}>
                     Set {currentSetIdx} of {prescription.sets} starts automatically
-                  </span>
+                  </div>
+                  <div style={{
+                    width: "min(460px, 80%)",
+                    height: 10,
+                    marginTop: 20,
+                    borderRadius: 5,
+                    overflow: "hidden",
+                    background: "oklch(1 0 0 / 0.22)",
+                  }}>
+                    <div style={{ height: "100%", width: `${restElapsedPct}%`, borderRadius: 5, background: NEON.hex }} />
+                  </div>
+                  {trackingPaused && (
+                    <div style={{ marginTop: 16, fontSize: tightLayout ? 15 : 18, color: "oklch(0.86 0.10 75)" }}>
+                      {captureMessage}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Camera off */}
+              {!cameraOn && (
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 25,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: tightLayout ? 14 : 20,
+                  padding: tightLayout ? 20 : 40,
+                  textAlign: "center",
+                  background: "oklch(0.22 0.006 240)",
+                }}>
+                  <div aria-hidden="true" style={{
+                    width: tightLayout ? 64 : 84,
+                    height: tightLayout ? 64 : 84,
+                    borderRadius: 999,
+                    background: "oklch(0.30 0.008 240)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="oklch(0.78 0.01 240)" strokeWidth="1.8" strokeLinecap="round">
+                      <path d="M16 16H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/>
+                      <path d="M10 6h4a2 2 0 0 1 2 2v1.5l5-3v11l-5-3"/>
+                      <line x1="2" y1="2" x2="22" y2="22"/>
+                    </svg>
+                  </div>
+                  <button
+                    id="cam-tour-start"
+                    type="button"
+                    onClick={() => startCamera(selectedDeviceId || undefined)}
+                    disabled={isStarting || !modelLoaded}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: tightLayout ? "14px 26px" : "18px 40px",
+                      borderRadius: 12,
+                      border: "none",
+                      background: ACCENT.hex,
+                      color: "white",
+                      fontFamily: "var(--sans)",
+                      fontSize: tightLayout ? 18 : 22,
+                      fontWeight: 600,
+                      cursor: isStarting || !modelLoaded ? "default" : "pointer",
+                      opacity: isStarting || !modelLoaded ? 0.6 : 1,
+                    }}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+                      <path d="M17 10.5l5-3v9l-5-3"/>
+                    </svg>
+                    {isStarting ? "Starting…" : "Start camera"}
+                  </button>
+                  <div style={{ maxWidth: 520, fontSize: tightLayout ? 15 : 18, lineHeight: 1.4, color: "oklch(0.82 0.01 240)" }}>
+                    Please click Allow when browser asks for camera permission.
+                  </div>
                 </div>
               )}
 
               {/* 3-2-1 countdown overlay */}
               {sessionState === "countdown" && (
                 <div style={{
-                  position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  zIndex: 30, pointerEvents: "none",
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 30,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  background: "oklch(0.18 0.01 240 / 0.55)",
+                  pointerEvents: "none",
                 }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                    <span
-                      key={countdownSec}
-                      style={{
-                        fontFamily: "var(--mono)",
-                        fontSize: "6rem",
-                        fontWeight: 900,
-                        lineHeight: 1,
-                        color: "white",
-                        filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.8))",
-                        userSelect: "none",
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                    >
-                      {countdownSec > 0 ? countdownSec : "···"}
-                    </span>
-                    <span style={{
-                      fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.8)",
-                      textTransform: "uppercase", letterSpacing: "0.2em",
-                      filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.9))",
-                    }}>
-                      {countdownSec > 0 ? "Get ready" : "Finishing setup"}
-                    </span>
-                  </div>
+                  <span
+                    key={countdownSec}
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: "clamp(96px, 21vh, 190px)",
+                      fontWeight: 700,
+                      lineHeight: 1,
+                      color: "white",
+                      userSelect: "none",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {countdownSec > 0 ? countdownSec : "···"}
+                  </span>
+                  <span style={{
+                    fontSize: tightLayout ? 20 : 26,
+                    fontWeight: 600,
+                    letterSpacing: ".12em",
+                    textTransform: "uppercase",
+                    color: "oklch(0.92 0.01 240)",
+                  }}>
+                    {countdownSec > 0 ? "Get ready" : "Finishing setup"}
+                  </span>
                 </div>
               )}
 
@@ -8768,60 +9144,38 @@ export default function CameraClient() {
                 const avgAsym = setsDone ? setsLog.reduce((s, r) => s + r.asymmetryIndex, 0) / setsDone : 0;
                 const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
                 const targetMs = setsLog.reduce((s, r) => s + (r.targetHoldMs ?? 0), 0);
-                const leftHeldMs = setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0);
-                const rightHeldMs = setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0);
                 const heldMsBySide = {
-                  left: leftHeldMs,
-                  right: rightHeldMs,
+                  left: setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0),
+                  right: setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0),
                 };
                 const isPatient = prescription.patientExerciseId !== undefined;
 
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
-
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 700, marginBottom: 4,
-                      }}>Session complete</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16 }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.38 0.07 145)", marginBottom: 8 }}>
+                        Session complete
+                      </div>
+                      <div style={{ marginBottom: 22, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {def?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {isIso ? (
-                          <>
-                            {outcomeSides.map((side) => (
-                              <div key={side} style={rowStyle}>
-                                <span style={labelStyle}>{sideLabel(side)} hold</span>
-                                <span style={valStyle}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        {isIso
+                          ? outcomeSides.map((side) => (
+                              <div key={side} style={MODAL_ROW_STYLE}>
+                                <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} hold</span>
+                                <span style={MODAL_VALUE_STYLE}>
                                   {Math.round(heldMsBySide[side] / 1000)}s
                                   {targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}
                                 </span>
                               </div>
-                            ))}
-                            {showAsymmetry && (
-                              <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
-                            )}
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
-                        ) : (
-                          <>
-                            {outcomeSides.map((side) => (
+                            ))
+                          : outcomeSides.map((side) => (
                               <div key={side} style={{ display: "contents" }}>
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>{sideLabel(side)} reps</span>
-                                  <span style={valStyle}>
+                                <div style={MODAL_ROW_STYLE}>
+                                  <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} reps</span>
+                                  <span style={MODAL_VALUE_STYLE}>
                                     {fullRomOutcomeText(
                                       completeBySide[side],
                                       repEventsBySide[side].length,
@@ -8829,9 +9183,9 @@ export default function CameraClient() {
                                   </span>
                                 </div>
                                 {avgPeakBySide[side] !== null && (
-                                  <div style={rowStyle}>
-                                    <span style={labelStyle}>{sideLabel(side)} avg peak</span>
-                                    <span style={valStyle}>
+                                  <div style={MODAL_ROW_STYLE}>
+                                    <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} avg peak</span>
+                                    <span style={MODAL_VALUE_STYLE}>
                                       {fmtVal(avgPeakBySide[side]!)}{unit}
                                       {target ? ` · target ${fmtVal(target)}${unit}` : ""}
                                     </span>
@@ -8839,26 +9193,13 @@ export default function CameraClient() {
                                 )}
                               </div>
                             ))}
-                            {showAsymmetry && (
-                              <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
-                            )}
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
+                        {showAsymmetry && (
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Asymmetry</span><span style={MODAL_VALUE_STYLE}>{asymLabel}</span></div>
                         )}
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets</span><span style={MODAL_VALUE_STYLE}>{setsDone} / {prescription.sets}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {!pendingCompletionNavigation && (
-                          <button
-                            type="button"
-                            onClick={handleSessionStart}
-                            style={{
-                              width: "100%", padding: "10px 12px",
-                              background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                              fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                            }}
-                          >Redo</button>
-                        )}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                         {(pendingCompletionNavigation?.next ||
                           (!pendingCompletionNavigation && hasNextExercise)) && (
                           <button
@@ -8868,22 +9209,22 @@ export default function CameraClient() {
                                 ? continueFromCompletionRecap("next")
                                 : goToAdjacentExercise(1)
                             }
-                            style={{
-                              width: "100%", padding: "10px 12px",
-                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
-                            }}
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Next exercise →</button>
+                        )}
+                        {!pendingCompletionNavigation && (
+                          <button
+                            type="button"
+                            onClick={startSessionWithCamera}
+                            disabled={!modelLoaded}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
+                          >Redo</button>
                         )}
                         {isPatient && pendingCompletionNavigation ? (
                           <button
                             type="button"
                             onClick={() => continueFromCompletionRecap("schedule")}
-                            style={{
-                              width: "100%", padding: "10px 12px", textAlign: "center",
-                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                            }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >
                             {pendingCompletionNavigation.next
                               ? "Back to schedule"
@@ -8892,11 +9233,7 @@ export default function CameraClient() {
                         ) : isPatient ? (
                           <Link
                             href="/dashboard/patient"
-                            style={{
-                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
-                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
-                            }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
                         ) : null}
                       </div>
@@ -8934,10 +9271,6 @@ export default function CameraClient() {
                   left: recap.completeLeftReps,
                   right: recap.completeRightReps,
                 };
-                const peakBySide = {
-                  left: recap.avgLeftPeakValue,
-                  right: recap.avgRightPeakValue,
-                };
                 const holdMsBySide = {
                   left: recap.totalLeftHoldMs ?? recap.totalPairedHoldMs ?? 0,
                   right: recap.totalRightHoldMs ?? recap.totalPairedHoldMs ?? 0,
@@ -8946,6 +9279,10 @@ export default function CameraClient() {
                   recap.totalTargetHoldMs != null
                     ? Math.round(recap.totalTargetHoldMs / 1000)
                     : 0;
+                const peakBySide = {
+                  left: recap.avgLeftPeakValue,
+                  right: recap.avgRightPeakValue,
+                };
                 const recapIsAngle =
                   activeDefinition?.kind === "dynamic"
                     ? activeDefinition.primaryMetric.name !== "wristShoulderVertical"
@@ -8954,61 +9291,39 @@ export default function CameraClient() {
                 const formatRecapPeak = (value: number) =>
                   recapIsAngle ? `${Math.round(value)}` : value.toFixed(2);
 
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
-
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      position: "relative",
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
                       <button
                         type="button"
                         onClick={() => setRecapDismissed(true)}
                         aria-label="Dismiss"
-                        style={{
-                          position: "absolute", top: 12, right: 12,
-                          width: 28, height: 28, display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
-                          fontSize: 15, lineHeight: 1,
-                        }}
+                        style={MODAL_DISMISS_STYLE}
                       >✕</button>
 
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: "oklch(0.40 0.07 145)", fontWeight: 700, marginBottom: 4,
-                      }}>Already completed</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.38 0.07 145)", marginBottom: 8 }}>
+                        Already completed
+                      </div>
+                      <div style={{ marginBottom: 22, paddingRight: 36, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {isIso ? (
-                          outcomeSides.map((side) => (
-                            <div key={side} style={rowStyle}>
-                              <span style={labelStyle}>{sideLabel(side)} hold</span>
-                              <span style={valStyle}>
-                                {Math.round(holdMsBySide[side] / 1000)}s
-                                {targetSec ? ` / ${targetSec}s` : ""}
-                              </span>
-                            </div>
-                          ))
-                        ) : (
-                          <>
-                            {outcomeSides.map((side) => (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        {isIso
+                          ? outcomeSides.map((side) => (
+                              <div key={side} style={MODAL_ROW_STYLE}>
+                                <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} hold</span>
+                                <span style={MODAL_VALUE_STYLE}>
+                                  {Math.round(holdMsBySide[side] / 1000)}s
+                                  {targetSec ? ` / ${targetSec}s` : ""}
+                                </span>
+                              </div>
+                            ))
+                          : outcomeSides.map((side) => (
                               <div key={side} style={{ display: "contents" }}>
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>{sideLabel(side)} reps</span>
-                                  <span style={valStyle}>
+                                <div style={MODAL_ROW_STYLE}>
+                                  <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} reps</span>
+                                  <span style={MODAL_VALUE_STYLE}>
                                     {fullRomOutcomeText(
                                       completeBySide[side],
                                       repCountBySide[side],
@@ -9016,51 +9331,38 @@ export default function CameraClient() {
                                   </span>
                                 </div>
                                 {peakBySide[side] !== null && (
-                                  <div style={rowStyle}>
-                                    <span style={labelStyle}>{sideLabel(side)} avg peak</span>
-                                    <span style={valStyle}>
+                                  <div style={MODAL_ROW_STYLE}>
+                                    <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} avg peak</span>
+                                    <span style={MODAL_VALUE_STYLE}>
                                       {formatRecapPeak(peakBySide[side]!)}{recapUnit}
                                     </span>
                                   </div>
                                 )}
                               </div>
                             ))}
-                          </>
-                        )}
-                        <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{recap.setCount} / {prescription.sets}</span></div>
-                        <div style={rowStyle}><span style={labelStyle}>Duration</span><span style={valStyle}>{duration}</span></div>
-                        <div style={rowStyle}><span style={labelStyle}>Finished</span><span style={valStyle}>{finishedAt}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets</span><span style={MODAL_VALUE_STYLE}>{recap.setCount} / {prescription.sets}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Duration</span><span style={MODAL_VALUE_STYLE}>{duration}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Finished</span><span style={MODAL_VALUE_STYLE}>{finishedAt}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={handleSessionStart}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
-                        >Redo</button>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                         {hasNextExercise && (
                           <button
                             type="button"
                             onClick={() => goToAdjacentExercise(1)}
-                            style={{
-                              width: "100%", padding: "10px 12px",
-                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
-                            }}
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Next exercise →</button>
                         )}
+                        <button
+                          type="button"
+                          onClick={startSessionWithCamera}
+                          disabled={!modelLoaded}
+                          style={{ ...(hasNextExercise ? SECONDARY_BUTTON_STYLE : PRIMARY_BUTTON_STYLE), flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
+                        >Redo</button>
                         {isPatient && (
                           <Link
                             href="/dashboard/patient"
-                            style={{
-                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
-                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
-                            }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
                         )}
                       </div>
@@ -9087,557 +9389,569 @@ export default function CameraClient() {
                 const rightHeldSec = Math.round((snap.sideHoldMs?.right ?? 0) / 1000);
                 const elapsed = formatElapsedTime(Math.round(snap.elapsedMs / 1000));
 
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
-
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      position: "relative",
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
                       <button
                         type="button"
                         onClick={() => setResumeDismissed(true)}
                         aria-label="Dismiss"
-                        style={{
-                          position: "absolute", top: 12, right: 12,
-                          width: 28, height: 28, display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
-                          fontSize: 15, lineHeight: 1,
-                        }}
+                        style={MODAL_DISMISS_STYLE}
                       >✕</button>
 
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: "oklch(0.48 0.13 75)", fontWeight: 700, marginBottom: 4,
-                      }}>Session in progress</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.45 0.13 70)", marginBottom: 8 }}>
+                        Session in progress
+                      </div>
+                      <div style={{ marginBottom: 22, paddingRight: 36, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        <div style={rowStyle}><span style={labelStyle}>Set</span><span style={valStyle}>{snap.completedSets + 1} of {prescription.sets}</span></div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Set</span><span style={MODAL_VALUE_STYLE}>{snap.completedSets + 1} of {prescription.sets}</span></div>
                         {sideSplitIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>L {leftHeldSec}s · R {rightHeldSec}s</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Hold</span><span style={MODAL_VALUE_STYLE}>L {leftHeldSec}s · R {rightHeldSec}s</span></div>
                         ) : isIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>{heldSec}s</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Hold</span><span style={MODAL_VALUE_STYLE}>{heldSec}s</span></div>
                         ) : (
-                          <div style={rowStyle}><span style={labelStyle}>Reps</span><span style={valStyle}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Reps</span><span style={MODAL_VALUE_STYLE}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
                         )}
-                        <div style={rowStyle}><span style={labelStyle}>Elapsed</span><span style={valStyle}>{elapsed}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Elapsed</span><span style={MODAL_VALUE_STYLE}>{elapsed}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                         <button
                           type="button"
                           onClick={resumeSession}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
+                          disabled={!modelLoaded || isStarting}
+                          style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                         >Resume</button>
                         <button
                           type="button"
                           onClick={() => {
                             clearResumeSnapshot(snap.patientExerciseId);
-                            handleSessionStart();
+                            startSessionWithCamera();
                           }}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                            fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                          }}
+                          disabled={!modelLoaded}
+                          style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
                         >Start over</button>
                       </div>
                     </div>
                   </div>
                 );
               })()}
-
-              {/* Stat strip — patient-facing distance readouts */}
-              <ClinicalStatStrip
-                score={score}
-                tier={tier}
-                activeDefinition={activeDefinition}
-                repCounts={repCounts}
-                holdState={holdState}
-                timer={timer}
-                prescription={prescription}
-                sessionState={sessionState}
-                currentSetIdx={currentSetIdx}
-                compact={compactLayout}
-              />
             </div>
-
-            {/* Set progress strip */}
-            <ClinicalProgressStrip
-              sessionState={sessionState}
-              currentSetIdx={currentSetIdx}
-              prescription={prescription}
-              completedSets={completedSets}
-              progressPct={progressPct}
-              compact={compactLayout}
-            />
           </main>
 
-          {/* RIGHT RAIL — controls + reference */}
-          <aside style={{
-            background: "white",
-            borderLeft: "1px solid oklch(0.93 0.003 240)",
+          {/* RIGHT COLUMN — exercise and session controls on top, the
+              demonstration below with all the height that is left */}
+          <aside id="cam-tour-column" style={{
+            width: asideWidth,
+            flexShrink: 0,
+            minHeight: 0,
             display: "flex",
             flexDirection: "column",
-            minHeight: 0,
-            overflow: compactLayout ? "visible" : "hidden",
-            order: compactLayout ? 3 : 0,
+            gap: 14,
+            overflowY: compactLayout ? "visible" : "auto",
           }}>
-            {/* Exercise stepper */}
-            <div style={{ padding: "16px 16px 14px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                marginBottom: 10,
-              }}>Session</div>
-
-              {assignedExercises.length === 0 ? (
-                <div style={{
-                  padding: "8px 10px", borderRadius: 6,
-                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
-                  fontSize: 12, color: "oklch(0.40 0.08 75)",
-                }}>
-                  No exercises are due today. Return to your schedule to review
-                  completed, upcoming, or historical prescriptions.
-                  {user?.role === "patient" && (
-                    <div style={{ marginTop: 8 }}>
-                      <Link href="/dashboard/patient?tab=session" style={{ color: ACCENT.text, fontWeight: 650 }}>
-                        Return to schedule
-                      </Link>
-                    </div>
-                  )}
+            {sessionState === "reporting" ? (
+              <div id="cam-tour-session" style={{ ...CARD_STYLE, flex: "0 0 auto", padding: 16 }}>
+                <div style={{ marginBottom: 4, fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                  Pain after this attempt
                 </div>
-              ) : (
-                <div id="cam-tour-exercise" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => goToAdjacentExercise(-1)}
-                    disabled={!hasPrevExercise || sessionBusy}
-                    aria-label="Previous exercise"
-                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasPrevExercise || sessionBusy) ? 0.35 : 1 }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M15 18l-6-6 6-6"/>
-                    </svg>
-                  </button>
-                  <div style={{
-                    flex: 1, padding: "12px 14px", borderRadius: 8,
-                    border: `1px solid ${ACCENT.soft}`, background: "white",
-                  }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      gap: 8, marginBottom: 4,
-                    }}>
-                      <span style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
-                      }}>
-                        {selectedExerciseIndex >= 0
-                          ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length} today`
-                          : `${assignedExercises.length} exercises today`}
-                      </span>
-                      {selectedExerciseCompleted ? (
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: 3,
-                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
-                          padding: "2px 7px", borderRadius: 999,
-                          background: "oklch(0.96 0.04 145)", color: "oklch(0.40 0.07 145)",
-                          border: "1px solid oklch(0.88 0.06 145)",
-                        }}>✓ Completed</span>
-                      ) : resumeEligible ? (
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: 4,
-                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
-                          padding: "2px 7px", borderRadius: 999,
-                          background: "oklch(0.96 0.05 75)", color: "oklch(0.45 0.13 70)",
-                          border: "1px solid oklch(0.88 0.08 75)",
-                        }}>● In progress</span>
-                      ) : null}
-                    </div>
-                    <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>
-                      {selectedExerciseObj?.name ?? "—"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => goToAdjacentExercise(1)}
-                    disabled={!hasNextExercise || sessionBusy}
-                    aria-label="Next exercise"
-                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasNextExercise || sessionBusy) ? 0.35 : 1 }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M9 18l6-6-6-6"/>
-                    </svg>
-                  </button>
-                </div>
-              )}
-
-              {selectedExerciseObj && (
-                <>
-                  <p style={{ marginTop: 12, marginBottom: 0, fontSize: 12.5, lineHeight: 1.5, color: "oklch(0.40 0.01 240)" }}>
-                    {selectedExerciseObj.description}
+                <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                  Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
+                </p>
+                <label style={{ display: "block", marginBottom: 6, fontSize: 14 }}>
+                  Pain score: <strong>{painScore}/10</strong>
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={painScore}
+                  onChange={(event) => setPainScore(Number(event.target.value))}
+                  disabled={painReportSaving}
+                  style={{ width: "100%", accentColor: ACCENT.hex }}
+                />
+                <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>
+                  Timing (optional)
+                </label>
+                <select
+                  value={painTiming}
+                  onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
+                  disabled={painReportSaving}
+                  style={FIELD_STYLE}
+                >
+                  <option value="">Not specified</option>
+                  <option value="during">During</option>
+                  <option value="after">After</option>
+                  <option value="both">During and after</option>
+                </select>
+                <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>
+                  Body area (optional)
+                </label>
+                <input
+                  value={painBodyArea}
+                  maxLength={80}
+                  onChange={(event) => setPainBodyArea(event.target.value)}
+                  disabled={painReportSaving}
+                  placeholder="e.g. left shoulder"
+                  style={FIELD_STYLE}
+                />
+                {painReportError && (
+                  <p style={{ margin: "10px 0 0", fontSize: 13, color: "oklch(0.50 0.18 25)" }}>
+                    {painReportError} Please retry while this page remains open.
                   </p>
-                  <div style={{
-                    marginTop: 10, display: "flex", alignItems: "center", gap: 14,
-                    fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)",
-                  }}>
-                    <span>{prescription.sets} sets</span>
-                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
-                    <span>{prescriptionTargetText}</span>
-                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
-                    <span>{prescription.restSeconds}s rest</span>
-                  </div>
-                  <div style={{
-                    marginTop: 7,
-                    fontSize: 11,
-                    color: "oklch(0.45 0.01 240)",
-                    lineHeight: 1.45,
-                  }}>
-                    Prescribed side: <strong>{prescription.prescribedSide}</strong>
-                    {" · "}
-                    {formatResistanceContext(prescription.resistance)}
-                  </div>
-                  {activeDefinition?.id === "ex_007" &&
-                    prescription.patientExerciseId !== undefined && (
-                      <div style={{
-                        marginTop: 10,
-                        padding: "8px 10px",
-                        borderRadius: 6,
-                        background: ACCENT.soft,
-                        color: ACCENT.text,
-                        fontSize: 11,
-                        lineHeight: 1.45,
-                      }}>
-                        <strong>Motion trace recording:</strong> raw upper-body
-                        metrics and pose landmarks only. No video is stored.
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => void savePainReport(false)}
+                    disabled={painReportSaving}
+                    style={{ ...PRIMARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}
+                  >
+                    {painReportSaving ? "Saving…" : "Save report"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void savePainReport(true)}
+                    disabled={painReportSaving}
+                    style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            ) : sessionState === "active" || sessionState === "resting" || sessionState === "countdown" ? (
+              <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ ...CARD_STYLE, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <div style={{ ...EYEBROW_STYLE, fontSize: 11, color: ACCENT.text, marginBottom: 2 }}>Session</div>
+                    {selectedExerciseObj && (
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", lineHeight: 1.2 }}>
+                        {selectedExerciseObj.name}
                       </div>
                     )}
-                </>
-              )}
-            </div>
+                  </div>
+                  <SessionProgressStrip
+                    phase={finishedSet ? "active" : sessionState}
+                    setNumber={hudSetIdx}
+                    completedSets={completedSets}
+                    sets={prescription.sets}
+                    progressPct={progressPct}
+                    setUnderway={sessionState === "active"}
+                  />
+                  {traceSyncReadout}
+                </div>
 
-            {/* Reference guidance */}
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{ marginBottom: 10 }}>
-                <span style={{
-                  fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                  textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                }}>Reference guidance</span>
-              </div>
-              <div style={{ borderRadius: 6, padding: "12px", background: "oklch(0.97 0.003 240)", border: "1px solid oklch(0.92 0.003 240)", color: "oklch(0.42 0.01 240)", fontSize: 11.5, lineHeight: 1.5 }}>
-                No verified demonstration video is published for this exercise yet.
-                Follow the written exercise description and your therapist&apos;s instructions.
-              </div>
-            </div>
-
-            {/* Capture settings */}
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                marginBottom: 10,
-              }}>Capture</div>
-
-              <label style={{ display: "block", fontSize: 11, color: "oklch(0.45 0.01 240)", marginBottom: 4 }}>Device</label>
-              <select
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                style={{
-                  width: "100%", padding: "8px 10px",
-                  border: "1px solid oklch(0.90 0.003 240)",
-                  borderRadius: 6, fontSize: 12, color: "oklch(0.25 0.01 240)",
-                  background: "white", marginBottom: 12,
-                }}
-              >
-                {devices.length === 0 ? (
-                  <option value="">(Allow camera access to list devices)</option>
-                ) : (
-                  devices.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Camera ${d.deviceId.slice(0, 6)}…`}
-                    </option>
-                  ))
+                {sessionState === "active" && (
+                  <FormCheckCard
+                    state={formCheckState}
+                    isometric={activeDefinition?.kind === "isometric"}
+                  />
                 )}
-              </select>
 
-              <ClinicalSettingRow
-                label="Mirror"
-                sub="Front cam feel"
-                on={mirror}
-                onChange={setMirror}
-              />
-              <ClinicalSettingRow
-                label="Prefer front camera"
-                sub="When no device selected"
-                on={useFrontCameraHint}
-                onChange={setUseFrontCameraHint}
-              />
-            </div>
-
-            {/* Session controls */}
-            <div id="cam-tour-session" style={{ padding: 16, marginTop: "auto" }}>
-              {sessionState === "reporting" ? (
-                <div style={{
-                  padding: 12,
-                  borderRadius: 8,
-                  background: "oklch(0.98 0.01 240)",
-                  border: "1px solid oklch(0.90 0.01 240)",
-                }}>
-                  <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 650 }}>
-                    Pain after this attempt
-                  </p>
-                  <p style={{ margin: "0 0 10px", fontSize: 11, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
-                    Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
-                  </p>
-                  <label style={{ display: "block", fontSize: 11, marginBottom: 4 }}>
-                    Pain score: <strong>{painScore}/10</strong>
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={10}
-                    step={1}
-                    value={painScore}
-                    onChange={(event) => setPainScore(Number(event.target.value))}
-                    disabled={painReportSaving}
-                    style={{ width: "100%" }}
-                  />
-                  <label style={{ display: "block", fontSize: 11, marginTop: 8, marginBottom: 4 }}>
-                    Timing (optional)
-                  </label>
-                  <select
-                    value={painTiming}
-                    onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
-                    disabled={painReportSaving}
-                    style={{ width: "100%", padding: "7px 8px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6 }}
-                  >
-                    <option value="">Not specified</option>
-                    <option value="during">During</option>
-                    <option value="after">After</option>
-                    <option value="both">During and after</option>
-                  </select>
-                  <label style={{ display: "block", fontSize: 11, marginTop: 8, marginBottom: 4 }}>
-                    Body area (optional)
-                  </label>
-                  <input
-                    value={painBodyArea}
-                    maxLength={80}
-                    onChange={(event) => setPainBodyArea(event.target.value)}
-                    disabled={painReportSaving}
-                    placeholder="e.g. left shoulder"
-                    style={{ width: "100%", boxSizing: "border-box", padding: "7px 8px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6 }}
-                  />
-                  {painReportError && (
-                    <p style={{ margin: "8px 0 0", fontSize: 11, color: "oklch(0.50 0.18 25)" }}>
-                      {painReportError} Please retry while this page remains open.
-                    </p>
-                  )}
-                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                    <button
-                      type="button"
-                      onClick={() => void savePainReport(false)}
-                      disabled={painReportSaving}
-                      style={{ flex: 1, padding: "8px 10px", border: `1px solid ${ACCENT.hex}`, borderRadius: 6, background: ACCENT.hex, color: "white", fontWeight: 600 }}
-                    >
-                      {painReportSaving ? "Saving…" : "Save report"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void savePainReport(true)}
-                      disabled={painReportSaving}
-                      style={{ flex: 1, padding: "8px 10px", border: "1px solid oklch(0.88 0.01 240)", borderRadius: 6, background: "white" }}
-                    >
-                      Decline
-                    </button>
-                  </div>
-                </div>
-              ) : sessionState === "resting" ? (
-                <>
-                  <div style={{
-                    padding: 12, borderRadius: 8,
-                    background: ACCENT.soft,
-                    marginBottom: 10, textAlign: "center",
-                  }}>
+                <div id="cam-tour-session" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+                  {sessionState === "active" && confirmingEnd ? (
                     <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 4,
-                    }}>Rest</div>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 32, fontWeight: 500,
-                      color: ACCENT.text, fontVariantNumeric: "tabular-nums", lineHeight: 1,
-                    }}>{formatElapsedTime(restRemainingSec)}</div>
-                    <div style={{ fontSize: 11, color: ACCENT.text, marginTop: 4, opacity: 0.8 }}>
-                      Next set starts automatically
+                      padding: 14,
+                      borderRadius: 12,
+                      background: "oklch(0.97 0.03 80)",
+                      border: "1px solid oklch(0.90 0.06 80)",
+                    }}>
+                      <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 650, color: "oklch(0.35 0.08 75)" }}>
+                        End this exercise early?
+                      </p>
+                      <p style={{ margin: "0 0 12px", fontSize: 14, color: "oklch(0.42 0.07 75)" }}>
+                        The current set won&apos;t count as complete.
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => { handleSessionEnd(); setConfirmingEnd(false); }}
+                          style={{ ...DANGER_BUTTON_STYLE, flex: 1 }}
+                        >Yes, end</button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingEnd(false)}
+                          style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "11px 12px", fontSize: 15 }}
+                        >Cancel</button>
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  ) : sessionState === "resting" ? (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={skipRest}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "13px 12px", fontSize: 15, fontWeight: 600 }}
+                      >Skip rest</button>
+                      <button
+                        type="button"
+                        onClick={() => handleSessionEnd()}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "13px 12px", fontSize: 15, color: "oklch(0.45 0.01 240)" }}
+                      >End</button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      onClick={skipRest}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
+                      onClick={() => {
+                        if (sessionState === "countdown") {
+                          handleSessionEnd();
+                        } else {
+                          setConfirmingEnd(true);
+                        }
                       }}
-                    >Skip rest</button>
-                    <button
-                      type="button"
-                      onClick={() => handleSessionEnd()}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "white", cursor: "pointer",
-                      }}
-                    >End</button>
-                  </div>
-                </>
-              ) : sessionState === "active" && confirmingEnd ? (
-                <div style={{
-                  padding: 12, borderRadius: 8,
-                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
-                }}>
-                  <p style={{ fontSize: 12, fontWeight: 600, color: "oklch(0.35 0.08 75)", margin: "0 0 4px" }}>
-                    End this exercise early?
-                  </p>
-                  <p style={{ fontSize: 11, color: "oklch(0.42 0.07 75)", margin: "0 0 10px" }}>
-                    The current set won&apos;t count as complete.
-                  </p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => { handleSessionEnd(); setConfirmingEnd(false); }}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "white", cursor: "pointer",
-                      }}
-                    >Yes, end</button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingEnd(false)}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                      }}
-                    >Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", gap: 8 }}>
+                      style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "13px 12px", fontSize: 15, color: "oklch(0.45 0.01 240)" }}
+                    >
+                      End
+                    </button>
+                  )}
+
                   <button
-                    onClick={handleSessionStart}
-                    disabled={!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown"}
+                    type="button"
+                    onClick={() => handleSessionEnd("pain")}
                     style={{
-                      flex: 1, padding: "10px 12px",
-                      background: (sessionState === "active" || sessionState === "countdown") ? "white" : ACCENT.hex,
-                      color: (sessionState === "active" || sessionState === "countdown") ? "oklch(0.30 0.01 240)" : "white",
-                      border: (sessionState === "active" || sessionState === "countdown") ? "1px solid oklch(0.90 0.003 240)" : `1px solid ${ACCENT.hex}`,
-                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                      opacity: (!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown") ? 0.5 : 1,
+                      width: "100%",
+                      padding: "13px 12px",
+                      borderRadius: 10,
+                      border: "1px solid oklch(0.55 0.17 25)",
+                      background: "oklch(0.97 0.025 25)",
+                      color: "oklch(0.42 0.16 25)",
+                      fontFamily: "var(--sans)",
+                      fontSize: 15,
+                      fontWeight: 650,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Stop — I have pain
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div id="cam-tour-exercise" style={{
+                ...CARD_STYLE,
+                flex: "1 1 auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                padding: 16,
+              }}>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>Session</div>
+                {assignedExercises.length === 0 ? (
+                  <div style={{
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "oklch(0.97 0.03 80)",
+                    border: "1px solid oklch(0.90 0.06 80)",
+                    fontSize: 14,
+                    lineHeight: 1.45,
+                    color: "oklch(0.40 0.08 75)",
+                  }}>
+                    No exercises are due today. Return to your schedule to review
+                    completed, upcoming, or historical prescriptions.
+                    {user?.role === "patient" && (
+                      <div style={{ marginTop: 8 }}>
+                        <Link href="/dashboard/patient?tab=session" style={{ color: ACCENT.text, fontWeight: 650 }}>
+                          Return to schedule
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(-1)}
+                      disabled={!hasPrevExercise || sessionBusy}
+                      aria-label="Previous exercise"
+                      style={{ ...ICON_BUTTON_STYLE, opacity: (!hasPrevExercise || sessionBusy) ? 0.35 : 1 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6"/>
+                      </svg>
+                    </button>
+                    <span style={{
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: "center",
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      letterSpacing: ".12em",
+                      textTransform: "uppercase",
+                      color: ACCENT.text,
+                    }}>
+                      {exerciseQueueLabel}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(1)}
+                      disabled={!hasNextExercise || sessionBusy}
+                      aria-label="Next exercise"
+                      style={{ ...ICON_BUTTON_STYLE, opacity: (!hasNextExercise || sessionBusy) ? 0.35 : 1 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+
+                {selectedExerciseObj && (
+                  <>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
+                          {selectedExerciseObj.name}
+                        </div>
+                        {selectedExerciseCompleted ? (
+                          <span style={{
+                            flexShrink: 0,
+                            marginTop: 4,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: "oklch(0.96 0.04 145)",
+                            border: "1px solid oklch(0.88 0.06 145)",
+                            color: "oklch(0.40 0.07 145)",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: ".04em",
+                          }}>✓ Completed</span>
+                        ) : resumeEligible ? (
+                          <span style={{
+                            flexShrink: 0,
+                            marginTop: 4,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: "oklch(0.96 0.05 75)",
+                            border: "1px solid oklch(0.88 0.08 75)",
+                            color: "oklch(0.45 0.13 70)",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: ".04em",
+                          }}>● In progress</span>
+                        ) : null}
+                      </div>
+                      <p style={{ margin: "7px 0 0", fontSize: 16, lineHeight: 1.4, color: "oklch(0.40 0.01 240)" }}>
+                        {selectedExerciseObj.description}
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                      <span style={CHIP_STYLE}>{prescription.sets} sets</span>
+                      <span style={CHIP_STYLE}>{prescriptionTargetText}</span>
+                      <span style={CHIP_STYLE}>{prescription.restSeconds}s rest</span>
+                    </div>
+                    <div style={{ fontSize: 13, lineHeight: 1.45, color: "oklch(0.45 0.01 240)" }}>
+                      Prescribed side: <strong>{prescription.prescribedSide}</strong>
+                      {" · "}
+                      {formatResistanceContext(prescription.resistance)}
+                    </div>
+                    {activeDefinition?.id === "ex_007" &&
+                      prescription.patientExerciseId !== undefined && (
+                        <div style={{
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          background: ACCENT.soft,
+                          color: ACCENT.text,
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                        }}>
+                          <strong>Motion trace recording:</strong> raw upper-body
+                          metrics and pose landmarks only. No video is stored.
+                        </div>
+                      )}
+                  </>
+                )}
+
+                {/* Session controls */}
+                <div id="cam-tour-session" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+                  {traceSyncReadout}
+                  <button
+                    type="button"
+                    onClick={startSessionWithCamera}
+                    disabled={!activeDefinition || blockedBySchedule || !modelLoaded}
+                    style={{
+                      ...PRIMARY_BUTTON_STYLE,
+                      width: "100%",
+                      padding: "17px 18px",
+                      fontSize: 20,
+                      cursor: !activeDefinition || blockedBySchedule || !modelLoaded ? "not-allowed" : "pointer",
+                      opacity: !activeDefinition || blockedBySchedule || !modelLoaded ? 0.5 : 1,
                     }}
                   >
                     {sessionState === "ended"
                       ? "Restart"
-                      : sessionState === "countdown"
-                        ? `Starting… (${countdownSec})`
-                        : blockedBySchedule
-                          ? selectedExercisePainStopped
-                            ? "Await therapist rescheduling"
-                            : "Not scheduled today"
-                          : "Start session"}
+                      : blockedBySchedule
+                        ? selectedExercisePainStopped
+                          ? "Await therapist rescheduling"
+                          : "Not scheduled today"
+                        : "Start session"}
                   </button>
-                  <button
-                    onClick={() => {
-                      if (sessionState === "countdown") {
-                        handleSessionEnd();
-                      } else {
-                        setConfirmingEnd(true);
-                      }
-                    }}
-                    disabled={sessionState !== "active" && sessionState !== "countdown"}
-                    style={{
-                      flex: 1, padding: "10px 12px",
-                      background: "white", color: "oklch(0.30 0.01 240)",
-                      border: "1px solid oklch(0.90 0.003 240)",
-                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                      opacity: (sessionState !== "active" && sessionState !== "countdown") ? 0.4 : 1,
-                    }}
-                  >End</button>
+
+                  {(blockedBySchedule || scheduleNotice) && (
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.55 0.14 45)" }}>
+                      {scheduleNotice ??
+                        (selectedExercisePainStopped
+                          ? "This occurrence was closed after pain was reported. Do not resume it; your therapist must review and reschedule if appropriate."
+                          : "Not scheduled today — start this exercise from your schedule on its due day.")}
+                    </p>
+                  )}
+
+                  {sessionState === "ended" && hasNextExercise && (
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(1)}
+                      style={{
+                        ...SECONDARY_BUTTON_STYLE,
+                        width: "100%",
+                        padding: "12px 14px",
+                        fontSize: 16,
+                        fontWeight: 600,
+                        border: `1px solid ${ACCENT.hex}`,
+                        color: ACCENT.text,
+                      }}
+                    >
+                      Next exercise →
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
+            )}
 
-              {(sessionState === "active" ||
-                sessionState === "resting" ||
-                sessionState === "countdown") && (
-                <button
-                  type="button"
-                  onClick={() => handleSessionEnd("pain")}
-                  style={{
-                    marginTop: 8,
-                    width: "100%",
-                    padding: "10px 12px",
-                    borderRadius: 6,
-                    border: "1px solid oklch(0.55 0.17 25)",
-                    background: "oklch(0.97 0.025 25)",
-                    color: "oklch(0.42 0.16 25)",
-                    fontSize: 13,
-                    fontWeight: 650,
-                    cursor: "pointer",
-                  }}
-                >
-                  Stop — I have pain
-                </button>
-              )}
-
-              {(blockedBySchedule || scheduleNotice) && sessionState !== "active" && sessionState !== "countdown" && (
-                <p style={{ marginTop: 8, fontSize: 12, color: "oklch(0.55 0.14 45)", lineHeight: 1.4 }}>
-                  {scheduleNotice ??
-                    (selectedExercisePainStopped
-                      ? "This occurrence was closed after pain was reported. Do not resume it; your therapist must review and reschedule if appropriate."
-                      : "Not scheduled today — start this exercise from your schedule on its due day.")}
-                </p>
-              )}
-
-              {sessionState === "ended" && hasNextExercise && (
-                <button
-                  type="button"
-                  onClick={() => goToAdjacentExercise(1)}
-                  style={{
-                    marginTop: 8, width: "100%", padding: "10px 12px",
-                    background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`,
-                    borderRadius: 6, fontSize: 13, fontWeight: 500,
-                    color: "white", cursor: "pointer",
-                  }}
-                >
-                  Next exercise →
-                </button>
-              )}
-            </div>
+            {/* Demonstration, under the exercise card */}
+            <DemoCard exerciseId={activeDefinition?.id ?? null} compact={compactLayout} />
           </aside>
         </div>
       </div>
+
+      {/* Floating segment remote. The operator stands 2-3 m away, so the
+          boundary has to be clickable without returning to the desk: park
+          the pointer on this control before stepping back and a single
+          LEFT click marks the boundary. Left click is the only pointer
+          input the page reliably receives — thumb buttons are serviced by
+          the browser and never reach it (see the keydown effect above). */}
+      {coachingShadowStaffAllowed && coachingShadowEnabled && !!activeDefinition && (() => {
+        const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+        const recording = coachingShadowActiveSegment !== null &&
+          !coachingShadowActiveSegment.label.startsWith("after:") &&
+          coachingShadowActiveSegment.label !== "idle";
+        return (
+          <div
+            data-testid="coaching-remote"
+            style={{
+              position: "fixed",
+              // Bottom-LEFT on purpose: the session Start/Stop controls live in
+              // the right-hand sidebar, and an earlier bottom-right placement
+              // covered them so the session could not be started at all.
+              left: 18,
+              bottom: 18,
+              zIndex: 60,
+              width: coachingRemoteCollapsed ? 200 : 260,
+              padding: coachingRemoteCollapsed ? "8px 12px" : 14,
+              borderRadius: 10,
+              border: "2px solid oklch(0.30 0.05 250)",
+              background: "oklch(0.99 0.004 250)",
+              boxShadow: "0 10px 30px -12px rgba(0,0,0,.45)",
+              fontFamily: "var(--mono)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.45 0.02 250)" }}>
+                {step
+                  ? `Step ${coachingPlanIndex + 1}/${COACHING_SESSION_PLAN.length} · ${step.captureId}`
+                  : "Plan complete"}
+              </div>
+              <button
+                type="button"
+                aria-label={coachingRemoteCollapsed ? "Expand segment remote" : "Collapse segment remote"}
+                onClick={() => setCoachingRemoteCollapsed((v) => !v)}
+                style={{
+                  border: "1px solid oklch(0.82 0.03 250)",
+                  borderRadius: 4,
+                  background: "white",
+                  color: "oklch(0.30 0.05 250)",
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  lineHeight: 1,
+                  padding: "3px 7px",
+                  cursor: "pointer",
+                }}
+              >
+                {coachingRemoteCollapsed ? "▴" : "▾"}
+              </button>
+            </div>
+            {!coachingRemoteCollapsed && (<>
+            <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: "oklch(0.20 0.03 250)", wordBreak: "break-word" }}>
+              {recording
+                ? coachingShadowActiveSegment.label
+                : step?.label ?? "—"}
+            </div>
+            <div style={{ fontSize: 11, marginTop: 2, color: "oklch(0.45 0.02 250)" }}>
+              {recording ? `recording · ${coachingShadowActiveSegment.intent}` : "not recording"}
+            </div>
+            <button
+              type="button"
+              disabled={!step && !recording}
+              onClick={() => {
+                if (recording) {
+                  endCoachingShadowSegment();
+                  return;
+                }
+                if (!step) return;
+                if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                setCoachingShadowSegmentLabel(step.label);
+                setCoachingShadowSegmentIntent(step.intent);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 10,
+                padding: "20px 8px",
+                borderRadius: 8,
+                border: "none",
+                cursor: !step && !recording ? "default" : "pointer",
+                background: recording ? "oklch(0.52 0.17 25)" : ACCENT.hex,
+                color: "white",
+                fontFamily: "var(--mono)",
+                fontSize: 17,
+                fontWeight: 700,
+                letterSpacing: ".06em",
+              }}
+            >
+              {recording ? "END SEGMENT" : "START SEGMENT"}
+            </button>
+            <button
+              type="button"
+              disabled={!step || coachingShadowAdvanceBlocked}
+              onClick={advanceCoachingShadowPlan}
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 6,
+                padding: "8px",
+                borderRadius: 6,
+                border: "1px solid oklch(0.82 0.03 250)",
+                background: "white",
+                color: "oklch(0.30 0.05 250)",
+                fontFamily: "var(--mono)",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: ".08em",
+                cursor: step && !coachingShadowAdvanceBlocked ? "pointer" : "default",
+              }}
+            >
+              {coachingShadowAdvanceBlocked ? "DOWNLOAD LOG FIRST" : "NEXT STEP →"}
+            </button>
+            <div style={{ fontSize: 9.5, marginTop: 7, lineHeight: 1.4, color: "oklch(0.48 0.02 250)" }}>
+              {coachingShadowAdvanceBlocked
+                ? `This capture has ${coachingShadowCount} unexported decisions.`
+                : step?.hint ?? "Export this capture, then run E3 unrecorded."}
+            </div>
+            </>)}
+          </div>
+        );
+      })()}
 
       {/* ── Spotlight Tour ──────────────────────────────────────────────── */}
       {showTutorial && (
@@ -9659,45 +9973,59 @@ const TOUR_STEPS: {
   targetId: string;
   /** When set, card is positioned relative to this element instead of targetId */
   anchorId?: string;
+  /** Further elements spotlighted alongside targetId */
+  alsoTargetIds?: string[];
+  /** Hold the camera menu open while this step shows, so its tray can be spotlighted */
+  opensCameraMenu?: boolean;
   title: string;
   lines: string[];
   placement: "below" | "above" | "right" | "left";
-  /** Override estimated card height (px) used for "above"/"right"/"left" placement */
-  cardH?: number;
+  /** Illustration beside the text; the card widens to `cardW` to fit it */
+  graphic?: TourGraphicKind;
+  cardW?: number;
   /** Extra gap (px) between card and target for "above" placement (default 16) */
   aboveGap?: number;
 }[] = [
   {
     targetId: "cam-tour-start",
+    alsoTargetIds: ["cam-tour-camera-menu"],
+    opensCameraMenu: true,
     title: "Start Camera",
     placement: "below",
+    graphic: "start",
+    cardW: 560,
     lines: [
       "Click this button to turn on your camera.",
-      "Your browser will ask permission — click Allow when prompted.",
+      "Please click Allow when browser asks for camera permission.",
       "The camera view will appear in the centre of the screen once ready.",
-      "Check that both status dots (AI ready & Capture OK) are green before continuing.",
+      "To switch cameras or turn the camera off, open the Camera menu at the top right.",
     ],
   },
   {
-    targetId: "cam-tour-status",
+    targetId: "cam-tour-ai",
+    alsoTargetIds: ["cam-tour-camera"],
     title: "Status Indicators",
     placement: "below",
+    graphic: "status",
+    cardW: 560,
     lines: [
-      "AI ready (green dot) — the movement detection engine is loaded.",
-      "Capture OK (green dot) — the app can see your body clearly.",
-      "If a dot is orange, adjust your position or lighting until both turn green.",
-      "Never start a session while a dot is still orange.",
+      "AI (top right of the camera view) — a green dot means movement detection is ready.",
+      "An orange dot means it is still loading. Start camera and Start session stay unavailable until it turns green.",
+      "Camera (top right of the page) — a green dot means your camera is on.",
     ],
   },
   {
-    targetId: "cam-tour-exercise",
+    targetId: "cam-tour-column",
     title: "Your Assigned Exercise",
     placement: "left",
+    graphic: "exercise",
+    cardW: 560,
     lines: [
       "This card shows the exercise assigned to you by your therapist.",
       "Use the left ( ‹ ) and right ( › ) arrows to move between exercises.",
       "The exercise name, sets, reps, and rest time are displayed in the card.",
       "Make sure you select the right exercise before starting your session.",
+      "Below the card, the Reference Guide shows an animated example when one is available — press the full-screen button to see it larger. Your therapist's instructions come first.",
     ],
   },
   {
@@ -9705,11 +10033,12 @@ const TOUR_STEPS: {
     anchorId: "cam-tour-metrics",
     title: "Camera View — Position Yourself Here",
     placement: "right",
+    graphic: "position",
+    cardW: 580,
     lines: [
-      "Stand or sit about 1–2 metres (3–6 feet) from the camera.",
-      "Make sure your full upper body — head to hips — is visible on screen.",
+      "Stand or sit about 2–3 metres (7–10 feet) from the camera.",
+      "Make sure your body — head to knees — is visible on screen.",
       "A green skeleton outline appears when the app can track you correctly.",
-      "Good lighting helps. Avoid a bright window directly behind you.",
     ],
   },
   {
@@ -9728,22 +10057,24 @@ const TOUR_STEPS: {
     targetId: "cam-tour-clothing",
     title: "Clothing & Environment Tips",
     placement: "below",
+    graphic: "environment",
+    cardW: 760,
     lines: [
       "Wear light or contrasting colours — dark clothing on a dark background makes it hard for the AI to track your joints.",
+      "Avoid wearing very loose clothing — it can hide your joints from the camera.",
       "Face the light source (window or lamp). A bright light behind you silhouettes your body and reduces tracking accuracy.",
       "Clear the area behind you — plain or lightly patterned walls work best. Busy wallpaper or moving objects confuse the system.",
       "Make sure the room is well lit. Low light causes the camera to produce noise that reduces pose detection quality.",
-      "Keep about 1–2 metres of free space in front of the camera so your full upper body stays in frame as you move.",
     ],
   },
   {
     targetId: "cam-tour-session",
     title: "Start Session & End",
-    placement: "above",
-    cardH: 300,
-    aboveGap: 100,
+    placement: "left",
+    graphic: "session",
+    cardW: 600,
     lines: [
-      "Press Start session when both status dots are green and you are ready.",
+      "Press Start session when you are ready.",
       "A 3-2-1 countdown gives you time to get into position before counting begins.",
       "Press End at any time to stop the exercise early — your progress is still saved.",
       "After finishing all sets, the session saves automatically and is sent to your therapist.",
@@ -9751,6 +10082,31 @@ const TOUR_STEPS: {
     ],
   },
 ];
+
+/** Keyframes for the spotlight ring and the step illustrations. */
+const TOUR_KEYFRAMES = `
+  @keyframes tour-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px oklch(0.55 0.07 200 / 0.25), 0 0 14px oklch(0.55 0.07 200 / 0.31); }
+    50%      { box-shadow: 0 0 0 6px oklch(0.55 0.07 200 / 0.15), 0 0 24px oklch(0.55 0.07 200 / 0.44); }
+  }
+  @keyframes gfx-rays { 0%, 100% { opacity: .35; } 50% { opacity: .95; } }
+  @keyframes gfx-chev-a { 0%, 46% { background: white; border-color: oklch(0.90 0.003 240); } 50%, 96% { background: oklch(0.95 0.02 200); border-color: oklch(0.55 0.07 200); } }
+  @keyframes gfx-chev-b { 0%, 46% { background: oklch(0.95 0.02 200); border-color: oklch(0.55 0.07 200); } 50%, 96% { background: white; border-color: oklch(0.90 0.003 240); } }
+  @keyframes cd-3 { 0%, 22% { opacity: 1; } 28%, 100% { opacity: 0; } }
+  @keyframes cd-2 { 0%, 28% { opacity: 0; } 34%, 55% { opacity: 1; } 61%, 100% { opacity: 0; } }
+  @keyframes cd-1 { 0%, 61% { opacity: 0; } 67%, 88% { opacity: 1; } 94%, 100% { opacity: 0; } }
+  @keyframes cd-go { 0%, 88% { opacity: 0; } 94%, 100% { opacity: 1; } }
+  @keyframes gfx-pip { 0%, 100% { box-shadow: 0 0 8px oklch(0.82 0.20 195 / 0.7); } 50% { box-shadow: 0 0 14px oklch(0.82 0.20 195 / 0.9); } }
+  @keyframes gfx-btn { 0%, 100% { box-shadow: 0 0 0 0 oklch(0.55 0.07 200 / 0.45); } 50% { box-shadow: 0 0 0 5px oklch(0.55 0.07 200 / 0); } }
+  @keyframes gfx-cursor { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-2px, -2px); } }
+  @keyframes gfx-amber { 0%, 100% { box-shadow: 0 0 0 3px oklch(0.72 0.15 70 / 0.14); } 50% { box-shadow: 0 0 0 6px oklch(0.72 0.15 70 / 0.30); } }
+  @keyframes gfx-joint { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
+  @media (prefers-reduced-motion: reduce) {
+    .cam-tour-ring, .cam-tour-gfx * { animation: none !important; }
+  }
+`;
+
+type TourGraphicKind = "start" | "status" | "exercise" | "position" | "environment" | "session";
 
 function CameraTour({
   step,
@@ -9770,6 +10126,9 @@ function CameraTour({
 
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [extraRects, setExtraRects] = useState<DOMRect[]>([]);
+  // Joined into a string so the effect reruns when the ids change, not on every render.
+  const extraTargetKey = (def.alsoTargetIds ?? []).join(" ");
 
   useEffect(() => {
     const refresh = () => {
@@ -9777,136 +10136,155 @@ function CameraTour({
       setRect(el ? el.getBoundingClientRect() : null);
       const anchor = def.anchorId ? document.getElementById(def.anchorId) : null;
       setAnchorRect(anchor ? anchor.getBoundingClientRect() : null);
+      setExtraRects(
+        extraTargetKey
+          .split(" ")
+          .filter(Boolean)
+          .flatMap((id) => {
+            const extra = document.getElementById(id);
+            return extra ? [extra.getBoundingClientRect()] : [];
+          }),
+      );
     };
     refresh();
     window.addEventListener("resize", refresh);
     return () => window.removeEventListener("resize", refresh);
-  }, [def.targetId, def.anchorId]);
+  }, [def.targetId, def.anchorId, extraTargetKey]);
 
   const PAD = 8; // spotlight padding around target
-  const CARD_W = 360;
+  const EDGE = 8; // smallest gap between the card and the viewport edge
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
 
-  // Spotlight ring — always follows targetId
-  const spot = rect
-    ? {
-        x: rect.left - PAD,
-        y: rect.top - PAD,
-        w: rect.width + PAD * 2,
-        h: rect.height + PAD * 2,
-        cx: rect.left + rect.width / 2,
-        cy: rect.top + rect.height / 2,
-      }
-    : null;
+  const pad = (r: DOMRect | null) =>
+    r
+      ? {
+          x: r.left - PAD,
+          y: r.top - PAD,
+          w: r.width + PAD * 2,
+          h: r.height + PAD * 2,
+          cx: r.left + r.width / 2,
+          cy: r.top + r.height / 2,
+        }
+      : null;
+  // Spotlight rings — targetId, plus any further elements the step points out
+  const spots = [rect, ...extraRects]
+    .map(pad)
+    .filter((s): s is NonNullable<ReturnType<typeof pad>> => s !== null);
+  // Card anchor — anchorId when provided, otherwise targetId, otherwise the first
+  // further element (the Start camera button is absent while the camera is on)
+  const anchor = pad(anchorRect ?? rect ?? extraRects[0] ?? null);
 
-  // Card anchor — anchorId when provided, otherwise targetId
-  const aRect = anchorRect ?? rect;
-  const anchor = aRect
-    ? {
-        x: aRect.left - PAD,
-        y: aRect.top - PAD,
-        w: aRect.width + PAD * 2,
-        h: aRect.height + PAD * 2,
-        cx: aRect.left + aRect.width / 2,
-        cy: aRect.top + aRect.height / 2,
-      }
-    : null;
+  // The illustration sits beside the text. When the screen cannot fit both, it
+  // is left out and the card keeps the original text-only width.
+  const maxW = Math.max(280, vw - EDGE * 2);
+  // The clothing and environment illustration uses two columns.
+  const wideGraphic = def.graphic === "environment";
+  const graphicW = wideGraphic ? 348 : 208;
+  const graphic =
+    def.graphic && Math.min(def.cardW ?? 560, maxW) - 48 - graphicW >= 240 ? def.graphic : undefined;
+  const cardW = Math.min(graphic ? (def.cardW ?? 560) : 360, maxW);
+  const clampLeft = (x: number) => Math.max(EDGE, Math.min(x, vw - cardW - EDGE));
 
-  // Card position: default center, then adjust based on placement + anchor
-  let cardStyle: CSSProperties = {
+  // The card sits in a fixed column that owns its vertical span, so flex layout
+  // keeps it inside the viewport however tall it renders. Beside a target, two
+  // weighted spacers slide it along the column in proportion to the anchor's
+  // height on screen; the arrow, placed at the same fraction of the card, then
+  // meets the anchor's centre without measuring the card.
+  const track: CSSProperties = {
     position: "fixed",
     zIndex: 62,
-    width: CARD_W,
-    maxWidth: "calc(100vw - 32px)",
-    background: "white",
-    borderRadius: 14,
-    boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
-    overflow: "hidden",
+    width: cardW,
+    left: clampLeft((vw - cardW) / 2),
+    top: EDGE,
+    bottom: EDGE,
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    pointerEvents: "none",
   };
-
-  // Arrow: which side of the card points toward the target
-  let arrowSide: "top" | "bottom" | "left" | "right" = "top";
-
+  let arrowSide: "top" | "bottom" | "left" | "right" | null = null;
+  let arrowAt = "50%";
+  let spacers: [number, number] | null = null;
   if (anchor) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cardH = def.cardH ?? 260;
-
-    if (def.placement === "below") {
-      const top = anchor.y + anchor.h + 16;
-      let left = anchor.cx - CARD_W / 2;
-      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "top";
-    } else if (def.placement === "above") {
-      const gap = def.aboveGap ?? 16;
-      const top = Math.max(16, anchor.y - cardH - gap);
-      let left = anchor.cx - CARD_W / 2;
-      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "bottom";
-    } else if (def.placement === "right") {
-      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
-      const left = Math.min(anchor.x + anchor.w + 16, vw - CARD_W - 16);
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "left";
+    if (def.placement === "below" || def.placement === "above") {
+      const left = clampLeft(anchor.cx - cardW / 2);
+      track.left = left;
+      arrowAt = `${Math.max(22, Math.min(anchor.cx - left, cardW - 22))}px`;
+      // A card that would not fit on its preferred side moves to the roomier
+      // one. The height is an estimate used only for that choice; the track
+      // still scrolls a card that is taller than the space it gets.
+      const estH = graphic ? (wideGraphic ? 470 : 410) : 290;
+      const gapAbove = def.aboveGap ?? 16;
+      const roomBelow = vh - EDGE - (anchor.y + anchor.h + 16);
+      const roomAbove = anchor.y - gapAbove - EDGE;
+      const below =
+        def.placement === "below"
+          ? roomBelow >= estH || roomBelow >= roomAbove
+          : roomAbove < estH && roomBelow > roomAbove;
+      if (below) {
+        const top = Math.min(anchor.y + anchor.h + 16, Math.max(EDGE, vh - 180));
+        track.top = top;
+        track.justifyContent = "flex-start";
+        // No arrow when the card has had to overlap its target.
+        if (top >= anchor.y + anchor.h) arrowSide = "top";
+      } else {
+        track.bottom = Math.max(EDGE, vh - anchor.y + gapAbove);
+        track.justifyContent = "flex-end";
+        arrowSide = "bottom";
+      }
     } else {
-      // left: card sits to the left of anchor
-      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
-      const left = Math.max(16, anchor.x - CARD_W - 16);
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "right";
+      const left = clampLeft(def.placement === "right" ? anchor.x + anchor.w + 16 : anchor.x - cardW - 16);
+      track.left = left;
+      const t = Math.max(0, Math.min(1, (anchor.cy - EDGE) / Math.max(1, vh - EDGE * 2)));
+      const before = Math.round(t * 1000);
+      spacers = [before, 1000 - before];
+      arrowAt = `clamp(22px, ${(t * 100).toFixed(2)}%, calc(100% - 22px))`;
+      if (def.placement === "right" ? left >= anchor.x + anchor.w : left + cardW <= anchor.x) {
+        arrowSide = def.placement === "right" ? "left" : "right";
+      }
     }
-  } else {
-    // Fallback: center
-    cardStyle = {
-      ...cardStyle,
-      top: "50%",
-      left: "50%",
-      transform: "translate(-50%,-50%)",
-    };
   }
 
-  const arrowSize = 10;
-  const arrowColor = ACCENT.hex;
-
+  const ARROW = 10;
   const arrowEl: Record<"top" | "bottom" | "left" | "right", CSSProperties> = {
     top: {
-      position: "absolute", top: -arrowSize, left: "50%",
+      position: "absolute", top: -ARROW, left: arrowAt,
       transform: "translateX(-50%)",
       width: 0, height: 0,
-      borderLeft: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid ${arrowColor}`,
+      borderLeft: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid ${ACCENT.hex}`,
     },
     bottom: {
-      position: "absolute", bottom: -arrowSize, left: "50%",
+      position: "absolute", bottom: -ARROW, left: arrowAt,
       transform: "translateX(-50%)",
       width: 0, height: 0,
-      borderLeft: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid transparent`,
-      borderTop: `${arrowSize}px solid ${arrowColor}`,
+      borderLeft: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid transparent`,
+      borderTop: `${ARROW}px solid ${ACCENT.hex}`,
     },
     left: {
-      position: "absolute", left: -arrowSize, top: "50%",
+      position: "absolute", left: -ARROW, top: arrowAt,
       transform: "translateY(-50%)",
       width: 0, height: 0,
-      borderTop: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid ${arrowColor}`,
+      borderTop: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid ${ACCENT.hex}`,
     },
     right: {
-      position: "absolute", right: -arrowSize, top: "50%",
+      position: "absolute", right: -ARROW, top: arrowAt,
       transform: "translateY(-50%)",
       width: 0, height: 0,
-      borderTop: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid transparent`,
-      borderLeft: `${arrowSize}px solid ${arrowColor}`,
+      borderTop: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid transparent`,
+      borderLeft: `${ARROW}px solid ${ACCENT.hex}`,
     },
   };
 
   return (
     <>
-      {/* Dim overlay — no blur, with transparent cutout via SVG */}
+      {/* Dim overlay with a transparent cutout via SVG */}
       <svg
         style={{ position: "fixed", inset: 0, zIndex: 60, pointerEvents: "none" }}
         width="100%"
@@ -9915,14 +10293,15 @@ function CameraTour({
         <defs>
           <mask id="tour-spotlight-mask">
             <rect width="100%" height="100%" fill="white" />
-            {spot && (
+            {spots.map((s, i) => (
               <rect
-                x={spot.x} y={spot.y}
-                width={spot.w} height={spot.h}
+                key={i}
+                x={s.x} y={s.y}
+                width={s.w} height={s.h}
                 rx={8} ry={8}
                 fill="black"
               />
-            )}
+            ))}
           </mask>
         </defs>
         <rect
@@ -9932,22 +10311,23 @@ function CameraTour({
         />
       </svg>
 
-      {/* Pulsing highlight ring around target */}
-      {spot && (
+      {/* Pulsing highlight ring around each target */}
+      {spots.map((s, i) => (
         <div
+          key={i}
+          className="cam-tour-ring"
           style={{
             position: "fixed",
             zIndex: 61,
-            left: spot.x, top: spot.y,
-            width: spot.w, height: spot.h,
+            left: s.x, top: s.y,
+            width: s.w, height: s.h,
             borderRadius: 8,
             border: `2px solid ${ACCENT.hex}`,
-            boxShadow: `0 0 0 3px ${ACCENT.hex}40, 0 0 16px ${ACCENT.hex}60`,
             pointerEvents: "none",
             animation: "tour-pulse 1.6s ease-in-out infinite",
           }}
         />
-      )}
+      ))}
 
       {/* Backdrop click to close */}
       <div
@@ -9956,143 +10336,633 @@ function CameraTour({
       />
 
       {/* Tooltip card */}
-      <div style={{ ...cardStyle, position: "fixed", zIndex: 62 }}>
-        {/* Arrow */}
-        {spot && <div style={arrowEl[arrowSide]} />}
+      <div style={track}>
+        {spacers && <div style={{ flex: `${spacers[0]} 0 0px` }} />}
+        <div
+          role="dialog"
+          aria-labelledby="camera-tour-title"
+          style={{
+            position: "relative",
+            flex: "0 1 auto",
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            pointerEvents: "auto",
+          }}
+        >
+          {/* Arrow, outside the scrolling card so it is not clipped */}
+          {arrowSide && <div style={arrowEl[arrowSide]} />}
 
-        {/* Header */}
-        <div style={{
-          background: ACCENT.hex,
-          padding: "14px 16px 12px",
-          position: "relative",
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 8,
-        }}>
-          <div>
+          <div style={{
+            flex: "0 1 auto",
+            minHeight: 0,
+            overflowY: "auto",
+            background: "white",
+            borderRadius: 14,
+            boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
+            // Rendered outside the page wrapper, so it sets its own text colour:
+            // the inherited body colour turns near-white under a dark system theme.
+            color: "oklch(0.18 0.01 240)",
+          }}>
+            {/* Header */}
             <div style={{
-              fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
-              textTransform: "uppercase", color: "oklch(0.95 0.02 200)", marginBottom: 3,
+              background: ACCENT.hex,
+              padding: "14px 16px 12px",
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 8,
             }}>
-              Step {step + 1} of {total}
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
-              {def.title}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close tour"
-            style={{
-              flexShrink: 0, width: 24, height: 24,
-              border: "1px solid oklch(0.95 0.02 200 / 0.35)",
-              background: "oklch(0.95 0.02 200 / 0.12)",
-              borderRadius: 6, cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "white",
-            }}
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-
-        {/* Body */}
-        <div style={{ padding: "14px 16px 10px" }}>
-          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
-            {def.lines.map((line, i) => (
-              <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{
-                  flexShrink: 0, marginTop: 4,
-                  width: 6, height: 6, borderRadius: 99,
-                  background: ACCENT.hex, display: "inline-block",
-                }} />
-                <span style={{ fontSize: 12.5, color: "oklch(0.22 0.01 240)", lineHeight: 1.55 }}>{line}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Footer */}
-        <div style={{
-          padding: "10px 16px 14px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          {/* Step dots */}
-          <div style={{ display: "flex", gap: 5 }}>
-            {Array.from({ length: total }).map((_, i) => (
+              <div>
+                <div style={{
+                  fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+                  textTransform: "uppercase", color: "oklch(0.95 0.02 200)", marginBottom: 3,
+                }}>
+                  Step {step + 1} of {total}
+                </div>
+                <div id="camera-tour-title" style={{ fontSize: 15, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
+                  {def.title}
+                </div>
+              </div>
               <button
-                key={i}
-                onClick={(e) => { e.stopPropagation(); onGoTo(i); }}
-                aria-label={`Go to step ${i + 1}`}
+                type="button"
+                onClick={onClose}
+                aria-label="Close tour"
                 style={{
-                  width: i === step ? 18 : 7, height: 7,
-                  borderRadius: 99,
-                  background: i === step ? ACCENT.hex : "oklch(0.88 0.003 240)",
-                  border: "none", cursor: "pointer", padding: 0,
-                  transition: "width .18s, background .18s",
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Nav buttons */}
-          <div style={{ display: "flex", gap: 6 }}>
-            {step > 0 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onBack(); }}
-                style={{
-                  padding: "5px 13px",
-                  border: "1px solid oklch(0.90 0.003 240)",
-                  background: "white", borderRadius: 7,
-                  fontSize: 12, fontWeight: 500,
-                  color: "oklch(0.35 0.01 240)", cursor: "pointer",
-                }}
-              >Back</button>
-            )}
-            {step < total - 1 ? (
-              <button
-                onClick={(e) => { e.stopPropagation(); onNext(); }}
-                style={{
-                  padding: "5px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex, borderRadius: 7,
-                  fontSize: 12, fontWeight: 600,
-                  color: "white", cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 5,
+                  flexShrink: 0, width: 24, height: 24,
+                  border: "1px solid oklch(0.95 0.02 200 / 0.35)",
+                  background: "oklch(0.95 0.02 200 / 0.12)",
+                  borderRadius: 6, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "white",
                 }}
               >
-                Next
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
-                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
-            ) : (
-              <button
-                onClick={(e) => { e.stopPropagation(); onClose(); }}
-                style={{
-                  padding: "5px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex, borderRadius: 7,
-                  fontSize: 12, fontWeight: 600,
-                  color: "white", cursor: "pointer",
-                }}
-              >Got it!</button>
-            )}
+            </div>
+
+            {/* Body: the step's lines, with its illustration beside them */}
+            <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "flex-start", gap: 16 }}>
+              <ul style={{
+                margin: 0, padding: 0, listStyle: "none",
+                display: "flex", flexDirection: "column", gap: 7,
+                flex: "1 1 0", minWidth: 0,
+              }}>
+                {def.lines.map((line, i) => (
+                  <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{
+                      flexShrink: 0, marginTop: 6,
+                      width: 6, height: 6, borderRadius: 99,
+                      background: ACCENT.hex,
+                    }} />
+                    <span style={{ fontSize: 12.5, color: "oklch(0.22 0.01 240)", lineHeight: 1.55 }}>{line}</span>
+                  </li>
+                ))}
+              </ul>
+              {graphic && <TourGraphic kind={graphic} />}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              padding: "10px 16px 14px",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              {/* Step dots */}
+              <div style={{ display: "flex", gap: 5 }}>
+                {Array.from({ length: total }).map((_, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onGoTo(i); }}
+                    aria-label={`Go to step ${i + 1}`}
+                    style={{
+                      width: i === step ? 18 : 7, height: 7,
+                      borderRadius: 99,
+                      background: i === step ? ACCENT.hex : "oklch(0.88 0.003 240)",
+                      border: "none", cursor: "pointer", padding: 0,
+                      transition: "width .18s, background .18s",
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Nav buttons */}
+              <div style={{ display: "flex", gap: 6 }}>
+                {step > 0 && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onBack(); }}
+                    style={{
+                      padding: "5px 13px",
+                      border: "1px solid oklch(0.90 0.003 240)",
+                      background: "white", borderRadius: 7,
+                      fontSize: 12, fontWeight: 500,
+                      color: "oklch(0.35 0.01 240)", cursor: "pointer",
+                    }}
+                  >Back</button>
+                )}
+                {step < total - 1 ? (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onNext(); }}
+                    style={{
+                      padding: "5px 14px",
+                      border: `1px solid ${ACCENT.hex}`,
+                      background: ACCENT.hex, borderRadius: 7,
+                      fontSize: 12, fontWeight: 600,
+                      color: "white", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 5,
+                    }}
+                  >
+                    Next
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onClose(); }}
+                    style={{
+                      padding: "5px 14px",
+                      border: `1px solid ${ACCENT.hex}`,
+                      background: ACCENT.hex, borderRadius: 7,
+                      fontSize: 12, fontWeight: 600,
+                      color: "white", cursor: "pointer",
+                    }}
+                  >Got it!</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        {spacers && <div style={{ flex: `${spacers[1]} 0 0px` }} />}
+      </div>
+
+      {/* Keyframes for the ring and the illustrations */}
+      <style>{TOUR_KEYFRAMES}</style>
+    </>
+  );
+}
+
+/**
+ * The small illustration beside a tour step: what to click, how to read the
+ * status dots, how to switch exercises, where to stand, clothing and lighting,
+ * and what happens after Start session. Decorative only; each point it shows
+ * is also stated in the step's text.
+ */
+function TourGraphic({ kind }: { kind: TourGraphicKind }) {
+  const column: CSSProperties = { flex: "0 0 208px", width: 208, display: "flex", flexDirection: "column", gap: 8 };
+  const label: CSSProperties = {
+    fontFamily: "var(--mono)", fontSize: 8.5, letterSpacing: ".18em",
+    textTransform: "uppercase", color: "oklch(0.50 0.01 240)",
+  };
+  const panel: CSSProperties = {
+    border: "1px solid oklch(0.93 0.003 240)", borderRadius: 8,
+    background: "oklch(0.985 0.003 240)", padding: 10,
+  };
+  const verdict = (tone: "ok" | "bad" | "warn", text: string) => {
+    const colors = {
+      ok: { bg: "oklch(0.96 0.04 145)", line: "oklch(0.88 0.06 145)", ink: "oklch(0.40 0.07 145)", mark: "✓" },
+      bad: { bg: "oklch(0.96 0.04 25)", line: "oklch(0.88 0.08 25)", ink: "oklch(0.45 0.14 25)", mark: "✗" },
+      warn: { bg: "oklch(0.96 0.05 80)", line: "oklch(0.86 0.09 70)", ink: "oklch(0.48 0.12 60)", mark: "!" },
+    }[tone];
+    return (
+      <div style={{ flex: "1 1 auto", padding: "5px 8px", display: "flex", alignItems: "center", gap: 5, background: colors.bg, borderTop: `1px solid ${colors.line}` }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: colors.ink }}>{colors.mark}</span>
+        <span style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".1em", textTransform: "uppercase", color: colors.ink, fontWeight: 600 }}>
+          {text}
+        </span>
+      </div>
+    );
+  };
+  const downArrow = (
+    <div style={{ display: "flex", justifyContent: "center", color: "oklch(0.72 0.01 240)" }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+        <line x1="12" y1="4" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/>
+      </svg>
+    </div>
+  );
+  const figure = (head: CSSProperties, body: CSSProperties) => (
+    <div style={{ position: "absolute", left: "50%", top: 16, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <div style={{ width: 15, height: 15, borderRadius: 999, ...head }} />
+      <div style={{ borderRadius: "8px 8px 3px 3px", ...body }} />
+    </div>
+  );
+  const ray = (position: CSSProperties, width: number, deg: number, origin: string, delay: number) => (
+    <div style={{
+      position: "absolute", ...position, width, height: 1.5,
+      background: "oklch(0.80 0.12 90)",
+      transform: `rotate(${deg}deg)`, transformOrigin: origin,
+      animation: `gfx-rays 2.6s ease-in-out ${delay}s infinite`,
+    }} />
+  );
+  const joint: CSSProperties = {
+    position: "absolute", width: 5, height: 5, borderRadius: 999,
+    background: "oklch(0.82 0.20 195)", boxShadow: "0 0 6px oklch(0.82 0.20 195 / 0.8)",
+  };
+  const lostJoint: CSSProperties = {
+    position: "absolute", width: 5, height: 5, borderRadius: 999,
+    border: "1px dashed oklch(0.72 0.15 70)",
+  };
+  const digit: CSSProperties = {
+    position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+    fontFamily: "var(--mono)", fontSize: 20, fontWeight: 700, color: "oklch(0.35 0.06 200)",
+  };
+
+  if (kind === "start") {
+    const cameraGlyph = (size: number) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+        <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+        <path d="M17 10.5l5-3v9l-5-3"/>
+      </svg>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>What to click</div>
+        <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 5 }}>
+          {/* The camera view while the camera is off, with its Start camera button. */}
+          <div style={{ height: 40, borderRadius: 6, background: "oklch(0.22 0.01 240)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 5, background: ACCENT.hex, color: "white", fontSize: 9, fontWeight: 600, animation: "gfx-btn 2.2s ease-out infinite" }}>
+              {cameraGlyph(10)}
+              Start camera
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="oklch(0.25 0.01 240)" strokeWidth="1.6" aria-hidden="true" style={{ position: "absolute", right: -7, bottom: -9, animation: "gfx-cursor 2.2s ease-in-out infinite" }}>
+                <path d="M5 3l14 8-6 1.5L10 19z"/>
+              </svg>
+            </span>
+          </div>
+          {downArrow}
+          <div style={{ padding: "6px 8px", background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6, boxShadow: "0 2px 6px oklch(0 0 0 / 0.06)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5, color: "oklch(0.35 0.01 240)" }}>
+              {cameraGlyph(10)}
+              <span style={{ fontSize: 9.5, color: "oklch(0.25 0.01 240)", fontWeight: 500 }}>Use your camera?</span>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 4, fontSize: 9, color: "oklch(0.45 0.01 240)" }}>Block</span>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", borderRadius: 4, fontSize: 9, color: "oklch(0.30 0.06 200)", fontWeight: 600 }}>Allow</span>
+            </div>
+          </div>
+          {downArrow}
+          {/* The live view that follows. */}
+          <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 6, overflow: "hidden" }}>
+            <div style={{ position: "relative", height: 40, background: "linear-gradient(oklch(0.36 0.01 240), oklch(0.26 0.01 240))" }}>
+              <div style={{ position: "absolute", left: "50%", bottom: 0, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <div style={{ width: 12, height: 12, borderRadius: 999, background: "oklch(0.70 0.02 240)" }} />
+                <div style={{ width: 30, height: 20, borderRadius: "10px 10px 0 0", background: "oklch(0.70 0.02 240)" }} />
+              </div>
+            </div>
+            {verdict("ok", "Camera view appears")}
           </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Keyframe animation injected once */}
-      <style>{`
-        @keyframes tour-pulse {
-          0%, 100% { box-shadow: 0 0 0 3px ${ACCENT.hex}40, 0 0 14px ${ACCENT.hex}50; }
-          50%       { box-shadow: 0 0 0 6px ${ACCENT.hex}25, 0 0 24px ${ACCENT.hex}70; }
-        }
-      `}</style>
-    </>
+  if (kind === "status") {
+    const aiChip = (ready: boolean) => (
+      <span style={{
+        position: "absolute", top: 6, right: 6,
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "2px 6px", borderRadius: 999,
+        background: "oklch(0.16 0.01 240 / 0.72)", border: "1px solid oklch(1 0 0 / 0.18)",
+        color: "white", fontSize: 8.5, fontWeight: 700, letterSpacing: ".04em",
+      }}>
+        AI
+        <span style={ready
+          ? { width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: "oklch(0.72 0.17 145)", boxShadow: "0 0 0 2px oklch(0.72 0.17 145 / 0.3)" }
+          : { width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: "oklch(0.78 0.15 75)", animation: "gfx-amber 2s ease-in-out infinite" }}
+        />
+      </span>
+    );
+    const cameraView = (ready: boolean) => (
+      <div style={{ position: "relative", height: 44, background: "oklch(0.22 0.01 240)" }}>
+        {aiChip(ready)}
+      </div>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Reading the dots</div>
+        <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 8, overflow: "hidden" }}>
+          {/* The page header's Camera menu above the camera view's AI indicator. */}
+          <div style={{ display: "flex", justifyContent: "flex-end", padding: "5px 6px", background: "white", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              padding: "2px 7px", borderRadius: 999,
+              background: "oklch(0.96 0.04 145)", border: "1px solid oklch(0.88 0.06 145)",
+              color: "oklch(0.38 0.07 145)", fontSize: 8.5, fontWeight: 600,
+            }}>
+              <span style={{ width: 5, height: 5, borderRadius: 999, background: "oklch(0.62 0.13 145)", boxShadow: "0 0 0 2px oklch(0.62 0.13 145 / 0.22)" }} />
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+                <path d="M17 10.5l5-3v9l-5-3"/>
+              </svg>
+              Camera
+              <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                <path d="M6 9l6 6 6-6"/>
+              </svg>
+            </span>
+          </div>
+          {cameraView(true)}
+          {verdict("ok", "Both green — ready to start")}
+        </div>
+        <div style={{ border: "1px solid oklch(0.86 0.09 70)", borderRadius: 8, overflow: "hidden" }}>
+          {cameraView(false)}
+          {verdict("warn", "Orange — AI still loading")}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "exercise") {
+    const chevron = (d: string, animation: string, active: boolean) => (
+      <div style={{
+        width: 26, flexShrink: 0, borderRadius: 6,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "oklch(0.35 0.06 200)",
+        border: `1px solid ${active ? ACCENT.hex : "oklch(0.90 0.003 240)"}`,
+        background: active ? "oklch(0.95 0.02 200)" : "white",
+        animation,
+      }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+          <path d={d}/>
+        </svg>
+      </div>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Switching exercises</div>
+        <div style={{ ...panel, display: "flex", alignItems: "stretch", gap: 6 }}>
+          {chevron("M15 18l-6-6 6-6", "gfx-chev-a 2.8s ease-in-out infinite", false)}
+          <div style={{ flex: 1, minWidth: 0, padding: "8px 9px", borderRadius: 6, border: "1px solid oklch(0.95 0.02 200)", background: "white" }}>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.35 0.06 200)", fontWeight: 600 }}>
+              Exercise 2 / 4
+            </div>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: "oklch(0.18 0.01 240)", marginTop: 2, lineHeight: 1.2 }}>
+              Shoulder Shrugs
+            </div>
+          </div>
+          {chevron("M9 18l6-6-6-6", "gfx-chev-b 2.8s ease-in-out infinite", true)}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 9.5, color: "oklch(0.50 0.01 240)", paddingLeft: 2 }}>
+          <span>3 sets</span>
+          <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+          <span>12 reps</span>
+          <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+          <span>60s rest</span>
+        </div>
+        <div style={{ ...label, marginTop: 4 }}>Watching the guide</div>
+        <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>
+              Reference Guide
+            </span>
+            <span style={{
+              position: "relative", width: 18, height: 18, flexShrink: 0, borderRadius: 5,
+              border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", color: "oklch(0.35 0.06 200)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              animation: "gfx-btn 2.2s ease-out infinite",
+            }}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>
+              </svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="oklch(0.25 0.01 240)" strokeWidth="1.6" aria-hidden="true" style={{ position: "absolute", right: -7, bottom: -9, animation: "gfx-cursor 2.2s ease-in-out infinite" }}>
+                <path d="M5 3l14 8-6 1.5L10 19z"/>
+              </svg>
+            </span>
+          </div>
+          {/* A generic, still figure standing for the guide's picture; it shows no movement. */}
+          <svg viewBox="0 0 184 64" style={{ display: "block", width: "100%", height: 64, borderRadius: 5, background: "linear-gradient(oklch(0.50 0.01 240), oklch(0.38 0.01 240))" }} aria-hidden="true">
+            <g fill="oklch(0.88 0.01 240)">
+              <circle cx="92" cy="13" r="6" />
+              <rect x="85" y="20" width="14" height="22" rx="5" />
+            </g>
+            <g stroke="oklch(0.88 0.01 240)" strokeWidth={4} strokeLinecap="round">
+              <line x1="86" y1="23" x2="81" y2="41" />
+              <line x1="98" y1="23" x2="103" y2="41" />
+              <line x1="89" y1="41" x2="88" y2="60" />
+              <line x1="95" y1="41" x2="96" y2="60" />
+            </g>
+          </svg>
+          <div style={{ fontSize: 8, lineHeight: 1.35, color: "oklch(0.50 0.01 240)" }}>
+            {"Animated guide. Your therapist's instructions come first."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "position") {
+    const person = (x: number, ink: string, opacity: number) => (
+      <g fill={ink} opacity={opacity}>
+        <circle cx={x} cy={24} r={6} />
+        <rect x={x - 5} y={31} width={10} height={22} rx={4} />
+        <rect x={x - 3.5} y={52} width={7} height={30} rx={3} />
+      </g>
+    );
+    // Side view: the camera on its stand at the left, the wedge it can see, and
+    // the person twice over, faint in full and solid where the camera sees them.
+    const sideView = (clipId: string, personX: number, ink: string, fov: string, textInk: string, distance: string) => (
+      <svg viewBox="0 0 168 92" style={{ display: "block", width: "100%", height: "auto", aspectRatio: "168 / 92", background: "oklch(0.985 0.003 240)" }} aria-hidden="true">
+        <defs>
+          <clipPath id={clipId}>
+            <polygon points="29,26 164,-8 164,84" />
+          </clipPath>
+        </defs>
+        <line x1="0" y1="82.5" x2="168" y2="82.5" stroke="oklch(0.86 0.005 240)" />
+        <polygon points="29,26 164,-8 164,84" fill={fov} fillOpacity={0.13} />
+        <g stroke={fov} strokeWidth={0.9} strokeDasharray="3 3">
+          <line x1="29" y1="26" x2="164" y2="-8" />
+          <line x1="29" y1="26" x2="164" y2="84" />
+        </g>
+        <g stroke="oklch(0.45 0.01 240)" strokeWidth={1.5} strokeLinecap="round">
+          <line x1="18" y1="31" x2="18" y2="82" />
+          <line x1="18" y1="71" x2="12" y2="82" />
+          <line x1="18" y1="71" x2="24" y2="82" />
+        </g>
+        <rect x="9" y="21" width="17" height="10" rx="2" fill="oklch(0.30 0.01 240)" />
+        <circle cx="27" cy="26" r="2.4" fill="oklch(0.82 0.20 195)" />
+        {person(personX, ink, 0.25)}
+        <g clipPath={`url(#${clipId})`}>{person(personX, ink, 1)}</g>
+        <g stroke={textInk} strokeWidth={0.9}>
+          <line x1="29" y1="88" x2={personX - 7} y2="88" />
+          <line x1="29" y1="85.5" x2="29" y2="90.5" />
+          <line x1={personX - 7} y1="85.5" x2={personX - 7} y2="90.5" />
+        </g>
+        <text x={(22 + personX) / 2} y="79" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600 }}>
+          {distance}
+        </text>
+      </svg>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Side view</div>
+        <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 8, overflow: "hidden" }}>
+          {sideView("tour-gfx-fov-good", 128, "oklch(0.45 0.06 200)", "oklch(0.65 0.13 145)", "oklch(0.40 0.07 145)", "2–3 m")}
+          {verdict("ok", "2–3 m, head to knees")}
+        </div>
+        <div style={{ border: "1px solid oklch(0.88 0.08 25)", borderRadius: 8, overflow: "hidden" }}>
+          {sideView("tour-gfx-fov-close", 62, "oklch(0.55 0.17 25)", "oklch(0.58 0.17 25)", "oklch(0.45 0.14 25)", "< 2 m")}
+          {verdict("bad", "Too close — knees cut off")}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "environment") {
+    const tile = (tone: "ok" | "bad", scene: React.ReactNode, text: string) => (
+      <div style={{
+        display: "flex", flexDirection: "column",
+        border: `1px solid ${tone === "ok" ? "oklch(0.88 0.06 145)" : "oklch(0.88 0.08 25)"}`,
+        borderRadius: 8, overflow: "hidden",
+      }}>
+        {scene}
+        {verdict(tone, text)}
+      </div>
+    );
+    // One row per tip, with the good example beside the poor one.
+    const topic = (text: string, first = false) => (
+      <div style={{ ...label, gridColumn: "1 / -1", marginTop: first ? 0 : 4 }}>{text}</div>
+    );
+    const fitScene = (children: React.ReactNode) => (
+      <svg viewBox="0 0 168 92" style={{ display: "block", width: "100%", height: 92, flexShrink: 0, background: "oklch(0.94 0.004 240)" }} aria-hidden="true">
+        {children}
+      </svg>
+    );
+    const trackedJoints: [number, number][] = [[76, 30], [92, 30], [68, 44], [100, 44], [80, 54], [88, 54], [79, 70], [89, 70]];
+    const hiddenJoints: [number, number][] = [[76, 30], [92, 30], [62, 49], [106, 49], [74, 77], [94, 77]];
+    return (
+      <div className="cam-tour-gfx" style={{ flex: "0 0 348px", width: 348, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", alignContent: "start" }}>
+        {topic("Clothing contrast", true)}
+        {tile(
+          "ok",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.34 0.012 250)" }}>
+            {figure({ background: "oklch(0.93 0.015 90)" }, { width: 30, height: 36, background: "oklch(0.93 0.015 90)" })}
+            <div style={{ position: "absolute", left: "50%", top: 36, transform: "translateX(-50%)", width: 30, height: 22 }}>
+              <span style={{ ...joint, left: -1, top: 0 }} />
+              <span style={{ ...joint, right: -1, top: 0 }} />
+              <span style={{ position: "absolute", left: "50%", top: 1, transform: "translateX(-50%)", width: 22, height: 1.5, background: "oklch(0.82 0.20 195)" }} />
+              <span style={{ position: "absolute", left: "50%", top: 3, transform: "translateX(-50%)", width: 1.5, height: 16, background: "oklch(0.82 0.20 195)" }} />
+              <span style={{ ...joint, left: "50%", bottom: 0, transform: "translateX(-50%)" }} />
+            </div>
+          </div>,
+          "Light on dark — joints found",
+        )}
+        {tile(
+          "bad",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.32 0.012 250)" }}>
+            {figure({ background: "oklch(0.27 0.014 255)" }, { width: 30, height: 36, background: "oklch(0.27 0.014 255)" })}
+            <div style={{ position: "absolute", left: "50%", top: 36, transform: "translateX(-50%)", width: 30, height: 22, animation: "gfx-joint 2.6s ease-in-out infinite" }}>
+              <span style={{ ...lostJoint, left: -1, top: 0 }} />
+              <span style={{ ...lostJoint, right: -1, top: 0 }} />
+              <span style={{ ...lostJoint, left: "50%", bottom: 0, transform: "translateX(-50%)" }} />
+            </div>
+          </div>,
+          "Dark on dark — joints lost",
+        )}
+
+        {topic("Clothing fit")}
+        {tile(
+          "ok",
+          fitScene(
+            <>
+              <g stroke="oklch(0.45 0.06 200)" strokeLinecap="round" strokeLinejoin="round" fill="none">
+                <path d="M76 30 L68 44 L64 57" strokeWidth={5} />
+                <path d="M92 30 L100 44 L104 57" strokeWidth={5} />
+                <path d="M80 54 L79 70 L78 86" strokeWidth={6} />
+                <path d="M88 54 L89 70 L90 86" strokeWidth={6} />
+              </g>
+              <rect x="75" y="26" width="18" height="30" rx="6" fill="oklch(0.45 0.06 200)" />
+              <circle cx="84" cy="16" r="7" fill="oklch(0.45 0.06 200)" />
+              <g fill="oklch(0.82 0.20 195)" style={{ filter: "drop-shadow(0 0 2px oklch(0.82 0.20 195 / 0.9))" }}>
+                {trackedJoints.map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={2.3} />)}
+              </g>
+            </>,
+          ),
+          "Fitted — joints visible",
+        )}
+        {tile(
+          "bad",
+          fitScene(
+            <>
+              <path d="M67 63 L101 63 L106 88 L89 88 L84 73 L79 88 L62 88 Z" fill="oklch(0.50 0.03 250)" />
+              <path d="M74 23 Q84 27 94 23 L113 47 L106 58 L99 45 L102 65 L66 65 L69 45 L62 58 L55 47 Z" fill="oklch(0.58 0.03 250)" />
+              <circle cx="84" cy="16" r="7" fill="oklch(0.45 0.02 250)" />
+              <g fill="none" stroke="oklch(0.72 0.15 70)" strokeWidth={1.1} strokeDasharray="2 1.5" style={{ animation: "gfx-joint 2.6s ease-in-out infinite" }}>
+                {hiddenJoints.map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={3.2} />)}
+              </g>
+            </>,
+          ),
+          "Very loose — joints hidden",
+        )}
+
+        {topic("Light & background")}
+        {tile(
+          "ok",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.94 0.004 240)" }}>
+            {figure(
+              { background: "oklch(0.90 0.02 90)", border: "1.5px solid oklch(0.45 0.02 240)" },
+              { width: 28, height: 34, background: "oklch(0.90 0.02 90)", border: "1.5px solid oklch(0.45 0.02 240)" },
+            )}
+            <div style={{ position: "absolute", left: 10, bottom: 8, width: 14, height: 14, borderRadius: 999, background: "oklch(0.85 0.14 90)", boxShadow: "0 0 10px oklch(0.85 0.14 90 / 0.8)" }} />
+            {ray({ left: 26, bottom: 22 }, 46, -24, "left center", 0)}
+            {ray({ left: 26, bottom: 16 }, 52, -12, "left center", 0.3)}
+            {ray({ left: 26, bottom: 11 }, 44, 0, "left center", 0.6)}
+          </div>,
+          "Light in front, plain wall",
+        )}
+        {tile(
+          "bad",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "repeating-linear-gradient(125deg, oklch(0.62 0.02 240) 0 6px, oklch(0.52 0.03 260) 6px 12px)" }}>
+            {figure({ background: "oklch(0.28 0.01 240)" }, { width: 28, height: 34, background: "oklch(0.28 0.01 240)" })}
+            <div style={{ position: "absolute", right: 10, top: 8, width: 14, height: 14, borderRadius: 999, background: "oklch(0.85 0.14 90)", boxShadow: "0 0 12px oklch(0.85 0.14 90 / 0.9)" }} />
+            {ray({ right: 26, top: 22 }, 44, 24, "right center", 0)}
+            {ray({ right: 26, top: 30 }, 50, 12, "right center", 0.3)}
+          </div>,
+          "Backlit, dark on busy wall",
+        )}
+      </div>
+    );
+  }
+
+  // kind === "session"
+  return (
+    <div className="cam-tour-gfx" style={column}>
+      <div style={label}>What happens next</div>
+      <div style={{ ...panel, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ flex: 1, padding: "7px 8px", borderRadius: 5, background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, color: "white", fontSize: 10, fontWeight: 500, textAlign: "center" }}>
+            Start session
+          </div>
+          <div style={{ padding: "7px 12px", borderRadius: 5, background: "white", border: "1px solid oklch(0.90 0.003 240)", color: "oklch(0.30 0.01 240)", fontSize: 10, fontWeight: 500, textAlign: "center" }}>
+            End
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ position: "relative", width: 46, height: 46, borderRadius: 999, border: "2px solid oklch(0.90 0.003 240)", background: "white", flexShrink: 0 }}>
+            {/* The later digits start hidden, so without animation only the 3 shows. */}
+            <div style={{ ...digit, animation: "cd-3 3.6s linear infinite" }}>3</div>
+            <div style={{ ...digit, opacity: 0, animation: "cd-2 3.6s linear infinite" }}>2</div>
+            <div style={{ ...digit, opacity: 0, animation: "cd-1 3.6s linear infinite" }}>1</div>
+            <div style={{ ...digit, opacity: 0, fontSize: 11, letterSpacing: ".08em", color: "oklch(0.40 0.07 145)", animation: "cd-go 3.6s linear infinite" }}>GO</div>
+          </div>
+          <div style={{ fontSize: 10.5, lineHeight: 1.45, color: "oklch(0.40 0.01 240)" }}>
+            A 3-2-1 countdown runs before counting starts.
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.82 0.20 195)", animation: "gfx-pip 2.4s ease-in-out infinite" }} />
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.90 0.08 195)" }} />
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.92 0.003 240)" }} />
+          </div>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)" }}>
+            Set 1 of 3 — saved as you go
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -10105,39 +10975,6 @@ function metricWarnLabel(name: MetricName): string {
     case "elbowFlexion":        return "ARMS";
     default:                    return "COMPENSATION";
   }
-}
-
-function ClinicalStatusDot({ ok }: { ok: boolean }) {
-  return (
-    <span style={{
-      display: "inline-block",
-      width: 6, height: 6, borderRadius: 999,
-      background: ok ? "oklch(0.65 0.13 145)" : "oklch(0.70 0.13 60)",
-      boxShadow: ok
-        ? "0 0 0 3px oklch(0.65 0.13 145 / 0.18)"
-        : "0 0 0 3px oklch(0.70 0.13 60 / 0.18)",
-    }} />
-  );
-}
-
-function ClinicalCornerTicks() {
-  const tick = (style: CSSProperties) => (
-    <div style={{
-      position: "absolute",
-      width: 18, height: 18,
-      borderColor: "oklch(0.95 0.005 240 / 0.5)",
-      borderStyle: "solid",
-      ...style,
-    }}/>
-  );
-  return (
-    <>
-      {tick({ top: 18, left: 18, borderWidth: "1px 0 0 1px" })}
-      {tick({ top: 18, right: 18, borderWidth: "1px 1px 0 0" })}
-      {tick({ bottom: 18, left: 18, borderWidth: "0 0 1px 1px" })}
-      {tick({ bottom: 18, right: 18, borderWidth: "0 1px 1px 0" })}
-    </>
-  );
 }
 
 function ClinicalScoreRow({ score, tier }: { score: number | null; tier: ScoreTier }) {
@@ -10254,13 +11091,331 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
   );
 }
 
-function ClinicalStatStrip({
-  score, tier, activeDefinition, repCounts, holdState,
-  timer, prescription, sessionState, currentSetIdx, compact,
+type CameraStatus = "off" | "starting" | "on";
+
+/**
+ * The camera menu in the header. The dot left of the camera icon shows whether
+ * the camera is on; a click opens the camera settings. Whether the pose model
+ * is ready has its own "AI" indicator on the camera view.
+ */
+function CameraStatusButton({
+  status,
+  open,
+  onToggle,
 }: {
-  score: number | null;
-  tier: ScoreTier;
-  activeDefinition: ExerciseDefinition | null;
+  status: CameraStatus;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const tone =
+    status === "on"
+      ? { background: "oklch(0.96 0.04 145)", border: "oklch(0.88 0.06 145)", dot: "oklch(0.62 0.13 145)", halo: "oklch(0.62 0.13 145 / 0.22)", text: "oklch(0.38 0.07 145)" }
+      : status === "starting"
+        ? { background: "oklch(0.97 0.05 75)", border: "oklch(0.86 0.09 70)", dot: "oklch(0.70 0.16 65)", halo: "oklch(0.70 0.16 65 / 0.25)", text: "oklch(0.42 0.11 60)" }
+        : { background: "oklch(0.96 0.004 240)", border: "oklch(0.90 0.004 240)", dot: "oklch(0.72 0.01 240)", halo: "oklch(0.72 0.01 240 / 0.25)", text: "oklch(0.42 0.01 240)" };
+  const cameraState = status === "on" ? "on" : status === "starting" ? "starting" : "off";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label={`Camera settings (camera ${cameraState})`}
+      title={`Camera ${cameraState}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "7px 12px",
+        borderRadius: 999,
+        background: tone.background,
+        border: `1px solid ${tone.border}`,
+        color: tone.text,
+        fontFamily: "var(--sans)",
+        fontSize: 14,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+        cursor: "pointer",
+      }}
+    >
+      <span aria-hidden="true" style={{
+        width: 10,
+        height: 10,
+        flexShrink: 0,
+        borderRadius: 999,
+        background: tone.dot,
+        boxShadow: `0 0 0 3px ${tone.halo}`,
+      }} />
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+        <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+        <path d="M17 10.5l5-3v9l-5-3"/>
+      </svg>
+      <span>Camera</span>
+      <svg
+        width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"
+        style={{ marginLeft: 2, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}
+      >
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+    </button>
+  );
+}
+
+type FormCheckState = "warning" | "clear" | "setup" | "paused";
+
+/**
+ * Neutral form-check status beside the camera view. It never names a movement
+ * or says how to correct one — cue wording and the overlay labels still await
+ * physiotherapist review — so the warning state only points at the highlight
+ * the overlay is already drawing.
+ */
+function FormCheckCard({
+  state,
+  isometric,
+}: {
+  state: FormCheckState;
+  isometric: boolean;
+}) {
+  const warning = state === "warning";
+  const title =
+    state === "warning"
+      ? "Check the highlighted area"
+      : state === "clear"
+        ? "No form warnings"
+        : state === "setup"
+          ? "Setting up"
+          : "Form checks paused";
+  const body =
+    state === "warning"
+      ? `Look at the highlight on your camera view. ${isometric ? "Your hold time still counts." : "Your reps still count."}`
+      : state === "clear"
+        ? "If something needs attention, it will be highlighted on your camera view."
+        : state === "setup"
+          ? "Form checks start once setup finishes."
+          : "Form checks resume when the camera can see you clearly.";
+  return (
+    <div style={{
+      padding: 20,
+      borderRadius: 12,
+      background: warning ? "oklch(0.97 0.05 75)" : "white",
+      border: warning ? "2px solid oklch(0.70 0.16 65)" : "1px solid oklch(0.93 0.003 240)",
+    }}>
+      <div style={{ ...EYEBROW_STYLE, marginBottom: 8, color: warning ? "oklch(0.42 0.11 60)" : "oklch(0.42 0.01 240)" }}>
+        Form check
+      </div>
+      <div style={{
+        marginBottom: 6,
+        fontSize: 26,
+        fontWeight: 700,
+        letterSpacing: "-0.02em",
+        lineHeight: 1.2,
+        color: warning ? "oklch(0.30 0.09 60)" : "oklch(0.22 0.01 240)",
+      }}>
+        {title}
+      </div>
+      <div style={{ fontSize: 17, lineHeight: 1.45, color: warning ? "oklch(0.38 0.07 60)" : "oklch(0.42 0.01 240)" }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Keyframes for RollingNumber: a digit rolls up into place when its count rises
+ * and back down when it falls, overshooting a touch before it settles, like the
+ * number wheels of a mechanical cash register. With reduced motion the digits
+ * change in place.
+ */
+const ROLLING_NUMBER_CSS = `
+  .cam-wheel-in-up, .cam-wheel-out-up, .cam-wheel-in-down, .cam-wheel-out-down {
+    animation-duration: 520ms;
+    animation-timing-function: cubic-bezier(0.25, 1.45, 0.45, 1);
+    animation-fill-mode: both;
+  }
+  .cam-wheel-in-up { animation-name: cam-wheel-in-up; }
+  .cam-wheel-out-up { animation-name: cam-wheel-out-up; }
+  .cam-wheel-in-down { animation-name: cam-wheel-in-down; }
+  .cam-wheel-out-down { animation-name: cam-wheel-out-down; }
+  @keyframes cam-wheel-in-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes cam-wheel-out-up { from { transform: translateY(0); } to { transform: translateY(-100%); } }
+  @keyframes cam-wheel-in-down { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+  @keyframes cam-wheel-out-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .cam-wheel-in-up, .cam-wheel-in-down { animation: none; }
+    .cam-wheel-out-up, .cam-wheel-out-down { display: none; }
+  }
+`;
+
+/** Keeps text available to screen readers while it is drawn some other way. */
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+/**
+ * A count drawn as cash-register number wheels. When the value changes, each
+ * digit that differs rolls to its new number, up for a rising count and down
+ * for a falling one, and each moving wheel starts a beat after the one to its
+ * right. Digits sit right-aligned in at least `minDigits` wheels, so a count
+ * passing 9 does not shift the layout. A hidden copy of the text sizes the
+ * wheels and carries the text baseline, so the number lines up with the labels
+ * beside it exactly as plain text did.
+ */
+function RollingNumber({ value, minDigits = 1 }: { value: number; minDigits?: number }) {
+  const text = String(value);
+  const [shown, setShown] = useState(text);
+  const [roll, setRoll] = useState<{ from: string; up: boolean; turn: number } | null>(null);
+  if (text !== shown) {
+    // React's pattern for responding to a changed prop: adjust state while rendering.
+    setShown(text);
+    setRoll({ from: shown, up: value > Number(shown), turn: (roll?.turn ?? 0) + 1 });
+  }
+
+  const width = Math.max(minDigits, text.length, roll ? roll.from.length : 0);
+  const to = text.padStart(width, " ");
+  const from = roll ? roll.from.padStart(width, " ") : to;
+  const direction = roll?.up ? "up" : "down";
+  const turn = roll?.turn ?? 0;
+  const moving = Array.from(to, (digit, i) => roll !== null && from[i] !== digit);
+  // Moving wheels start right to left, 70 ms apart.
+  const delays = moving.map((isMoving, i) =>
+    isMoving ? moving.slice(i + 1).filter(Boolean).length * 70 : 0,
+  );
+
+  return (
+    <span style={{ position: "relative", display: "inline-block", whiteSpace: "pre" }}>
+      <span aria-hidden="true" style={{ visibility: "hidden" }}>{to}</span>
+      <span aria-hidden="true" style={{ position: "absolute", inset: 0, display: "flex", overflow: "hidden" }}>
+        {Array.from(to, (digit, i) =>
+          moving[i] ? (
+            <span key={`${turn}-${i}`} style={{ position: "relative", display: "block" }}>
+              <span className={`cam-wheel-in-${direction}`} style={{ display: "block", animationDelay: `${delays[i]}ms` }}>
+                {digit}
+              </span>
+              <span className={`cam-wheel-out-${direction}`} style={{ position: "absolute", left: 0, top: 0, animationDelay: `${delays[i]}ms` }}>
+                {from[i]}
+              </span>
+            </span>
+          ) : (
+            <span key={`wheel-${i}`} style={{ display: "block" }}>{digit}</span>
+          ),
+        )}
+      </span>
+      <span style={VISUALLY_HIDDEN}>{text}</span>
+    </span>
+  );
+}
+
+/**
+ * The page's original set progress strip, now on the session card: where the
+ * patient is in the session, one pip per set, and the whole session as a bar.
+ * The set number rolls like the counts on the camera view.
+ */
+function SessionProgressStrip({
+  phase,
+  setNumber,
+  completedSets,
+  sets,
+  progressPct,
+  setUnderway,
+}: {
+  phase: SessionState;
+  setNumber: number;
+  completedSets: number;
+  sets: number;
+  progressPct: number;
+  /** A set is being counted right now, which lights the current pip. */
+  setUnderway: boolean;
+}) {
+  const prefix =
+    phase === "countdown" ? "Starting set " : phase === "resting" ? "Rest — next: Set " : "Set ";
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid oklch(0.92 0.003 240)",
+      background: "oklch(0.985 0.003 240)",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <span style={{
+          fontFamily: "var(--mono)",
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: ".14em",
+          textTransform: "uppercase",
+          color: "oklch(0.40 0.01 240)",
+        }}>
+          {prefix}<RollingNumber value={setNumber} minDigits={String(sets).length} /> of {sets}
+        </span>
+        <span style={{
+          fontFamily: "var(--mono)",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "oklch(0.20 0.01 240)",
+          fontVariantNumeric: "tabular-nums",
+        }}>
+          {progressPct}%
+        </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", gap: 5, flex: "0 1 auto", minWidth: 0 }}>
+          {Array.from({ length: sets }).map((_, i) => {
+            const done = i < completedSets;
+            const current = i === completedSets;
+            const lit = done || (current && setUnderway);
+            return (
+              <span key={i} style={{
+                width: 28,
+                flexShrink: 1,
+                minWidth: 6,
+                height: 10,
+                borderRadius: 5,
+                boxSizing: "border-box",
+                background: done ? NEON.hex : current ? NEON.dim : "oklch(0.92 0.003 240)",
+                boxShadow: lit ? `0 0 8px ${NEON.glow}, 0 0 3px ${NEON.glow}` : "none",
+                outline: current && setUnderway ? `1px solid ${NEON.hex}` : "none",
+                transition: "background .3s, box-shadow .3s",
+              }} />
+            );
+          })}
+        </div>
+        <div style={{ flex: "1 1 60px", height: 10, borderRadius: 5, background: "oklch(0.93 0.003 240)" }}>
+          <div style={{
+            height: "100%",
+            width: `${progressPct}%`,
+            borderRadius: 5,
+            background: NEON.hex,
+            boxShadow: progressPct > 0 ? `0 0 10px ${NEON.glow}, 0 0 4px ${NEON.glow}` : "none",
+            transition: "width .4s, box-shadow .3s",
+          }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rep, set and time readouts drawn over the camera view: a row across the
+ * bottom with its two panels pushed to the corners, so the patient's body and
+ * the overlay stay clear. Painted with a flat translucent fill (no backdrop
+ * blur) to keep compositing cheap while the pose loop runs. The labels keep the
+ * camera page's original stat-strip wording. Rep counts and the set number
+ * roll like cash-register wheels when they change.
+ */
+function CameraSetHud({
+  activeDefinition, repCounts, holdState, timer, prescription, currentSetIdx, compact,
+}: {
+  activeDefinition: ExerciseDefinition;
   repCounts: { left: number; right: number };
   holdState: {
     pairedSec: number;
@@ -10271,267 +11426,418 @@ function ClinicalStatStrip({
   };
   timer: string;
   prescription: Prescription;
-  sessionState: SessionState;
   currentSetIdx: number;
   compact: boolean;
 }) {
+  const panelSt: CSSProperties = {
+    padding: compact ? "8px 12px" : "12px 18px",
+    borderRadius: 12,
+    background: "oklch(0.16 0.01 240 / 0.78)",
+    border: "1px solid oklch(1 0 0 / 0.10)",
+    color: "white",
+  };
   const labelSt: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".18em",
-    textTransform: "uppercase", color: "oklch(0.40 0.01 240)",
-    marginBottom: 6, fontWeight: 700,
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 6,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 13,
+    fontWeight: 700,
+    letterSpacing: ".18em",
+    textTransform: "uppercase",
+    color: "oklch(0.82 0.01 240)",
+  };
+  const suffixSt: CSSProperties = {
+    fontSize: compact ? 11 : 12,
+    fontWeight: 500,
+    letterSpacing: "normal",
+    textTransform: "none",
+    color: "oklch(0.76 0.01 240)",
   };
   const numSt: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: 44, fontWeight: 600,
-    letterSpacing: "-0.03em", color: "oklch(0.12 0.01 240)",
-    fontVariantNumeric: "tabular-nums", lineHeight: 1,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 34 : "clamp(40px, 6.4vh, 64px)",
+    fontWeight: 600,
+    lineHeight: 1,
+    letterSpacing: "-0.03em",
+    fontVariantNumeric: "tabular-nums",
   };
-  const divider = (
-    <div
-      style={compact
-        ? { height: 1, background: "oklch(0.93 0.003 240)" }
-        : { width: 1, background: "oklch(0.93 0.003 240)" }}
-    />
+  const captionSt: CSSProperties = {
+    marginTop: 6,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 12,
+    fontWeight: 600,
+    letterSpacing: ".14em",
+    textTransform: "uppercase",
+    color: "oklch(0.80 0.01 240)",
+  };
+  const sideSt: CSSProperties = {
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 13,
+    fontWeight: 700,
+    letterSpacing: ".18em",
+    textTransform: "uppercase",
+    color: "oklch(0.80 0.01 240)",
+  };
+  const rowSt: CSSProperties = {
+    display: "flex",
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    gap: compact ? 8 : 12,
+  };
+  const separator = (
+    <span style={{ fontSize: compact ? 18 : 24, fontWeight: 300, color: "oklch(0.62 0.01 240)" }}>·</span>
+  );
+  // Sides are shown separately and never merged: the asymmetry between them is
+  // the signal. A side outside the prescription is still shown, marked as
+  // observation only.
+  const sideCell = (label: "L" | "R", value: React.ReactNode, done: boolean, observation: boolean) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+      <span style={sideSt}>{label}{observation ? " · observation" : ""}</span>
+      <span style={{ ...numSt, color: done ? NEON.hex : "white" }}>{value}</span>
+    </div>
+  );
+  const repDigits = String(prescription.reps).length;
+  const seconds = (value: number) => (
+    <>
+      {value}
+      <span style={{ fontSize: compact ? 16 : 22, fontWeight: 500 }}>s</span>
+    </>
   );
 
-  let repsContent: React.ReactNode;
-  if (activeDefinition?.kind === "isometric" && activeDefinition.bilateral) {
-    // Side-split isometric (ex_004): per-side hold times, split-panel style —
-    // the same L/R convention as bilateral rep counting, never merged into
-    // one number (the asymmetry between sides is the clinical signal).
+  let primary: React.ReactNode;
+  if (activeDefinition.kind === "isometric" && activeDefinition.bilateral) {
     const leftSec = Math.floor(holdState.leftSec);
     const rightSec = Math.floor(holdState.rightSec);
-    const leftDone = leftSec >= prescription.holdSeconds;
-    const rightDone = rightSec >= prescription.holdSeconds;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Hold</span>
-          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.holdSeconds}s side</span>
+          <span style={suffixSt}>/ {prescription.holdSeconds}s side</span>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>
-              L{prescription.prescribedSide === "right" ? " · observation" : ""}
-            </span>
-            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {leftSec}
-              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
-            </span>
-          </div>
-          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>
-              R{prescription.prescribedSide === "left" ? " · observation" : ""}
-            </span>
-            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {rightSec}
-              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
-            </span>
-          </div>
+        <div style={rowSt}>
+          {sideCell("L", seconds(leftSec), leftSec >= prescription.holdSeconds, prescription.prescribedSide === "right")}
+          {separator}
+          {sideCell("R", seconds(rightSec), rightSec >= prescription.holdSeconds, prescription.prescribedSide === "left")}
         </div>
-      </div>
+      </>
     );
-  } else if (activeDefinition?.kind === "isometric") {
+  } else if (activeDefinition.kind === "isometric") {
     const holdSec = Math.floor(holdState.pairedSec);
     const done = holdSec >= prescription.holdSeconds;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={labelSt}>Hold</div>
-        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-          {formatElapsedTime(holdSec)}
-        </div>
-        <div style={{
-          marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-          letterSpacing: ".14em", textTransform: "uppercase",
-          color: done ? ACCENT.text : "oklch(0.50 0.01 240)", fontWeight: 600,
-        }}>target {prescription.holdSeconds}s</div>
-      </div>
+    primary = (
+      <>
+        <div style={labelSt}><span>Hold</span></div>
+        <div style={{ ...numSt, color: done ? NEON.hex : "white" }}>{formatElapsedTime(holdSec)}</div>
+        <div style={captionSt}>target {prescription.holdSeconds}s</div>
+      </>
     );
-  } else if (activeDefinition?.bilateral) {
-    const leftDone = repCounts.left >= prescription.reps;
-    const rightDone = repCounts.right >= prescription.reps;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+  } else if (activeDefinition.bilateral) {
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Reps</span>
-          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
+          <span style={suffixSt}>/ {prescription.reps}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>
-              L{prescription.prescribedSide === "right" ? " · observation" : ""}
-            </span>
-            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {repCounts.left}
-            </span>
-          </div>
-          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>
-              R{prescription.prescribedSide === "left" ? " · observation" : ""}
-            </span>
-            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {repCounts.right}
-            </span>
-          </div>
+        <div style={rowSt}>
+          {sideCell("L", <RollingNumber value={repCounts.left} minDigits={repDigits} />, repCounts.left >= prescription.reps, prescription.prescribedSide === "right")}
+          {separator}
+          {sideCell("R", <RollingNumber value={repCounts.right} minDigits={repDigits} />, repCounts.right >= prescription.reps, prescription.prescribedSide === "left")}
         </div>
-      </div>
+      </>
     );
   } else {
     const singleReps = repCounts.left + repCounts.right;
-    const done = activeDefinition?.kind === "dynamic" && singleReps >= prescription.reps;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Reps</span>
-          {activeDefinition?.kind === "dynamic" && (
-            <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
-          )}
+          <span style={suffixSt}>/ {prescription.reps}</span>
         </div>
-        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-          {activeDefinition ? singleReps : "—"}
-        </div>
-      </div>
+        <div style={{ ...numSt, color: singleReps >= prescription.reps ? NEON.hex : "white" }}><RollingNumber value={singleReps} minDigits={repDigits} /></div>
+      </>
     );
   }
 
   return (
-    <div style={{ position: "absolute", left: 16, right: 16, bottom: 16, pointerEvents: "none" }}>
-      <div style={{
-        background: "oklch(1 0 0 / 0.96)",
-        backdropFilter: "blur(10px)",
-        border: "1px solid oklch(0.92 0.003 240)",
-        borderRadius: 8,
-        display: "flex",
-        flexDirection: compact ? "column" : "row",
-        pointerEvents: "auto",
-        boxShadow: "0 1px 3px oklch(0 0 0 / 0.06)",
-        overflow: "hidden",
-        width: "100%",
-      }}>
-        <div style={{
-          padding: "14px 18px", minWidth: 0,
-          borderLeft: `4px solid ${tier.hex}`,
-          background: "oklch(0.985 0.003 240)",
-          flex: "1 1 0",
-        }}>
-          <div style={labelSt}>Posture</div>
-          <div style={numSt}>{score ?? "—"}</div>
-          <div style={{
-            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-            letterSpacing: ".14em", textTransform: "uppercase",
-            color: tier.text, fontWeight: 700,
-          }}>{tier.label}</div>
-        </div>
-        {divider}
-        {repsContent}
-        {divider}
-        <div style={{ padding: "14px 18px", flex: "0.85 1 0", minWidth: 0 }}>
-          <div style={labelSt}>Time</div>
-          <div style={{ ...numSt, whiteSpace: "nowrap" }}>
-            {(sessionState === "idle" || sessionState === "countdown") ? "00:00" : timer}
-          </div>
-          <div style={{
-            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-            letterSpacing: ".14em", textTransform: "uppercase",
-            color: "oklch(0.50 0.01 240)", fontWeight: 600,
-          }}>Set {currentSetIdx} / {prescription.sets}</div>
-        </div>
+    <div style={{
+      alignSelf: "stretch",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "space-between",
+      flexWrap: "wrap",
+      gap: 10,
+      pointerEvents: "none",
+    }}>
+      <div style={panelSt}>{primary}</div>
+      <div style={panelSt}>
+        <div style={labelSt}><span>Time</span></div>
+        <div style={{ ...numSt, whiteSpace: "nowrap" }}>{timer}</div>
+        <div style={captionSt}>Set <RollingNumber value={currentSetIdx} minDigits={String(prescription.sets).length} /> / {prescription.sets}</div>
       </div>
     </div>
   );
 }
 
-function ClinicalProgressStrip({
-  sessionState, currentSetIdx, prescription, completedSets, progressPct, compact,
-}: {
-  sessionState: SessionState;
-  currentSetIdx: number;
-  prescription: Prescription;
-  completedSets: number;
-  progressPct: number;
-  compact: boolean;
-}) {
-  const label =
-    sessionState === "reporting"
-      ? "Pain report required before continuing"
-      : sessionState === "ended"
-      ? completedSets >= prescription.sets
-        ? "Session complete"
-        : `Ended at set ${completedSets} / ${prescription.sets}`
-      : sessionState === "countdown"
-        ? `Starting set ${currentSetIdx} of ${prescription.sets}`
-        : sessionState === "active"
-      ? `Set ${currentSetIdx} of ${prescription.sets}`
-      : sessionState === "resting"
-        ? `Rest — next: Set ${currentSetIdx} of ${prescription.sets}`
-        : `Ready — ${prescription.sets} sets`;
+/**
+ * Crop of the ex_001 figure render (870 x 980) to the model's full body in every
+ * frame: the baked-in title, caption and phase word above the head, and the spare
+ * floor below the feet, are cut away. Measured over all 210 source frames with a
+ * 14 px margin; the video file itself is the unmodified render.
+ */
+const EX001_DEMO_CLIP = {
+  src: "/demos/ex_001-figure-motion.mp4",
+  width: 870,
+  height: 980,
+  crop: { x: 43, y: 108, w: 784, h: 847 },
+};
 
+/**
+ * The cropped clip at the largest aspect-correct size its parent allows. The
+ * parent must be a size container.
+ */
+function DemoClipBox({ onError }: { onError: () => void }) {
+  const { src, width, height, crop } = EX001_DEMO_CLIP;
+  const ratio = crop.w / crop.h;
   return (
     <div style={{
-      marginTop: 12,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      flexWrap: compact ? "wrap" : "nowrap",
-      gap: 16,
-      padding: "10px 14px",
-      background: "white",
-      border: "1px solid oklch(0.93 0.003 240)",
-      borderRadius: 8,
+      position: "relative",
+      width: `min(100cqw, calc(100cqh * ${ratio}))`,
+      height: `min(100cqh, calc(100cqw / ${ratio}))`,
+      borderRadius: 10,
+      overflow: "hidden",
+      background: "oklch(0.47 0.006 80)",
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <span style={{
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-          textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-        }}>{label}</span>
-        <div style={{ display: "flex", gap: 5 }}>
-          {Array.from({ length: prescription.sets }).map((_, i) => {
-            const done = i < completedSets;
-            const current =
-              i === completedSets && sessionState !== "idle" && sessionState !== "ended";
-            const lit = done || (current && sessionState === "active");
-            return (
-              <span key={i} style={{
-                width: 32, height: 10, borderRadius: 5, display: "inline-block",
-                background: done ? NEON.hex : current ? NEON.dim : "oklch(0.92 0.003 240)",
-                boxShadow: lit ? `0 0 8px ${NEON.glow}, 0 0 3px ${NEON.glow}` : "none",
-                outline: current && sessionState === "active" ? `1px solid ${NEON.hex}` : "none",
-                boxSizing: "border-box",
-                transition: "background .3s, box-shadow .3s",
-              }}/>
-            );
-          })}
-        </div>
+      <video
+        src={src}
+        autoPlay
+        loop
+        muted
+        playsInline
+        preload="auto"
+        aria-label="Animated guide showing a lateral arm raise"
+        onError={onError}
+        style={{
+          position: "absolute",
+          left: `${(-crop.x / crop.w) * 100}%`,
+          top: `${(-crop.y / crop.h) * 100}%`,
+          width: `${(width / crop.w) * 100}%`,
+          height: `${(height / crop.h) * 100}%`,
+          // The global CSS reset caps video at max-width: 100%, which squashed
+          // the frame and pushed the figure off-centre inside the crop.
+          maxWidth: "none",
+          maxHeight: "none",
+          objectFit: "fill",
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * The "Reference Guide" card. ex_001 plays the looping figure animation,
+ * labelled as an illustrative guide rather than a clinical demonstration, and
+ * can be opened full screen; any other exercise, or a clip that fails to load,
+ * says that no video is published. The card hugs the clip instead of stretching
+ * to the column, so it never frames a small figure in empty space.
+ */
+function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact: boolean }) {
+  const [clipFailed, setClipFailed] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
+  const fullScreenRef = useRef<HTMLDivElement | null>(null);
+  const hasClip = exerciseId === "ex_001" && !clipFailed;
+  const { crop } = EX001_DEMO_CLIP;
+
+  useEffect(() => {
+    if (!fullScreen) return;
+    const overlay = fullScreenRef.current;
+    // Native full screen where the browser allows it; the fixed overlay already
+    // fills the window when it does not.
+    if (overlay && typeof overlay.requestFullscreen === "function" && !document.fullscreenElement) {
+      overlay.requestFullscreen().catch(() => {});
+    }
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) setFullScreen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullScreen(false);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("keydown", onKeyDown);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, [fullScreen]);
+
+  return (
+    <div id="cam-tour-demo" style={{
+      ...CARD_STYLE,
+      flex: "0 1 auto",
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      padding: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexShrink: 0 }}>
+        <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
+        {hasClip && (
+          <button
+            type="button"
+            onClick={() => setFullScreen(true)}
+            aria-label="View the demonstration full screen"
+            title="Full screen"
+            style={{ ...ICON_BUTTON_STYLE, width: 32, height: 32 }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </button>
+        )}
       </div>
-      <div style={{
-        flex: 1, height: 10, background: "oklch(0.94 0.003 240)",
-        borderRadius: 5, maxWidth: 360,
-      }}>
+
+      {hasClip ? (
+        <>
+          <div style={{
+            width: "100%",
+            aspectRatio: `${crop.w} / ${crop.h}`,
+            maxHeight: compact ? 460 : undefined,
+            minHeight: 160,
+            flex: "0 1 auto",
+            containerType: "size",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            {fullScreen ? (
+              // One decoder at a time: the card's copy steps aside while the
+              // full-screen copy plays.
+              <div style={{ width: "100%", height: "100%", borderRadius: 10, background: "oklch(0.24 0.01 240)" }} />
+            ) : (
+              <DemoClipBox onError={() => setClipFailed(true)} />
+            )}
+          </div>
+          <div style={{ flexShrink: 0, fontSize: 12, lineHeight: 1.4, color: "oklch(0.50 0.01 240)" }}>
+            Animated guide. Your therapist&apos;s instructions come first.
+          </div>
+        </>
+      ) : (
         <div style={{
-          height: "100%", width: `${progressPct}%`,
-          background: NEON.hex, borderRadius: 5,
-          boxShadow: progressPct > 0 ? `0 0 10px ${NEON.glow}, 0 0 4px ${NEON.glow}` : "none",
-          transition: "width .4s, box-shadow .3s",
-        }} />
+          position: "relative",
+          height: compact ? 260 : 300,
+          minHeight: 150,
+          flex: "0 1 auto",
+          borderRadius: 10,
+          overflow: "hidden",
+          background: "oklch(0.24 0.01 240)",
+        }}>
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage: "repeating-linear-gradient(135deg, oklch(0.32 0.01 240 / 0.5) 0 1px, transparent 1px 9px)",
+          }} />
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            padding: 18,
+            textAlign: "center",
+          }}>
+            <span style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.90 0.01 240)" }}>
+              No verified demonstration video is published for this exercise yet.
+              Follow the written exercise description and your therapist&apos;s instructions.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {fullScreen && hasClip && (
+        <div
+          ref={fullScreenRef}
+          role="dialog"
+          aria-label="Demonstration, full screen"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 70,
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+            padding: 24,
+            background: "oklch(0.14 0.01 240)",
+            color: "white",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
+            <span style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.85 0.01 240)" }}>Reference Guide</span>
+            <button
+              type="button"
+              onClick={() => setFullScreen(false)}
+              aria-label="Close full screen"
+              style={{
+                width: 44,
+                height: 44,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 999,
+                border: "1px solid oklch(1 0 0 / 0.25)",
+                background: "oklch(1 0 0 / 0.10)",
+                color: "white",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            containerType: "size",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            <DemoClipBox onError={() => setClipFailed(true)} />
+          </div>
+          <div style={{ flexShrink: 0, textAlign: "center", fontSize: 14, lineHeight: 1.4, color: "oklch(0.80 0.01 240)" }}>
+            Animated guide. Your therapist&apos;s instructions come first.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StaffStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{
+        marginBottom: 2,
+        fontFamily: "var(--mono)",
+        fontSize: 9,
+        letterSpacing: ".14em",
+        textTransform: "uppercase",
+        color: "oklch(0.50 0.01 240)",
+      }}>
+        {label}
       </div>
-      <span style={{
-        fontFamily: "var(--mono)", fontSize: 12, fontWeight: 500,
-        color: "oklch(0.20 0.01 240)", fontVariantNumeric: "tabular-nums",
-        minWidth: 32, textAlign: "right",
-      }}>{progressPct}%</span>
+      <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)", overflowWrap: "anywhere" }}>
+        {value}
+      </div>
     </div>
   );
 }

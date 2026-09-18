@@ -11,6 +11,8 @@
 import {
   EventOutbox,
   outboxStorageKey,
+  persistedOutboxSessionIds,
+  recoverPersistedOutboxes,
   type OutboxFetch,
   type OutboxResponse,
   type OutboxStorage,
@@ -302,6 +304,133 @@ test("corrupt stored JSON does not throw", () => {
   const outbox = makeOutbox(fetchFn, storage);
 
   assertEqual(outbox.restoreFor(12), 0, "corrupt snapshot ignored");
+});
+
+// ── recovery after the session ended ────────────────────────────────────────
+
+/**
+ * Leave a session's events in storage the way an undelivered End does: the
+ * drain gives up, then the live outbox is unbound.
+ */
+async function endUndelivered(
+  storage: OutboxStorage,
+  sessionId: number,
+  repIndices: number[],
+  setIndices: number[],
+): Promise<void> {
+  const { fetchFn } = recordingFetch(() => ({ ok: false, status: 404 }));
+  const live = makeOutbox(fetchFn, storage);
+  live.setSession(sessionId);
+  for (const index of repIndices) live.enqueue("rep", rep(index));
+  for (const index of setIndices) live.enqueue("set", { setIndex: index });
+  await live.drain({ timeoutMs: 0, pollDelayMs: 0 });
+  live.setSession(null);
+}
+
+test("only outbox keys for positive session ids are read back", () => {
+  const ids = persistedOutboxSessionIds([
+    outboxStorageKey(210),
+    outboxStorageKey(9),
+    "postural.resume.v1.78",
+    "postural.outbox.v1.0",
+    "postural.outbox.v1.12a",
+    "postural.outbox.v1.",
+    "poseDebug.ex005",
+  ]);
+  assertEqual(ids.join(","), "9,210", "session ids");
+});
+
+test("an ended session's stored events are delivered and then cleared", async () => {
+  const storage = memoryStorage();
+  await endUndelivered(storage, 210, [1, 2], [1]);
+  assert(storage.getItem(outboxStorageKey(210)) !== null, "End left the events in storage");
+
+  const urls: string[] = [];
+  const fetchFn: OutboxFetch = async (url) => {
+    urls.push(url);
+    return ok;
+  };
+  const recovered = await recoverPersistedOutboxes({ sessionIds: [210], fetchFn, storage });
+
+  assertEqual(recovered.length, 1, "sessions recovered");
+  assertEqual(recovered[0].restored, 3, "items restored");
+  assertEqual(recovered[0].remaining, 0, "items left");
+  assertEqual(storage.getItem(outboxStorageKey(210)), null, "storage cleared once delivered");
+  assertEqual(
+    urls.slice().sort().join(","),
+    "/api/sessions/210/rep-events,/api/sessions/210/set-events",
+    "requests addressed to the stored session",
+  );
+});
+
+test("a refused recovery keeps every stored event and makes one attempt", async () => {
+  const storage = memoryStorage();
+  await endUndelivered(storage, 210, [1, 2], [1]);
+  const before = storage.getItem(outboxStorageKey(210));
+
+  const { fetchFn, calls } = recordingFetch(() => ({ ok: false, status: 404 }));
+  const recovered = await recoverPersistedOutboxes({ sessionIds: [210], fetchFn, storage });
+
+  assertEqual(recovered[0].remaining, 3, "items left");
+  assertEqual(storage.getItem(outboxStorageKey(210)), before, "stored copy untouched");
+  assertEqual(calls(), 2, "one rep and one set request, with no retry");
+});
+
+test("when only the sets are refused, only the sets stay stored", async () => {
+  const storage = memoryStorage();
+  await endUndelivered(storage, 210, [1, 2], [1]);
+
+  const fetchFn: OutboxFetch = async (url) =>
+    url.endsWith("/set-events") ? { ok: false, status: 500 } : ok;
+  const recovered = await recoverPersistedOutboxes({ sessionIds: [210], fetchFn, storage });
+
+  assertEqual(recovered[0].remaining, 1, "items left");
+  const stored = JSON.parse(storage.getItem(outboxStorageKey(210)) ?? "null") as {
+    rep: unknown[];
+    set: unknown[];
+  } | null;
+  assertEqual(stored?.rep.length, 0, "delivered repetitions removed from storage");
+  assertEqual(stored?.set.length, 1, "refused set kept");
+});
+
+test("a stored outbox that does not match its key is neither sent nor deleted", async () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    outboxStorageKey(11),
+    JSON.stringify({ v: 1, sessionId: 999, rep: [rep(1)], set: [] }),
+  );
+  storage.setItem(outboxStorageKey(12), "{not json");
+  const { fetchFn, calls } = recordingFetch(() => ok);
+  const recovered = await recoverPersistedOutboxes({ sessionIds: [11, 12], fetchFn, storage });
+
+  assertEqual(recovered.length, 0, "nothing recovered");
+  assertEqual(calls(), 0, "nothing sent");
+  assert(storage.getItem(outboxStorageKey(11)) !== null, "mismatched copy kept");
+  assert(storage.getItem(outboxStorageKey(12)) !== null, "corrupt copy kept");
+});
+
+test("stored sessions are recovered one at a time", async () => {
+  const storage = memoryStorage();
+  await endUndelivered(storage, 209, [1], [1]);
+  await endUndelivered(storage, 210, [1], [1]);
+
+  const log: string[] = [];
+  const fetchFn: OutboxFetch = async (url) => {
+    log.push(`start ${url}`);
+    await Promise.resolve();
+    log.push(`end ${url}`);
+    return ok;
+  };
+  await recoverPersistedOutboxes({ sessionIds: [209, 210], fetchFn, storage });
+
+  const lastEnd209 = log
+    .map((entry) => entry.startsWith("end /api/sessions/209/"))
+    .lastIndexOf(true);
+  const firstStart210 = log.findIndex((entry) => entry.startsWith("start /api/sessions/210/"));
+  assert(
+    lastEnd209 !== -1 && firstStart210 > lastEnd209,
+    `session 210 started before 209 finished: ${log.join(" | ")}`,
+  );
 });
 
 // ── runner ──────────────────────────────────────────────────────────────────

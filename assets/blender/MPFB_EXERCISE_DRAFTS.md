@@ -2,7 +2,11 @@
 
 Three editable animations reuse the clothed MPFB figure. These are presentation
 drafts for review; timing and ranges are authored display choices, not patient
-prescriptions or scoring calibration. They are not integrated into the app.
+prescriptions or scoring calibration. The arm-hold and overhead-press MP4s play
+in the camera page's Reference Guide as low-priority, illustrative guides: each
+is copied unmodified into the gitignored `web/public/demos/` folder and shown
+through the same crop as the lateral-raise guide, set in
+`web/src/lib/exercises/demoClips.ts`. The side-bend guide is withheld for now.
 Assisted neck stretch (`ex_004`) and wall angels (`ex_008`) are on hold.
 Deprecated exercises `ex_002` and `ex_003` are not included.
 

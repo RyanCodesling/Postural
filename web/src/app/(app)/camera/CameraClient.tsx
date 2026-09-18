@@ -71,6 +71,7 @@ import {
   type MetricName,
 } from "@/lib/exercises/registry";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { demoClipFor, type DemoClip } from "@/lib/exercises/demoClips";
 import {
   compareActionableOccurrences,
   isOccurrenceActionable,
@@ -10746,7 +10747,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
             </g>
           </svg>
           <div style={{ fontSize: 8, lineHeight: 1.35, color: "oklch(0.50 0.01 240)" }}>
-            {"Animated guide. Your therapist's instructions come first."}
+            {"Animated guide with illustrative timing. Your therapist's instructions come first."}
           </div>
         </div>
       </div>
@@ -11582,24 +11583,13 @@ function CameraSetHud({
 }
 
 /**
- * Crop of the ex_001 figure render (870 x 980) to the model's full body in every
- * frame: the baked-in title, caption and phase word above the head, and the spare
- * floor below the feet, are cut away. Measured over all 210 source frames with a
- * 14 px margin; the video file itself is the unmodified render.
- */
-const EX001_DEMO_CLIP = {
-  src: "/demos/ex_001-figure-motion.mp4",
-  width: 870,
-  height: 980,
-  crop: { x: 43, y: 108, w: 784, h: 847 },
-};
-
-/**
  * The cropped clip at the largest aspect-correct size its parent allows. The
- * parent must be a size container.
+ * parent must be a size container. Each clip's full-body crop, and how it was
+ * measured, lives with the clip in demoClips.ts; the video file itself is the
+ * unmodified render.
  */
-function DemoClipBox({ onError }: { onError: () => void }) {
-  const { src, width, height, crop } = EX001_DEMO_CLIP;
+function DemoClipBox({ clip, onError }: { clip: DemoClip; onError: () => void }) {
+  const { src, width, height, crop, subject } = clip;
   const ratio = crop.w / crop.h;
   return (
     <div style={{
@@ -11617,7 +11607,7 @@ function DemoClipBox({ onError }: { onError: () => void }) {
         muted
         playsInline
         preload="auto"
-        aria-label="Animated guide showing a lateral arm raise"
+        aria-label={`Animated guide showing ${subject}`}
         onError={onError}
         style={{
           position: "absolute",
@@ -11637,18 +11627,21 @@ function DemoClipBox({ onError }: { onError: () => void }) {
 }
 
 /**
- * The "Reference Guide" card. ex_001 plays the looping figure animation,
- * labelled as an illustrative guide rather than a clinical demonstration, and
- * can be opened full screen; any other exercise, or a clip that fails to load,
- * says that no video is published. The card hugs the clip instead of stretching
- * to the column, so it never frames a small figure in empty space.
+ * The "Reference Guide" card. An exercise with a published clip (demoClips.ts)
+ * plays its looping figure animation, labelled as an illustrative guide rather
+ * than a clinical demonstration, and can be opened full screen; any other
+ * exercise, or a clip that fails to load, says that no video is published. The
+ * card hugs the clip instead of stretching to the column, so it never frames a
+ * small figure in empty space.
  */
 function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact: boolean }) {
-  const [clipFailed, setClipFailed] = useState(false);
+  // The card outlives exercise changes, so a load failure is remembered per
+  // clip: one missing file must not blank every other exercise's guide.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [fullScreen, setFullScreen] = useState(false);
   const fullScreenRef = useRef<HTMLDivElement | null>(null);
-  const hasClip = exerciseId === "ex_001" && !clipFailed;
-  const { crop } = EX001_DEMO_CLIP;
+  const clip = demoClipFor(exerciseId);
+  const shownClip = clip !== null && clip.src !== failedSrc ? clip : null;
 
   useEffect(() => {
     if (!fullScreen) return;
@@ -11685,7 +11678,7 @@ function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact:
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexShrink: 0 }}>
         <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
-        {hasClip && (
+        {shownClip && (
           <button
             type="button"
             onClick={() => setFullScreen(true)}
@@ -11703,11 +11696,11 @@ function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact:
         )}
       </div>
 
-      {hasClip ? (
+      {shownClip ? (
         <>
           <div style={{
             width: "100%",
-            aspectRatio: `${crop.w} / ${crop.h}`,
+            aspectRatio: `${shownClip.crop.w} / ${shownClip.crop.h}`,
             maxHeight: compact ? 460 : undefined,
             minHeight: 160,
             flex: "0 1 auto",
@@ -11721,11 +11714,11 @@ function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact:
               // full-screen copy plays.
               <div style={{ width: "100%", height: "100%", borderRadius: 10, background: "oklch(0.24 0.01 240)" }} />
             ) : (
-              <DemoClipBox onError={() => setClipFailed(true)} />
+              <DemoClipBox key={shownClip.src} clip={shownClip} onError={() => setFailedSrc(shownClip.src)} />
             )}
           </div>
           <div style={{ flexShrink: 0, fontSize: 12, lineHeight: 1.4, color: "oklch(0.50 0.01 240)" }}>
-            Animated guide. Your therapist&apos;s instructions come first.
+            Animated guide with illustrative timing. Your therapist&apos;s instructions come first.
           </div>
         </>
       ) : (
@@ -11762,7 +11755,7 @@ function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact:
         </div>
       )}
 
-      {fullScreen && hasClip && (
+      {fullScreen && shownClip && (
         <div
           ref={fullScreenRef}
           role="dialog"
@@ -11811,10 +11804,10 @@ function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact:
             alignItems: "center",
             justifyContent: "center",
           }}>
-            <DemoClipBox onError={() => setClipFailed(true)} />
+            <DemoClipBox key={shownClip.src} clip={shownClip} onError={() => setFailedSrc(shownClip.src)} />
           </div>
           <div style={{ flexShrink: 0, textAlign: "center", fontSize: 14, lineHeight: 1.4, color: "oklch(0.80 0.01 240)" }}>
-            Animated guide. Your therapist&apos;s instructions come first.
+            Animated guide with illustrative timing. Your therapist&apos;s instructions come first.
           </div>
         </div>
       )}

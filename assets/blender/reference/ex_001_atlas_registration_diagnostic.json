@@ -1,0 +1,429 @@
+{
+  "common_named_meshes": 161,
+  "fit": {
+    "errors": {
+      "max_m": 0.551565610735036,
+      "median_m": 0.0013424250405246036,
+      "p95_m": 0.007823746193603124,
+      "rmse_m": 0.026095284814167737
+    },
+    "rotation": [
+      [
+        0.9999725980602631,
+        0.0058686270586620955,
+        0.004512465518153698
+      ],
+      [
+        -0.0058649795713156296,
+        0.9999824637327678,
+        -0.0008211221417531792
+      ],
+      [
+        -0.00451720524597197,
+        0.0007946341233332488,
+        0.9999894816513695
+      ]
+    ],
+    "scale": 0.9965165935652837,
+    "translation_m": [
+      -0.007046826357972272,
+      -0.049904541502391944,
+      -0.07300936065283681
+    ]
+  },
+  "identity": {
+    "errors": {
+      "max_m": 0.5632322105794735,
+      "median_m": 0.09255357126480224,
+      "p95_m": 0.09255409141981494,
+      "rmse_m": 0.09612434935612978
+    }
+  },
+  "matched_vertices": 149463,
+  "original_fixed_offset": {
+    "errors": {
+      "max_m": 0.5560840376782393,
+      "median_m": 1.2324086923905102e-06,
+      "p95_m": 1.9354763044165504e-06,
+      "rmse_m": 0.026206060244041585
+    },
+    "translation_m": [
+      -0.000221,
+      -0.051202,
+      -0.077099
+    ]
+  },
+  "same_topology_meshes": 92,
+  "shoulder_object_centers": [
+    {
+      "fitted_center_error_m": 0.0015828602300514605,
+      "fixed_offset_center_error_m": 5.971657701029347e-07,
+      "identity_center_error_m": 0.09255258045895758,
+      "name": "Scapula.l",
+      "vertices": 12690
+    },
+    {
+      "fitted_center_error_m": 0.0006865168723915677,
+      "fixed_offset_center_error_m": 6.103290138020494e-07,
+      "identity_center_error_m": 0.09255268997944123,
+      "name": "Scapula.r",
+      "vertices": 12690
+    }
+  ],
+  "worst_fitted_object_centers": [
+    {
+      "fitted_center_error_m": 0.5297808337084912,
+      "fixed_offset_center_error_m": 0.5340606448845228,
+      "identity_center_error_m": 0.541525232826431,
+      "name": "Third metacarpal bone.l",
+      "vertices": 356
+    },
+    {
+      "fitted_center_error_m": 0.015040967806384756,
+      "fixed_offset_center_error_m": 0.014479198102278877,
+      "identity_center_error_m": 0.09124339954018781,
+      "name": "Distal phalanx of first finger of hand.r",
+      "vertices": 113
+    },
+    {
+      "fitted_center_error_m": 0.012678537245469457,
+      "fixed_offset_center_error_m": 0.012276324317896596,
+      "identity_center_error_m": 0.08942495194057087,
+      "name": "Second metacarpal bone.r",
+      "vertices": 384
+    },
+    {
+      "fitted_center_error_m": 0.011971886615940038,
+      "fixed_offset_center_error_m": 0.011414590639220096,
+      "identity_center_error_m": 0.08903213145109545,
+      "name": "Fifth metacarpal bone.r",
+      "vertices": 258
+    },
+    {
+      "fitted_center_error_m": 0.011284992301421133,
+      "fixed_offset_center_error_m": 0.012899347445575556,
+      "identity_center_error_m": 0.0933437014471514,
+      "name": "Distal phalanx of first finger of hand.l",
+      "vertices": 113
+    },
+    {
+      "fitted_center_error_m": 0.010317828157684348,
+      "fixed_offset_center_error_m": 0.009755957676819865,
+      "identity_center_error_m": 0.0894671131190008,
+      "name": "Hamate bone.r",
+      "vertices": 270
+    },
+    {
+      "fitted_center_error_m": 0.010294028421386709,
+      "fixed_offset_center_error_m": 0.009658427575460505,
+      "identity_center_error_m": 0.09039464429541148,
+      "name": "Trapezium bone.r",
+      "vertices": 252
+    },
+    {
+      "fitted_center_error_m": 0.010175966289805456,
+      "fixed_offset_center_error_m": 0.00962967133065561,
+      "identity_center_error_m": 0.0896826424852333,
+      "name": "Capitate bone.r",
+      "vertices": 238
+    },
+    {
+      "fitted_center_error_m": 0.01011045235675513,
+      "fixed_offset_center_error_m": 0.009345482030976002,
+      "identity_center_error_m": 0.09005475758683966,
+      "name": "Pisiform bone.r",
+      "vertices": 141
+    },
+    {
+      "fitted_center_error_m": 0.009925238892864993,
+      "fixed_offset_center_error_m": 0.00930871587952193,
+      "identity_center_error_m": 0.08952573301723905,
+      "name": "Triquetrum bone.r",
+      "vertices": 90
+    },
+    {
+      "fitted_center_error_m": 0.009542717316594217,
+      "fixed_offset_center_error_m": 0.00894039304534439,
+      "identity_center_error_m": 0.08965368377267524,
+      "name": "Lunate bone.r",
+      "vertices": 176
+    },
+    {
+      "fitted_center_error_m": 0.009074189430591566,
+      "fixed_offset_center_error_m": 0.010758106308299964,
+      "identity_center_error_m": 0.09132096721701477,
+      "name": "Second metacarpal bone.l",
+      "vertices": 384
+    },
+    {
+      "fitted_center_error_m": 0.008384769518791347,
+      "fixed_offset_center_error_m": 0.010255757701325505,
+      "identity_center_error_m": 0.09068033385525051,
+      "name": "Fifth metacarpal bone.l",
+      "vertices": 258
+    },
+    {
+      "fitted_center_error_m": 0.008376844434860477,
+      "fixed_offset_center_error_m": 1.268630449410446e-06,
+      "identity_center_error_m": 0.09255367037853647,
+      "name": "Sesamoid bones of foot.r",
+      "vertices": 149
+    },
+    {
+      "fitted_center_error_m": 0.008346472976403493,
+      "fixed_offset_center_error_m": 1.1667093917267594e-06,
+      "identity_center_error_m": 0.0925535397678493,
+      "name": "Sesamoid bones of foot.l",
+      "vertices": 149
+    },
+    {
+      "fitted_center_error_m": 0.008127754593592454,
+      "fixed_offset_center_error_m": 1.271443461038965e-06,
+      "identity_center_error_m": 0.09255367557224067,
+      "name": "Fifth metatarsal bone.r",
+      "vertices": 449
+    },
+    {
+      "fitted_center_error_m": 0.008119993200160415,
+      "fixed_offset_center_error_m": 1.2794296997420718e-06,
+      "identity_center_error_m": 0.09255368068310095,
+      "name": "Fourth metatarsal bone.r",
+      "vertices": 419
+    },
+    {
+      "fitted_center_error_m": 0.008075228677631491,
+      "fixed_offset_center_error_m": 1.2657894824080403e-06,
+      "identity_center_error_m": 0.09255367043186903,
+      "name": "Second metatarsal bone.r",
+      "vertices": 347
+    },
+    {
+      "fitted_center_error_m": 0.00807382613103539,
+      "fixed_offset_center_error_m": 1.1617150322672005e-06,
+      "identity_center_error_m": 0.09255352941030509,
+      "name": "Fifth metatarsal bone.l",
+      "vertices": 449
+    },
+    {
+      "fitted_center_error_m": 0.008072964412065422,
+      "fixed_offset_center_error_m": 1.1937908088891451e-06,
+      "identity_center_error_m": 0.09255355409972896,
+      "name": "Fourth metatarsal bone.l",
+      "vertices": 419
+    },
+    {
+      "fitted_center_error_m": 0.008037577363551951,
+      "fixed_offset_center_error_m": 1.1877177741314785e-06,
+      "identity_center_error_m": 0.09255355833420316,
+      "name": "Second metatarsal bone.l",
+      "vertices": 347
+    },
+    {
+      "fitted_center_error_m": 0.007894190764944202,
+      "fixed_offset_center_error_m": 1.2542854262348813e-06,
+      "identity_center_error_m": 0.09255364487700887,
+      "name": "Medial cuneiform bone.r",
+      "vertices": 498
+    },
+    {
+      "fitted_center_error_m": 0.007863101815517902,
+      "fixed_offset_center_error_m": 1.1993520632342224e-06,
+      "identity_center_error_m": 0.09255356551742608,
+      "name": "Medial cuneiform bone.l",
+      "vertices": 498
+    },
+    {
+      "fitted_center_error_m": 0.007856304321059118,
+      "fixed_offset_center_error_m": 1.2760256100455374e-06,
+      "identity_center_error_m": 0.09255366970901749,
+      "name": "Lateral cuneiform bone.r",
+      "vertices": 321
+    },
+    {
+      "fitted_center_error_m": 0.007834151732577158,
+      "fixed_offset_center_error_m": 1.2711277580266863e-06,
+      "identity_center_error_m": 0.09255366192122982,
+      "name": "Intermediate cuneiform bone.r",
+      "vertices": 224
+    }
+  ],
+  "worst_identity_object_centers": [
+    {
+      "fitted_center_error_m": 0.5297808337084912,
+      "fixed_offset_center_error_m": 0.5340606448845228,
+      "identity_center_error_m": 0.541525232826431,
+      "name": "Third metacarpal bone.l",
+      "vertices": 356
+    },
+    {
+      "fitted_center_error_m": 0.011284992301421133,
+      "fixed_offset_center_error_m": 0.012899347445575556,
+      "identity_center_error_m": 0.0933437014471514,
+      "name": "Distal phalanx of first finger of hand.l",
+      "vertices": 113
+    },
+    {
+      "fitted_center_error_m": 0.001487521038879935,
+      "fixed_offset_center_error_m": 1.7706235289576642e-06,
+      "identity_center_error_m": 0.09255412971331274,
+      "name": "Seventh rib.l",
+      "vertices": 4890
+    },
+    {
+      "fitted_center_error_m": 0.000764253237289659,
+      "fixed_offset_center_error_m": 1.6915373474913732e-06,
+      "identity_center_error_m": 0.09255408841557401,
+      "name": "Fifth rib.r",
+      "vertices": 4690
+    },
+    {
+      "fitted_center_error_m": 0.0013702482832744721,
+      "fixed_offset_center_error_m": 1.6532830191899504e-06,
+      "identity_center_error_m": 0.09255404750856344,
+      "name": "Fifth rib.l",
+      "vertices": 4690
+    },
+    {
+      "fitted_center_error_m": 0.0014743557824562093,
+      "fixed_offset_center_error_m": 1.6123833251555345e-06,
+      "identity_center_error_m": 0.09255396458371024,
+      "name": "Eleventh rib.r",
+      "vertices": 2519
+    },
+    {
+      "fitted_center_error_m": 0.0017543551721812883,
+      "fixed_offset_center_error_m": 1.617975316849517e-06,
+      "identity_center_error_m": 0.09255396447706407,
+      "name": "Eleventh rib.l",
+      "vertices": 2519
+    },
+    {
+      "fitted_center_error_m": 0.0007226277986001946,
+      "fixed_offset_center_error_m": 1.5165844579515999e-06,
+      "identity_center_error_m": 0.0925539221402005,
+      "name": "Third rib.r",
+      "vertices": 3492
+    },
+    {
+      "fitted_center_error_m": 0.0013504184789746316,
+      "fixed_offset_center_error_m": 1.4279123339678214e-06,
+      "identity_center_error_m": 0.09255380336307309,
+      "name": "Fourth rib.l",
+      "vertices": 4325
+    },
+    {
+      "fitted_center_error_m": 0.001105820171831658,
+      "fixed_offset_center_error_m": 1.3936457346667883e-06,
+      "identity_center_error_m": 0.09255377427016927,
+      "name": "Ninth rib.r",
+      "vertices": 3891
+    },
+    {
+      "fitted_center_error_m": 0.001212802461189246,
+      "fixed_offset_center_error_m": 1.4386542013984363e-06,
+      "identity_center_error_m": 0.09255376841735682,
+      "name": "First rib.l",
+      "vertices": 1607
+    },
+    {
+      "fitted_center_error_m": 0.0007405536307029184,
+      "fixed_offset_center_error_m": 1.3555697454396834e-06,
+      "identity_center_error_m": 0.09255376157648852,
+      "name": "Fourth rib.r",
+      "vertices": 4325
+    },
+    {
+      "fitted_center_error_m": 0.0009524862901944895,
+      "fixed_offset_center_error_m": 1.3694546959780821e-06,
+      "identity_center_error_m": 0.09255374554201264,
+      "name": "Seventh rib.r",
+      "vertices": 4890
+    },
+    {
+      "fitted_center_error_m": 0.0008097196087107642,
+      "fixed_offset_center_error_m": 1.3109496947125962e-06,
+      "identity_center_error_m": 0.09255371398905707,
+      "name": "First rib.r",
+      "vertices": 1607
+    },
+    {
+      "fitted_center_error_m": 0.0012968613901531156,
+      "fixed_offset_center_error_m": 1.3214287579355898e-06,
+      "identity_center_error_m": 0.09255370985819926,
+      "name": "Tenth rib.r",
+      "vertices": 3515
+    },
+    {
+      "fitted_center_error_m": 0.0006728697471899043,
+      "fixed_offset_center_error_m": 1.327000868140218e-06,
+      "identity_center_error_m": 0.09255369881020586,
+      "name": "Vertebra T5",
+      "vertices": 1076
+    },
+    {
+      "fitted_center_error_m": 0.0015430564750862296,
+      "fixed_offset_center_error_m": 1.2950749463111561e-06,
+      "identity_center_error_m": 0.09255368105884897,
+      "name": "Twelfth rib.r",
+      "vertices": 1503
+    },
+    {
+      "fitted_center_error_m": 0.0017295101128291964,
+      "fixed_offset_center_error_m": 1.298621468848707e-06,
+      "identity_center_error_m": 0.09255368100552684,
+      "name": "Twelfth rib.l",
+      "vertices": 1503
+    },
+    {
+      "fitted_center_error_m": 0.008119993200160415,
+      "fixed_offset_center_error_m": 1.2794296997420718e-06,
+      "identity_center_error_m": 0.09255368068310095,
+      "name": "Fourth metatarsal bone.r",
+      "vertices": 419
+    },
+    {
+      "fitted_center_error_m": 0.0012750133897240922,
+      "fixed_offset_center_error_m": 1.2931255519497647e-06,
+      "identity_center_error_m": 0.09255368000224302,
+      "name": "Third rib.l",
+      "vertices": 3492
+    },
+    {
+      "fitted_center_error_m": 0.008127754593592454,
+      "fixed_offset_center_error_m": 1.271443461038965e-06,
+      "identity_center_error_m": 0.09255367557224067,
+      "name": "Fifth metatarsal bone.r",
+      "vertices": 449
+    },
+    {
+      "fitted_center_error_m": 0.008075228677631491,
+      "fixed_offset_center_error_m": 1.2657894824080403e-06,
+      "identity_center_error_m": 0.09255367043186903,
+      "name": "Second metatarsal bone.r",
+      "vertices": 347
+    },
+    {
+      "fitted_center_error_m": 0.008376844434860477,
+      "fixed_offset_center_error_m": 1.268630449410446e-06,
+      "identity_center_error_m": 0.09255367037853647,
+      "name": "Sesamoid bones of foot.r",
+      "vertices": 149
+    },
+    {
+      "fitted_center_error_m": 0.007856304321059118,
+      "fixed_offset_center_error_m": 1.2760256100455374e-06,
+      "identity_center_error_m": 0.09255366970901749,
+      "name": "Lateral cuneiform bone.r",
+      "vertices": 321
+    },
+    {
+      "fitted_center_error_m": 0.002005602356536431,
+      "fixed_offset_center_error_m": 7.422847902208303e-06,
+      "identity_center_error_m": 0.09255366544208901,
+      "name": "Xiphoid process",
+      "vertices": 459
+    }
+  ],
+  "z_anatomy_skeleton_meshes": 353,
+  "z_biomechanics_skeleton_meshes": 279
+}

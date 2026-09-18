@@ -1,5 +1,90 @@
 # Sprint Updates 
 
+## 📌 Update-9-18-26 | *RyanCodesling*
+
+- Made manual recalibration and a dropout during calibration discard the measurement in progress, so no repetition or neutral baseline mixes readings from before and after them
+- Blanked the trace sync readout on frames that write no trace row, so a paused screen recording can no longer pair a later posture with an older row
+- Renamed the scapular overlay label from "Shoulder elevated" to "Shoulder / head position", because the metric cannot tell a rising shoulder from a lowering head
+- Redesigned the camera page around a letterboxed camera view, a session card, and a Reference Guide, and made Start and Resume wait until the pose model is ready
+- Delivered repetition and set results left on the device when a session ended, and warned on screen when a tuning-trace batch is lost after its upload retries run out
+- Versioned the Blender figure and animation tooling together with its asset licence and provenance records
+- Added figure animations for lateral arm raises, the arm hold at shoulder height, and the overhead shoulder press to the Reference Guide, all shown through the same crop (low priority)
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\traceSyncClock.ts*, and *web\src\lib\pose\tuningTraceV4.test.ts*
+
+- Routed manual recalibration through one shared reset that clears the repetition state machines, the quality buffer, the isometric anchor, and accrued hold time, while completed repetitions and closed sets survive; before, an in-progress repetition kept its peak from the old frozen tilt and baselines and was judged against the new ones
+- Discarded and restarted a calibration that a sustained capture dropout interrupts, instead of keeping its partial samples; a finished baseline is still kept, with the stale-baseline prompt offered instead
+- Added a distinct paused marker to the trace sync readout for any processed frame that wrote no row, and cleared the readout at session start and camera stop
+- Made the readout writer compare the node's own text rather than a remembered value, which an ordinary rerender could desynchronise
+- Tested the recalibration fix through a real `RepCounter` and the writer against a node changed behind its back, replacing two source-text assertions that could not see the behaviour
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+
+- Renamed the `scapularElevation` label to name the region its box encloses instead of a movement, since the metric is an ear-to-shoulder vector on the trunk axis and a rising shoulder and a lowering head read the same
+- Left every threshold, metric formula, smoothing constant, latch, arbitration rule, and scoring value unchanged, along with the directional branches that draw their own words
+
+### *web\src\app\(app)\camera\CameraClient.tsx* and *web\src\lib\pose\captureReadiness.ts*
+
+- Rebuilt the layout: the camera view carries the feed, the repetition, set, and time counts, and the framing messages; the session card beside it carries progress, the set-progress strip, the trace sync readout, and the session controls; the Reference Guide sits below, and narrow layouts stack these areas
+- Letterboxed the camera feed and its overlay instead of cropping them, so the whole frame the pose model receives stays visible at any width
+- Moved device choice, starting and stopping the camera, mirroring, and the front-camera preference into a Camera menu in the page header, and moved the pose-model readiness indicator onto the camera view's top-right corner
+- Put staff diagnostics in a panel docked beside the camera view behind an (i) button, and kept the frame rate on screen next to that button, above the countdown and the camera-off cover
+- Made the baseline-capture message the most prominent banner on the camera view, since the patient has to hold still while it runs, and showed rest between sets as an overlay on the view
+- Rolled the repetition and set digits when they change, keeping them static under reduced motion; as rest begins, the view holds the finished set's count for two seconds before rolling back to zero
+- Added a neutral form-check card that reads "Check the highlighted area" only while the selected cue's highlight can be drawn, and names no movement
+- Made Start session also start the camera when it is off; Start and Resume now do nothing until the pose model is ready, and Resume is disabled while the model loads or the camera starts
+- Changed the framing messages to say head to knees, which is what the existing knee gate already requires; no readiness gate changed
+- Updated the page tour and its illustrations for the new layout, and added loose-clothing advice to the clothing and environment tips
+
+### *web\src\lib\pose\eventOutbox.ts* and *web\src\lib\pose\eventOutbox.test.ts*
+
+- Added `recoverPersistedOutboxes`, which sends results still queued when a session ended, once per patient camera-page load and one session at a time; before, only Resume read them back, so an ended session's repetitions and sets never left the device
+- Removed a stored item only when the server acknowledges it, keeping anything refused for the next load, and showed a toast when results from an earlier session are uploaded
+- Skipped sessions that can still be resumed, because Resume re-adopts the same queue; a session running in another tab counts as resumable
+- Corrected the end-of-session message, which promised an upload that stops when the session ends
+
+### *web\src\lib\pose\traceUploadLoss.ts* and *web\src\lib\pose\traceUploadLoss.test.ts*
+
+- Recorded each raw-frame batch that exhausts its retries, with its final HTTP status or network failure, and showed the loss beside the trace readout, including after End, with a toast on the first loss; before, a lost batch left no sign while the readout kept advancing, because it names rows as they are queued
+- Kept the readout's meaning explicit: a displayed row means queued, not saved, and the absence of a warning does not prove every batch arrived
+
+### *web\src\lib\pose\cameraStartup.test.ts* and *web\src\lib\patientExerciseWorkflowContracts.test.ts*
+
+- Added a startup test that runs the component's actual `startSessionWithCamera`, `resumeSession`, `startCamera`, and `predictWebcam` against fake browser dependencies; it proves the model-loading barrier, not a live session
+- Extended the workflow contract test to pin the ended-session recovery, the resumable-session exclusion, and the corrected end message
+
+### *web\src\lib\exercises\demoClips.ts* and *web\src\lib\exercises\demoClips.test.ts* (low priority)
+
+- Added looping figure animations to the Reference Guide for lateral arm raises (`ex_001`), the arm hold at shoulder height (`ex_006`), and the overhead shoulder press (`ex_007`), with a full-screen view; other exercises say that no video is published
+- Showed every clip through the lateral-raise guide's crop, scaled to its render, so the guide keeps one size and framing across exercises; checked over every decoded frame, that crop holds the whole figure and cuts away the baked-in title, caption, and phase word
+- Kept clip data outside the exercise registry, so it can never change the measurement-configuration hash that groups a patient's history
+- Remembered a load failure per clip, so one missing file cannot blank every other exercise's guide
+- Captioned the guide as having illustrative timing, with the therapist's instructions coming first, and named the movement in its accessible label
+- Withheld the side-bend animation (`ex_005`) for now and published no clip for the assisted neck stretch (`ex_004`) or wall angels (`ex_008`), whose animations are on hold; the test pins these together with the shared crop, file names, and registry membership
+
+### *tools\blender*, *assets\blender*, and *LICENSE*
+
+- Versioned the build, inspection, render, and encoding scripts for the figure and its animations, with the asset README, the animation notes, provenance and attribution records, and the reference data they use
+- Kept the editable `.blend` sources and rendered previews ignored, because they are large and regenerable from these scripts
+- Stated in `LICENSE` that MIT covers the original software and documentation, while atlas-derived anatomy geometry and its media are CC BY-SA 4.0, as recorded in `assets\blender\LICENSE-CC-BY-SA-4.0.md` and `assets\blender\THIRD_PARTY_ASSETS.md`; the MPFB figure is built from CC0 MakeHuman assets
+- Kept the anatomy, écorché, and muscle-atlas variants as frozen history; the app does not use them
+
+### *Validation*
+
+- 44 framework-free TypeScript suites pass, including 44 tuning-trace, 21 outcome-outbox, 15 trace-clock, 11 trace-loss, 8 capture-readiness, 8 demo-clip, and 5 workflow-contract checks, plus the camera startup check
+- Type check, lint, and a production build pass; the build notes that `CameraClient.tsx` now exceeds the 500 KB size above which Babel stops pretty-printing its output, which does not affect behaviour
+- The demo-clip source check fails against the previous single-clip camera page, so it catches a return to a hard-coded clip, and the crop check rejects the earlier per-clip crops
+- The shared crop was drawn over each clip's extreme frames and viewed in a browser using the page's own sizing rules, where every clip showed at the same size
+- A signed-in check of camera startup, Resume, saved results, and the new guides is still pending; automated and fixture checks do not establish live or clinical acceptance
+
+### *Remaining boundaries*
+
+- No metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the aspect correction remains enabled nowhere
+- Angle outputs remain pipeline measurements, not validated anatomical angles
+- The demonstration videos stay in the gitignored `web\public\demos\` folder, so this branch ships the player but not the media; without the files the guide shows its "no video" state
+- The animations are illustrative, with authored timing, and no clinician has reviewed them
+- Three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
+
 ## 📌 Update-9-8-26 | *RyanCodesling*
 
 - Stopped a capture dropout from silently re-capturing the neutral baseline, which could adopt a compensated posture as the reference every later deduction is measured against

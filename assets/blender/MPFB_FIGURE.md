@@ -5,8 +5,50 @@ The active presentation source is `ex_001_figure_mpfb.blend`. Its preview is
 demonstration, not a clinical measurement model. Source provenance is recorded
 in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md#ex_001-patient-facing-figure-mpfb2--makehuman-cc0).
 
-Additional side-bend, arm-hold and overhead-press drafts have separate sources
-and previews in [MPFB_EXERCISE_DRAFTS.md](MPFB_EXERCISE_DRAFTS.md).
+Additional side-bend, arm-hold, overhead-press and wall-angel drafts have
+separate sources and previews in [MPFB_EXERCISE_DRAFTS.md](MPFB_EXERCISE_DRAFTS.md).
+
+## Upgraded presentation look
+
+The camera page's Reference Guide plays all five clips in an upgraded look: the
+lateral raise, arm hold, overhead press and wall angels as re-renders, and the
+side bend as a one-sided version with one hand on the hip, rebuilt from the
+upgraded figure (see [MPFB_EXERCISE_DRAFTS.md](MPFB_EXERCISE_DRAFTS.md)).
+
+`tools/blender/upgrade_mpfb_figure_look.py` builds the upgraded look from the
+unchanged `ex_001_figure_mpfb.blend`:
+
+- the CC0 MakeHuman `short02` hairstyle, fitted to the saved body (provenance
+  in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md));
+- warmer skin with subsurface scattering, still matte so no highlight reads as
+  a landmark;
+- rebalanced key, fill and top lights;
+- a seamless studio backdrop in place of the floor's hard horizon;
+- the "slate" palette: dark backdrop, petrol-blue top and light shorts.
+
+The palette was chosen from measured luminance contrast against the background:
+skin 5.5 : 1, top 3.9 : 1 and shorts 6.5 : 1, with the green trunk guide 2.3 : 1
+against the top. The earlier look measured 1.9, 1.9, 1.5 and 2.0.
+
+The body, garment and rig coordinates are unchanged, as are the animation and
+the approved `girdle_scale = 0.475`. The upgraded figure and the exercises
+rebuilt from it are in `previews/slate_2026_09_25/`. The lateral-raise guide is
+`previews/slate_2026_09_25/ex_001_mpfb/ex_001_figure_motion.mp4`: 870 x 980, 64
+samples. The original preview named at the top of this file is kept unchanged.
+
+```powershell
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 `
+  --python tools/blender/upgrade_mpfb_figure_look.py -- `
+  --source assets/blender/ex_001_figure_mpfb.blend `
+  --hair-dir <MPFB user data>/hair/short02 --palette slate `
+  --output assets/blender/previews/<fresh folder>/ex_001_figure_mpfb.blend
+```
+
+The hair directory is MPFB2's installed copy of the MakeHuman system assets.
+Pass the upgraded figure as `--source` to `build_mpfb_exercise_drafts.py` to
+rebuild the exercises in the same look.
+
+## Clothing revision
 
 The presentation revision `mpfb-garments-2026-09-06` keeps the approved
 `girdle_scale = 0.475` and the original body and shoulder animation. The hand

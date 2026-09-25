@@ -58,13 +58,13 @@ test("every clip uses the ex_001 crop scaled to its own frame", () => {
   }
 });
 
-test("the 522 x 588 clips use the crop checked against every frame", () => {
-  for (const id of ["ex_006", "ex_007"]) {
+test("the 870 x 980 clips use the reference crop checked against every frame", () => {
+  for (const id of ["ex_001", "ex_005", "ex_006", "ex_007", "ex_008"]) {
     const clip = DEMO_CLIPS[id];
     assert(clip !== undefined, `${id} must have a clip`);
-    assert(clip.width === 522 && clip.height === 588, `${id}: unexpected frame size`);
+    assert(clip.width === 870 && clip.height === 980, `${id}: unexpected frame size`);
     const { x, y, w, h } = clip.crop;
-    assert(x === 26 && y === 65 && w === 470 && h === 508, `${id}: crop ${JSON.stringify(clip.crop)} was not the one checked`);
+    assert(x === 43 && y === 108 && w === 784 && h === 847, `${id}: crop ${JSON.stringify(clip.crop)} was not the one checked`);
   }
 });
 
@@ -81,10 +81,10 @@ test("every clip belongs to an exercise in the registry", () => {
   }
 });
 
-test("held and withheld animations have no clip", () => {
-  assert(demoClipFor("ex_004") === null, "ex_004's animation is on hold");
-  assert(demoClipFor("ex_008") === null, "ex_008's animation is on hold");
-  assert(demoClipFor("ex_005") === null, "ex_005's side-bend animation is withheld for now");
+test("exercises without a finished animation have no clip", () => {
+  assert(demoClipFor("ex_004") === null, "ex_004's active neck-tilt animation is not made yet");
+  assert(demoClipFor("ex_005") === DEMO_CLIPS.ex_005, "ex_005's side-bend animation is back");
+  assert(demoClipFor("ex_008") === DEMO_CLIPS.ex_008, "ex_008's wall-angels animation is published");
 });
 
 test("no id, an unknown id, or an inherited key returns null", () => {

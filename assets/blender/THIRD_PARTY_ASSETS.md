@@ -201,6 +201,7 @@ by this repository, and the generated `.blend` does not require it at runtime.
 |---|---|---|---|
 | MPFB2 add-on v2.0.17 | Blender extension platform, `add-on-mpfb-v2.0.17.zip`, 45,031,536 bytes | CC0 | SHA-256 `4f0a879d64a39bf646fbf5f53601ac678855da329d650617dca5737548239a87`, matching the hash published in the download URL |
 | MakeHuman system assets | `files.makehumancommunity.org`, `makehuman_system_assets_cc0.zip`, 280,737,770 bytes | CC0 | 517 entries: 153 clothes, 92 skins, plus eyes, hair, teeth, tongue, eyebrows, eyelashes, proxymeshes |
+| `short02` hair (from the system assets above, as installed with MPFB2) | `hair/short02/`: `short02.mhclo` 119,240 bytes, `short02.obj` 139,742, `short02_diffuse.png` 3,553,543, `short02_normal.png` 1,626,745, `short02.mhmat` 1,323 | CC0 | Each file's header records its explicit CC0 release (September 2020), and the pack manifest `makehuman_system_assets.json` lists `short02` with `"license": "CC0"`. SHA-256: `.mhclo` `625736cdb73e6d094df6e5a2df18f371781f1d2cd37b0ae15795c5d7051c3ec2`, `.obj` `48f979114adfa712165a69cc55c45a70831af1fb3cba8e2a89120f0c87407b64`, diffuse `47fe33831a3929567c733356dd66243116e05df2ace1f884ddca0080b728229f`, normal `2cfac7619f8eec77dd90df979d912415058f4f0fc16940cba40a8eb1ae6d74b5`, `.mhmat` `2ed04c8aad9c1a35d858ca72091525d32b1da3b61b5a031634dd528fd8530f6d` |
 
 The base mesh is MakeHuman's, which every MakeHuman character shares by design,
 so its 19,158-vertex topology matches the Maya demo's. The morphology is not
@@ -216,6 +217,13 @@ Everything above the body - the landmark marks, the lighting, the
 gate-derived camera framing, and the 210-frame action with authored shoulder
 elevation - is original work under the repository's MIT licence. The rig has
 no scapula bone and does not model anatomical scapulohumeral rhythm.
+
+The upgraded presentation look (`tools/blender/upgrade_mpfb_figure_look.py`)
+adds the CC0 `short02` hair above. It is fitted to the saved body the way MPFB
+fits MakeHuman clothes, follows the head bone, and has its two textures packed
+into the output `.blend`. The skin, garment colours, lights and seamless studio
+backdrop of that look are original work under the MIT licence; it uses no other
+external asset.
 
 This is an instructional demonstration. It is not clinically validated, no
 clinician has reviewed it, and it makes no claim of medical accuracy.

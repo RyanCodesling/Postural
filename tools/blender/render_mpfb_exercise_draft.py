@@ -54,6 +54,9 @@ def main():
     for frame in frames:
         scene.frame_set(frame)
         signature = hashlib.sha256()
+        # Timeline markers can switch cameras (wall angels alternate views),
+        # so the active camera is part of what makes two frames identical.
+        signature.update(scene.camera.name.encode() + b"\0")
         for pb in rig.pose.bones:
             signature.update(struct.pack("16f", *(v for row in pb.matrix for v in row)))
         for obj in sorted((o for o in scene.objects if o.type == "FONT"), key=lambda o: o.name):

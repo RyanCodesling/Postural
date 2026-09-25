@@ -2,7 +2,7 @@
 
 Preserves the source file and mesh data. Choreography values describe authored
 display poses, not clinical targets, scoring thresholds or prescribed timing.
-Only ex_005, ex_006 and ex_007 are included in this draft batch.
+This draft batch covers ex_005, ex_006, ex_007 and ex_008.
 """
 from __future__ import annotations
 
@@ -16,25 +16,64 @@ from pathlib import Path
 import bpy
 import numpy as np
 from mathutils import Matrix, Quaternion, Vector
+from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_ex001_mpfb_figure import aim_bone, smoothstep
 
 
 SIDE_BEND_PEAK_DEG = 42.0
+# Side bend, by user direction 2026-09-25: one side only, so the clip does not
+# suggest alternating. The trunk bends toward the figure's left; that arm
+# dangles under gravity while the right hand rests on the right hip from the
+# first frame to the last.
+SIDE_BEND_HIP_SIDE = "r"
+SIDE_BEND_HIP = {
+    "palm_height": 0.99,           # palm centre on the waist, just over the top's hem
+    "palm_depth": -0.02,           # front-back position of the palm centre
+    "contact_gap": 0.002,          # nearest hand or forearm skin this far outside the garments
+    "finger_direction": (0.0, -0.95, -0.30),  # fingers forward along the waist, above the hip's flare
+    "elbow_pole": (1.0, 0.35, 0.10),          # elbow out to the side and a little back (x mirrored)
+    "contact_bends": (0.0, 0.25, 0.5, 0.75, 1.0),  # bend shares at which the resting gap is solved
+    "finger_flatten": 0.7,         # share of the relaxed finger curl let go while the hand rests
+    "thumb_tilt_deg": 20.0,        # the thumb points back along the waist, tilted up by this much
+    "thumb_lift": 0.1,             # and slightly out from it
+}
+SIDE_BEND_DANGLE_DEG = (12.0, 3.0)  # hanging arm's outward angle from vertical: upright, full bend
+
+# Wall angels: frontal-plane upper-arm angles from straight down and interior
+# elbow angles (180 = straight) at the W rest and the Y top. They were chosen so
+# that, replayed through the app's own metric on a 16:9 frame, the W stays well
+# under the 70 re-arm threshold and the Y reaches about the 150 target. The
+# replay is the evidence for that, not these constants.
+WALL_ANGEL_ARM_DEG = (60.0, 140.0)
+WALL_ANGEL_ELBOW_DEG = (90.0, 180.0)
+WALL_ANGEL_ELBOW_EASE = 1.15       # the elbows straighten slightly ahead of the arm rise
+WALL_ANGEL_RETRACTION_DEG = 15.0   # girdle drawn back toward the wall
+WALL_GAP_M = 0.003                 # wall surface behind the rearmost torso or garment point
+WALL_ARM_GAP_M = 0.006             # authored skin gap for the arms and the backs of the hands
+WALL_SIDE_VIEW = {                 # the second repetition's camera, seen full frame
+    "yaw_deg": 22.0,               # from straight side-on, turned toward the front to show the wall face
+    "band": (0.08, 0.92, 0.05, 0.86),  # figure envelope limits as view fractions: x min/max, y min/max from the bottom
+    "switch_frame": 235,           # first frame of the side-view repetition
+}
+WALL_REP_FRAMES = 234
+WALL_POSTURE = True                # bring the upper back and head to the wall
+WALL_POSTURE_GAP_M = 0.005         # upper back and back of the head, as physiotherapy guides ask
+WALL_RGBA = (0.200, 0.190, 0.175, 1.0)
 
 SPECS = {
     "ex_005": {
-        "title": "Standing side bends", "frames": 360,
+        "title": "Standing side bends", "frames": 180,
         "phases": [(1, 20, "Ready"), (21, 79, "Bend"), (80, 100, "Pause"),
-                   (101, 159, "Return"), (160, 200, "Ready"),
-                   (201, 259, "Bend"), (260, 280, "Pause"),
-                   (281, 339, "Return"), (340, 360, "Ready")],
-        "checkpoints": [1, 50, 80, 100, 130, 180, 230, 260, 280, 310, 360],
-        "pose_note": "Alternating lateral spine bend; feet and pelvis fixed. "
+                   (101, 159, "Return"), (160, 180, "Ready")],
+        "checkpoints": [1, 20, 35, 50, 65, 80, 100, 115, 130, 145, 180],
+        "pose_note": "One-sided lateral spine bend toward the figure's left, one repetition "
+                     "per loop; feet and pelvis fixed. "
                      f"{SIDE_BEND_PEAK_DEG:g} degrees distributed across three spine controls; "
                      "head and neck retain their neutral relation to the upper torso; "
-                     "soft elbows, hanging forearms and relaxed fingers. "
+                     "the left arm hangs under gravity while the right hand rests on the right "
+                     "hip throughout, fingers forward and thumb back. "
                      "The driver value is not a measured trunk angle.",
     },
     "ex_006": {
@@ -57,7 +96,27 @@ SPECS = {
                      "Elbow path and shoulder roll are authored. No scapula bone or "
                      "clinical shoulder rhythm is modelled.",
     },
+    "ex_008": {
+        # Two identical repetitions: the first seen from the front, the
+        # second from the side (the camera switches at the rest between them).
+        # Short rests keep the two-view loop near 15 s; the slides keep the
+        # press's 95-frame pace.
+        "title": "Wall angels", "frames": 468, "peak_frame": 108,
+        "phases": [(1, 12, "Ready"), (13, 107, "Slide up"), (108, 119, "Pause"),
+                   (120, 214, "Slide down"), (215, 234, "Ready"),
+                   (235, 246, "Ready"), (247, 341, "Slide up"), (342, 353, "Pause"),
+                   (354, 448, "Slide down"), (449, 468, "Ready")],
+        "checkpoints": [1, 12, 36, 60, 84, 108, 119, 143, 167, 191, 234],
+        "pose_note": "Back against a wall; both arms slide in the wall's plane from a W "
+                     f"(upper arms {WALL_ANGEL_ARM_DEG[0]:g} degrees from the sides, elbows "
+                     f"{WALL_ANGEL_ELBOW_DEG[0]:g} degrees) up to a Y (upper arms "
+                     f"{WALL_ANGEL_ARM_DEG[1]:g} degrees, elbows {WALL_ANGEL_ELBOW_DEG[1]:g}) and back. "
+                     "Palms face forward and the elbows straighten ahead of the top. "
+                     "Girdle elevation and retraction are authored; no scapula bone or "
+                     "clinical shoulder rhythm is modelled.",
+    },
 }
+ARM_FINGERS = ["index", "middle", "ring", "pinky", "thumb"]
 MESH_NAMES = ("Figure_Body", "Figure_Top", "Figure_Shorts")
 KEY_BONES = ["spine_01", "spine_02", "spine_03"] + [
     stem + "_" + side for side in ("l", "r")
@@ -110,11 +169,17 @@ def rotate_world(pb, axis, radians):
     pb.matrix = rotated
 
 
-def press_girdle(rig, side, sign, progress):
+def press_girdle(rig, side, sign, progress, retraction=0.0):
     cb = rig.pose.bones["clavicle_" + side]
     rest = (cb.bone.tail_local-cb.bone.head_local).normalized()
     girdle = math.radians(22.0*progress)
-    aim_bone(cb, Vector((sign*abs(rest.x)*math.cos(girdle), rest.y, math.sin(girdle))))
+    target = Vector((sign*abs(rest.x)*math.cos(girdle), rest.y, math.sin(girdle)))
+    if retraction:
+        # Swing the clavicle's horizontal reach back toward the wall. The
+        # press passes no retraction, so its target is unchanged.
+        back, reach = math.radians(retraction), abs(rest.x)*math.cos(girdle)
+        target = Vector((sign*reach*math.cos(back), rest.y+reach*math.sin(back), math.sin(girdle)))
+    aim_bone(cb, target)
     bpy.context.view_layer.update()
 
 
@@ -254,10 +319,471 @@ def hand_profile(rig, neutral, closed):
     return {name: rig.pose.bones[name].rotation_quaternion.copy() for name in FINGER_BONES}
 
 
-def make_animation(scene, rig, exercise, source_poses):
+def side_bend_trunk(rig, lean):
+    # The pelvis and lower limbs are never keyed. Distributing the
+    # bend lets the trunk curve while the neck follows the torso.
+    for name, weight in [("spine_01", .40), ("spine_02", .35), ("spine_03", .25)]:
+        rotate_world(rig.pose.bones[name], Vector((0, 1, 0)), math.radians(lean * weight))
+        bpy.context.view_layer.update()
+
+
+def garment_tree(scene):
+    """BVH of the evaluated garments as they render."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    vertices, faces = [], []
+    for name in ["Figure_Top", "Figure_Shorts"]:
+        evaluated = scene.objects[name].evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        try:
+            faces += [[len(vertices) + i for i in p.vertices] for p in mesh.polygons]
+            vertices += [evaluated.matrix_world @ v.co for v in mesh.vertices]
+        finally:
+            evaluated.to_mesh_clear()
+    return BVHTree.FromPolygons(vertices, faces)
+
+
+def garment_clearance(tree, points):
+    """Lowest signed distance of the points from the garments; negative is inside.
+
+    A point beside an open hem, rather than over a face, counts at its
+    unsigned distance: there the face normal says nothing about inside.
+    """
+    lowest = math.inf
+    for point in points:
+        near, normal, _, distance = tree.find_nearest(Vector(point))
+        signed = (Vector(point) - near).dot(normal)
+        lowest = min(lowest, signed if abs(signed) >= .5 * distance else distance)
+    return lowest
+
+
+def forearm_hand_skin(body, side):
+    """Evaluated-mesh indices of one side's forearm, hand and finger skin, and the kept count.
+
+    The mask keeps the "body" group's vertices in their original order, so a
+    kept vertex's evaluated index is its rank among them.
+    """
+    names = {g.index: g.name for g in body.vertex_groups}
+    bones = {f"{stem}_{side}" for stem in ["lowerarm", "hand"] +
+             [f"{finger}_{joint:02d}" for finger in ARM_FINGERS for joint in [1, 2, 3]]}
+    kept, ids = 0, []
+    for vertex in body.data.vertices:
+        weights = {names[g.group]: g.weight for g in vertex.groups}
+        if weights.get("body", 0) <= 0:
+            continue
+        if sum(weights.get(b, 0) for b in bones) >= .5:
+            ids.append(kept)
+        kept += 1
+    return np.array(ids), kept
+
+
+def calibrate_side_bend_hands(scene, rig, neutral, fingers):
+    """Solve where the hip hand rests.
+
+    At the full bend away from that hand, rays over roughly the hand's
+    footprint at the waist find the garments' outer surface. The palm faces
+    their mean normal, with the fingers forward in the surface's tangent plane
+    and the thumb laid back along the waist. How far out along the normal the
+    palm sits is then solved at bend shares from upright to full, so the
+    hand's and forearm's nearest skin stays SIDE_BEND_HIP["contact_gap"]
+    outside the evaluated garments while the waist moves with the trunk.
+    Everything is measured as it renders, masked body included: the garments
+    shrink-wrap to the body, and unmasked helper shells would push them out.
+    The saved-scene inspector independently measures every frame.
+    """
+    body = scene.objects["Figure_Body"]
+    garments = [scene.objects[n] for n in ["Figure_Top", "Figure_Shorts"]]
+    saved = [(m, m.show_viewport) for obj in [body] + garments for m in obj.modifiers]
+    for modifier, _ in saved:
+        modifier.show_viewport = True
+    hip, record = {}, {}
+    try:
+        for side, sign in [(SIDE_BEND_HIP_SIDE, 1 if SIDE_BEND_HIP_SIDE == "l" else -1)]:
+            skin, kept = forearm_hand_skin(body, side)
+            if len(evaluated_points(body)) != kept:
+                raise RuntimeError("The evaluated body does not match its mask's kept vertices")
+            reset_pose(rig, neutral, fingers)
+            side_bend_trunk(rig, -sign * SIDE_BEND_PEAK_DEG)
+            tree, hits = garment_tree(scene), []
+            # The palm faces the waist's mean surface normal over roughly the hand's footprint.
+            for dy in [.02, 0, -.03]:
+                for dz in [.025, 0, -.03]:
+                    origin = Vector((sign * .5, SIDE_BEND_HIP["palm_depth"] + dy, SIDE_BEND_HIP["palm_height"] + dz))
+                    hit, normal, _, _ = tree.ray_cast(origin, Vector((-sign, 0, 0)))
+                    if hit is None:
+                        raise RuntimeError("No garment surface at the hip for side " + side)
+                    hits.append((hit, normal if normal.x * sign > 0 else -normal))
+            point = hits[4][0]
+            normal = sum((n for _, n in hits), Vector()).normalized()
+            wanted = Vector(SIDE_BEND_HIP["finger_direction"]).normalized()
+            target = {"point": point, "normal": normal,
+                      "fingers": (wanted - normal * wanted.dot(normal)).normalized(),
+                      "bends": list(SIDE_BEND_HIP["contact_bends"]), "gaps": [.03] * len(SIDE_BEND_HIP["contact_bends"])}
+            # The thumb's rotations depend only on the hand's resting orientation, not its gap.
+            reset_pose(rig, neutral, fingers)
+            side_bend_trunk(rig, -sign * SIDE_BEND_PEAK_DEG)
+            side_bend_arms(rig, -sign * SIDE_BEND_PEAK_DEG, {side: target})
+            target["thumb"] = akimbo_thumb(rig, side, target)
+            solved = []
+            for share in SIDE_BEND_HIP["contact_bends"]:
+                lean = -sign * SIDE_BEND_PEAK_DEG * share
+
+                def clearance(gap):
+                    target["gaps"] = [gap] * len(target["bends"])
+                    reset_pose(rig, neutral, fingers)
+                    side_bend_trunk(rig, lean)
+                    side_bend_arms(rig, lean, {side: target})
+                    return garment_clearance(garment_tree(scene), evaluated_points(body)[skin])
+
+                low, high = 0.0, .08
+                for _ in range(11):
+                    middle = (low + high) / 2
+                    low, high = (middle, high) if clearance(middle) < SIDE_BEND_HIP["contact_gap"] else (low, middle)
+                if high > .079:
+                    raise RuntimeError(f"The {side} hand cannot reach its hip without touching the garments elsewhere")
+                solved.append({"bend_share": share, "palm_gap_m": high, "nearest_skin_mm": clearance(high) * 1000})
+            target["gaps"] = [s["palm_gap_m"] for s in solved]
+            hip[side] = target
+            record[side] = {"surface_point": list(point), "surface_normal": list(normal),
+                            "finger_direction": list(target["fingers"]), "contact": solved}
+    finally:
+        for modifier, value in saved:
+            modifier.show_viewport = value
+        reset_pose(rig, neutral, fingers)
+    return hip, record
+
+
+def two_bone_elbow(shoulder, wrist, upper_length, fore_length, pole):
+    """Elbow position reaching the wrist target (or as close as the arm allows), bent toward the pole."""
+    delta = wrist - shoulder
+    distance = min(delta.length, (upper_length + fore_length) * .999)
+    axis = delta.normalized()
+    along = (upper_length**2 - fore_length**2 + distance**2) / (2 * distance)
+    radius = math.sqrt(max(0., upper_length**2 - along**2))
+    bend = (pole - axis * pole.dot(axis)).normalized()
+    return shoulder + axis * along + bend * radius
+
+
+def palm_normal_world(rig, side, sign):
+    hand = rig.pose.bones["hand_" + side]
+    index, pinky, middle = [rig.pose.bones[f"{n}_01_{side}"].head for n in ["index", "pinky", "middle"]]
+    return (-sign * (index - pinky).cross((middle - hand.head).normalized())).normalized()
+
+
+def palm_frame(forward, normal):
+    """World rotation whose columns are the palm's long axis, its normal and their cross product."""
+    forward = forward.normalized()
+    normal = (normal - forward * normal.dot(forward)).normalized()
+    return Matrix((forward, normal, forward.cross(normal))).transposed()
+
+
+def hand_palm(rig, side, sign):
+    """The posed hand's palm frame (wrist to middle knuckle, palm normal) and palm centre."""
+    hand = rig.pose.bones["hand_" + side]
+    index, middle, pinky = [rig.pose.bones[f"{n}_01_{side}"].head for n in ["index", "middle", "pinky"]]
+    return palm_frame(middle - hand.head, palm_normal_world(rig, side, sign)), (index + pinky + hand.head) / 3
+
+
+def side_bend_arms(rig, lean, hip):
+    """Pose both arms for the one-sided side bend.
+
+    The arm on the bending side hangs from its shoulder under gravity, easing
+    from the upright spread to nearly vertical. The other hand rests on its hip
+    throughout: palm on the waist, fingers forward, thumb back and elbow out.
+    `hip` holds the resting hand's solved placement, keyed by its side.
+    """
+    bend = abs(lean) / SIDE_BEND_PEAK_DEG
+    upright, bent = SIDE_BEND_DANGLE_DEG
+    for side, sign in [("l", 1), ("r", -1)]:
+        upper, lower, hand = [rig.pose.bones[n + "_" + side] for n in ["upperarm", "lowerarm", "hand"]]
+        if side not in hip:
+            spread = math.radians(upright + (bent - upright) * bend)
+            hang = Vector((sign * math.sin(spread), 0, -math.cos(spread)))
+            fore_hang = Vector((sign * math.sin(math.radians(10.0 - 4.0 * bend)), -.12, -1)).normalized()
+            for pb, direction in [(upper, hang), (lower, fore_hang), (hand, fore_hang)]:
+                aim_bone(pb, direction)
+                bpy.context.view_layer.update()
+            continue
+        target = hip[side]
+        frame, centre = hand_palm(rig, side, sign)
+        offset = frame.transposed() @ (centre - hand.head)
+        resting_frame = palm_frame(target["fingers"], -target["normal"])
+        resting = resting_frame @ frame.transposed() @ hand.matrix.to_3x3()
+        gap = float(np.interp(bend, target["bends"], target["gaps"]))
+        wrist = target["point"] + target["normal"] * gap - resting_frame @ offset
+        x, y, z = SIDE_BEND_HIP["elbow_pole"]
+        elbow = two_bone_elbow(upper.head, wrist, upper.bone.length, lower.bone.length, Vector((sign * x, y, z)))
+        aim_bone(upper, elbow - upper.head)
+        bpy.context.view_layer.update()
+        aim_bone(lower, wrist - lower.head)
+        bpy.context.view_layer.update()
+        matrix = resting.to_4x4()
+        matrix.translation = hand.head
+        hand.matrix = matrix
+        bpy.context.view_layer.update()
+        # Let the fingers lie flatter on the waist, and lay the thumb back
+        # along it: a relaxed thumb would point into the body.
+        for finger in ["index", "middle", "ring", "pinky"]:
+            for joint in [1, 2, 3]:
+                pb = rig.pose.bones[f"{finger}_{joint:02d}_{side}"]
+                pb.rotation_quaternion = pb.rotation_quaternion.slerp(Quaternion(), SIDE_BEND_HIP["finger_flatten"])
+        for name, rotation in target.get("thumb", {}).items():
+            rig.pose.bones[name].rotation_quaternion = rotation
+        bpy.context.view_layer.update()
+
+
+def akimbo_thumb(rig, side, target):
+    """Local thumb rotations, taken with the hand at rest on the hip, that lay
+    the thumb back along the waist."""
+    normal, forward = target["normal"], target["fingers"]
+    up = normal.cross(forward)
+    up = (up if up.z > 0 else -up).normalized()
+    tilt = math.radians(SIDE_BEND_HIP["thumb_tilt_deg"])
+    back = (-forward * math.cos(tilt) + up * math.sin(tilt) + normal * SIDE_BEND_HIP["thumb_lift"]).normalized()
+    names = [f"thumb_{joint:02d}_{side}" for joint in [1, 2, 3]]
+    relaxed = {name: rig.pose.bones[name].rotation_quaternion.copy() for name in names}
+    rotations = {}
+    for name in names:
+        aim_bone(rig.pose.bones[name], back)
+        bpy.context.view_layer.update()
+        rotations[name] = rig.pose.bones[name].rotation_quaternion.copy()
+    for name in names:
+        rig.pose.bones[name].rotation_quaternion = relaxed[name]
+    bpy.context.view_layer.update()
+    return rotations
+
+
+def wall_angel_progress(frame):
+    """Slide position: 0 at the W rest, 1 at the Y top. Every repetition is the same."""
+    return excursion((frame - 1) % WALL_REP_FRAMES + 1, 12, 108, 119, 215)
+
+
+def wall_angel_targets(progress):
+    """Frontal upper-arm angle, interior elbow angle and girdle progress."""
+    (arm_w, arm_y), (elbow_w, elbow_y) = WALL_ANGEL_ARM_DEG, WALL_ANGEL_ELBOW_DEG
+    arm = arm_w + (arm_y-arm_w)*progress
+    elbow = elbow_w + (elbow_y-elbow_w)*(1-(1-progress)**WALL_ANGEL_ELBOW_EASE)
+    # Elevation follows the arm at about the lateral raise's rate and reaches
+    # the press's 22-degree girdle at the top.
+    return arm, elbow, (arm-30.0)/(arm_y-30.0)
+
+
+def set_bone_frame(pb, x_axis, y_axis):
+    """Give a pose bone an exact orientation; its head stays where it is."""
+    matrix = Matrix((x_axis, y_axis, x_axis.cross(y_axis))).transposed().to_4x4()
+    matrix.translation = pb.head
+    pb.matrix = matrix
+
+
+def wall_angel_arm(rig, side, sign, arm_deg, elbow_deg, lean):
+    """Pose one arm against the wall as a pure elbow hinge.
+
+    The upper arm keeps its frontal-plane angle and leans back toward the wall
+    by `lean`. The hinge axis is the camera-facing axis made perpendicular to
+    it, so the forearm bends toward the head within the leaning arm's plane,
+    the palm faces forward and the backs of the arm and hand face the wall.
+    Deriving the hinge from the two segments instead would swing it sideways
+    as the elbow straightens and twist the palm.
+    """
+    upper, lower, hand = [rig.pose.bones[n + "_" + side] for n in ["upperarm", "lowerarm", "hand"]]
+    arm, bend = math.radians(arm_deg), math.radians(180.0-elbow_deg)
+    along = Vector((sign*math.sin(arm), 0, -math.cos(arm)))
+    upper_direction = along*math.sqrt(1-lean**2) + Vector((0, lean, 0))
+    facing = Vector((0, -sign, 0))
+    hinge = (facing - upper_direction*facing.dot(upper_direction)).normalized()
+    fore_direction = upper_direction*math.cos(bend) + hinge.cross(upper_direction)*math.sin(bend)
+    set_bone_frame(upper, hinge, upper_direction)
+    bpy.context.view_layer.update()
+    set_bone_frame(lower, hinge, fore_direction)
+    bpy.context.view_layer.update()
+    aim_bone(hand, fore_direction)
+    bpy.context.view_layer.update()
+
+
+def pose_wall_angel(rig, progress, lean):
+    """Pose both girdles and arms for a slide position, starting from the neutral pose."""
+    arm, elbow, girdle = wall_angel_targets(progress)
+    for side, sign in [("l", 1), ("r", -1)]:
+        press_girdle(rig, side, sign, girdle, WALL_ANGEL_RETRACTION_DEG)
+        wall_angel_arm(rig, side, sign, arm, elbow, lean)
+
+
+def reset_pose(rig, neutral, fingers, posture=None):
+    for name, matrix in neutral.items():
+        rig.pose.bones[name].matrix_basis = matrix
+    for name, quaternion in fingers.items():
+        rig.pose.bones[name].rotation_quaternion = quaternion
+    bpy.context.view_layer.update()
+    if posture:
+        wall_posture(rig, *posture)
+
+
+def wall_posture(rig, extension_deg, retraction_deg):
+    """Bring the upper back and the back of the head to the wall; the pelvis and legs stay put.
+
+    The thoracic extension is shared between spine_02 and spine_03. The neck
+    retracts by extending neck_01 while the head flexes by the same amount, a
+    chin tuck that keeps the face upright. Both are held for the whole clip.
+    """
+    right = Vector((1, 0, 0))
+    for name, share in [("spine_02", .5), ("spine_03", .5)]:
+        rotate_world(rig.pose.bones[name], right, -math.radians(extension_deg*share))
+        bpy.context.view_layer.update()
+    rotate_world(rig.pose.bones["neck_01"], right, -math.radians(retraction_deg))
+    bpy.context.view_layer.update()
+    rotate_world(rig.pose.bones["head"], right, math.radians(retraction_deg))
+    bpy.context.view_layer.update()
+
+
+def posterior_gap(points, wall_y, z_range, half_width):
+    selected = points[(points[:, 2] >= z_range[0]) & (points[:, 2] < z_range[1]) & (np.abs(points[:, 0]) < half_width)]
+    return wall_y - float(selected[:, 1].max())
+
+
+def calibrate_wall_posture(scene, rig, neutral, fingers, wall_y):
+    """Solve the extension and retraction that put the upper back and head WALL_POSTURE_GAP_M from the wall.
+
+    Measured on exactly what renders - the masked body, the evaluated garments
+    and any hair - at the W pose; the trunk and head do not move during the
+    clip. (Unmasking the body would let MakeHuman's hidden helper shells, such
+    as the hair helper, touch the wall instead of the visible surfaces.)
+    """
+    surfaces = [scene.objects[n] for n in MESH_NAMES] + [o for o in [scene.objects.get("Figure_Hair")] if o]
+    saved = [(m, m.show_viewport) for obj in surfaces for m in obj.modifiers]
+    for modifier, _ in saved:
+        modifier.show_viewport = True
+    upper_back, head = (1.12, 1.36, .16), (1.48, 1.72, .13)
+    extension, retraction = 0., 0.
+
+    def rendered_points():
+        return np.vstack([evaluated_points(obj) for obj in surfaces])
+
+    try:
+        for _ in range(12):
+            reset_pose(rig, neutral, fingers, (extension, retraction))
+            points = rendered_points()
+            back_gap = posterior_gap(points, wall_y, upper_back[:2], upper_back[2])
+            head_gap = posterior_gap(points, wall_y, head[:2], head[2])
+            # About 0.25 m of trunk above spine_02 and 0.1 m of neck act as the levers.
+            extension += math.degrees(.7*(back_gap-WALL_POSTURE_GAP_M)/.25)
+            retraction += math.degrees(.7*(head_gap-WALL_POSTURE_GAP_M)/.10)
+            extension, retraction = min(12., max(0., extension)), min(15., max(0., retraction))
+        reset_pose(rig, neutral, fingers, (extension, retraction))
+        points = rendered_points()
+        result = {"thoracic_extension_deg": extension, "neck_retraction_deg": retraction,
+                  "upper_back_gap_mm": posterior_gap(points, wall_y, upper_back[:2], upper_back[2])*1000,
+                  "head_gap_mm": posterior_gap(points, wall_y, head[:2], head[2])*1000}
+    finally:
+        for modifier, value in saved:
+            modifier.show_viewport = value
+    return (extension, retraction), result
+
+
+def wall_lean_at(fit, progress):
+    return float(np.polyval(fit, progress))
+
+
+def evaluated_points(obj):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        co = np.empty(len(mesh.vertices)*3, dtype=np.float64)
+        mesh.vertices.foreach_get("co", co)
+        world = np.array(evaluated.matrix_world)
+        return co.reshape(-1, 3) @ world[:3, :3].T + world[:3, 3]
+    finally:
+        evaluated.to_mesh_clear()
+
+
+def arm_skin(body):
+    """Unmasked body vertices dominated by an arm, hand or finger bone."""
+    names = {g.index: g.name for g in body.vertex_groups}
+    stems = ["upperarm", "lowerarm", "hand"] + [f"{finger}_{joint:02d}" for finger in ARM_FINGERS for joint in [1, 2, 3]]
+    arm_groups = {f"{stem}_{side}" for stem in stems for side in ["l", "r"]}
+    return np.array([vertex.index for vertex in body.data.vertices
+                     if any(names[g.group] == "body" and g.weight > 0 for g in vertex.groups)
+                     and sum(g.weight for g in vertex.groups if names[g.group] in arm_groups) >= .5])
+
+
+def calibrate_wall_lean(scene, rig, neutral, fingers, wall_y, posture=None, knots=9):
+    """Solve how far the arms lean back so their nearest skin sits WALL_ARM_GAP_M from the wall.
+
+    Solved at evenly spaced slide positions on the body deformed by the rig
+    alone, then fitted with a cubic so the lean changes smoothly. The saved-scene
+    inspector independently measures the wall clearance of every frame.
+    """
+    body = scene.objects["Figure_Body"]
+    saved = [(m, m.show_viewport) for m in body.modifiers]
+    for modifier in body.modifiers:
+        # Keep original vertex indices: deform with the rig, skip the mask.
+        modifier.show_viewport = modifier.type == "ARMATURE"
+    arm_ids = arm_skin(body)
+    target = wall_y - WALL_ARM_GAP_M
+    reach = rig.pose.bones["upperarm_l"].bone.length + rig.pose.bones["lowerarm_l"].bone.length
+    solved = []
+    try:
+        for progress in np.linspace(0, 1, knots):
+            lean = .15
+            for _ in range(15):
+                reset_pose(rig, neutral, fingers, posture)
+                pose_wall_angel(rig, float(progress), lean)
+                gap = target - evaluated_points(body)[arm_ids, 1].max()
+                lean = min(.6, max(0., lean + .7*gap/(.6*reach)))
+            reset_pose(rig, neutral, fingers, posture)
+            pose_wall_angel(rig, float(progress), lean)
+            points = evaluated_points(body)[arm_ids]
+            nearest = int(points[:, 1].argmax())
+            solved.append({"progress": float(progress), "lean": lean,
+                           "arm_gap_mm": float(wall_y - points[nearest, 1])*1000,
+                           "nearest_point": points[nearest].round(4).tolist()})
+    finally:
+        for modifier, value in saved:
+            modifier.show_viewport = value
+    fit = np.polyfit([s["progress"] for s in solved], [s["lean"] for s in solved], 3).tolist()
+    return fit, solved
+
+
+def rearmost_point(scene):
+    return max(float(evaluated_points(scene.objects[n])[:, 1].max()) for n in MESH_NAMES)
+
+
+def add_wall(scene, wall_y):
+    """A plain matte wall facing the camera, for the figure to stand against.
+
+    A source with the upgraded studio backdrop lends the wall its material, so
+    the wall matches the other clips' background.
+    """
+    mesh = bpy.data.meshes.new("Exercise wall")
+    mesh.from_pydata([(-4., wall_y, 0.), (4., wall_y, 0.), (4., wall_y, 4.5), (-4., wall_y, 4.5)],
+                     [], [(0, 1, 2, 3)])
+    # A perpendicular wall at the far end turns the side view's background
+    # into a room corner instead of the open set past the wall's edge. The
+    # front camera never sees it.
+    corner = bpy.data.meshes.new("Room corner")
+    corner.from_pydata([(-4., wall_y, 0.), (-4., wall_y, 4.5), (-4., wall_y - 8., 4.5), (-4., wall_y - 8., 0.)],
+                       [], [(0, 1, 2, 3)])
+    material = bpy.data.materials.get("Studio backdrop")
+    if material is None:
+        material = bpy.data.materials.new("Wall paint")
+        material.use_nodes = True
+        shader = next(n for n in material.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+        shader.inputs["Base Color"].default_value = WALL_RGBA
+        shader.inputs["Roughness"].default_value = .92
+        if "Specular IOR Level" in shader.inputs:
+            shader.inputs["Specular IOR Level"].default_value = .12
+    mesh.materials.append(material)
+    corner.materials.append(material)
+    wall = bpy.data.objects.new("Exercise_Wall", mesh)
+    scene.collection.objects.link(wall)
+    scene.collection.objects.link(bpy.data.objects.new("Room corner", corner))
+    return wall
+
+
+def make_animation(scene, rig, exercise, source_poses, wall_fit=None, posture=None, hip=None):
     neutral = source_poses[1]
     rig.animation_data_clear()
-    fingers = hand_profile(rig, neutral, exercise == "ex_007") if exercise in ["ex_005", "ex_007"] else {}
+    fingers = (hand_profile(rig, neutral, exercise == "ex_007")
+               if exercise in ["ex_005", "ex_007", "ex_008"] else {})
     press = press_profile(rig, neutral, fingers) if exercise == "ex_007" else {}
     rig.animation_data_create()
     rig.animation_data.action = bpy.data.actions.new(exercise + "_figure_draft")
@@ -286,30 +812,11 @@ def make_animation(scene, rig, exercise, source_poses):
                 aim_bone(rig.pose.bones["hand_" + side], direction)
                 bpy.context.view_layer.update()
         elif exercise == "ex_005":
-            lean = SIDE_BEND_PEAK_DEG * (excursion(frame, 20, 80, 100, 160) -
-                           excursion(frame, 200, 260, 280, 340))
-            # The pelvis and lower limbs are never keyed. Distributing the
-            # bend lets the trunk curve while the neck follows the torso.
-            for name, weight in [("spine_01", .40), ("spine_02", .35), ("spine_03", .25)]:
-                rotate_world(rig.pose.bones[name], Vector((0, 1, 0)), math.radians(lean * weight))
-                bpy.context.view_layer.update()
-            for side, sign in [("l", 1), ("r", -1)]:
-                # Upper arms follow the torso while the softer elbows let the
-                # forearms hang downward instead of forming rigid diagonal bars.
-                spread = 12.0 - abs(lean) if sign * lean > 0 else 12.0 + abs(lean)
-                angle = math.radians(sign * spread)
-                direction = Vector((math.sin(angle), 0, -math.cos(angle)))
-                aim_bone(rig.pose.bones["upperarm_" + side], direction)
-                bpy.context.view_layer.update()
-                # The raised-side hand clears the front of the waist at the
-                # deeper bend instead of passing through the shirt/shorts.
-                forward = .12 + (.37 * abs(lean)/SIDE_BEND_PEAK_DEG if sign * lean < 0 else 0)
-                forearm_spread = 10.0 - 4.0*abs(lean)/SIDE_BEND_PEAK_DEG
-                direction = Vector((sign*math.sin(math.radians(forearm_spread)), -forward, -1)).normalized()
-                aim_bone(rig.pose.bones["lowerarm_" + side], direction)
-                bpy.context.view_layer.update()
-                aim_bone(rig.pose.bones["hand_" + side], direction)
-                bpy.context.view_layer.update()
+            # One bend per loop, away from the hip hand.
+            away = 1 if SIDE_BEND_HIP_SIDE == "r" else -1
+            lean = away * SIDE_BEND_PEAK_DEG * excursion(frame, 20, 80, 100, 160)
+            side_bend_trunk(rig, lean)
+            side_bend_arms(rig, lean, hip)
         elif exercise == "ex_007":
             progress = excursion(frame, 24, 120, 144, 240)
             for side, sign in [("l", 1), ("r", -1)]:
@@ -332,7 +839,14 @@ def make_animation(scene, rig, exercise, source_poses):
                 lower.matrix = matrix
                 rig.pose.bones["hand_" + side].matrix_basis = profile["hand_basis"]
                 bpy.context.view_layer.update()
-        for name in KEY_BONES + list(fingers):
+        elif exercise == "ex_008":
+            if posture:
+                wall_posture(rig, *posture)
+            progress = wall_angel_progress(frame)
+            pose_wall_angel(rig, progress, wall_lean_at(wall_fit, progress))
+        # Only the wall-angel posture moves the neck and head, so only it keys them.
+        extra = ["neck_01", "head"] if exercise == "ex_008" and posture else []
+        for name in KEY_BONES + extra + list(fingers):
             pb = rig.pose.bones[name]
             q = pb.rotation_quaternion.copy()
             if name in previous and q.dot(previous[name]) < 0:
@@ -373,12 +887,65 @@ def fit_camera(scene):
             "camera_location": list(scene.camera.location), "frames_measured": scene.frame_end}
 
 
-def labels(scene, spec):
+def add_side_camera(scene, spec, step=5):
+    """A full-frame side camera for the second repetition, switched in by a timeline marker.
+
+    It looks from the figure's left, turned toward the front so the wall's face
+    shows. Its distance is solved in closed form from the skinned body's
+    envelope sampled through the animation, so the figure stays inside the same
+    view limits as the front camera's (the saved-scene inspector re-checks
+    every frame with whichever camera is active). A lens shift moves the band
+    below the title area. The camera gets its own labels.
+    """
+    body = scene.objects["Figure_Body"]
+    points = []
+    for frame in range(1, WALL_REP_FRAMES + 1, step):
+        scene.frame_set(frame)
+        points.append(evaluated_points(body))
+    points = np.vstack(points)
+    target = (points.min(axis=0) + points.max(axis=0)) / 2
+    yaw = math.radians(WALL_SIDE_VIEW["yaw_deg"])
+    forward = Vector((-math.cos(yaw), math.sin(yaw), 0.0))
+    data = bpy.data.cameras.new("Side camera")
+    data.lens, data.sensor_fit = 35.0, "VERTICAL"
+    camera = bpy.data.objects.new("Side camera", data)
+    scene.collection.objects.link(camera)
+    camera.rotation_euler = forward.to_track_quat("-Z", "Y").to_euler()
+    basis = camera.rotation_euler.to_matrix()
+    right, up = np.array(basis.col[0]), np.array(basis.col[1])
+    ahead = np.array(forward)
+    x0, x1, y0, y1 = WALL_SIDE_VIEW["band"]
+    half_h = data.sensor_height / 2 / data.lens
+    half_w = half_h * scene.render.resolution_x / scene.render.resolution_y
+    rel = points - target
+    depth = rel @ ahead
+    distance = float(max((np.abs(rel @ right) / ((x1 - x0) * half_w) - depth).max(),
+                         (np.abs(rel @ up) / ((y1 - y0) * half_h) - depth).max()))
+    camera.location = Vector(target) - forward * distance
+    # Shift is measured in the frame's larger dimension (its height here).
+    data.shift_x = .5 - (x0 + x1) / 2
+    data.shift_y = .5 - (y0 + y1) / 2
+    bpy.context.view_layer.update()
+    main = scene.camera
+    labels(scene, spec, camera=camera, prefix="Side preview ",
+           guides="Side view | Draft preview | Timing is illustrative", markers=False)
+    for name, frame, view in [("Front view", 1, main), ("Side view", WALL_SIDE_VIEW["switch_frame"], camera)]:
+        scene.timeline_markers.new(name, frame=frame).camera = view
+    return {"camera": camera.name, "main_camera": main.name, "location": list(camera.location),
+            "rotation_euler": list(camera.rotation_euler), "lens_mm": data.lens,
+            "shift": [data.shift_x, data.shift_y],
+            **{k: list(v) if isinstance(v, tuple) else v for k, v in WALL_SIDE_VIEW.items()}}
+
+
+def labels(scene, spec, camera=None, prefix="Preview ", guides="Draft preview | Timing is illustrative",
+           markers=True):
+    camera = camera or scene.camera
     for obj in list(scene.objects):
-        if obj.name.startswith("Preview "):
+        if obj.name.startswith(prefix):
             bpy.data.objects.remove(obj, do_unlink=True)
-    scene.timeline_markers.clear()
-    corners = [v / abs(v.z) for v in scene.camera.data.view_frame(scene=scene)]
+    if markers:
+        scene.timeline_markers.clear()
+    corners = [v / abs(v.z) for v in camera.data.view_frame(scene=scene)]
     xmin, xmax = min(v.x for v in corners), max(v.x for v in corners)
     ymin, ymax = min(v.y for v in corners), max(v.y for v in corners)
     material = bpy.data.materials.get("Figure preview text")
@@ -391,21 +958,22 @@ def labels(scene, spec):
         data.size = size / scene.render.resolution_y * (ymax - ymin)
         obj = bpy.data.objects.new(name, data)
         scene.collection.objects.link(obj)
-        obj.parent = scene.camera
+        obj.parent = camera
         obj.location = (xmin + x * (xmax - xmin), ymin + y * (ymax - ymin), -1)
         obj.data.materials.append(material)
         obj.visible_shadow = False
         return obj
 
-    text("Preview title", spec["title"], .065, .951, 28)
-    text("Preview guides", "Draft preview | Timing is illustrative", .065, .910, 19)
+    text(prefix + "title", spec["title"], .065, .951, 28)
+    text(prefix + "guides", guides, .065, .910, 19)
     for start, end, word in spec["phases"]:
-        obj = text(f"Preview phase {start:03d}", word, .935, .951, 25, "RIGHT")
+        obj = text(f"{prefix}phase {start:03d}", word, .935, .951, 25, "RIGHT")
         for frame in sorted({1, start, end + 1, scene.frame_end + 1}):
             obj.hide_render = obj.hide_viewport = not (start <= frame <= end)
             obj.keyframe_insert("hide_render", frame=frame)
             obj.keyframe_insert("hide_viewport", frame=frame)
-        scene.timeline_markers.new(word, frame=start)
+        if markers:
+            scene.timeline_markers.new(word, frame=start)
 
 
 def main():
@@ -428,7 +996,16 @@ def main():
         rig = scene.objects["Figure_Rig"]
         original_meshes = {n: mesh_digest(scene.objects[n]) for n in MESH_NAMES}
         garment_adjustment = (stabilize_press_top(scene.objects["Figure_Top"])
-                              if exercise == "ex_007" else None)
+                              if exercise in ["ex_007", "ex_008"] else None)
+        wall = hip = None
+        if exercise == "ex_008":
+            # The trunk, pelvis and legs never move, so the source's first frame
+            # fixes the rearmost evaluated point of the body and garments.
+            scene.frame_set(1)
+            rear = rearmost_point(scene)
+            wall = {"surface_y_m": rear + WALL_GAP_M, "rearmost_point_y_m": rear,
+                    "torso_gap_m": WALL_GAP_M, "arm_skin_gap_target_m": WALL_ARM_GAP_M,
+                    "retraction_deg": WALL_ANGEL_RETRACTION_DEG}
         # Disable costly evaluated surfaces while authoring bone controls.
         states = [(m, m.show_viewport) for n in MESH_NAMES for m in scene.objects[n].modifiers]
         for modifier, _ in states:
@@ -442,7 +1019,23 @@ def main():
         scene.render.fps, scene.render.fps_base = 30, 1.0
         scene.render.resolution_x, scene.render.resolution_y = 870, 980
         scene.render.resolution_percentage = 100
-        make_animation(scene, rig, exercise, source_poses)
+        wall_fit = posture = None
+        if wall is not None:
+            rig.animation_data_clear()
+            relaxed = hand_profile(rig, source_poses[1], False)
+            if WALL_POSTURE:
+                # The posture moves the shoulders, so it is solved before the arms.
+                posture, posture_record = calibrate_wall_posture(scene, rig, source_poses[1], relaxed,
+                                                                 wall["surface_y_m"])
+                wall["posture"] = posture_record
+            wall_fit, solved = calibrate_wall_lean(scene, rig, source_poses[1], relaxed,
+                                                   wall["surface_y_m"], posture)
+            wall.update({"arm_lean_cubic": wall_fit, "arm_lean_calibration": solved})
+        if exercise == "ex_005":
+            rig.animation_data_clear()
+            hip, hip_record = calibrate_side_bend_hands(scene, rig, source_poses[1],
+                                                        hand_profile(rig, source_poses[1], False))
+        make_animation(scene, rig, exercise, source_poses, wall_fit, posture, hip)
         for modifier, value in states:
             modifier.show_viewport = value
         # Only the body is needed for camera fitting; restore garments before
@@ -454,12 +1047,17 @@ def main():
         for modifier, value in garment_states:
             modifier.show_viewport = value
         labels(scene, spec)
+        if wall is not None:
+            add_wall(scene, wall["surface_y_m"])
+            wall["side_view"] = add_side_camera(scene, spec)
+            scene["side_view"] = json.dumps(wall["side_view"])
         if any(mesh_digest(scene.objects[n]) != original_meshes[n] for n in MESH_NAMES):
             raise RuntimeError("Source mesh coordinates changed")
         for key in [k for k in scene.keys() if k.startswith("figure_camera_fit")]:
             del scene[key]
-        revision = ("mpfb-side-bend-depth-2026-09-16" if exercise == "ex_005" else
+        revision = ("mpfb-side-bend-hands-2026-09-25" if exercise == "ex_005" else
                     "mpfb-straight-press-2026-09-15" if exercise == "ex_007" else
+                    "mpfb-wall-angels-2026-09-25" if exercise == "ex_008" else
                     "mpfb-exercise-feedback-2026-09-14")
         manifest = {"exercise": exercise, "revision": revision,
                     "source_file": source.name, "source_sha256": source_hash,
@@ -470,12 +1068,20 @@ def main():
                     "garment_weight_adjustment": garment_adjustment,
                     "camera_fit": camera_fit,
                     "scope": "Presentation asset only; no product integration or clinical validation."}
+        if wall is not None:
+            manifest["wall"] = wall
+        if hip is not None:
+            manifest["side_bend_hands"] = {"hip_side": SIDE_BEND_HIP_SIDE, "hip_rest": hip_record,
+                                           **{k: list(v) if isinstance(v, tuple) else v for k, v in SIDE_BEND_HIP.items()},
+                                           "dangle_spread_deg": list(SIDE_BEND_DANGLE_DEG)}
         scene["exercise_draft"] = json.dumps(manifest)
         if exercise != "ex_006":
             scene["figure_source_girdle_scale"] = scene.get("figure_girdle_scale", .475)
             if "figure_girdle_scale" in scene:
                 del scene["figure_girdle_scale"]
-            scene["figure_hand_pose"] = "neutral wrist; " + ("closed fist" if exercise == "ex_007" else "relaxed fingers")
+            scene["figure_hand_pose"] = "neutral wrist; " + (
+                "closed fist" if exercise == "ex_007" else
+                "relaxed fingers, palms forward" if exercise == "ex_008" else "relaxed fingers")
         scene.frame_set(1)
         bpy.context.view_layer.objects.active = rig
         bpy.ops.wm.save_as_mainfile(filepath=str(output.resolve()))

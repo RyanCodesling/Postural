@@ -1,23 +1,33 @@
 # Additional exercise animation drafts
 
-Three editable animations reuse the clothed MPFB figure. These are presentation
+Four editable animations reuse the clothed MPFB figure. These are presentation
 drafts for review; timing and ranges are authored display choices, not patient
-prescriptions or scoring calibration. The arm-hold and overhead-press MP4s play
-in the camera page's Reference Guide as low-priority, illustrative guides: each
-is copied unmodified into the gitignored `web/public/demos/` folder and shown
-through the same crop as the lateral-raise guide, set in
-`web/src/lib/exercises/demoClips.ts`. The side-bend guide is withheld for now.
-Assisted neck stretch (`ex_004`) and wall angels (`ex_008`) are on hold.
-Deprecated exercises `ex_002` and `ex_003` are not included.
+prescriptions or scoring calibration. The side-bend, arm-hold, overhead-press and
+wall-angels MP4s play in the camera page's Reference Guide as low-priority,
+illustrative guides: each is copied unmodified into the gitignored
+`web/public/demos/` folder and shown through the same crop as the lateral-raise
+guide, set in `web/src/lib/exercises/demoClips.ts`. The neck exercise (`ex_004`)
+is now active alternating neck tilts rather than the assisted stretch, and its
+animation will follow that version. Deprecated exercises `ex_002` and `ex_003`
+are not included.
 
 | Exercise | Editable source | Preview | Timeline |
 | --- | --- | --- | --- |
 | Standing Side Bends | [Blender source](ex_005_figure_mpfb.blend) | [MP4](previews/ex_005_mpfb/ex_005_figure_motion.mp4) | 360 frames / 12 s |
 | Arm Abduction at 90 degrees | [Blender source](ex_006_figure_mpfb.blend) | [MP4](previews/ex_006_mpfb/ex_006_figure_motion.mp4) | 300 frames / 10 s |
 | Overhead Shoulder Press | [Blender source](ex_007_figure_mpfb.blend) | [MP4](previews/ex_007_mpfb/ex_007_figure_motion.mp4) | 300 frames / 10 s |
+| Wall Angels | [Blender source](ex_008_figure_mpfb.blend) | [MP4](previews/ex_008_mpfb/ex_008_figure_motion.mp4) | 468 frames / 15.6 s: one repetition from the front, one from the side |
 
 All scenes use 30 fps and retain an editable 870 x 980 camera. Review videos
-render at 522 x 588 with 24 EEVEE samples. The whole figure, including overhead
+render at 522 x 588 with 24 EEVEE samples. The arm hold, overhead press and wall
+angels play in the Reference Guide as full-size re-renders in the upgraded look
+(see [MPFB_FIGURE.md](MPFB_FIGURE.md#upgraded-presentation-look)). Those are
+870 x 980 at 64 samples, rebuilt by this builder from the upgraded figure into
+`previews/slate_2026_09_25/`, with the same motion and the same checks passed.
+The side bend plays a one-sided version at the same size and look, rebuilt by
+this builder from the upgraded figure into `previews/side_bend_one_side_2026_09_25/`:
+180 frames (6 s), one bend per loop. The table's 360-frame alternating side bend
+remains the archived earlier draft. The whole figure, including overhead
 fingertips, stays below the title area. The body and garments retain their
 original mesh coordinates and topology. The original lateral-raise scene and
 video remain unchanged. Source provenance is in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md).
@@ -26,13 +36,19 @@ video remain unchanged. Source provenance is in [THIRD_PARTY_ASSETS.md](THIRD_PA
 
 The active exercise definitions remain in [registry.ts](../../web/src/lib/exercises/registry.ts).
 
-- Side bends alternate through a neutral standing position. The latest draft
-  distributes a 42-degree driver across three spine controls, with about 24%
-  more measured excursion than the preceding draft. The pelvis and feet stay
-  planted, and the head keeps its neutral relation to the upper torso.
-  Soft elbows let the forearms hang downward; the fingers are gently
-  curled. Arm clearance changes through the bend to keep the hands clear of the
-  shirt and shorts.
+- Side bends distribute a 42-degree driver across three spine controls, with
+  about 24% more measured excursion than the draft before them. The pelvis and
+  feet stay planted, and the head keeps its neutral relation to the upper torso.
+  By user direction on 2026-09-25, the version in the Reference Guide bends to
+  one side only, so that it does not suggest alternating. The trunk bends
+  toward the figure's left, and the left arm hangs under gravity with a soft
+  elbow. The right hand rests on the right hip from the first frame to the last:
+  palm on the waist, fingers forward along it, thumb laid back, elbow out.
+  The builder places that hand against the rendered garments. The palm faces
+  the waist's mean surface normal over the hand's footprint. Its distance out
+  is solved at five bend shares, so the nearest hand or forearm skin stays
+  2 mm outside the clothing while the waist moves with the trunk. The earlier
+  alternating draft in the table hangs both arms instead.
 - The arm hold raises both arms, pauses at shoulder height, and lowers them.
   The accepted shoulder pose is retained. Forearms are straightened: the source
   had a depth bend concealed by the front view. The therapist sets the actual
@@ -48,6 +64,23 @@ The active exercise definitions remain in [registry.ts](../../web/src/lib/exerci
   accommodates the movement from the folded start. The top's upper-arm weights
   transfer to the same-side clavicle so the straps follow the shoulder rather than
   being dragged with the humerus. Body weights and garment coordinates are unchanged.
+- Wall angels stand the figure against a wall object placed 3 mm behind its
+  rearmost garment point, feet about 75 mm out. Both arms slide in the wall's
+  plane from a W (upper arms 60 degrees from the sides, elbows 90 degrees) up to a
+  Y (140 degrees, straight elbows) and back; the elbows straighten slightly ahead
+  of the rise, and each elbow is a pure hinge whose axis faces the camera, so the
+  palms face forward. As physiotherapy guides describe, the upper back and the
+  back of the head rest against the wall: a small thoracic extension and a chin
+  tuck, solved to a 5 mm gap, put them there. One arm lean per slide position is
+  solved so the nearest arm or hand skin sits 6 mm from the wall. The girdle
+  rises to the press's 22 degrees with a constant 15-degree retraction, and the
+  press's clavicle reweighting of the top is reused. The W is lower than a 90/90
+  goal post on purpose: the app re-arms its counter below 70 on this metric. The
+  clip shows one repetition from the front and the next from a side camera; the
+  view switches at the rest through camera-bound timeline markers, each camera
+  carries its own labels, and a room-corner wall closes the side view's
+  background. Short rests keep the loop at 15.6 s; the slides keep the press's
+  95-frame pace.
 
 The `exercise_draft` scene property and adjacent JSON file describe the new
 timeline, pose choices, camera fit and garment adjustment. In the revised side-bend
@@ -59,7 +92,8 @@ The rig has no scapula bone and does not model clinical shoulder rhythm.
 
 Movement descriptions were checked against the registry and primary references:
 [CUH spinal exercises](https://www.cuh.nhs.uk/patient-information/spinal-range-of-movementstretching-exercises/)
-for a hand sliding beside the outer leg, and the arm-extension sequence in
+for a hand sliding beside the outer leg (the one-sided version's hand on the
+hip follows the user's direction rather than that reference), and the arm-extension sequence in
 [Gloucestershire Hospitals exercise guidance](https://www.gloshospitals.nhs.uk/your-visit/patient-information-leaflets/simple-exercises-encourage-weight-loss/)
 for a shoulder-to-overhead movement. The latter is a seated, weighted example;
 the existing registry supplies this draft's standing, bilateral bodyweight
@@ -131,6 +165,34 @@ check the authored animation; they do not define exercise prescriptions.
 The saved straight-path press has less than 0.002 mm of measured fist-center drift
 and approximately 15 degrees of minimum elbow bend throughout the loop.
 
+The one-sided side bend passed all 180 frame checks. The trunk bends from 0 to
+33.18 degrees toward the hanging arm and never the other way (the inspector
+requires at least 24 degrees and allows 0.1 degrees back). The hanging forearm
+stays within 9.9 degrees of downward, with a neutral wrist. On every frame the
+hip hand's nearest skin sits 1.8 to 2.4 mm from the clothing (the inspector
+allows up to 10 mm). No hand or forearm skin passes into the garments on any
+frame; hand skin is chosen by its bone weights, and a point beside an open hem
+counts at its plain distance. Joints move at most 14.9 mm between frames. The
+resting wrist bends up to 80 degrees, as a hand on the hip needs. Bending the
+hanging wrist, narrowing the camera and adding head rotation must be rejected.
+
+The saved wall-angel scene passed all 468 frame checks. The W measures 60.0 degrees
+with 90.0-degree elbows and the Y 140.0 degrees with straight elbows; once the upper
+arm passes 120 degrees the elbows stay at or above 162.4 degrees. No body or garment
+point comes within 3.0 mm of the wall. Each arm's nearest skin sits about 6 mm from
+it at the W, mid-slide and Y; each side is checked separately. The upper back sits
+5.9 mm from the wall and the head 5.0 mm, and the palms stay within 9 degrees of
+facing forward. That nearest skin is not everywhere wall-angel guides ask for
+contact. The inspector also reports each side's skin within 35 mm of the elbow,
+wrist and middle knuckle. At the W the elbows sit 9.9 mm off the wall, the wrists
+20.2 mm and the knuckles 24.9 mm; at the Y they sit 15.4, 8.1 and 7.0 mm. A 30 mm
+limit on these guards against regression and does not claim contact. The inspector
+also confirms that the front and side views alternate at frame 235, that the side
+repetition repeats the front one exactly, and that the figure stays inside the
+framing limits in both views. It must reject three changes: the wall pushed 20 mm
+into the figure, an elbow bent at the top, and one whole arm carried about 50 mm
+off the wall while the other stays.
+
 The revised side bend was also measured through MediaPipe and the current app's
 metric, filter, counter, warning and cue modules. The old and new renders were
 both freshly extracted in the same environment, letterboxed to 1280 x 720.
@@ -144,17 +206,44 @@ compatibility, not that warning-fit issue. See
 runtime details. The replay uses a rendered avatar, a pre-captured neutral window
 and synthetic 30 fps timestamps; it is not a live or clinical validation.
 
+The one-sided side bend was replayed the same way. The pose model found the
+figure in all 180 frames and capture readiness passed on each. It counts one
+partial repetition to the left, peaking at 18.8 against the minimum of 15, as
+the alternating draft's left bend did. The coupled neck-tilt warning latches on
+171 of 180 frames, as before. The shoulder-elevation warning latches on 106
+frames (59%), against 35% for the arms-down draft, because the hand on the hip
+moves that shoulder's landmark. A latched warning is not a displayed cue: the
+camera page shows one cue at a time, chosen on its 150 ms tick by priority, and
+the neck cue outranks the shoulder cue. Replayed with that cadence and selector,
+the neck cue is shown on 145 of 180 frames and the shoulder cue on none, as with
+the arms-down draft (325 of 360, and none). The asymmetric neutral pose also
+lowers the frozen camera tilt estimate to 3.7 degrees at low confidence; the
+counted peak is unchanged, because the side bend measures from its own neutral
+baseline.
+
+The wall-angel clip's front repetition was replayed the same way, following the
+camera page's per-limb path (per-side smoothing, counters and warning signals,
+and the near-peak gate). The pose model found the figure in all 234 frames and
+capture readiness passed on each. The W reads 44.8-52.1 in the pipeline's units,
+under the 70 re-arm threshold. The top peaks at 154.1 and 154.4 against the 150
+target, so each side counts one complete repetition. Across the 87 frames near the
+top, the lowest elbow reading is 161.6 against the 150 warning, trunk lean stays
+at or under 0.3 against 5, and no warning latches. The side repetition is a
+demonstration angle only; a patient's front camera does not measure it.
+
 Each garment remains one connected surface, with four intended openings in the
 top and three in the shorts. Every evaluated garment vertex is checked against
-the body at eleven standard poses per animation. The revised side bend also
-passes eight intermediate checks near the hand/waist interaction, for nineteen
-sampled poses in total. Minimum sampled clearances:
+the body at eleven standard poses per animation. The alternating side-bend draft
+also passed eight intermediate checks near the hand/waist interaction, for
+nineteen sampled poses in total. Minimum sampled clearances:
 
 | Exercise | Top | Shorts |
 | --- | ---: | ---: |
-| Side bends | 1.360 mm | 1.556 mm |
+| Side bends, alternating draft | 1.360 mm | 1.556 mm |
+| Side bend, one-sided | 1.623 mm | 2.227 mm |
 | Arm hold | 1.116 mm | 3.036 mm |
 | Overhead press | 1.453 mm | 3.036 mm |
+| Wall angels | 1.056 mm | 3.027 mm |
 
 These are sampled vertex checks, not proof of continuous collision-free cloth
 or clinical correctness. The garments follow the rig without cloth physics.

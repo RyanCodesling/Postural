@@ -7,6 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "verify:coaching": "tsx scripts/verify-coaching.ts",
+    "verify:coaching:db": "tsx scripts/verify-coaching-readers.ts",
+    "replay:coaching": "tsx scripts/replay-coaching.ts",
     "profile:filter": "tsx scripts/profileOneEuroFilter.ts",
     "profile:sweep": "tsx scripts/sweepOneEuroFilter.ts",
     "seed:demo": "tsx scripts/seedDemo.ts"

@@ -7,6 +7,7 @@ import {
   type ExerciseDefinition,
 } from "./registry";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { coachingConfiguration } from "@/lib/pose/coachingConfig";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -55,9 +56,8 @@ export function effectiveCompensationBands(
  * that added coaching cues while implying a measurement change that did not
  * happen. Excluding it keeps the hashes byte-identical to their pre-cue values.
  *
- * Coaching configuration still deserves its own recorded version — that is part
- * of the planned measurement-contract work and is not implemented here. Until
- * it exists, a cue change is NOT captured by any persisted version.
+ * Coaching configuration is fingerprinted separately and stored in session
+ * context and set audit records. It never participates in trend grouping.
  */
 function measurementDefinition(definition: ExerciseDefinition): ExerciseDefinition {
   const compensationMetrics = definition.compensationMetrics.map((metric) => {
@@ -92,6 +92,10 @@ export const REGISTRY_VERSION = sha256Version({
   exercises: EXERCISE_REGISTRY,
   exerciseConfigVersions: EXERCISE_CONFIG_VERSIONS,
 });
+
+export const COACHING_CONFIG_VERSIONS: Record<string, string> = Object.fromEntries(
+  Object.entries(EXERCISE_REGISTRY).map(([id, definition]) => [id, sha256Version(coachingConfiguration(definition))]),
+);
 
 export function getAppRevision(): string {
   const candidate =

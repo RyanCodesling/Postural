@@ -39,7 +39,8 @@
  * For an `isometric` exercise, the state machine is NOT used. Instead, the
  * camera loop accumulates time-in-target-band using `isometric.targetBand` —
  * per limb for per-limb isometrics (ex_006), or per sign-attributed side for
- * bidirectional-alternating isometrics (ex_004).
+ * bidirectional-alternating isometrics (the side-split path; no current
+ * exercise uses it).
  *
  * ── COMPENSATION METRICS ─────────────────────────────────────────────────────
  * Listed metrics are displayed alongside the primary metric and logged per
@@ -81,7 +82,7 @@ export type MetricName =
   | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
   | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
   | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_006/ex_007/ex_008 (NOT ex_005 — side bends score neckTilt + scapularElevation instead)
-  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_006 (and deprecated ex_003; removed from ex_004 2026-06-11 — sloped shoulders are prescribed technique in the assisted stretch)
+  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_004/ex_006 (and deprecated ex_003; restored on ex_004 2026-09-24 with the active version — the shoulders should stay level, unlike the former assisted stretch's prescribed slope)
   | "neckTilt"               // existing — used as compensation metric on ex_005
   | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
@@ -100,7 +101,10 @@ export type Side = "left" | "right";
  * "per-limb": Two limbs work in parallel and are tracked independently.
  *   Camera loop runs ONE state machine per side, each fed its own
  *   per-side signed angle. Examples: lateral arm raise, overhead arm
- *   raise, shoulder shrug, T-pose hold.
+ *   raise, shoulder shrug, T-pose hold. A metric measured as ONE signed
+ *   angle (ex_004 neck flexion) is split by sign instead: the left side
+ *   sees the positive part, the right side the negative part's magnitude
+ *   (`splitSignedBySide` in poseMetrics.ts).
  *
  * "bidirectional-alternating": One bidirectional motion on a single signed
  *   scale (positive = patient's LEFT, negative = patient's RIGHT — the sign
@@ -108,9 +112,10 @@ export type Side = "left" | "right";
  *   Patient alternates sides. For a DYNAMIC exercise (ex_005) the camera loop
  *   runs ONE state machine fed the ABSOLUTE value of the signed angle, with
  *   the sign at peak time recorded separately so each rep can be tagged left
- *   or right. For an ISOMETRIC exercise (ex_004) no state machine runs; the
- *   camera loop accrues time-in-band PER SIDE from the sign of the angle —
- *   see the ex_004 entry for the band semantics.
+ *   or right. For an ISOMETRIC exercise no state machine runs; the camera
+ *   loop accrues time-in-band PER SIDE from the sign of the angle (the
+ *   side-split path, which ex_004 used as an assisted stretch until
+ *   2026-09-24 and which is kept intact).
  *
  * Unilateral exercises (bilateral: false) ignore this field.
  */
@@ -823,64 +828,64 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   },
 
   // ────────────────────────────────────────────────────────────────────────
-  // ex_004 — Neck Lateral Flexion (Cervical Side Bending, Isometric Hold)
-  // Patient tilts head ear-toward-shoulder, HOLDS at the target angle, then
-  // alternates to the other side. CONVERTED 2026-06-11 from a dynamic
-  // (rep-counted) exercise to an isometric hold: the slow, small-range
-  // alternating motion segments poorly as reps near MediaPipe's ear-line
-  // noise, while a held tilt maps cleanly onto the same time-in-band
-  // scoring ex_006 uses. The dynamic config (velocity-zero-crossing
-  // segmentation, 5/2/12/30 thresholds) lives in git history if needed.
+  // ex_004 — Neck Lateral Flexion (Active Alternating, Rep-Counted)
+  // Patient tilts the head ear-toward-shoulder without assistance, returns to
+  // centre, then tilts to the other side. RESTORED 2026-09-24 as an active
+  // repetition exercise, replacing the assisted isometric stretch used from
+  // 2026-06-11. Repetitions quantify what a hold cannot: active range per side
+  // per repetition (the per-side peak trend), count, tempo, left/right
+  // symmetry, trunk lean and a shoulder hike, with no hold angle or duration
+  // to prescribe and no overpressure on the head. The assisted-stretch
+  // definition is in git history and the camera loop's side-split isometric
+  // path is kept intact, so it can return unchanged if multi-person
+  // recordings show this counting is unreliable.
   //
-  // SCORING MODEL: one signed bidirectional signal (neckLateralFlexion;
-  // positive = patient's LEFT — pinned by neckSideAgreement.test.ts). The
-  // camera loop accrues hold time PER SIDE from the sign of the angle:
-  // left accrues while the signed angle is inside [center−tol, center+tol],
-  // right while inside [−center−tol, −center+tol]. The two sides are
-  // surfaced separately (never merged) and a set completes only when BOTH
-  // sides reach the prescribed hold — the slower side gates, preserving
-  // the asymmetry signal. No rep state machine runs (isometric).
+  // COUNTING MODEL: one signed signal (neckLateralFlexion; positive = patient's
+  // LEFT — pinned by neckSideAgreement.test.ts) is split by sign into per-side
+  // magnitudes (`splitSignedBySide` in poseMetrics.ts), and each side runs its
+  // own RepCounter, as the per-limb arm exercises do. Both designs tried in
+  // June 2026 failed live: one counter on |angle| could not tell a return
+  // stroke passing neutral from a small deliberate repetition, and a
+  // velocity/zero-crossing segmenter ghost-counted small posture adjustments.
+  // With the split, a return stroke past neutral lands on the OTHER side's
+  // counter, which discards it unless it reaches that side's minimum peak.
   // ────────────────────────────────────────────────────────────────────────
   ex_004: {
     id: "ex_004",
     name: "Neck Lateral Flexion",
-    kind: "isometric",
+    kind: "dynamic",
     bilateral: true,
-    bilateralMode: "bidirectional-alternating",
-    isometric: {
-      metric: "neckLateralFlexion",
-      targetBand: {
-        // PLACEHOLDER values — the clinical hold angle and tolerance are
-        // still pending a clinician decision; revise before validation.
-        // This exercise is the ASSISTED stretch (decided 2026-06-11): one
-        // hand applies gentle overpressure on the head, so the held angle
-        // sits at end-range, not at a sub-maximal target. The band is
-        // therefore one-sided in practice — "at least 12° toward that
-        // side": [12°, 88°] = center 50 ± 38.
-        center: 50,
-        // ±38° puts the lower band edge at 12°: strictly positive — required
-        // for sign-based side attribution (enforced in validateRegistry) —
-        // and at the noise-validated 12° floor, so landmark jitter near
-        // neutral cannot accrue hold time for either side. The upper edge
-        // (88°) sits above anything observable: a recorded clean assisted
-        // session measured holds at 44–63° (p95 55°, max 63°) — an earlier
-        // 48° ceiling based on anatomical neck range turned out wrong for
-        // this ear-line measurement (shoulder drop and head translation
-        // push it past anatomical cervical ROM) and was silently discarding
-        // 45% of legitimate hold time at the deepest stretch.
-        // Hold-quality note: for a stretch, drifting DEEPER during the hold
-        // is expected tissue creep, not failure — read drift/droop stats for
-        // this exercise with the opposite sign convention from the ex_006
-        // strength hold.
-        tolerance: 38,
+    bilateralMode: "per-limb",
+    primaryMetric: {
+      name: "neckLateralFlexion",
+      thresholds: {
+        // Pipeline units: the ear line is near-horizontal, so on a 16:9 frame
+        // a reading is larger than the true tilt. Engineering starting points,
+        // to be checked against multi-person recordings; not clinician-approved.
+        // At rest the unsmoothed ear-line angle measured ~2.3° SD and ~11°
+        // peak-to-peak, the noisiest metric in the registry, and the June 2026
+        // thresholds (5° start, 12° minimum peak) sat inside that noise. 12° is
+        // the floor already validated for the former hold band's lower edge.
+        startThreshold: 12,
+        // Half of start: a repetition completes once the head is back near
+        // centre, and always when it crosses into the other side (this side's
+        // magnitude then reads 0).
+        repCompleteThreshold: 6,
+        // Peaks below this are discarded as false starts, so a passive
+        // overshoot past neutral or a posture adjustment that briefly crosses
+        // the start threshold does not count. 18° ≈ 10° of true tilt on 16:9.
+        minimumPeakThreshold: 18,
+        // "complete" vs "partial" boundary. 30° (the June 2026 starting value)
+        // ≈ 18° of true tilt on 16:9: a modest active range, so reduced
+        // mobility records partial repetitions instead of losing them.
+        targetROM: 30,
       },
     },
     compensationMetrics: [
-      // Trunk lean during neck flexion = patient is bending the whole spine
-      // instead of isolating the neck. Strong quality indicator. Unbraced-floor
-      // band override (6° vs global 2°): clean assisted holds sway 1.8–3.4° and
-      // the global floor deducted on ~54% of clean-hold frames. The warning
-      // threshold stays the tighter 3° (warning ≠ score deduction here).
+      // Trunk lean during neck flexion = the whole spine bending instead of
+      // the neck. Unbraced-floor band override (6° vs global 2°), measured on
+      // the former assisted holds (clean sway 1.8–3.4°); re-check it on active
+      // repetitions. The warning threshold stays the tighter 3°.
       { name: "trunkLean",
         cue: {
           id: "ex_004.trunk-lean",
@@ -888,17 +893,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           priority: 10,
         },
         warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
-      // NOTE 2026-06-11: `shoulderSymmetry` was REMOVED from this
-      // compensation list. The exercise is the assisted stretch, where a
-      // sloped shoulder line is PRESCRIBED technique (the opposite shoulder
-      // is deliberately depressed while the hand pulls the head over) — a
-      // symmetric line-angle metric cannot distinguish that from the genuine
-      // cheat (hiking the bend-side shoulder up to meet the ear). Restoring
-      // shoulder-cheat detection needs a per-side, baseline-relative
-      // scapular check (direction-aware), which requires baseline capture
-      // on this exercise — future work. The raw shoulder line is still
-      // recorded every frame by the tuning trace, so the signal is measured
-      // even though it is not scored or warned on.
+      // Uneven shoulder line = hiking a shoulder toward the ear instead of
+      // tilting the head. Valid again for the active exercise, where both
+      // shoulders stay level (the assisted stretch depressed the opposite
+      // shoulder on purpose, so the metric was removed then). Same threshold
+      // and resting-asymmetry band override as ex_001. scapularElevation stays
+      // excluded: its ear-to-shoulder proxy shrinks by design as the head
+      // tilts toward the shoulder.
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_004.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 20,
+        },
+        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
   },
 

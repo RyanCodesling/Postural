@@ -1,7 +1,7 @@
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 
 export const PRESCRIPTION_SNAPSHOT_VERSION = 2 as const;
-export const SESSION_CONTEXT_VERSION = 2 as const;
+export const SESSION_CONTEXT_VERSION = 3 as const;
 export const REP_QUALITY_VERSION = "dynamic_rep_quality_v2" as const;
 
 export type PrescribedSide = "both" | "left" | "right";
@@ -84,7 +84,7 @@ export type SessionContextSnapshotV1 = SessionContextSnapshotBase & {
 };
 
 export type SessionContextSnapshotV2 = SessionContextSnapshotBase & {
-  version: typeof SESSION_CONTEXT_VERSION;
+  version: 2;
   versions: {
     registry: string;
     exerciseConfig: string;
@@ -95,9 +95,16 @@ export type SessionContextSnapshotV2 = SessionContextSnapshotBase & {
   };
 };
 
+export type SessionContextSnapshotV3 = Omit<SessionContextSnapshotV2, "version" | "versions"> & {
+  version: typeof SESSION_CONTEXT_VERSION;
+  versions: SessionContextSnapshotV2["versions"] & { coachingConfig: string };
+  coaching: import("./pose/coachingConfig").CoachingProvenance & { source: "executing-client" | "server-default-unverified" };
+};
+
 export type SessionContextSnapshot =
   | SessionContextSnapshotV1
-  | SessionContextSnapshotV2;
+  | SessionContextSnapshotV2
+  | SessionContextSnapshotV3;
 
 export type RuntimePrescription = {
   occurrenceId: number;

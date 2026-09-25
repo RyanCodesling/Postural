@@ -13,6 +13,8 @@ import {
   type SessionContextSnapshot,
 } from "./prescriptionContext";
 import { POSE_METRIC_ALGORITHM_VERSION } from "./pose/metricVersion";
+import { coachingConfiguration } from "./pose/coachingConfig";
+import { getExerciseDefinition } from "./exercises/registry";
 
 let passed = 0;
 let failed = 0;
@@ -121,7 +123,7 @@ test("trend comparison key changes with side, load, or exercise config", () => {
 });
 
 test("new session context records the pose and rep-quality contract versions", () => {
-  assert(SESSION_CONTEXT_VERSION === 2, "new context writes must use version 2");
+  assert(SESSION_CONTEXT_VERSION === 3, "new context writes must use version 3");
   assert(PRESCRIPTION_SNAPSHOT_VERSION === 2, "new prescription snapshots must use version 2");
   assert(
     REP_QUALITY_VERSION === "dynamic_rep_quality_v2",
@@ -161,14 +163,16 @@ test("new session context records the pose and rep-quality contract versions", (
     versions: {
       registry: "registry",
       exerciseConfig: "config",
+      coachingConfig: "coaching-config",
       appRevision: "test",
       poseMetrics: POSE_METRIC_ALGORITHM_VERSION,
       repQuality: REP_QUALITY_VERSION,
       model: null,
     },
+    coaching: { version: "coaching-config", configuration: coachingConfiguration(getExerciseDefinition("ex_001")!), source: "executing-client" },
   };
 
-  assert(context.version === 2, "V2 context should satisfy the compatibility union");
+  assert(context.version === 3, "V3 context should satisfy the compatibility union");
   assert(
     context.versions.poseMetrics === POSE_METRIC_ALGORITHM_VERSION,
     "pose version must be persisted with the context",

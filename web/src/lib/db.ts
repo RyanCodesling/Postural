@@ -31,17 +31,20 @@ import {
   type ResistanceContext,
   type RuntimePrescription,
   type SessionContextSnapshot,
-  type SessionContextSnapshotV2,
+  type SessionContextSnapshotV3,
   type SessionEndReason,
   type TherapistReviewLabel,
 } from "@/lib/prescriptionContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import {
   EXERCISE_CONFIG_VERSIONS,
+  COACHING_CONFIG_VERSIONS,
   REGISTRY_VERSION,
   effectiveCompensationBands,
   getAppRevision,
 } from "@/lib/exercises/versioning";
+import { coachingConfiguration, type CoachingProvenance } from "@/lib/pose/coachingConfig";
+import { isAuditOnlyMeasurement } from "@/lib/pose/holdQuality";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -1193,8 +1196,8 @@ export type SetEventRow = {
   terminatedBy: "min_reached" | "user" | "pain" | "capture_lost" | "stall";
   asymmetryIndex: number;
   /**
-   * Optional set-level hold-quality summary (isometric holds only). Free-form
-   * JSON blob — stored as-is in the `hold_quality` JSONB column.
+   * API-validated set measurement envelope in the existing hold_quality JSONB:
+   * legacy/V2 holds or coaching_set_v1 for dynamic sets. No raw-feature rewrite.
    */
   holdQuality?: unknown;
   /** ISO-8601 wall-clock timestamps. */
@@ -1271,11 +1274,12 @@ export async function createSession(data: {
   occurrenceId: number;
   exerciseId: string;
   deviceInfo?: unknown;
+  coaching?: CoachingProvenance;
 }): Promise<{
   id: number;
   startedAt: string;
   runtimePrescription: RuntimePrescription;
-  context: SessionContextSnapshotV2;
+  context: SessionContextSnapshotV3;
 }> {
   // Strict schedule lock: a patient may only start an exercise that has an
   // actionable occurrence today — due today, or earlier with its make-up window
@@ -1289,7 +1293,7 @@ export async function createSession(data: {
   let row: Record<string, unknown>;
   let occurrenceId: number;
   let runtimePrescription: RuntimePrescription;
-  let context: SessionContextSnapshotV2;
+  let context: SessionContextSnapshotV3;
   try {
     await client.query("BEGIN");
     const occ = await client.query(
@@ -1382,10 +1386,14 @@ export async function createSession(data: {
       versions: {
         registry: REGISTRY_VERSION,
         exerciseConfig: exerciseConfigVersion,
+        coachingConfig: data.coaching?.version ?? COACHING_CONFIG_VERSIONS[data.exerciseId],
         appRevision: getAppRevision(),
         poseMetrics: POSE_METRIC_ALGORITHM_VERSION,
         repQuality: REP_QUALITY_VERSION,
         model: null,
+      },
+      coaching: data.coaching ? { ...data.coaching, source: "executing-client" } : {
+        version: COACHING_CONFIG_VERSIONS[data.exerciseId], configuration: coachingConfiguration(definition), source: "server-default-unverified",
       },
     };
 
@@ -1726,6 +1734,7 @@ export async function appendSessionReview(
            SELECT AVG((st.hold_quality->>'meanCompensationScore')::numeric)
              FROM set_events st
             WHERE st.session_id = $1
+              AND (st.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
               AND jsonb_typeof(st.hold_quality->'meanCompensationScore') = 'number'
          ) AS isometric_score`,
       [sessionId],
@@ -2063,7 +2072,9 @@ export async function getSessionsForPatient(patientId: string) {
                    ELSE NULL
                  END
                ) AS avg_compensation_score
-        FROM set_events GROUP BY session_id
+        FROM set_events
+        WHERE (hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
+        GROUP BY session_id
      ) st ON st.session_id = s.id
      LEFT JOIN LATERAL (
        SELECT sr.label, sr.score_source, sr.score_value, sr.created_at
@@ -2188,7 +2199,8 @@ export async function getTherapistRoster(therapistId: string) {
                COUNT(*) FILTER (WHERE s.started_at >= NOW() - INTERVAL '7 days') AS sessions_this_week,
                MAX(s.started_at)                                                 AS last_session_at
         FROM sessions s
-        WHERE EXISTS (SELECT 1 FROM set_events se WHERE se.session_id = s.id)
+        WHERE EXISTS (SELECT 1 FROM set_events se WHERE se.session_id = s.id
+                      AND (se.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb)
            OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
         GROUP BY s.patient_id
      ) sess ON sess.patient_id = u.id
@@ -2296,7 +2308,18 @@ export async function getSessionDetail(sessionId: number) {
     },
     captureQuality:   parseCaptureQualitySummary(s.capture_quality_summary),
     deviceContext:    summarizeDeviceInfo(s.device_info),
-    sets: setsRes.rows.map((r) => ({
+    // Preserve the historical meaning of `sets` for all outcome consumers.
+    // Raw audit attempts remain available separately for replay/inspection.
+    auditAttempts: setsRes.rows.filter((r) => isAuditOnlyMeasurement(r.hold_quality)).map((r) => ({
+      setIndex: r.set_index,
+      exerciseKind: r.exercise_kind,
+      durationMs: r.duration_ms,
+      terminatedBy: r.terminated_by,
+      startTs: r.start_ts,
+      endTs: r.end_ts,
+      holdQuality: r.hold_quality,
+    })),
+    sets: setsRes.rows.filter((r) => !isAuditOnlyMeasurement(r.hold_quality)).map((r) => ({
       setIndex:       r.set_index,
       exerciseKind:   r.exercise_kind,
       targetReps:     r.target_reps,

@@ -1289,9 +1289,9 @@ export function computeScapularElevation(
  * The `_side` parameter is currently ignored — neck lateral flexion is
  * a single bidirectional metric, not a per-side measurement. The
  * parameter exists for signature compatibility with other per-side metrics
- * routed through `computeMetricByName`. The bidirectional-alternating
- * routing in CameraClient attributes sides from the sign (per-side
- * time-in-band attribution for the ex_004 isometric hold).
+ * routed through `computeMetricByName`. Per-side values come from
+ * `splitSignedBySide` (ex_004 counts each side from its half of the sign),
+ * and the side-split isometric path attributes hold time from the sign.
  */
 export function computeNeckLateralFlexionSigned(
   landmarks: LM[],
@@ -1301,6 +1301,23 @@ export function computeNeckLateralFlexionSigned(
 ): number | null {
   void _side;
   return signedNeckFlexionAngle(landmarks, tiltRef, frameAspect);
+}
+
+/**
+ * Signed metrics (positive = patient's LEFT) that a per-limb exercise counts
+ * per side: see `splitSignedBySide`.
+ */
+const SIGN_SPLIT_PER_SIDE_METRICS: ReadonlySet<MetricName> = new Set<MetricName>(["neckLateralFlexion"]);
+
+/**
+ * Splits one signed reading into per-side magnitudes: left is the positive
+ * part, right the magnitude of the negative part, and the idle side reads 0.
+ * Each side's RepCounter then sees a signal that rises and falls on its own
+ * side only — the design repCounter.ts describes for bidirectional motion.
+ */
+export function splitSignedBySide(value: number | null): { left: number | null; right: number | null } {
+  if (value === null) return { left: null, right: null };
+  return { left: Math.max(0, value), right: Math.max(0, -value) };
 }
 
 /**
@@ -1924,7 +1941,15 @@ export function computePoseMetricsForExercise(
   if (definition.kind === "dynamic") {
     const p = definition.primaryMetric;
 
-    if (definition.bilateral && definition.bilateralMode === "per-limb") {
+    if (definition.bilateral && definition.bilateralMode === "per-limb" && SIGN_SPLIT_PER_SIDE_METRICS.has(p.name)) {
+      // One signed signal drives both sides: each side's counter sees only
+      // its own half of the range, so a return stroke past neutral can never
+      // read as a repetition on the side it came from. The signed value stays
+      // in the main map for the trace, diagnostics and display that expect it.
+      const signed = computeMetricByName(landmarks, tiltReference, p.name, undefined, frameAspect);
+      metrics[p.name] = signed;
+      perSideMetrics = splitSignedBySide(signed);
+    } else if (definition.bilateral && definition.bilateralMode === "per-limb") {
       // Per-limb: compute the metric once per side. Both values go into
       // perSideMetrics for the rep counters; the left value is also placed
       // in the main metrics map so compensation-score and UI code that

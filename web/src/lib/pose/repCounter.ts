@@ -70,8 +70,10 @@
  * - Visibility gating: caller decides whether to call update at all.
  * - Sign convention: the state machine assumes the metric increases during
  *   ascent and decreases during descent. For bidirectional exercises like
- *   neck flexion (left tilts negative, right tilts positive), use two
- *   counters fed with the absolute value of one side's range each.
+ *   neck flexion (positive = patient's left, pinned by
+ *   neckSideAgreement.test.ts), use two counters fed with the magnitude of
+ *   one side's range each — ex_004 does this via `splitSignedBySide` in
+ *   poseMetrics.ts.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +145,16 @@ export type RepCounterOptions = {
 // STATE MACHINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-type State = "WAITING_FOR_REP_START" | "ASCENDING" | "DESCENDING";
+export type RepMovementState = "WAITING_FOR_REP_START" | "ASCENDING" | "DESCENDING";
+type State = RepMovementState;
+export type RepMovementSnapshot = Readonly<{
+  state: RepMovementState;
+  restObserved: boolean;
+  lastUpdateMs: number | null;
+  repStartMs: number | null;
+  runningPeak: number | null;
+  runningPeakAtMs: number | null;
+}>;
 
 export class RepCounter {
   private state: State = "WAITING_FOR_REP_START";
@@ -259,6 +270,18 @@ export class RepCounter {
   /** Current internal state — useful for debugging and tests. */
   getState(): State {
     return this.state;
+  }
+
+  /** Observation only. ASCENDING also includes a plateau; no peak phase is inferred. */
+  getMovementSnapshot(): RepMovementSnapshot {
+    const inRep = this.state !== "WAITING_FOR_REP_START";
+    return Object.freeze({
+      state: this.state, restObserved: this.armAtRest,
+      lastUpdateMs: this.lastUpdateTimeMs === 0 ? null : this.lastUpdateTimeMs,
+      repStartMs: inRep ? this.repStartTimeMs : null,
+      runningPeak: inRep ? this.peakValue : null,
+      runningPeakAtMs: inRep ? this.peakTimeMs : null,
+    });
   }
 
   // ── Per-state handlers ──────────────────────────────────────────────────

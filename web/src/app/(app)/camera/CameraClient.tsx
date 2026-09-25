@@ -24,6 +24,9 @@ import {
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
+import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
+import { CoachingAuditBuffer, observeMovement, type CoachingObservation } from "@/lib/pose/coachingAudit";
+import type { HoldQualityV2, HoldSideQuality, SetMeasurement } from "@/lib/pose/holdQuality";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
@@ -316,7 +319,18 @@ type ResumeSnapshot = {
   // frame_index at 1 and collide with raw_frames' UNIQUE(session_id, frame_index).
   rawFrameIndex: number;
   updatedAtWallMs: number;
+  /**
+   * Outcomes counted before a disruption, so the end-of-session card and the
+   * capture summary cover the whole attempt after Resume, not only the resumed
+   * portion. Optional: snapshots written before these fields existed parse.
+   */
+  completedSetsLog?: CompletedSetRecord[];
+  repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
+  captureFrames?: { total: number; ok: number };
 };
+
+/** What the end-of-session card needs from each counted repetition. */
+type RepOutcome = Pick<RepEvent, "peakValue" | "classification">;
 
 // A resumable session older than this (by last snapshot write) is not offered —
 // avoids resuming a days-old still-open session.
@@ -342,6 +356,68 @@ function readResumeSnapshot(
   } catch {
     return null;
   }
+}
+
+/**
+ * The progress a snapshot carries from before a disruption. Validated so an
+ * older or malformed snapshot restores nothing rather than wrong numbers.
+ */
+function restoredSessionProgress(snap: ResumeSnapshot): {
+  setsLog: CompletedSetRecord[];
+  repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
+  captureFrames: { total: number; ok: number };
+} {
+  const count = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const setsLog = Array.isArray(snap.completedSetsLog)
+    ? snap.completedSetsLog.filter(
+        (s) =>
+          !!s &&
+          count(s.setIndex) &&
+          count(s.leftReps) &&
+          count(s.rightReps) &&
+          count(s.asymmetryIndex),
+      )
+    : [];
+  const outcomes = (list: unknown): RepOutcome[] =>
+    Array.isArray(list)
+      ? list.flatMap((o: { peakValue?: unknown; classification?: unknown } | null) =>
+          o &&
+          typeof o.peakValue === "number" &&
+          Number.isFinite(o.peakValue) &&
+          (o.classification === "complete" || o.classification === "partial")
+            ? [{ peakValue: o.peakValue, classification: o.classification }]
+            : [],
+        )
+      : [];
+  const frames = snap.captureFrames;
+  const captureFrames =
+    frames && count(frames.total) && count(frames.ok) && frames.ok <= frames.total
+      ? { total: frames.total, ok: frames.ok }
+      : { total: 0, ok: 0 };
+  return {
+    setsLog,
+    repOutcomes: {
+      left: outcomes(snap.repOutcomes?.left),
+      right: outcomes(snap.repOutcomes?.right),
+    },
+    captureFrames,
+  };
+}
+
+/** Repetition outcomes for the whole attempt: restored ones, then this page's. */
+function sessionRepOutcomes(
+  prior: { left: RepOutcome[]; right: RepOutcome[] },
+  log: { left: RepEvent[]; right: RepEvent[] },
+): { left: RepOutcome[]; right: RepOutcome[] } {
+  const pick = (e: RepEvent): RepOutcome => ({
+    peakValue: e.peakValue,
+    classification: e.classification,
+  });
+  return {
+    left: [...prior.left, ...log.left.map(pick)],
+    right: [...prior.right, ...log.right.map(pick)],
+  };
 }
 
 function clearResumeSnapshot(patientExerciseId: number | undefined): void {
@@ -657,30 +733,8 @@ type RawFramePayload = {
  *  - `meanErrorDeg`        — mean − target band center (negative = below target / sag)
  *  - `droopSlopeDegPerSec` — slope of angle vs time (negative = progressive sag / fatigue)
  */
-type HoldSideQuality = {
-  meanDeg: number;
-  sdDeg: number;
-  meanErrorDeg: number;
-  droopSlopeDegPerSec: number;
-};
-
-/**
- * Set-level hold-quality summary for an isometric hold. Aggregates per-frame raw
- * signals the camera loop already computes; persisted to `set_events.hold_quality`.
- */
-type HoldQuality = {
-  sampleCount: number;
-  leftInBandMs: number;
-  rightInBandMs: number;
-  outOfPositionMs: number;          // active time NOT both-in-band
-  dropCount: number;                // both-in-band → not transitions
-  longestPairedStreakMs: number;    // longest continuous both-in-band run
-  settleMs: number | null;          // set start → first both-in-band (null if never)
-  left: HoldSideQuality | null;
-  right: HoldSideQuality | null;
-  meanCompensationScore: number | null;
-  minCompensationScore: number | null;
-};
+// Contract types and validation live in holdQuality.ts; legacy field names
+// remain readable. Their angle values are pipeline units, not anatomical ROM.
 
 /**
  * A set-level outcome shaped for the `set_events` write API. This is what makes
@@ -698,8 +752,8 @@ type SetEventPayload = {
   durationMs: number;
   terminatedBy: CompletedSetRecord["terminatedBy"];
   asymmetryIndex: number;
-  // Isometric only; absent for dynamic sets.
-  holdQuality?: HoldQuality;
+  // Existing JSONB envelope: hold statistics or a dynamic-set coaching audit.
+  holdQuality?: SetMeasurement;
   startTs: string;
   endTs: string;
 };
@@ -857,9 +911,8 @@ type CoachingShadowRecord = {
   selectedMetric: MetricName | null;
   /**
    * The cue's registry wording at the moment of the decision. Recorded even
-   * though it is not rendered: cue text is not covered by any persisted
-   * configuration version, so without it an old export cannot prove which
-   * wording produced a decision after the registry changes.
+   * though it is not rendered. This legacy diagnostic export stays readable;
+   * session/set audit envelopes separately fingerprint the executing config.
    */
   selectedMessage: string | null;
   reason: CoachingCueReason;
@@ -896,8 +949,8 @@ type CoachingShadowExport = {
    * module defaults are applied. Read from the registry when the file is
    * written, so it describes the configuration that produced these decisions
    * only while the registry is unchanged — this is a diagnostic snapshot, not
-   * a persisted configuration version (see the coaching-config gap in
-   * `versioning.ts`).
+   * a persisted configuration version. Session/set coaching provenance is
+   * recorded separately from this legacy diagnostic export.
    */
   cueConfiguration: {
     exerciseId: string;
@@ -1799,6 +1852,12 @@ export default function CameraClient() {
   // Read by the per-frame overlay path, which runs faster than the 150 ms
   // metrics tick that produces the decision.
   const selectedCoachingCueMetricRef = useRef<MetricName | null>(null);
+  const coachingProvenanceRef = useRef<CoachingProvenance | null>(null);
+  const coachingAuditRef = useRef(new CoachingAuditBuffer());
+  const coachingDecisionRef = useRef<CoachingObservation["selected"]>(null);
+  const sessionStartPendingRef = useRef(false);
+  const cameraStartEpochRef = useRef(0);
+  const cameraReadyRef = useRef(false);
   const [selectedCoachingCueMetric, setSelectedCoachingCueMetric] =
     useState<MetricName | null>(null);
   const resetCompensationWarnings = useCallback(() => {
@@ -1806,6 +1865,7 @@ export default function CameraClient() {
     setActiveCompensationWarnings(new Set());
     coachingCueStateRef.current = newCoachingCueState();
     selectedCoachingCueMetricRef.current = null;
+    coachingDecisionRef.current = null;
     setSelectedCoachingCueMetric(null);
   }, []);
   /**
@@ -1966,6 +2026,12 @@ export default function CameraClient() {
   // step — for now, console.log on each rep is the only output beyond the
   // live counter.
   const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
+    left: [],
+    right: [],
+  });
+  // Outcomes counted before a Resume (from the snapshot). Kept apart from
+  // repLogRef, which only ever holds this page's live RepEvents.
+  const priorRepOutcomesRef = useRef<{ left: RepOutcome[]; right: RepOutcome[] }>({
     left: [],
     right: [],
   });
@@ -2987,6 +3053,7 @@ export default function CameraClient() {
           patientExerciseId,
           occurrenceId,
           exerciseId,
+          coaching: coachingProvenanceRef.current ?? undefined,
           deviceInfo:
             typeof navigator !== "undefined"
               ? { userAgent: navigator.userAgent }
@@ -3307,7 +3374,7 @@ export default function CameraClient() {
    * a hold that never produced a usable frame). Pure read of the accumulator
    * ref — call BEFORE the per-set reset runs.
    */
-  const finalizeHoldQuality = (centerDeg: number): HoldQuality | undefined => {
+  const finalizeHoldQuality = (centerDeg: number): HoldQualityV2 | undefined => {
     const a = holdQualityAccumRef.current;
     if (a.sampleCount === 0) return undefined;
     const side = (s: HoldSideAccum): HoldSideQuality | null => {
@@ -3327,6 +3394,10 @@ export default function CameraClient() {
       };
     };
     return {
+      version: "hold_quality_v2",
+      primaryUnits: "pipeline-units",
+      compensationScoreSource: "smoothed-live-rule",
+      streakMode: activeDefinitionRef.current?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
       sampleCount: a.sampleCount,
       leftInBandMs: Math.round(a.left.inBandMs),
       rightInBandMs: Math.round(a.right.inBandMs),
@@ -3347,6 +3418,7 @@ export default function CameraClient() {
     record: CompletedSetRecord,
     exerciseKind: SetEventPayload["exerciseKind"],
     endPerfMs: number,
+    auditOnly = false,
   ) => {
     if (prescriptionRef.current.patientExerciseId === undefined) return;
     const durationMs = Math.max(0, record.durationMs);
@@ -3354,10 +3426,25 @@ export default function CameraClient() {
     // Read the hold-quality accumulators for isometric sets BEFORE any per-set
     // reset clears them. Uses the active exercise's target-band center.
     const def = activeDefinitionRef.current;
-    const holdQuality =
+    let holdQuality: SetMeasurement | undefined =
       exerciseKind === "isometric" && def?.kind === "isometric"
         ? finalizeHoldQuality(def.isometric.targetBand.center)
         : undefined;
+    const provenance = coachingProvenanceRef.current;
+    if (provenance) {
+      const coaching = coachingAuditRef.current.snapshot(provenance, endPerfMs, perfToIso(0));
+      if (holdQuality) holdQuality = { ...holdQuality, coaching };
+      else if (exerciseKind === "dynamic") holdQuality = { version: "coaching_set_v1", coaching };
+      else holdQuality = { version: "hold_quality_v2", primaryUnits: "pipeline-units",
+        compensationScoreSource: "smoothed-live-rule", streakMode: def?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
+        sampleCount: 0, leftInBandMs: 0, rightInBandMs: 0, outOfPositionMs: 0,
+        dropCount: 0, longestPairedStreakMs: 0, settleMs: null, left: null, right: null,
+        meanCompensationScore: null, minCompensationScore: null, coaching };
+    }
+    // Without a versioned envelope there is no safe way to classify an audit
+    // attempt. Normal Start establishes provenance before persistence opens.
+    if (auditOnly && !holdQuality) return;
+    if (auditOnly && holdQuality) holdQuality = { ...holdQuality, auditOnly: true };
     eventOutboxRef.current.enqueue("set", {
       setIndex: record.setIndex,
       exerciseKind,
@@ -3374,6 +3461,7 @@ export default function CameraClient() {
       startTs: perfToIso(startPerfMs),
       endTs: perfToIso(endPerfMs),
     });
+    coachingAuditRef.current.reset();
   };
 
   /**
@@ -3651,6 +3739,12 @@ export default function CameraClient() {
       globalRepIndex: globalRepIndexRef.current,
       rawFrameIndex: rawFrameIndexRef.current,
       updatedAtWallMs: Date.now(),
+      completedSetsLog: completedSetsLogRef.current,
+      repOutcomes: sessionRepOutcomes(priorRepOutcomesRef.current, repLogRef.current),
+      captureFrames: {
+        total: captureFramesTotalRef.current,
+        ok: captureFramesOkRef.current,
+      },
     };
     try {
       window.localStorage.setItem(
@@ -4037,16 +4131,20 @@ export default function CameraClient() {
       return;
     }
     setScheduleNotice(null);
+    coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
+    if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
     const canPersist = await startSessionPersistence();
     if (!canPersist) return;
 
     const counters = createRepCountersForDefinition(activeDefinition);
+    coachingAuditRef.current.reset();
     captureFramesTotalRef.current = 0;
     captureFramesOkRef.current = 0;
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
@@ -4083,24 +4181,32 @@ export default function CameraClient() {
    * `handleSessionStart`, but restores state instead of zeroing it. A resumed
    * attempt recalibrates before returning to `active`.
    */
-  const resumeSession = () => {
+  const resumeSession = async () => {
     // Like Start, Resume must wait for inference readiness before restoring
     // progress or starting a camera whose first frame could arrive too early.
     if (!modelLoaded || !activeDefinition) return;
     const snap = readResumeSnapshot(prescriptionRef.current.patientExerciseId);
     if (!snap || snap.exerciseId !== activeDefinition.id) return;
+    if (sessionStartPendingRef.current || isStarting) return;
+    sessionStartPendingRef.current = true;
+    try {
+    if (!cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) return;
+    coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
+    if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
+    coachingAuditRef.current.reset();
 
     const counters = createRepCountersForDefinition(activeDefinition);
-    // Capture-quality tally restarts for the resumed portion.
-    captureFramesTotalRef.current = 0;
-    captureFramesOkRef.current = 0;
+    // Restore what the snapshot carried from before the disruption, so the
+    // end-of-session card and capture summary cover the whole attempt rather
+    // than only the resumed portion. An older snapshot restores nothing here.
+    const progress = restoredSessionProgress(snap);
+    captureFramesTotalRef.current = progress.captureFrames.total;
+    captureFramesOkRef.current = progress.captureFrames.ok;
 
-    // Completed-set count comes back; the live per-set log starts empty (the
-    // pre-disruption sets already live in the DB / the "already completed"
-    // analytics — the headline "Sets X/N" tracks the restored completedSets).
     setCompletedSets(snap.completedSets);
-    completedSetsLogRef.current = [];
+    completedSetsLogRef.current = progress.setsLog;
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = progress.repOutcomes;
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
@@ -4182,12 +4288,8 @@ export default function CameraClient() {
     countdownResumeElapsedMsRef.current = snap.elapsedMs;
     setSessionElapsedSec(Math.floor(snap.elapsedMs / 1000));
 
-    // Manual-start page: ensure the camera is running so reps can count.
-    if (!streamRef.current) {
-      void startCamera(selectedDeviceId || undefined);
-    }
-
     setSessionState("countdown");
+    } finally { sessionStartPendingRef.current = false; }
   };
 
   /**
@@ -4263,6 +4365,16 @@ export default function CameraClient() {
         completedSetsLogRef.current.push(setRecord);
         if (def) bufferSetEvent(setRecord, def.kind, endedAtMs);
       }
+    }
+    // Preserve observations from an attempt with no credited movement. This
+    // persistence-only row does not change the live completion/recap counters.
+    if (def && coachingAuditRef.current.hasRecords()) {
+      bufferSetEvent({ setIndex: completedSetsRef.current + 1,
+        targetReps: def.kind === "dynamic" ? prescriptionRef.current.reps : 0,
+        leftReps: 0, rightReps: 0, pairedReps: 0,
+        targetHoldMs: def.kind === "isometric" ? prescriptionRef.current.holdSeconds * 1000 : 0,
+        pairedHoldMs: 0, durationMs: currentSetStartMsRef.current === null ? 0 : endedAtMs - currentSetStartMsRef.current,
+        terminatedBy: reason, asymmetryIndex: 0 }, def.kind, endedAtMs, true);
     }
     // Flush any reps from the in-progress (partial) set and stamp ended_at.
     // endReason "user" = the End button was pressed — distinguishes a deliberate
@@ -5806,6 +5918,7 @@ export default function CameraClient() {
       bidirectionalRepCounterRef.current = null;
       dynamicRepQualityBufferRef.current.reset();
       repLogRef.current = { left: [], right: [] };
+      priorRepOutcomesRef.current = { left: [], right: [] };
       neckRepDebugRef.current = [];
       neckRepDebugStartMsRef.current = null;
       neckRepDebugSeqRef.current = 0;
@@ -5892,6 +6005,7 @@ export default function CameraClient() {
     bidirectionalRepCounterRef.current = null;
     dynamicRepQualityBufferRef.current.reset();
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
@@ -5995,6 +6109,12 @@ export default function CameraClient() {
         // detectForVideo cost. `inferStart` doubles as the detect timestamp,
         // which must be monotonically increasing.
         const frameStart = performance.now();
+        let coachingObservation: CoachingObservation = {
+          capture: "unavailable", sessionState: sessionStateRef.current,
+          baselineReady: baselinePhaseRef.current === "captured",
+          movement: { left: "unknown", right: "unknown", activeSide: null },
+          selected: null, rendered: [], renderEvidence: "canvas-frame", suppressedMetrics: [], absenceReason: "capture-unavailable",
+        };
         const inferStart = frameStart;
         // Cleared here and read after the pipeline below. `bufferTuningRawFrame`
         // sets it on the one path that persists a row; every other path — no
@@ -6041,6 +6161,10 @@ export default function CameraClient() {
             framingMode,
             prescriptionRef.current.prescribedSide,
           );
+          if (r.ok && lastCaptureOkRef.current) {
+            coachingObservation.capture = "available";
+            coachingObservation.absenceReason = baselinePhaseRef.current !== "captured" ? "baseline-unavailable" : "not-selected";
+          }
 
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
@@ -7035,7 +7159,7 @@ export default function CameraClient() {
                 }
               }
 
-              if (tNow - lastMetricsUpdateRef.current > 150) {
+              if (tNow - lastMetricsUpdateRef.current > COACHING_TICK_MS) {
                 lastMetricsUpdateRef.current = tNow;
                 const coachingWarningsEnabled =
                   sessionStateRef.current === "active" &&
@@ -7073,6 +7197,14 @@ export default function CameraClient() {
                   tNow,
                 );
                 coachingCueStateRef.current = cueDecision.state;
+                coachingDecisionRef.current = {
+                  cueId: cueDecision.cueId, metric: cueDecision.metric,
+                  declaredMessage: cueDecision.message, reason: cueDecision.reason,
+                  decisionAtMs: tNow, selectedSinceMs: cueDecision.state.currentSinceMs,
+                  side: cueDecision.metric ? warningSignals.get(cueDecision.metric)?.side ?? null : null,
+                  warningValuesSmoothed: Object.fromEntries(activeDefinition.compensationMetrics.map(comp => [comp.name, warningDisplayMetrics[comp.name] ?? null])),
+                  activeLatches: [...activeWarningNames],
+                };
                 if (selectedCoachingCueMetricRef.current !== cueDecision.metric) {
                   selectedCoachingCueMetricRef.current = cueDecision.metric;
                   setSelectedCoachingCueMetric(cueDecision.metric);
@@ -7197,7 +7329,7 @@ export default function CameraClient() {
                 if (isActive) overlayWarningNames.add(comp.name);
                 return isActive;
               });
-              drawCompensationOverlay(
+              const renderedCues = drawCompensationOverlay(
                 ctx,
                 landmarks,
                 canvas.width,
@@ -7207,6 +7339,27 @@ export default function CameraClient() {
                 metricDirections,
                 overlayWarningNames,
               );
+              const suppressedMetrics = activeDefinition.compensationMetrics.filter(comp =>
+                sessionStateRef.current !== "active" || !lastCaptureOkRef.current || !baselineReadyForExercise ||
+                comp.peakRelevant === true && !nearPeakNow ||
+                prescriptionRef.current.prescribedSide !== "both" && comp.name === "shoulderSymmetry",
+              ).map(comp => comp.name);
+              const singleAvailable = typeof metricInputs[scorePrimaryName] === "number";
+              coachingObservation = {
+                capture: lastCaptureOkRef.current ? "available" : "unavailable",
+                sessionState: sessionStateRef.current, baselineReady: baselineReadyForExercise,
+                movement: observeMovement(activeDefinition, {
+                  left: leftRepCounterRef.current, right: rightRepCounterRef.current,
+                  bidirectional: bidirectionalRepCounterRef.current,
+                }, { left: scoreIsPerLimb ? rawPrimaryLeft !== null : singleAvailable,
+                  right: scoreIsPerLimb ? rawPrimaryRight !== null : singleAvailable },
+                { left: leftInBandRef.current, right: rightInBandRef.current }),
+                selected: coachingDecisionRef.current, rendered: renderedCues, renderEvidence: "canvas-frame", suppressedMetrics,
+                absenceReason: renderedCues.length ? null : !lastCaptureOkRef.current ? "capture-unavailable" :
+                  !baselineReadyForExercise ? "baseline-unavailable" : sessionStateRef.current !== "active" ? "session-inactive" :
+                  selectedCoachingCueMetricRef.current && suppressedMetrics.includes(selectedCoachingCueMetricRef.current) ? "suppressed" :
+                  selectedCoachingCueMetricRef.current ? "not-rendered" : "not-selected",
+              };
               }
             }
           } else {
@@ -7258,6 +7411,9 @@ export default function CameraClient() {
         }
 
         ctx.restore();
+        if (sessionStateRef.current === "active") {
+          coachingAuditRef.current.observe(performance.now(), coachingObservation);
+        }
 
         // Blank the sync readout on any frame that produced no trace row, so a
         // reading on screen always belongs to the video frame showing it.
@@ -7285,6 +7441,9 @@ export default function CameraClient() {
     mounted && typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
   const stopCamera = useCallback(async () => {
+    cameraStartEpochRef.current++;
+    cameraReadyRef.current = false;
+    if (sessionStateRef.current === "active") coachingAuditRef.current.interrupt(performance.now(), sessionStateRef.current);
     try {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -7334,15 +7493,16 @@ export default function CameraClient() {
     if (!selectedDeviceId && cams[0]?.deviceId) setSelectedDeviceId(cams[0].deviceId);
   }
 
-  async function startCamera(deviceId?: string) {
+  async function startCamera(deviceId?: string): Promise<boolean> {
     if (!canUseMediaDevices) {
       setError("Camera API not available in this browser/environment.");
-      return;
+      return false;
     }
 
     setIsStarting(true);
     setError(null);
     await stopCamera();
+    const epoch = cameraStartEpochRef.current;
 
     try {
       const constraints: MediaStreamConstraints = {
@@ -7353,24 +7513,48 @@ export default function CameraClient() {
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      setCameraStreamActive(true);
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadeddata = () => {
-          videoRef.current?.play();
-          predictWebcam();
-        };
+      if (epoch !== cameraStartEpochRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return false;
       }
-
-      await listCameras();
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) throw new Error("Video element unavailable");
+      video.srcObject = stream;
+      let videoTimeout: ReturnType<typeof setTimeout> | undefined;
+      await new Promise<void>((resolve, reject) => {
+        let playing = false;
+        videoTimeout = setTimeout(() => reject(new Error("Camera video timed out")), 10_000);
+        const play = () => {
+          if (playing) return;
+          playing = true;
+          void video.play().then(resolve, reject);
+        };
+        video.onloadeddata = play;
+        video.onerror = () => reject(new Error("Camera video failed"));
+        if (video.readyState >= 2) play();
+        // Also clear callbacks after timeout/rejection, so a late frame cannot
+        // start inference after this attempt has failed.
+      }).finally(() => {
+        clearTimeout(videoTimeout);
+        video.onloadeddata = null;
+        video.onerror = null;
+      });
+      if (epoch !== cameraStartEpochRef.current) return false;
+      cameraReadyRef.current = true;
+      setCameraStreamActive(true);
+      predictWebcam();
+      // Enumeration is optional UI metadata; camera capture already succeeded.
+      await listCameras().catch(() => undefined);
+      return true;
     } catch (e) {
       const name = getErrorName(e);
       if (name === "NotAllowedError") setError("Permission denied. Please allow camera access.");
       else if (name === "NotFoundError") setError("No camera found on this device.");
       else if (name === "NotReadableError") setError("Camera is already in use by another app.");
       else setError(`Failed to start camera: ${name}`);
+      if (epoch === cameraStartEpochRef.current) await stopCamera();
+      return false;
     } finally {
       setIsStarting(false);
     }
@@ -7581,12 +7765,13 @@ export default function CameraClient() {
   // first frame arrives before the model, and nothing restarts the loop when
   // the model finishes loading. The buttons that call this stay disabled too,
   // matching the Start camera buttons.
-  const startSessionWithCamera = () => {
-    if (!modelLoaded) return;
-    if (!streamRef.current && !isStarting) {
-      void startCamera(selectedDeviceId || undefined);
-    }
-    void handleSessionStart();
+  const startSessionWithCamera = async () => {
+    if (!modelLoaded || isStarting || sessionStartPendingRef.current) return;
+    sessionStartPendingRef.current = true;
+    try {
+      if (!cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) return;
+      await handleSessionStart();
+    } finally { sessionStartPendingRef.current = false; }
   };
 
   // Trace sync readout — the join key between a screen recording and the
@@ -9116,8 +9301,10 @@ export default function CameraClient() {
                 const setsLog = completedSetsLogRef.current;
                 const setsDone = setsLog.length;
 
-                const L = repLogRef.current.left;
-                const R = repLogRef.current.right;
+                // Whole attempt: outcomes restored after a Resume plus this page's.
+                const outcomes = sessionRepOutcomes(priorRepOutcomesRef.current, repLogRef.current);
+                const L = outcomes.left;
+                const R = outcomes.right;
                 const outcomeSides = prescribedOutcomeSides(
                   prescription.prescribedSide,
                 );
@@ -9129,7 +9316,7 @@ export default function CameraClient() {
                   left: L.filter((event) => event.classification === "complete").length,
                   right: R.filter((event) => event.classification === "complete").length,
                 };
-                const averagePeak = (events: RepEvent[]) =>
+                const averagePeak = (events: RepOutcome[]) =>
                   events.length > 0
                     ? events.reduce((sum, event) => sum + event.peakValue, 0) /
                       events.length

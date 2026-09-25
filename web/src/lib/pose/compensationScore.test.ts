@@ -78,9 +78,9 @@ const ex008 = EXERCISE_REGISTRY.ex_008;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BANDED INTERPOLATION VALUES (single active metric → its deduction is the score)
-// ex_004's only compensation metric is trunkLean (shoulderSymmetry removed
-// 2026-06-11 — assisted-stretch variant); the legacy shoulderSymmetry: null
-// inputs below are harmless extra keys the score ignores.
+// ex_004 scores trunkLean and shoulderSymmetry (restored 2026-09-24 with the
+// active version). The shoulderSymmetry: null inputs below mark that metric
+// unavailable, so trunkLean's deduction is the whole score.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("ex_004 trunkLean override knots: 6°→100, 10°→65, 15°→25, 25°→0, clamp past 25°", () => {
@@ -92,6 +92,13 @@ test("ex_004 trunkLean override knots: 6°→100, 10°→65, 15°→25, 25°→0
   assertEq(score(15), 25, "15°");
   assertEq(score(25), 0, "25°");
   assertEq(score(50), 0, "50° (clamped)");
+});
+
+test("ex_004 weights trunkLean and shoulderSymmetry equally: 10° + 12° → 65", () => {
+  // trunkLean 10° → override deduction 35; shoulderSymmetry 12° → asymmetric
+  // override deduction 35. Each carries half the weight: 100 − 17.5 − 17.5.
+  assertEq(computeCompensationScore(ex004, { trunkLean: 10, shoulderSymmetry: 12 }), 65, "both metrics");
+  assertEq(computeCompensationScore(ex004, { trunkLean: 0, shoulderSymmetry: 7 }), 100, "resting asymmetry is free");
 });
 
 test("ex_004 trunkLean override mid-band: 8° → deduction 17.5 → score 83", () => {
@@ -235,9 +242,9 @@ test("only a warning-only metric available → null (no scored signal)", () => {
 test("compensation lists backing these pins are unchanged", () => {
   const names = (d: ExerciseDefinition) => d.compensationMetrics.map((c) => c.name).join(",");
   assertEq(names(ex001), "trunkLean,scapularElevation,shoulderSymmetry", "ex_001");
-  // shoulderSymmetry removed 2026-06-11: ex_004 is the assisted stretch,
-  // where a sloped shoulder line is prescribed technique, not compensation.
-  assertEq(names(ex004), "trunkLean", "ex_004");
+  // shoulderSymmetry restored 2026-09-24: in the active exercise both
+  // shoulders stay level (the former assisted stretch sloped them on purpose).
+  assertEq(names(ex004), "trunkLean,shoulderSymmetry", "ex_004");
   assertEq(names(ex005), "neckTilt,scapularElevation", "ex_005");
   assertEq(names(ex006), "scapularElevation,trunkLean,shoulderSymmetry", "ex_006");
   assertEq(names(ex007), "trunkLean,elbowFlexion", "ex_007");

@@ -215,6 +215,13 @@ export class BidirectionalRepCounter {
     return this.counter.getRepCount();
   }
 
+  getMovementSnapshot() {
+    return Object.freeze({ ...this.counter.getMovementSnapshot(),
+      activeSide: this.peakSign === 0 ? null : this.peakSign > 0 ? "left" as const : "right" as const,
+      awaitingRestSettle: this.awaitingRestSettle,
+    });
+  }
+
   getDebugSnapshot(
     tMs?: number,
     signedValue?: number,

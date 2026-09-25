@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
+import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
+import { sha256Version } from "@/lib/exercises/versioning";
 import {
   createSession,
   getSessionsForPatient,
@@ -75,12 +77,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const coaching = body?.coaching;
+    if (coaching !== undefined && (!validCoachingProvenance(coaching) || coaching.configuration.exerciseId !== exerciseId ||
+        sha256Version(coaching.configuration) !== coaching.version)) {
+      return NextResponse.json({ error: "Invalid coaching configuration provenance" }, { status: 400 });
+    }
     const session = await createSession({
       patientId: user.id,
       patientExerciseId,
       occurrenceId,
       exerciseId,
       deviceInfo: body?.deviceInfo,
+      coaching,
     });
     return NextResponse.json({
       sessionId: session.id,

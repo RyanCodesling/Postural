@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { getSessionOwner, insertSetEvents, type SetEventRow } from "@/lib/db";
+import { validSetMeasurement, quarantineSetMeasurement } from "@/lib/pose/holdQuality";
+import { sha256Version } from "@/lib/exercises/versioning";
 
 const EXERCISE_KINDS = new Set(["dynamic", "isometric"]);
 const TERMINATION_REASONS = new Set([
@@ -51,12 +53,20 @@ function rejectionReason(item: unknown): string | null {
   return null;
 }
 
+function measurementRejectionReason(value: unknown, kind: string): string | null {
+  if (!validSetMeasurement(value, kind)) return "invalid holdQuality measurement envelope";
+  const audit = "coaching" in value ? value.coaching : undefined;
+  return audit && sha256Version(audit.provenance.configuration) !== audit.provenance.version
+    ? "coaching configuration fingerprint mismatch" : null;
+}
+
 function normalizeRows(
   raw: unknown,
-): { rows: SetEventRow[]; rejected: RowRejection[] } | null {
+): { rows: SetEventRow[]; rejected: RowRejection[]; quarantined: RowRejection[] } | null {
   if (!Array.isArray(raw)) return null;
   const rows: SetEventRow[] = [];
   const rejected: RowRejection[] = [];
+  const quarantined: RowRejection[] = [];
   raw.forEach((item, index) => {
     const reason = rejectionReason(item);
     if (reason !== null) {
@@ -64,15 +74,17 @@ function normalizeRows(
       return;
     }
     const r = item as Record<string, unknown>;
-    // Optional exploratory JSONB blob (isometric hold quality). Accept only a
-    // plain non-null object; a malformed value is dropped, not rejected, so it
-    // never fails an otherwise-valid set row.
-    const holdQuality =
-      r.holdQuality !== null &&
-      typeof r.holdQuality === "object" &&
-      !Array.isArray(r.holdQuality)
-        ? r.holdQuality
-        : undefined;
+    // A bad audit must neither poison later sets nor be acknowledged away.
+    // Persist the valid outcome with the original envelope quarantined in the
+    // same JSONB. Its quality fields stay outside legacy aggregate paths.
+    let holdQuality = r.holdQuality ?? undefined;
+    if (holdQuality !== undefined) {
+      const reason = measurementRejectionReason(holdQuality, r.exerciseKind as string);
+      if (reason) {
+        quarantined.push({ index, reason });
+        holdQuality = quarantineSetMeasurement(holdQuality, reason);
+      }
+    }
     rows.push({
       setIndex: r.setIndex as number,
       exerciseKind: r.exerciseKind as SetEventRow["exerciseKind"],
@@ -90,7 +102,7 @@ function normalizeRows(
       endTs: r.endTs as string,
     });
   });
-  return { rows, rejected };
+  return { rows, rejected, quarantined };
 }
 
 // POST /api/sessions/[id]/set-events — batch-insert set outcomes for a session.
@@ -124,7 +136,7 @@ export async function POST(
     if (normalized === null) {
       return NextResponse.json({ error: "Invalid set_events payload" }, { status: 400 });
     }
-    const { rows, rejected } = normalized;
+    const { rows, rejected, quarantined } = normalized;
     if (rejected.length > 0) {
       console.warn(
         `set-events session ${sessionId}: rejected ${rejected.length} row(s)`,
@@ -139,7 +151,7 @@ export async function POST(
     }
 
     const { inserted, skipped } = await insertSetEvents(sessionId, rows);
-    return NextResponse.json({ success: true, inserted, skipped, rejected });
+    return NextResponse.json({ success: true, inserted, skipped, rejected, quarantined });
   } catch (error) {
     console.error("POST /api/sessions/[id]/set-events error:", error);
     return NextResponse.json({ error: "Failed to insert set events" }, { status: 500 });

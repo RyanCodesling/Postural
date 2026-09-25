@@ -19,7 +19,7 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
  * directional path instead of these; the values here are the fallbacks used
  * when the generic single-box path runs (no direction available).
  */
-const METRIC_LABEL: Partial<Record<MetricName, string>> = {
+export const OVERLAY_LABELS: Partial<Record<MetricName, string>> = {
   neckTilt:          "Neck tilted",
   shoulderSymmetry:  "Asymmetric shoulders",
   trunkLean:         "Trunk lean",
@@ -41,6 +41,14 @@ const METRIC_LABEL: Partial<Record<MetricName, string>> = {
   // failure here; misdirecting a patient is not.
   scapularElevation: "Shoulder / head position",
   elbowFlexion:      "Straighten arms",
+};
+
+export const OVERLAY_DIRECTION_LABELS = { shoulderSymmetry: "LOWER", straighten: "STRAIGHTEN" } as const;
+export type RenderedCompensationCue = {
+  metric: MetricName;
+  text: string;
+  /** Anatomical side for shoulder/neck; image-space direction for trunk. */
+  direction: string | null;
 };
 
 function isWarning(spec: CompensationMetricSpec, value: number): boolean {
@@ -240,12 +248,12 @@ function drawShoulderAsymmetry(
   ctx: CanvasRenderingContext2D,
   landmarks: NormalizedLandmark[],
   canvasW: number, canvasH: number,
-): void {
+): boolean {
   const elevatedIdx = higherShoulderLandmarkIndex(landmarks);
   const otherIdx = elevatedIdx === 11 ? 12 : 11;
   const elevated = landmarks[elevatedIdx];
   const other = landmarks[otherIdx];
-  if (!elevated || !other) return;
+  if (!elevated || !other) return false;
 
   const ex = elevated.x * canvasW, ey = elevated.y * canvasH;
   const ox = other.x * canvasW,    oy = other.y * canvasH;
@@ -264,7 +272,8 @@ function drawShoulderAsymmetry(
   );
 
   // "LOWER" label above the elevated shoulder box.
-  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, "LOWER", WARN);
+  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, OVERLAY_DIRECTION_LABELS.shoulderSymmetry, WARN);
+  return true;
 }
 
 /**
@@ -299,7 +308,8 @@ export function drawCompensationOverlay(
   metricValues: Partial<Record<MetricName, number | null>>,
   metricDirections?: Partial<Record<MetricName, string>>,
   activeWarningNames?: ReadonlySet<MetricName>,
-): void {
+): RenderedCompensationCue[] {
+  const rendered: RenderedCompensationCue[] = [];
   for (const spec of compensationMetrics) {
     const value = metricValues[spec.name];
     if (typeof value !== "number") continue;
@@ -312,7 +322,10 @@ export function drawCompensationOverlay(
     // The warning has already fired (isWarning above); place the cue on the
     // higher shoulder by raw y inside drawShoulderAsymmetry.
     if (spec.name === "shoulderSymmetry") {
-      drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH);
+      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH)) {
+        rendered.push({ metric: spec.name, text: OVERLAY_DIRECTION_LABELS.shoulderSymmetry,
+          direction: higherShoulderLandmarkIndex(landmarks) === 11 ? "right" : "left" });
+      }
       continue;
     }
 
@@ -332,7 +345,7 @@ export function drawCompensationOverlay(
     strokeBox(ctx, minX, minY, maxX, maxY, WARN);
 
     // ── Directional correction arrow for trunk lean / neck tilt ──────────────
-    let label = METRIC_LABEL[spec.name] ?? spec.name;
+    let label = OVERLAY_LABELS[spec.name] ?? spec.name;
     if (spec.name === "trunkLean") {
       const d = metricDirections?.trunkLean; // image-space: "left" | "right"
       if (d === "left" || d === "right") {
@@ -340,7 +353,7 @@ export function drawCompensationOverlay(
         // opposite side. "right" leans toward larger raw-x, so point −x.
         const dx = d === "right" ? -1 : 1;
         drawArrow(ctx, centerX, centerY, centerX + dx * ARROW_LEN, centerY, WARN);
-        label = "STRAIGHTEN";
+        label = OVERLAY_DIRECTION_LABELS.straighten;
       }
     } else if (spec.name === "neckTilt") {
       const d = metricDirections?.neckTilt; // anatomical: "left" | "right"
@@ -348,10 +361,12 @@ export function drawCompensationOverlay(
         const correctionSide = d === "left" ? "right" : "left";
         const dx = anatomicalSideScreenDirX(correctionSide, landmarks);
         drawArrow(ctx, centerX, centerY, centerX + dx * ARROW_LEN, centerY, WARN);
-        label = "STRAIGHTEN";
+        label = OVERLAY_DIRECTION_LABELS.straighten;
       }
     }
 
     drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN);
+    rendered.push({ metric: spec.name, text: label, direction: metricDirections?.[spec.name] ?? null });
   }
+  return rendered;
 }

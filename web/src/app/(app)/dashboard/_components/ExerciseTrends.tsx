@@ -13,6 +13,7 @@ import {
   type ResistanceContext,
 } from "@/lib/prescriptionContext";
 import {
+  fullRomOutcomeText,
   prescribedOutcomeSides,
   prescribedValue,
   sideLabel,
@@ -31,6 +32,8 @@ export interface TrendSession {
   avgRightPeakValue?: number | null;
   completeLeftReps: number;
   completeRightReps: number;
+  leftReps?: number;
+  rightReps?: number;
   totalPairedHoldMs: number | null;
   totalLeftHoldMs?: number | null;
   totalRightHoldMs?: number | null;
@@ -201,6 +204,33 @@ function fmtTrendDate(iso: string): string {
   });
 }
 
+/** Hover detail for a primary-trend point: its value, then the session's volume. */
+export function primaryPointDetail(
+  s: TrendSession,
+  value: number,
+  meta: { label: string; unit: string; isAngle: boolean },
+  isIso: boolean,
+): string {
+  const shown = isIso
+    ? value.toFixed(1)
+    : meta.isAngle
+      ? String(Math.round(value))
+      : value.toFixed(2);
+  const sets = `${s.setCount} set${s.setCount === 1 ? "" : "s"}`;
+  return isIso
+    ? `${meta.label}: ${shown}${meta.unit} · ${sets}`
+    : `${meta.label}: ${shown}${meta.unit} · ${sets} · ${s.totalReps} rep${s.totalReps === 1 ? "" : "s"}`;
+}
+
+/** Hover detail for one side of the completed-reps trend. */
+export function repPointDetail(s: TrendSession, side: "left" | "right"): string {
+  const complete = side === "left" ? s.completeLeftReps : s.completeRightReps;
+  const total = side === "left" ? s.leftReps : s.rightReps;
+  return `${sideLabel(side)}: ${
+    typeof total === "number" ? fullRomOutcomeText(complete, total) : `${complete} met full-ROM target`
+  }`;
+}
+
 export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
   const {
     exerciseId,
@@ -213,9 +243,13 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
   const meta = primaryMetricMeta(exerciseId, exerciseKind);
   const isIso = exerciseKind === "isometric";
 
-  const primaryValues = sessions
-    .map(sessionPrimaryValue)
-    .filter((v): v is number => v != null);
+  // Sessions with a primary value, kept paired so each point's hover details
+  // describe the session it plots.
+  const plotted = sessions.flatMap((s) => {
+    const v = sessionPrimaryValue(s);
+    return v == null ? [] : [{ s, v }];
+  });
+  const primaryValues = plotted.map((p) => p.v);
   const status = trendStatus(primaryValues, meta.isAngle);
 
   const first = sessions[0];
@@ -262,8 +296,14 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
             <p className="text-xs font-medium text-gray-500 mb-1">{meta.label} over time</p>
             {primaryValues.length >= 2 ? (
               <TrendChart
-                series={[{ label: meta.label, color: "#15803d", values: primaryValues }]}
+                series={[{
+                  label: meta.label,
+                  color: "#15803d",
+                  values: primaryValues,
+                  pointDetails: plotted.map((p) => primaryPointDetail(p.s, p.v, meta, isIso)),
+                }]}
                 unitSuffix={meta.unit}
+                pointTitles={plotted.map((p) => fmtTrendDate(p.s.startedAt))}
               />
             ) : (
               <p className="text-xs text-gray-400 py-4 text-center">
@@ -288,7 +328,9 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
                       ? session.completeLeftReps
                       : session.completeRightReps,
                   ),
+                  pointDetails: sessions.map((session) => repPointDetail(session, side)),
                 }))}
+                pointTitles={sessions.map((session) => fmtTrendDate(session.startedAt))}
               />
             </div>
           )}

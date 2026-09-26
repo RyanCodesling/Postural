@@ -64,6 +64,7 @@ const context: any = vm.createContext({
   priorRepOutcomesRef: ref({ left: [], right: [] }),
   repLogRef: ref({ left: twelve(), right: twelve() }),
   captureFramesTotalRef: ref(1000), captureFramesOkRef: ref(950),
+  recordingWantedRef: ref(false),
 });
 vm.runInContext(transpile(cameraDeclarations([
   "RESUME_KEY_PREFIX", "resumeKey", "readResumeSnapshot", "restoredSessionProgress", "sessionRepOutcomes", "writeResumeSnapshot",

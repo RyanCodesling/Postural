@@ -186,16 +186,18 @@ function drawArrow(
 function drawLabelPill(
   ctx: CanvasRenderingContext2D,
   canvasW: number, centerX: number, boxMinY: number, boxMaxY: number,
-  label: string, color: string,
+  label: string, color: string, mirroredDisplay = true,
 ): void {
   ctx.save();
-  ctx.transform(-1, 0, 0, 1, canvasW, 0);
+  // The live canvas is shown mirrored by CSS, so its text is pre-flipped to
+  // read correctly; an unmirrored display (video playback) draws it as is.
+  if (mirroredDisplay) ctx.transform(-1, 0, 0, 1, canvasW, 0);
 
   ctx.font = `bold ${FONT_SIZE}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
 
-  const textX = canvasW - centerX;
+  const textX = mirroredDisplay ? canvasW - centerX : centerX;
   const labelH = FONT_SIZE + 8;
   // Place above the box; fall back to below if too close to the top edge.
   const textY = boxMinY > labelH + 4 ? boxMinY - 4 : boxMaxY + labelH + 4;
@@ -248,6 +250,7 @@ function drawShoulderAsymmetry(
   ctx: CanvasRenderingContext2D,
   landmarks: NormalizedLandmark[],
   canvasW: number, canvasH: number,
+  mirroredDisplay = true,
 ): boolean {
   const elevatedIdx = higherShoulderLandmarkIndex(landmarks);
   const otherIdx = elevatedIdx === 11 ? 12 : 11;
@@ -272,7 +275,7 @@ function drawShoulderAsymmetry(
   );
 
   // "LOWER" label above the elevated shoulder box.
-  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, OVERLAY_DIRECTION_LABELS.shoulderSymmetry, WARN);
+  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, OVERLAY_DIRECTION_LABELS.shoulderSymmetry, WARN, mirroredDisplay);
   return true;
 }
 
@@ -298,6 +301,10 @@ function drawShoulderAsymmetry(
  * the caller has already applied any display-layer hysteresis/debounce and this
  * function should trust that latched warning state instead of rechecking the
  * raw threshold every frame.
+ *
+ * `options.mirroredDisplay` (default true, the live camera) pre-flips label
+ * text for a canvas shown mirrored; video playback passes false. Geometry is
+ * drawn in raw image space either way.
  */
 export function drawCompensationOverlay(
   ctx: CanvasRenderingContext2D,
@@ -308,7 +315,9 @@ export function drawCompensationOverlay(
   metricValues: Partial<Record<MetricName, number | null>>,
   metricDirections?: Partial<Record<MetricName, string>>,
   activeWarningNames?: ReadonlySet<MetricName>,
+  options: { mirroredDisplay?: boolean } = {},
 ): RenderedCompensationCue[] {
+  const mirroredDisplay = options.mirroredDisplay ?? true;
   const rendered: RenderedCompensationCue[] = [];
   for (const spec of compensationMetrics) {
     const value = metricValues[spec.name];
@@ -322,7 +331,7 @@ export function drawCompensationOverlay(
     // The warning has already fired (isWarning above); place the cue on the
     // higher shoulder by raw y inside drawShoulderAsymmetry.
     if (spec.name === "shoulderSymmetry") {
-      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH)) {
+      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH, mirroredDisplay)) {
         rendered.push({ metric: spec.name, text: OVERLAY_DIRECTION_LABELS.shoulderSymmetry,
           direction: higherShoulderLandmarkIndex(landmarks) === 11 ? "right" : "left" });
       }
@@ -365,7 +374,7 @@ export function drawCompensationOverlay(
       }
     }
 
-    drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN);
+    drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN, mirroredDisplay);
     rendered.push({ metric: spec.name, text: label, direction: metricDirections?.[spec.name] ?? null });
   }
   return rendered;

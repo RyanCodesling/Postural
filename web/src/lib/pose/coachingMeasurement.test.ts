@@ -175,6 +175,7 @@ async function run() {
     if (name === "@/lib/pose/coachingConfig") return config;
     if (name === "@/lib/exercises/versioning") return versioning;
     if (name === "@/lib/prescriptionContext") return contextContract;
+    if (name === "@/lib/recording/storage") return { hasRecording: async () => false };
     throw new Error(`Unexpected session route import ${name}`);
   } });
   vm.runInContext(transpile(readFileSync(new URL("../../app/api/sessions/route.ts", import.meta.url), "utf8")), sessionRouteContext);
@@ -200,7 +201,7 @@ async function run() {
     prescriptionRef: { current: { patientExerciseId: 1, occurrenceId: 1 } }, activeDefinitionRef: { current: definition },
     coachingProvenanceRef: { current: provenance }, eventOutboxRef: { current: { setSession: noop } },
   };
-  for (const name of ["traceUploadLoss", "reportSessionId", "showCompletionRecapAfterReport", "terminalOccurrenceAfterReport", "pendingStaleEndReason", "sessionWallStartMs", "sessionPerfStartMs", "sessionId", "preSessionPain"]) sessionClient[`${name}Ref`] = { current: null };
+  for (const name of ["traceUploadLoss", "reportSessionId", "showCompletionRecapAfterReport", "terminalOccurrenceAfterReport", "pendingStaleEndReason", "sessionWallStartMs", "sessionPerfStartMs", "sessionId", "preSessionPain", "videoConsent"]) sessionClient[`${name}Ref`] = { current: null };
   sessionClient.preSessionPainRef.current = { status: "reported", score: 7, bodyArea: "  left shoulder " };
   sessionClient.sessionTokenRef = { current: 0 };
   vm.createContext(sessionClient);
@@ -272,6 +273,23 @@ async function run() {
   assert.equal(detail.auditAttempts[2].holdQuality.auditOnly, true, "invalid audit remains excluded after quarantine");
   assert.deepEqual(detail.auditAttempts[2].holdQuality.original, badFingerprint.holdQuality);
   assert.equal(detail.context.versions.coachingConfig, provenance.version);
+
+  // Video consent counts only for the notice the page showed: a page from
+  // before a notice change (or one that sends no notice) is refused.
+  const consentStart = { patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, videoConsent: true };
+  for (const videoNotice of [undefined, "session_video_notice_v1"]) {
+    const stale = await sessionRequest({ ...consentStart, videoNotice });
+    assert.equal(stale.status, 409, `consent under notice ${videoNotice} is refused`);
+    assert.equal((await stale.json()).code, "video_notice_changed");
+  }
+  assert.equal((await sessionRequest({ ...consentStart, videoConsent: false })).status, 200, "declining needs no notice");
+  assert(!("videoConsent" in storedSession.context_snapshot));
+  sessionClient.videoConsentRef.current = true;
+  sessionClient.videoConsentRememberedRef = { current: true };
+  sessionClient.videoConsentNoticeRef = { current: contextContract.SESSION_VIDEO_NOTICE_VERSION };
+  assert.equal(await sessionClient.start(), true, "the camera page sends the notice it showed");
+  assert.deepEqual({ ...storedSession.context_snapshot.videoConsent, consentedAt: "" },
+    { consentedAt: "", notice: contextContract.SESSION_VIDEO_NOTICE_VERSION, remembered: true });
   console.log("Coaching contract: hashes, read-only movement, real camera processing/writers, draw labels, dropout, hold/legacy validation, API, durable retry and SQL readback passed (fake transports).");
 }
 run().catch(e => { console.error(e); process.exitCode = 1; });

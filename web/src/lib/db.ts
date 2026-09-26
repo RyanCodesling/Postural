@@ -23,10 +23,12 @@ import {
   SESSION_CONTEXT_VERSION,
   comparableContextKey,
   resistanceContextFromRow,
+  videoConsentFromContext,
   type PainReportStatus,
   type PainTiming,
   type PreSessionPain,
   type PrescribedSide,
+  type SessionVideoConsent,
   type PrescriptionSnapshot,
   type PrescriptionSnapshotV2,
   type ResistanceContext,
@@ -1277,6 +1279,7 @@ export async function createSession(data: {
   deviceInfo?: unknown;
   coaching?: CoachingProvenance;
   preSessionPain?: PreSessionPain;
+  videoConsent?: SessionVideoConsent;
 }): Promise<{
   id: number;
   startedAt: string;
@@ -1398,6 +1401,7 @@ export async function createSession(data: {
         version: COACHING_CONFIG_VERSIONS[data.exerciseId], configuration: coachingConfiguration(definition), source: "server-default-unverified",
       },
       ...(data.preSessionPain ? { preSessionPain: data.preSessionPain } : {}),
+      ...(data.videoConsent ? { videoConsent: data.videoConsent } : {}),
     };
 
     runtimePrescription = {
@@ -1506,6 +1510,25 @@ export async function getSessionOwner(sessionId: number): Promise<string | null>
     [sessionId]
   );
   return result.rows.length > 0 ? (result.rows[0].patient_id as string) : null;
+}
+
+/** Who owns a session, whether it is still open, and whether its video was consented to. */
+export async function getSessionRecordingState(sessionId: number): Promise<{
+  patientId: string;
+  ended: boolean;
+  videoConsent: boolean;
+} | null> {
+  const result = await pool.query(
+    "SELECT patient_id, ended_at, context_snapshot FROM sessions WHERE id = $1",
+    [sessionId],
+  );
+  if (result.rows.length === 0) return null;
+  const row = result.rows[0];
+  return {
+    patientId: String(row.patient_id),
+    ended: row.ended_at !== null,
+    videoConsent: videoConsentFromContext(row.context_snapshot) !== null,
+  };
 }
 
 export async function endSession(
@@ -2335,6 +2358,8 @@ export async function getSessionDetail(sessionId: number) {
       terminatedBy:   r.terminated_by,
       asymmetryIndex: r.asymmetry_index != null ? Number(r.asymmetry_index) : null,
       holdQuality:    r.hold_quality ?? null,
+      startTs:        r.start_ts ?? null,
+      endTs:          r.end_ts ?? null,
     })),
     reps: repsRes.rows.map((r) => ({
       repIndex:       r.rep_index,
@@ -2348,6 +2373,8 @@ export async function getSessionDetail(sessionId: number) {
       totalMs:        r.total_ms,
       classification: r.classification,
       compensations:  r.compensations ?? null,
+      startTs:        r.start_ts ?? null,
+      endTs:          r.end_ts ?? null,
     })),
     reviews: reviewsRes.rows.map((review) => ({
       id: Number(review.id),

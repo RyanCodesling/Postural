@@ -28,6 +28,7 @@ import {
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
 import ReportButton from "../../../_components/ReportButton";
+import SessionVideo from "../../../_components/SessionVideo";
 
 interface Patient {
   id: string;
@@ -112,6 +113,7 @@ interface SessionSummary {
   comparableContextKey: string;
   exerciseConfigVersion: string | null;
   context: SessionContextSnapshot | null;
+  hasRecording?: boolean;
   painReport: {
     status: PainReportStatus;
     score: number | null;
@@ -815,6 +817,11 @@ function SessionCard({
                 incomplete
               </span>
             )}
+            {session.hasRecording && (
+              <span className="px-2 py-0.5 text-[10px] rounded-full bg-gray-100 text-gray-700 font-medium">
+                video
+              </span>
+            )}
             {session.endReason === "pain" && (
               <span className="px-2 py-0.5 text-[10px] rounded-full bg-red-100 text-red-700 font-semibold">
                 stopped for pain
@@ -929,6 +936,7 @@ function SessionDetailBody({
           className="px-3 py-1.5 border border-green-700 text-green-700 text-xs font-medium rounded-lg hover:bg-green-50 transition disabled:opacity-60"
         />
       </div>
+      <SessionVideo sessionId={detail.id} />
       <SessionPrescriptionContext detail={detail} />
       <SessionPainReport detail={detail} />
       <SessionCaptureContext detail={detail} />

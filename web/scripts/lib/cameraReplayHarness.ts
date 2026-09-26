@@ -111,7 +111,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   const refGroups: [any, string[]][] = [
     [0, ["fpsFrameCount", "fpsWindowStartMs", "perfSampleCount", "inferMsSum", "frameMsSum", "stableOkSince", "lastBadCaptureAt", "captureFramesTotal", "captureFramesOk", "lastEx005DebugMs", "lastMetricsUpdate", "leftHoldMs", "rightHoldMs", "pairedHoldMs", "neckRepDebugSeq"]],
     [false, ["captureDropoutResetDone", "leftInBand", "rightInBand", "coachingShadowEnabled", "coachingShadowStaffAllowed", "traceSyncWroteThisFrame", "calibrationStale"]],
-    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request"]],
+    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder"]],
   ];
   for (const [initial, names] of refGroups) for (const name of names) context[`${name}Ref`] = ref(initial);
   for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals"]) context[`${name}Ref`] = ref(new Map());

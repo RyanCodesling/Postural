@@ -14,6 +14,7 @@ import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ReportButton from "../_components/ReportButton";
+import SessionVideo from "../_components/SessionVideo";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
 import {
   classifyScheduleOccurrence,
@@ -97,6 +98,7 @@ interface SessionLite extends ScheduleSessionRecord {
   exerciseConfigVersion: string | null;
   // Read by the progress report.
   context: SessionContextSnapshot | null;
+  hasRecording?: boolean;
   painReport: {
     status: PainReportStatus;
     score: number | null;
@@ -106,6 +108,52 @@ interface SessionLite extends ScheduleSessionRecord {
 }
 
 type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
+
+/** The patient's recorded sessions, newest first, each opening its player. */
+function SessionVideoList({
+  sessions,
+  onDeleted,
+}: {
+  sessions: SessionLite[];
+  onDeleted: (sessionId: number) => void;
+}) {
+  const [openId, setOpenId] = useState<number | null>(null);
+  if (sessions.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-semibold text-green-800">Session videos</h2>
+      <p className="text-xs text-gray-500 mt-1 mb-3">
+        Only you and your therapist can watch these. They are kept on this clinic&apos;s computer, and you can delete them.
+      </p>
+      <div className="space-y-2">
+        {sessions.map((s) => (
+          <div key={s.id} className="bg-white border border-green-100 rounded-xl p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm">
+                <p className="font-medium text-gray-800">{s.exerciseName}</p>
+                <p className="text-xs text-gray-500">
+                  {new Date(s.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpenId(openId === s.id ? null : s.id)}
+                className="px-3 py-1.5 text-sm rounded-lg border border-green-700 text-green-700 hover:bg-green-50"
+              >
+                {openId === s.id ? "Hide" : "Watch"}
+              </button>
+            </div>
+            {openId === s.id && (
+              <div className="mt-3">
+                <SessionVideo sessionId={s.id} onDeleted={() => onDeleted(s.id)} />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
@@ -466,6 +514,11 @@ export default function PatientDashboardPage() {
                   ))}
                 </div>
               )}
+
+              <SessionVideoList
+                sessions={sessions.filter((s) => s.hasRecording)}
+                onDeleted={(id) => setSessions((all) => all.map((s) => (s.id === id ? { ...s, hasRecording: false } : s)))}
+              />
             </div>
           );
         })()}

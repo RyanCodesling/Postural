@@ -28,6 +28,14 @@ export type PreSessionPain =
  * wording are engineering placeholders awaiting physical-therapist review.
  */
 export const PRE_SESSION_PAIN_CAUTION_SCORE = 7;
+/**
+ * The patient's opt-in to recording this session's video, stored in the start
+ * context: when they agreed, which version of the notice they had seen, and
+ * whether the answer came from a choice they asked this device to remember.
+ */
+export type SessionVideoConsent = { consentedAt: string; notice: string; remembered?: boolean };
+/** Version of the recording notice the camera page shows; change it when its wording changes. */
+export const SESSION_VIDEO_NOTICE_VERSION = "session_video_notice_v2";
 export type SessionEndReason = "completed" | "user" | "pain" | "superseded";
 export type TherapistReviewLabel =
   | "agree"
@@ -115,6 +123,8 @@ export type SessionContextSnapshotV3 = Omit<SessionContextSnapshotV2, "version" 
   coaching: import("./pose/coachingConfig").CoachingProvenance & { source: "executing-client" | "server-default-unverified" };
   /** Absent when the start showed no survey, as for every session started before it existed. */
   preSessionPain?: PreSessionPain;
+  /** Present only when the patient opted in to recording this session's video. */
+  videoConsent?: SessionVideoConsent;
 };
 
 export type SessionContextSnapshot =
@@ -333,6 +343,16 @@ export function parsePreSessionPain(
     return { ok: false, error: `Body area must be ${MAX_PAIN_BODY_AREA_LENGTH} characters or fewer.` };
   }
   return { ok: true, value: { status: "reported", score, bodyArea } };
+}
+
+/** The recorded video consent, or null when the patient did not opt in. */
+export function videoConsentFromContext(context: unknown): SessionVideoConsent | null {
+  if (!context || typeof context !== "object") return null;
+  const consent = (context as { videoConsent?: unknown }).videoConsent;
+  if (!consent || typeof consent !== "object") return null;
+  const { consentedAt, notice, remembered } = consent as Record<string, unknown>;
+  if (typeof consentedAt !== "string" || typeof notice !== "string") return null;
+  return typeof remembered === "boolean" ? { consentedAt, notice, remembered } : { consentedAt, notice };
 }
 
 /** The survey answer stored with a session, or null when none was recorded. */

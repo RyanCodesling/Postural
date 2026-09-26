@@ -18,6 +18,7 @@ const ref = (current: any) => ({ current });
 
 function harness(options: { sessionId: number | null; rowOk?: boolean; drained?: boolean }) {
   const offered: Array<number | null> = [];
+  let stoppedRecording = 0;
   let releaseDrain: () => void = () => {};
   const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
   const context: any = vm.createContext({
@@ -30,6 +31,7 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
     captureFramesTotalRef: ref(100),
     captureFramesOkRef: ref(90),
     resetSessionPersistence: () => {},
+    stopSessionRecording: () => { stoppedRecording += 1; },
     flushRawFrames: () => {},
     setLastSessionId: (id: number | null) => offered.push(id),
     fetch: async () => ({ ok: options.rowOk ?? true, status: options.rowOk === false ? 500 : 200 }),
@@ -40,7 +42,7 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
   });
   vm.runInContext(transpile(cameraDeclarations(["SESSION_END_DRAIN_TIMEOUT_MS", "endSessionPersistence"]) +
     "\nglobalThis.end = endSessionPersistence;"), context);
-  return { context, offered, releaseDrain, end: () => context.end(false, "user") as Promise<string> };
+  return { context, offered, releaseDrain, recordingStops: () => stoppedRecording, end: () => context.end(false, "user") as Promise<string> };
 }
 
 async function run() {
@@ -53,6 +55,7 @@ async function run() {
     h.releaseDrain();
     assert.equal(await ending, "saved");
     assert.deepEqual(h.offered, [null, 218], "a fully saved session gets its report");
+    assert.equal(h.recordingStops(), 1, "ending the session ends its video recording");
     console.log("  ✓ saved: the report is offered after the save completes");
   }
 

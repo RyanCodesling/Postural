@@ -2,13 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
 import { sha256Version } from "@/lib/exercises/versioning";
-import { parsePreSessionPain } from "@/lib/prescriptionContext";
+import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
+import { hasRecording } from "@/lib/recording/storage";
 import {
   createSession,
   getSessionsForPatient,
   getUsers,
   SessionNotScheduledError,
 } from "@/lib/db";
+
+/** Marks the sessions that have a stored video, for the dashboards' video lists. */
+async function withRecordingFlags<T extends { id: unknown }>(sessions: T[]) {
+  const flags = await Promise.all(sessions.map((s) => hasRecording(Number(s.id))));
+  return sessions.map((s, i) => ({ ...s, hasRecording: flags[i] }));
+}
 
 // GET /api/sessions — session history summaries.
 //   patient   → own sessions.
@@ -19,7 +26,7 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     if (user.role === "patient") {
-      const sessions = await getSessionsForPatient(user.id);
+      const sessions = await withRecordingFlags(await getSessionsForPatient(user.id));
       return NextResponse.json({ sessions });
     }
 
@@ -35,7 +42,7 @@ export async function GET(request: NextRequest) {
           { status: 403 },
         );
       }
-      const sessions = await getSessionsForPatient(patientId);
+      const sessions = await withRecordingFlags(await getSessionsForPatient(patientId));
       return NextResponse.json({ sessions });
     }
 
@@ -87,6 +94,25 @@ export async function POST(request: NextRequest) {
     if (!preSessionPain.ok) {
       return NextResponse.json({ error: preSessionPain.error }, { status: 400 });
     }
+    // Recording is opt-in per session; only an explicit true records consent.
+    if (body?.videoConsent !== undefined && typeof body.videoConsent !== "boolean") {
+      return NextResponse.json({ error: "videoConsent must be true or false" }, { status: 400 });
+    }
+    if (body?.videoConsentRemembered !== undefined && typeof body.videoConsentRemembered !== "boolean") {
+      return NextResponse.json({ error: "videoConsentRemembered must be true or false" }, { status: 400 });
+    }
+    // Consent counts only for the notice the patient was shown. A page opened
+    // before the notice changed (or a choice remembered under an older one)
+    // is sent back to reload and read the current notice.
+    if (body?.videoConsent === true && body?.videoNotice !== SESSION_VIDEO_NOTICE_VERSION) {
+      return NextResponse.json(
+        {
+          error: "The video notice has been updated. Reload this page to read it, then start again.",
+          code: "video_notice_changed",
+        },
+        { status: 409 },
+      );
+    }
     const session = await createSession({
       patientId: user.id,
       patientExerciseId,
@@ -95,6 +121,13 @@ export async function POST(request: NextRequest) {
       deviceInfo: body?.deviceInfo,
       coaching,
       preSessionPain: preSessionPain.value,
+      videoConsent: body?.videoConsent === true
+        ? {
+            consentedAt: new Date().toISOString(),
+            notice: SESSION_VIDEO_NOTICE_VERSION,
+            remembered: body.videoConsentRemembered === true,
+          }
+        : undefined,
     });
     return NextResponse.json({
       sessionId: session.id,

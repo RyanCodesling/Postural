@@ -137,6 +137,9 @@ import {
   type FixedFaceRoi,
 } from "@/lib/pose/faceLandmarkerShadow";
 import ReportButton from "../dashboard/_components/ReportButton";
+import { SESSION_VIDEO_NOTICE, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/recording/consent";
+import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "@/lib/recording/videoChoice";
+import { SessionRecorder, type RecordingState } from "@/lib/recording/sessionRecorder";
 import {
   formatResistanceContext,
   PRE_SESSION_PAIN_CAUTION_SCORE,
@@ -332,6 +335,8 @@ type ResumeSnapshot = {
   completedSetsLog?: CompletedSetRecord[];
   repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
   captureFrames?: { total: number; ok: number };
+  /** The patient opted in to video for this session and has not stopped it. */
+  recordVideo?: boolean;
 };
 
 /** What the end-of-session card needs from each counted repetition. */
@@ -2850,6 +2855,20 @@ export default function CameraClient() {
   const [preSessionSurvey, setPreSessionSurvey] = useState<{ score: number; bodyArea: string } | null>(null);
   const preSessionSurveyResolveRef = useRef<((answer: PreSessionPain | null) => void) | null>(null);
   const preSessionPainRef = useRef<PreSessionPain | null>(null);
+  // Optional session video: a question after the pain survey, answered each
+  // time unless the patient asked this device to remember the answer.
+  const [videoQuestion, setVideoQuestion] = useState<{ remember: boolean } | null>(null);
+  const videoQuestionResolveRef = useRef<((answer: { record: boolean; remember: boolean } | null) => void) | null>(null);
+  const [, setVideoChoiceVersion] = useState(0);
+  const videoConsentRef = useRef(false);
+  const videoConsentRememberedRef = useRef(false);
+  // The notice version the patient agreed to, sent so the server can check it.
+  const videoConsentNoticeRef = useRef<string | null>(null);
+  const recorderRef = useRef<SessionRecorder | null>(null);
+  // Whether a Resume should keep recording: true once recording starts, false
+  // after the patient stops it.
+  const recordingWantedRef = useRef(false);
+  const [recordingState, setRecordingState] = useState<RecordingState | "off">("off");
   // The session the end card describes, for its PDF report.
   const [lastSessionId, setLastSessionId] = useState<number | null>(null);
 
@@ -3068,6 +3087,9 @@ export default function CameraClient() {
           exerciseId,
           coaching: coachingProvenanceRef.current ?? undefined,
           preSessionPain: preSessionPainRef.current ?? undefined,
+          videoConsent: videoConsentRef.current || undefined,
+          videoConsentRemembered: videoConsentRef.current && videoConsentRememberedRef.current ? true : undefined,
+          videoNotice: videoConsentRef.current ? videoConsentNoticeRef.current ?? undefined : undefined,
           deviceInfo:
             typeof navigator !== "undefined"
               ? { userAgent: navigator.userAgent }
@@ -3506,6 +3528,7 @@ export default function CameraClient() {
     const sessionId = sessionIdRef.current;
     const hasPatientAssignment =
       typeof prescriptionRef.current.patientExerciseId === "number";
+    stopSessionRecording();
     // Invalidate any in-flight create for this run. If the create has not
     // resolved yet (sessionId still null), its handler will see the bumped
     // token and self-close the row it creates, so nothing is left open.
@@ -3761,6 +3784,7 @@ export default function CameraClient() {
       updatedAtWallMs: Date.now(),
       completedSetsLog: completedSetsLogRef.current,
       repOutcomes: sessionRepOutcomes(priorRepOutcomesRef.current, repLogRef.current),
+      recordVideo: recordingWantedRef.current || undefined,
       captureFrames: {
         total: captureFramesTotalRef.current,
         ok: captureFramesOkRef.current,
@@ -4146,6 +4170,43 @@ export default function CameraClient() {
     setPreSessionSurvey(null);
     resolve?.(answer);
   };
+  const askVideoChoice = () =>
+    new Promise<{ record: boolean; remember: boolean } | null>((resolve) => {
+      videoQuestionResolveRef.current = resolve;
+      setVideoQuestion({ remember: false });
+    });
+  const answerVideoChoice = (answer: { record: boolean; remember: boolean } | null) => {
+    const resolve = videoQuestionResolveRef.current;
+    videoQuestionResolveRef.current = null;
+    setVideoQuestion(null);
+    resolve?.(answer);
+  };
+
+  /** Records the camera stream for a session whose patient opted in. Never blocks the session. */
+  const startSessionRecording = (sessionId: number) => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    void recorderRef.current?.stop();
+    const recorder = new SessionRecorder({
+      sessionId,
+      stream,
+      nowWallMs: () => Date.parse(perfToIso(performance.now())),
+      onState: (state) => { if (recorderRef.current === recorder) setRecordingState(state); },
+    });
+    recorderRef.current = recorder;
+    recordingWantedRef.current = true;
+    void recorder.start();
+  };
+
+  /** Ends the recording; what was uploaded is kept. `byPatient` also stops it for a later Resume. */
+  const stopSessionRecording = (byPatient = false) => {
+    if (byPatient) recordingWantedRef.current = false;
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    void recorder.stop().finally(() => {
+      if (recorderRef.current === recorder) recorderRef.current = null;
+    });
+  };
 
   /** `onConfirmed` runs once the start is no longer cancellable from the survey. */
   const handleSessionStart = async (onConfirmed?: () => void) => {
@@ -4166,16 +4227,37 @@ export default function CameraClient() {
     setScheduleNotice(null);
     // A patient's new session opens with the pain survey; Back cancels it.
     preSessionPainRef.current = null;
+    videoConsentRef.current = false;
+    videoConsentRememberedRef.current = false;
+    videoConsentNoticeRef.current = null;
     if (typeof prescriptionRef.current.patientExerciseId === "number") {
       const answer = await askPreSessionPain();
       if (answer === null) return;
       preSessionPainRef.current = answer;
+      // Then the video question, unless this patient asked this device to
+      // remember an answer. Back cancels the start.
+      const remembered = readVideoChoice(user?.id);
+      if (remembered) {
+        videoConsentRef.current = remembered.record;
+        videoConsentRememberedRef.current = true;
+        videoConsentNoticeRef.current = remembered.notice;
+      } else {
+        const choice = await askVideoChoice();
+        if (choice === null) return;
+        videoConsentRef.current = choice.record;
+        // The question showed this page's notice.
+        videoConsentNoticeRef.current = SESSION_VIDEO_NOTICE_VERSION;
+        if (choice.remember) rememberVideoChoice(user?.id, choice.record);
+      }
     }
     onConfirmed?.();
+    setRecordingState("off");
+    recordingWantedRef.current = false;
     coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
     if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
     const canPersist = await startSessionPersistence();
     if (!canPersist) return;
+    if (videoConsentRef.current && sessionIdRef.current !== null) startSessionRecording(sessionIdRef.current);
 
     const counters = createRepCountersForDefinition(activeDefinition);
     coachingAuditRef.current.reset();
@@ -4305,6 +4387,9 @@ export default function CameraClient() {
     // collide with rows already persisted under this session id.
     resetSessionPersistence();
     sessionIdRef.current = snap.sessionId;
+    // The consent given at the start covers the rest of the session; the
+    // resumed part is recorded as a new part.
+    if (snap.recordVideo === true) startSessionRecording(snap.sessionId);
     // Re-adopt any outcome events the interrupted run could not deliver, then
     // let the normal flush path retry them. Inserts are idempotent by
     // (session_id, rep_index) / (session_id, set_index), so re-sending an event
@@ -6183,6 +6268,9 @@ export default function CameraClient() {
             lineWidth: 1,
             radius: 3,
           });
+          // A consented session video keeps this frame's pose, and below the
+          // cue drawn on it, so playback can redraw the coaching overlays.
+          const overlayFrame = recorderRef.current?.addOverlayFrame(landmarks) ?? null;
 
           // Framing mode is per-exercise: exercises that reach above head
           // height (ex_007 Press, ex_008 Wall Angels — `requiresOverheadRoom:
@@ -7381,6 +7469,12 @@ export default function CameraClient() {
                 metricDirections,
                 overlayWarningNames,
               );
+              if (overlayFrame && renderedCues[0]) {
+                overlayFrame.cue = {
+                  metric: renderedCues[0].metric,
+                  direction: metricDirections[renderedCues[0].metric] ?? null,
+                };
+              }
               const suppressedMetrics = activeDefinition.compensationMetrics.filter(comp =>
                 sessionStateRef.current !== "active" || !lastCaptureOkRef.current || !baselineReadyForExercise ||
                 comp.peakRelevant === true && !nearPeakNow ||
@@ -7609,6 +7703,12 @@ export default function CameraClient() {
     };
   }, [stopCamera]);
 
+  // Leaving the page ends any session recording; the uploaded part is kept.
+  useEffect(() => {
+    const recorders = recorderRef;
+    return () => { void recorders.current?.stop(); };
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const updateViewportSize = () => {
@@ -7669,6 +7769,11 @@ export default function CameraClient() {
     Date.now() - resumeSnap.updatedAtWallMs < RESUME_MAX_AGE_MS;
   const showResumePrompt =
     sessionState === "idle" && resumeEligible && !resumeDismissed;
+  // Read only when idle or ended, like the resume snapshot above.
+  const rememberedVideoChoice =
+    user?.role === "patient" && (sessionState === "idle" || sessionState === "ended")
+      ? readVideoChoice(user.id)
+      : null;
   const selectedExerciseIndex = assignedExercises.findIndex((e) => e.id === selectedExercise);
   const hasPrevExercise = selectedExerciseIndex > 0;
   const hasNextExercise =
@@ -7683,6 +7788,7 @@ export default function CameraClient() {
   // Stepper navigation locked while a session is in progress.
   const sessionBusy =
     preSessionSurvey !== null ||
+    videoQuestion !== null ||
     sessionState === "active" ||
     sessionState === "resting" ||
     sessionState === "countdown" ||
@@ -9296,6 +9402,53 @@ export default function CameraClient() {
               )}
 
               {/* 3-2-1 countdown overlay */}
+              {/* Session video indicator: always visible while recording. */}
+              {recordingState !== "off" && recordingState !== "stopped" &&
+                (sessionState === "countdown" || sessionState === "active" || sessionState === "resting") && (
+                <div role="status" style={{
+                  position: "absolute",
+                  top: 12,
+                  left: 12,
+                  zIndex: 34,
+                  maxWidth: "calc(100% - 24px)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  background: recordingState === "recording" ? "oklch(0.25 0.02 25 / 0.85)" : "oklch(0.30 0.05 75 / 0.9)",
+                  color: "white",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}>
+                  {recordingState === "recording" ? (
+                    <>
+                      <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 999, background: "oklch(0.63 0.24 25)" }} />
+                      Recording video
+                      <button
+                        type="button"
+                        onClick={() => { stopSessionRecording(true); setRecordingState("off"); }}
+                        style={{
+                          padding: "2px 10px",
+                          borderRadius: 999,
+                          border: "1px solid oklch(1 0 0 / 0.6)",
+                          background: "transparent",
+                          color: "white",
+                          fontFamily: "var(--sans)",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >Stop</button>
+                    </>
+                  ) : recordingState === "unsupported" ? (
+                    "This browser cannot record video. Your exercise results are not affected."
+                  ) : (
+                    "Video recording stopped: it could not be saved. Your exercise results are not affected."
+                  )}
+                </div>
+              )}
+
               {sessionState === "countdown" && (
                 <div style={{
                   position: "absolute",
@@ -9338,7 +9491,7 @@ export default function CameraClient() {
               {/* Post-session summary — recap of the just-finished session. A
                   completed patient attempt reaches this only after the required
                   pain report/decline, and navigation waits for acknowledgement. */}
-              {sessionState === "ended" && !preSessionSurvey && (() => {
+              {sessionState === "ended" && !preSessionSurvey && !videoQuestion && (() => {
                 const def = activeDefinition;
                 const isIso = def?.kind === "isometric";
                 const setsLog = completedSetsLogRef.current;
@@ -9489,7 +9642,7 @@ export default function CameraClient() {
                   when the selected exercise was finished in a prior visit. Built
                   from the persisted latest-finished session (the live in-memory
                   summary above is gone after the route unmounts). Dismissable. */}
-              {showCompletedRecap && selectedRecap && !preSessionSurvey && (() => {
+              {showCompletedRecap && selectedRecap && !preSessionSurvey && !videoQuestion && (() => {
                 const recap = selectedRecap;
                 const isIso = recap.exerciseKind === "isometric";
                 const isPatient = prescription.patientExerciseId !== undefined;
@@ -9630,7 +9783,7 @@ export default function CameraClient() {
                   session that was disrupted (not ended via the End button). The
                   counter/sets/timer come from the device-local resume snapshot;
                   Resume continues the SAME open session. */}
-              {showResumePrompt && resumeSnap && !preSessionSurvey && (() => {
+              {showResumePrompt && resumeSnap && !preSessionSurvey && !videoQuestion && (() => {
                 const snap = resumeSnap;
                 if (!snap) return null;
                 const isIso = snap.kind === "isometric";
@@ -9761,7 +9914,7 @@ export default function CameraClient() {
                           bodyArea: preSessionSurvey.bodyArea.trim() || null,
                         })}
                         style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
-                      >Save and start</button>
+                      >{rememberedVideoChoice ? "Save and start" : "Continue"}</button>
                       <button
                         type="button"
                         onClick={() => answerPreSessionSurvey({ status: "declined" })}
@@ -9771,6 +9924,62 @@ export default function CameraClient() {
                     <button
                       type="button"
                       onClick={() => answerPreSessionSurvey(null)}
+                      style={{
+                        marginTop: 10,
+                        padding: "6px 0",
+                        border: "none",
+                        background: "none",
+                        color: "oklch(0.45 0.01 240)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 14,
+                        cursor: "pointer",
+                      }}
+                    >Back</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Session video question: asked before every patient session
+                  unless the patient asked this device to remember the answer. */}
+              {videoQuestion && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="dialog" aria-modal="true" aria-labelledby="session-video-title" style={MODAL_CARD_STYLE}>
+                    <div id="session-video-title" style={{ marginBottom: 8, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Record video of this session?
+                    </div>
+                    <p style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                      Recording is optional. Your exercise is measured the same either way.
+                    </p>
+                    <ul style={{ margin: "0 0 16px 20px", padding: 0, fontSize: 14, lineHeight: 1.55, color: "oklch(0.35 0.01 240)" }}>
+                      {SESSION_VIDEO_NOTICE.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => answerVideoChoice({ record: true, remember: videoQuestion.remember })}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Yes, record</button>
+                      <button
+                        type="button"
+                        onClick={() => answerVideoChoice({ record: false, remember: videoQuestion.remember })}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >No</button>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, fontSize: 14, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={videoQuestion.remember}
+                        onChange={(event) => {
+                          const remember = event.target.checked;
+                          setVideoQuestion((question) => question && { ...question, remember });
+                        }}
+                        style={{ width: 18, height: 18, accentColor: ACCENT.hex }}
+                      />
+                      Remember my choice on this device (you can change it beside Start session)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => answerVideoChoice(null)}
                       style={{
                         marginTop: 10,
                         padding: "6px 0",
@@ -10104,7 +10313,7 @@ export default function CameraClient() {
                           lineHeight: 1.45,
                         }}>
                           <strong>Motion trace recording:</strong> raw upper-body
-                          metrics and pose landmarks only. No video is stored.
+                          metrics and pose landmarks only. The trace holds no video.
                         </div>
                       )}
                   </>
@@ -10134,6 +10343,26 @@ export default function CameraClient() {
                           : "Not scheduled today"
                         : "Start session"}
                   </button>
+                  {rememberedVideoChoice && (
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+                      Session video: {rememberedVideoChoice.record ? "recorded" : "not recorded"}, as you asked this
+                      device to remember.{" "}
+                      <button
+                        type="button"
+                        onClick={() => { forgetVideoChoice(user?.id); setVideoChoiceVersion((v) => v + 1); }}
+                        style={{
+                          padding: 0,
+                          border: "none",
+                          background: "none",
+                          color: ACCENT.text,
+                          textDecoration: "underline",
+                          fontFamily: "var(--sans)",
+                          fontSize: 13,
+                          cursor: "pointer",
+                        }}
+                      >Ask me each time</button>
+                    </p>
+                  )}
 
                   {(blockedBySchedule || scheduleNotice) && (
                     <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.55 0.14 45)" }}>

@@ -37,14 +37,13 @@ console.log("\nTrendChart hover details\n");
 
 test("each point gets a focusable target whose title and label carry its details", () => {
   const html = renderToStaticMarkup(createElement(TrendChart, {
-    series: [{ label: "Peak ROM", color: "#15803d", values: [90, 96], pointDetails: ["Peak ROM: 90° · 1 set · 24 reps", "Peak ROM: 96° · 1 set · 24 reps"] }],
-    unitSuffix: "°",
+    series: [{ label: "Peak", color: "#15803d", values: [90, 96], pointDetails: ["Peak: 90 · 1 set · 24 reps", "Peak: 96 · 1 set · 24 reps"] }],
     pointTitles: ["Sep 7, 2026, 7:43 PM", "Sep 26, 2026, 12:48 AM"],
   }));
   assert((html.match(/data-point="/g) ?? []).length === 2, "one target per point");
   assert((html.match(/tabindex="0"/g) ?? []).length === 2, "targets are keyboard-focusable");
-  assert(html.includes("<title>Sep 26, 2026, 12:48 AM\nPeak ROM: 96° · 1 set · 24 reps</title>"), "native title fallback");
-  assert(html.includes('aria-label="Sep 7, 2026, 7:43 PM, Peak ROM: 90° · 1 set · 24 reps"'), "accessible label");
+  assert(html.includes("<title>Sep 26, 2026, 12:48 AM\nPeak: 96 · 1 set · 24 reps</title>"), "native title fallback");
+  assert(html.includes('aria-label="Sep 7, 2026, 7:43 PM, Peak: 90 · 1 set · 24 reps"'), "accessible label");
   assert(!html.includes('role="tooltip"'), "no tooltip until a point is selected");
 });
 
@@ -61,8 +60,8 @@ test("two series share one target per session and fall back to their values", ()
 });
 
 test("primary-point details: angle, normalized and hold metrics", () => {
-  const angle = { label: "Peak ROM", unit: "°", isAngle: true };
-  assert(primaryPointDetail(session({}), 95.8, angle, false) === "Peak ROM: 96° · 1 set · 24 reps", "angle rounds");
+  const angle = { label: "Peak angle (camera estimate)", unit: "", isAngle: true };
+  assert(primaryPointDetail(session({}), 95.8, angle, false) === "Peak angle (camera estimate): 96 · 1 set · 24 reps", "angle rounds");
   assert(primaryPointDetail(session({ setCount: 2, totalReps: 1 }), 0.874, { label: "Peak", unit: "", isAngle: false }, false)
     === "Peak: 0.87 · 2 sets · 1 rep", "normalized keeps 2 decimals");
   assert(primaryPointDetail(session({ setCount: 2 }), 29.96, { label: "Hold time", unit: "s", isAngle: false }, true)

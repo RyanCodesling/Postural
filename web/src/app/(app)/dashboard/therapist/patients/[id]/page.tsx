@@ -7,7 +7,9 @@ import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
 import {
+  formatPreSessionPain,
   formatResistanceContext,
+  preSessionPainFromContext,
   type PainReportStatus,
   type PainTiming,
   type PrescribedSide,
@@ -17,6 +19,7 @@ import {
   type TherapistReviewLabel,
 } from "@/lib/prescriptionContext";
 import {
+  ANGLE_ESTIMATE_LABEL,
   fullRomOutcomeText,
   prescribedOutcomeSides,
   shouldShowOutcomeAsymmetry,
@@ -24,6 +27,7 @@ import {
 } from "@/lib/sessionOutcomePresentation";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
+import ReportButton from "../../../_components/ReportButton";
 
 interface Patient {
   id: string;
@@ -107,6 +111,7 @@ interface SessionSummary {
   resistance: ResistanceContext;
   comparableContextKey: string;
   exerciseConfigVersion: string | null;
+  context: SessionContextSnapshot | null;
   painReport: {
     status: PainReportStatus;
     score: number | null;
@@ -410,13 +415,23 @@ export default function PatientDetailPage() {
           <h1 className="text-4xl font-bold text-green-800">Patient Profile</h1>
           <p className="text-gray-500 mt-1 mb-8">{patient.name}</p>
         </div>
-        <button
-          onClick={() => window.print()}
-          className="shrink-0 inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
-        >
-          <PrinterIcon />
-          Print / Save as PDF
-        </button>
+        <div className="shrink-0 flex flex-wrap items-start justify-end gap-2">
+          <ReportButton
+            label="Progress report (PDF)"
+            onDownload={async () => {
+              const { downloadProgressReport } = await import("../../../_components/progressReport");
+              await downloadProgressReport({ patientId }, patient.name);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
+          />
+          <button
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
+          >
+            <PrinterIcon />
+            Print / Save as PDF
+          </button>
+        </div>
       </div>
 
       {/* Personal Information */}
@@ -701,6 +716,7 @@ export default function PatientDetailPage() {
                 loadingDetail={loadingDetailId === s.id}
                 onToggle={() => toggleSession(s.id)}
                 onDetailChanged={() => refreshSessionDetail(s.id)}
+                patientName={patient.name}
               />
             ))}
           </div>
@@ -754,6 +770,7 @@ function SessionCard({
   loadingDetail,
   onToggle,
   onDetailChanged,
+  patientName,
 }: {
   session: SessionSummary;
   expanded: boolean;
@@ -761,6 +778,7 @@ function SessionCard({
   loadingDetail: boolean;
   onToggle: () => void;
   onDetailChanged: () => Promise<void>;
+  patientName: string;
 }) {
   const isIsometric = session.exerciseKind === "isometric";
   const outcomeSides = prescribedOutcomeSides(session.prescribedSide);
@@ -835,7 +853,7 @@ function SessionCard({
                       repCountBySide[side],
                     )}
                     {peakBySide[side] !== null
-                      ? ` · avg peak ${peakBySide[side]!.toFixed(angleUnit ? 1 : 2)}${angleUnit ? "°" : ""}`
+                      ? ` · avg peak${angleUnit ? ` ${ANGLE_ESTIMATE_LABEL}` : ""} ${peakBySide[side]!.toFixed(angleUnit ? 1 : 2)}`
                       : ""}
                   </span>
                 ))}
@@ -857,6 +875,7 @@ function SessionCard({
               reviewScore={session.reviewScore}
               reviewScoreSource={session.reviewScoreSource}
               onDetailChanged={onDetailChanged}
+              patientName={patientName}
             />
           ) : (
             <p className="text-sm text-gray-400">Could not load session detail.</p>
@@ -872,11 +891,13 @@ function SessionDetailBody({
   reviewScore,
   reviewScoreSource,
   onDetailChanged,
+  patientName,
 }: {
   detail: SessionDetail;
   reviewScore: number | null;
   reviewScoreSource: "raw_rule_v1" | "hold_rule_v1" | null;
   onDetailChanged: () => Promise<void>;
+  patientName: string;
 }) {
   const prescribedSide =
     detail.context?.prescription.prescribedSide ?? "both";
@@ -898,6 +919,16 @@ function SessionDetailBody({
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <ReportButton
+          label="Session report (PDF)"
+          onDownload={async () => {
+            const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
+            await downloadSessionReport(detail.id, patientName);
+          }}
+          className="px-3 py-1.5 border border-green-700 text-green-700 text-xs font-medium rounded-lg hover:bg-green-50 transition disabled:opacity-60"
+        />
+      </div>
       <SessionPrescriptionContext detail={detail} />
       <SessionPainReport detail={detail} />
       <SessionCaptureContext detail={detail} />
@@ -940,23 +971,39 @@ function SessionPrescriptionContext({ detail }: { detail: SessionDetail }) {
   );
 }
 
+/**
+ * The before-session survey beside the after-session report. Only a pain stop
+ * needs follow-up; otherwise the reports are shown as plain context.
+ */
 function SessionPainReport({ detail }: { detail: SessionDetail }) {
   const report = detail.painReport;
-  if (detail.endReason !== "pain" && report.status !== "reported") return null;
+  const before = preSessionPainFromContext(detail.context);
+  const painStop = detail.endReason === "pain";
+  if (!painStop && report.status !== "reported" && before === null) return null;
   return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-      <p className="font-semibold">Pain follow-up required before rescheduling</p>
+    <div className={painStop
+      ? "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+      : "rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600"}>
+      <p className={painStop ? "font-semibold" : "font-semibold text-gray-800"}>
+        {painStop ? "Pain follow-up required before rescheduling" : "Pain reports"}
+      </p>
+      {before !== null && (
+        <p className="mt-1">Before the session: {formatPreSessionPain(before)}</p>
+      )}
       {report.status === "reported" ? (
         <p className="mt-1">
-          Score {report.score}/10 · {report.timing?.replace("_", " ")}
+          After the attempt: {report.score}/10
+          {report.timing ? ` · ${report.timing === "both" ? "during and after" : report.timing}` : ""}
           {report.bodyArea ? ` · ${report.bodyArea}` : ""}
         </p>
-      ) : (
+      ) : painStop ? (
         <p className="mt-1">
           The patient stopped the attempt for pain but did not submit the optional
           detail form.
         </p>
-      )}
+      ) : report.status === "declined" ? (
+        <p className="mt-1">After the attempt: declined</p>
+      ) : null}
     </div>
   );
 }
@@ -1251,7 +1298,7 @@ function HoldQualityGrid({
 }) {
   const sideText = (s: HoldSideQuality | null) => {
     if (!s || typeof s !== "object") return "—";
-    return `mean ${unit(s.meanDeg, 0, "°")} · err ${unit(s.meanErrorDeg, 0, "°")} · steadiness ${unit(s.sdDeg, 1, "°")} · droop ${unit(s.droopSlopeDegPerSec, 2, "°/s")}`;
+    return `mean ${unit(s.meanDeg, 0, "")} · err ${unit(s.meanErrorDeg, 0, "")} · steadiness ${unit(s.sdDeg, 1, "")} · droop ${unit(s.droopSlopeDegPerSec, 2, "/s")}`;
   };
   const dropCount =
     typeof hq.dropCount === "number" && Number.isFinite(hq.dropCount) ? hq.dropCount : null;
@@ -1273,6 +1320,9 @@ function HoldQualityGrid({
         <span className="text-gray-400">Compensation:</span>{" "}
         {typeof hq.meanCompensationScore === "number" ? `avg ${hq.meanCompensationScore}` : "—"}
         {typeof hq.minCompensationScore === "number" ? ` · worst ${hq.minCompensationScore}` : ""}
+      </div>
+      <div className="sm:col-span-2 text-gray-400">
+        Arm angles are camera estimates, not degrees.
       </div>
     </div>
   );

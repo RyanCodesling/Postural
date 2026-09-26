@@ -9,10 +9,12 @@ import { getExerciseDefinition } from "@/lib/exercises/registry";
 import {
   comparableContextKey,
   formatResistanceContext,
+  recordedExercise,
   type PrescribedSide,
   type ResistanceContext,
 } from "@/lib/prescriptionContext";
 import {
+  ANGLE_ESTIMATE_LABEL,
   fullRomOutcomeText,
   prescribedOutcomeSides,
   prescribedValue,
@@ -43,19 +45,23 @@ export interface TrendSession {
   prescribedSide?: PrescribedSide;
   resistance?: ResistanceContext;
   exerciseConfigVersion?: string | null;
+  /** Start context: what kind and metric the exercise had when recorded. */
+  context?: unknown;
 }
 
-type TrendStatus = "improving" | "plateau" | "regressing";
+export type TrendStatus = "improving" | "plateau" | "regressing";
 
-export interface TrendGroup {
+export interface TrendGroup<S extends TrendSession = TrendSession> {
   contextKey: string;
   exerciseId: string;
   exerciseName: string;
   exerciseKind: TrendSession["exerciseKind"];
+  /** The recorded primary metric; decides angle vs normalized units. */
+  primaryMetric: string | null;
   prescribedSide: PrescribedSide;
   resistance: ResistanceContext;
   exerciseConfigVersion: string;
-  sessions: TrendSession[]; // oldest → newest
+  sessions: S[]; // oldest → newest
 }
 
 const STATUS_STYLE: Record<TrendStatus, { label: string; classes: string }> = {
@@ -96,9 +102,9 @@ function sessionContext(s: TrendSession) {
 // abandoned session has no reps/sets and would add spurious zero points). Input
 // is newest-first (the API orders started_at DESC), so each group is reversed to
 // oldest→newest for the time axis; groups are ordered by most-recent activity.
-export function groupSessionsByExercise(sessions: TrendSession[]): TrendGroup[] {
+export function groupSessionsByExercise<S extends TrendSession>(sessions: S[]): TrendGroup<S>[] {
   const real = sessions.filter((s) => s.setCount > 0 || s.totalReps > 0);
-  const map = new Map<string, TrendSession[]>();
+  const map = new Map<string, S[]>();
   for (const s of real) {
     const key = sessionContext(s).contextKey;
     const arr = map.get(key) ?? [];
@@ -108,18 +114,25 @@ export function groupSessionsByExercise(sessions: TrendSession[]): TrendGroup[] 
   return Array.from(map.entries())
     .map(([contextKey, list]) => {
       const context = sessionContext(list[0]);
+      // A group is one saved configuration, so the kind and primary metric its
+      // sessions recorded describe it. The current registry is only a fallback:
+      // an exercise can change between configurations (ex_004 went from a hold
+      // to repetitions), and old sessions keep their own meaning. Any session
+      // with a kind will do, since a newest session can lack one.
+      const recorded = list.map((s) => recordedExercise(s.context)).find((r) => r !== null) ?? null;
+      const current = getExerciseDefinition(list[0].exerciseId);
       return {
         contextKey,
         exerciseId: list[0].exerciseId,
         exerciseName: list[0].exerciseName,
-        // Authoritative from the registry — NOT list[0].exerciseKind, which is
-        // derived from set_events and is null for an abandoned/legacy newest
-        // session (would mislabel e.g. an isometric card as dynamic). Fall back
-        // to the first session that does carry a kind, then null.
         exerciseKind:
-          getExerciseDefinition(list[0].exerciseId)?.kind ??
           list.find((s) => s.exerciseKind != null)?.exerciseKind ??
+          recorded?.kind ??
+          current?.kind ??
           null,
+        primaryMetric:
+          recorded?.primaryMetric ??
+          (current?.kind === "dynamic" ? current.primaryMetric.name : null),
         prescribedSide: context.prescribedSide,
         resistance: context.resistance,
         exerciseConfigVersion: context.exerciseConfigVersion,
@@ -135,7 +148,7 @@ export function groupSessionsByExercise(sessions: TrendSession[]): TrendGroup[] 
 
 // The session's primary trend value: ROM (avgPeakValue) for dynamic exercises,
 // hold seconds for isometric. Null when the session didn't record it.
-function sessionPrimaryValue(s: TrendSession): number | null {
+export function sessionPrimaryValue(s: TrendSession): number | null {
   const side = s.prescribedSide ?? "both";
   if (s.exerciseKind === "isometric") {
     const holdMs = prescribedValue(
@@ -160,14 +173,15 @@ function sessionPrimaryValue(s: TrendSession): number | null {
 
 // Label / unit / whether the metric is an angle (the latter drives the badge
 // deadband — hold seconds and ex_007's normalized units are not angles).
-function primaryMetricMeta(
-  exerciseId: string,
+export function primaryMetricMeta(
   kind: TrendSession["exerciseKind"],
+  primaryMetric: string | null,
 ): { label: string; unit: string; isAngle: boolean } {
   if (kind === "isometric") return { label: "Hold time", unit: "s", isAngle: false };
-  const def = getExerciseDefinition(exerciseId);
-  const angle = def && def.kind === "dynamic" ? def.primaryMetric.name !== "wristShoulderVertical" : true;
-  return { label: angle ? "Peak ROM" : "Peak", unit: angle ? "°" : "", isAngle: angle };
+  // ex_007's overhead reach is in normalized units; the other readings are angles.
+  const angle = primaryMetric !== "wristShoulderVertical";
+  // Angles are camera estimates in pipeline units, so no degree sign.
+  return { label: angle ? `Peak ${ANGLE_ESTIMATE_LABEL}` : "Peak", unit: "", isAngle: angle };
 }
 
 // Trend direction from a least-squares slope over the session values (oldest→
@@ -176,7 +190,7 @@ function primaryMetricMeta(
 // max(3° noise floor for angle metrics, 5% of the mean). Higher = better for both
 // ROM and hold time. DESCRIPTIVE STATISTICS — not the ML model, not a diagnosis.
 // The deadband is a tunable heuristic.
-function trendStatus(values: number[], isAngle: boolean): TrendStatus | null {
+export function trendStatus(values: number[], isAngle: boolean): TrendStatus | null {
   const n = values.length;
   if (n < 3) return null;
   const meanX = (n - 1) / 2;
@@ -233,14 +247,13 @@ export function repPointDetail(s: TrendSession, side: "left" | "right"): string 
 
 export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
   const {
-    exerciseId,
     exerciseName,
     exerciseKind,
     prescribedSide,
     resistance,
     sessions,
   } = group;
-  const meta = primaryMetricMeta(exerciseId, exerciseKind);
+  const meta = primaryMetricMeta(exerciseKind, group.primaryMetric);
   const isIso = exerciseKind === "isometric";
 
   // Sessions with a primary value, kept paired so each point's hover details

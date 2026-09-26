@@ -13,6 +13,7 @@ import {
 import ConsistencyCalendar from "./ConsistencyCalendar";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
+import ReportButton from "../_components/ReportButton";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
 import {
   classifyScheduleOccurrence,
@@ -28,8 +29,11 @@ import {
   type ScheduleSessionRecord,
 } from "@/lib/exercises/scheduleSessionSummary";
 import type {
+  PainReportStatus,
+  PainTiming,
   PrescribedSide,
   ResistanceContext,
+  SessionContextSnapshot,
 } from "@/lib/prescriptionContext";
 
 interface PatientProfile {
@@ -91,6 +95,14 @@ interface SessionLite extends ScheduleSessionRecord {
   resistance: ResistanceContext;
   comparableContextKey: string;
   exerciseConfigVersion: string | null;
+  // Read by the progress report.
+  context: SessionContextSnapshot | null;
+  painReport: {
+    status: PainReportStatus;
+    score: number | null;
+    timing: PainTiming | null;
+    bodyArea: string | null;
+  };
 }
 
 type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
@@ -425,9 +437,23 @@ export default function PatientDashboardPage() {
           const trendGroups = groupSessionsByExercise(sessions);
           return (
             <div className="max-w-4xl">
-              <h1 className="text-2xl font-bold text-green-800">My Progress</h1>
-              <p className="text-gray-500 mt-1">Your session-over-session trends per exercise.</p>
-              <p className="text-xs text-gray-400 mt-1 mb-6">Descriptive trends — not a diagnosis.</p>
+              <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-green-800">My Progress</h1>
+                  <p className="text-gray-500 mt-1">Your session-over-session trends per exercise.</p>
+                  <p className="text-xs text-gray-400 mt-1">Descriptive trends — not a diagnosis.</p>
+                </div>
+                {trendGroups.length > 0 && (
+                  <ReportButton
+                    label="Download progress report (PDF)"
+                    onDownload={async () => {
+                      const { downloadProgressReport } = await import("../_components/progressReport");
+                      await downloadProgressReport({}, patientProfile?.name ?? user?.name ?? "Patient");
+                    }}
+                    className="px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
+                  />
+                )}
+              </div>
 
               {trendGroups.length === 0 ? (
                 <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">

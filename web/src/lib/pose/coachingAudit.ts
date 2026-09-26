@@ -149,3 +149,37 @@ export function validCoachingAudit(value: unknown): value is CoachingAudit {
     return true;
   });
 }
+
+/** The coaching audit stored with a set, when it validates. */
+export function setCoachingAudit(measurement: unknown): CoachingAudit | null {
+  const coaching = obj(measurement) ? measurement.coaching : undefined;
+  return validCoachingAudit(coaching) ? coaching : null;
+}
+
+/** A stretch of an observed set during which one compensation cue stayed drawn. */
+export type CueEpisode = { metric: MetricName; text: string; startMs: number; endMs: number };
+
+/**
+ * When each compensation cue was drawn. Consecutive records drawing the same
+ * metric's cue form one episode; an unsampled gap ends it, so gaps never count
+ * as display time.
+ */
+export function cueEpisodes(audit: CoachingAudit): CueEpisode[] {
+  const open = new Map<MetricName, CueEpisode>();
+  const closed: CueEpisode[] = [];
+  for (const record of audit.records) {
+    const drawn = new Map(record.rendered.map((cue) => [cue.metric, cue.text] as const));
+    for (const [metric, episode] of open) {
+      if (record.gapBeforeMs > 0 || !drawn.has(metric)) {
+        closed.push(episode);
+        open.delete(metric);
+      }
+    }
+    for (const [metric, text] of drawn) {
+      const episode = open.get(metric);
+      if (episode) episode.endMs = record.endMs;
+      else open.set(metric, { metric, text, startMs: record.startMs, endMs: record.endMs });
+    }
+  }
+  return [...closed, ...open.values()].sort((a, b) => a.startMs - b.startMs);
+}

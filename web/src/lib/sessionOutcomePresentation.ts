@@ -25,6 +25,12 @@ export function sideLabel(side: OutcomeSide): "Left" | "Right" {
   return side === "left" ? "Left" : "Right";
 }
 
+/**
+ * How the app labels a surfaced angle. Readings are pipeline units from a 2D
+ * camera, not anatomical degrees, so they carry this label and no degree sign.
+ */
+export const ANGLE_ESTIMATE_LABEL = "angle (camera estimate)";
+
 export function fullRomOutcomeText(complete: number, attempted: number): string {
   return `${complete}/${attempted} met full-ROM target`;
 }

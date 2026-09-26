@@ -25,6 +25,7 @@ import {
   resistanceContextFromRow,
   type PainReportStatus,
   type PainTiming,
+  type PreSessionPain,
   type PrescribedSide,
   type PrescriptionSnapshot,
   type PrescriptionSnapshotV2,
@@ -1275,6 +1276,7 @@ export async function createSession(data: {
   exerciseId: string;
   deviceInfo?: unknown;
   coaching?: CoachingProvenance;
+  preSessionPain?: PreSessionPain;
 }): Promise<{
   id: number;
   startedAt: string;
@@ -1395,6 +1397,7 @@ export async function createSession(data: {
       coaching: data.coaching ? { ...data.coaching, source: "executing-client" } : {
         version: COACHING_CONFIG_VERSIONS[data.exerciseId], configuration: coachingConfiguration(definition), source: "server-default-unverified",
       },
+      ...(data.preSessionPain ? { preSessionPain: data.preSessionPain } : {}),
     };
 
     runtimePrescription = {

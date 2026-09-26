@@ -166,6 +166,7 @@ async function run() {
   vm.runInContext(transpile(dbFunctions.map(n => n.getText(dbAst)).join("\n")), dbContext);
   await dbContext.exports.createSession({ patientId: "fixture", patientExerciseId: 1, occurrenceId: 1, exerciseId: "ex_001" });
   assert.equal(storedSession.context_snapshot.coaching.source, "server-default-unverified", "legacy client provenance is not fabricated");
+  assert(!("preSessionPain" in storedSession.context_snapshot), "a start without the survey stores no answer");
   const jsonResponse = (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200 });
   const sessionRouteContext: any = vm.createContext({ exports: {}, console, require: (name: string) => {
     if (name === "next/server") return { NextResponse: { json: jsonResponse } };
@@ -173,6 +174,7 @@ async function run() {
     if (name === "@/lib/db") return { createSession: dbContext.exports.createSession, SessionNotScheduledError: class extends Error {} };
     if (name === "@/lib/pose/coachingConfig") return config;
     if (name === "@/lib/exercises/versioning") return versioning;
+    if (name === "@/lib/prescriptionContext") return contextContract;
     throw new Error(`Unexpected session route import ${name}`);
   } });
   vm.runInContext(transpile(readFileSync(new URL("../../app/api/sessions/route.ts", import.meta.url), "utf8")), sessionRouteContext);
@@ -180,6 +182,11 @@ async function run() {
   const invalidResponse = await sessionRequest({ patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id,
     coaching: { ...provenance, version: `sha256:${"0".repeat(64)}` } });
   assert.equal(invalidResponse.status, 400);
+  for (const preSessionPain of [{ status: "reported", score: 11 }, { status: "reported", score: 2.5 }, { status: "later" },
+    { status: "reported", score: 3, bodyArea: "x".repeat(81) }]) {
+    const invalidPain = await sessionRequest({ patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, preSessionPain });
+    assert.equal(invalidPain.status, 400, `malformed pre-session pain is refused: ${JSON.stringify(preSessionPain)}`);
+  }
   const noop = () => undefined;
   const sessionClient: any = { console, performance: { now: () => 1000 }, resetSessionPersistence: noop,
     setTraceUploadLoss: noop, setPendingCompletionNavigation: noop, setScheduleNotice: noop,
@@ -193,7 +200,8 @@ async function run() {
     prescriptionRef: { current: { patientExerciseId: 1, occurrenceId: 1 } }, activeDefinitionRef: { current: definition },
     coachingProvenanceRef: { current: provenance }, eventOutboxRef: { current: { setSession: noop } },
   };
-  for (const name of ["traceUploadLoss", "reportSessionId", "showCompletionRecapAfterReport", "terminalOccurrenceAfterReport", "pendingStaleEndReason", "sessionWallStartMs", "sessionPerfStartMs", "sessionId"]) sessionClient[`${name}Ref`] = { current: null };
+  for (const name of ["traceUploadLoss", "reportSessionId", "showCompletionRecapAfterReport", "terminalOccurrenceAfterReport", "pendingStaleEndReason", "sessionWallStartMs", "sessionPerfStartMs", "sessionId", "preSessionPain"]) sessionClient[`${name}Ref`] = { current: null };
+  sessionClient.preSessionPainRef.current = { status: "reported", score: 7, bodyArea: "  left shoulder " };
   sessionClient.sessionTokenRef = { current: 0 };
   vm.createContext(sessionClient);
   vm.runInContext(transpile(cameraDeclarations(["startSessionPersistence"]) + "\nglobalThis.start = startSessionPersistence;"), sessionClient);
@@ -202,6 +210,8 @@ async function run() {
   assert.equal(storedSession.context_snapshot.version, 3);
   assert.equal(storedSession.context_snapshot.versions.coachingConfig, provenance.version);
   assert.equal(storedSession.context_snapshot.coaching.source, "executing-client");
+  assert.deepEqual(storedSession.context_snapshot.preSessionPain, { status: "reported", score: 7, bodyArea: "left shoulder" },
+    "the survey answer is stored, trimmed, with the start context");
 
   const routeContext: any = vm.createContext({ exports: {}, console: { warn() {}, error() {} }, require: (name: string) => {
     if (name === "next/server") return { NextResponse: { json: (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200 }) } };

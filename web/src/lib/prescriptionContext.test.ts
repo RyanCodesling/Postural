@@ -5,8 +5,13 @@
 
 import {
   comparableContextKey,
+  formatPreSessionPain,
   parsePrescribedSide,
+  parsePreSessionPain,
   parseResistanceContext,
+  preSessionPainFromContext,
+  preSessionPainNeedsCaution,
+  PRE_SESSION_PAIN_CAUTION_SCORE,
   PRESCRIPTION_SNAPSHOT_VERSION,
   REP_QUALITY_VERSION,
   SESSION_CONTEXT_VERSION,
@@ -177,6 +182,44 @@ test("new session context records the pose and rep-quality contract versions", (
     context.versions.poseMetrics === POSE_METRIC_ALGORITHM_VERSION,
     "pose version must be persisted with the context",
   );
+});
+
+test("before-session pain answers are validated like the after-session report", () => {
+  const absent = parsePreSessionPain(undefined);
+  assert(absent.ok && absent.value === undefined, "no answer is valid and stores nothing");
+  const skipped = parsePreSessionPain({ status: "declined", score: 9 });
+  assert(skipped.ok && JSON.stringify(skipped.value) === '{"status":"declined"}', "a skip keeps no score");
+  const reported = parsePreSessionPain({ status: "reported", score: 0, bodyArea: "   " });
+  assert(
+    reported.ok && JSON.stringify(reported.value) === '{"status":"reported","score":0,"bodyArea":null}',
+    "0 is a real answer and a blank body area is null",
+  );
+  for (const bad of [
+    { status: "reported", score: 11 },
+    { status: "reported", score: -1 },
+    { status: "reported", score: 4.5 },
+    { status: "reported", score: "4" },
+    { status: "reported", score: 4, bodyArea: 7 },
+    { status: "reported", score: 4, bodyArea: "x".repeat(81) },
+    { status: "later" },
+    "4",
+  ]) {
+    assert(!parsePreSessionPain(bad).ok, `malformed answer must be refused: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("stored answers read back, and only high scores carry the caution", () => {
+  assert(preSessionPainFromContext(null) === null, "legacy session without context");
+  assert(preSessionPainFromContext({ version: 3 }) === null, "session started before the survey");
+  assert(preSessionPainFromContext({ preSessionPain: { status: "reported", score: 12 } }) === null, "corrupt answer is ignored");
+  const high = preSessionPainFromContext({ preSessionPain: { status: "reported", score: 7, bodyArea: "neck" } });
+  assert(PRE_SESSION_PAIN_CAUTION_SCORE === 7, "placeholder threshold is 7/10");
+  assert(preSessionPainNeedsCaution(high), "7/10 shows the caution");
+  assert(!preSessionPainNeedsCaution({ status: "reported", score: 6, bodyArea: null }), "6/10 does not");
+  assert(!preSessionPainNeedsCaution({ status: "declined" }), "a skip does not");
+  assert(formatPreSessionPain(high) === "7/10 · neck", "reported text");
+  assert(formatPreSessionPain({ status: "declined" }) === "skipped", "skipped text");
+  assert(formatPreSessionPain(null) === "not recorded", "older sessions");
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

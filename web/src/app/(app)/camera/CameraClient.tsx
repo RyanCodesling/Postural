@@ -136,14 +136,18 @@ import {
   type FaceOrientationDegrees,
   type FixedFaceRoi,
 } from "@/lib/pose/faceLandmarkerShadow";
+import ReportButton from "../dashboard/_components/ReportButton";
 import {
   formatResistanceContext,
+  PRE_SESSION_PAIN_CAUTION_SCORE,
   type PainTiming,
+  type PreSessionPain,
   type PrescribedSide,
   type ResistanceContext,
   type RuntimePrescription,
 } from "@/lib/prescriptionContext";
 import {
+  ANGLE_ESTIMATE_LABEL,
   fullRomOutcomeText,
   prescribedOutcomeSides,
   shouldShowOutcomeAsymmetry,
@@ -223,6 +227,7 @@ interface Exercise {
  * preserves the asymmetry signal).
  */
 type ExerciseSessionRecap = {
+  sessionId: number | null;
   exerciseKind: "dynamic" | "isometric" | null;
   prescribedSide: PrescribedSide;
   endedAt: string | null;
@@ -1744,7 +1749,8 @@ type CardSpec = {
   label: string;
   value: number | null;
   kind: "primary" | "compensation";
-  unit: "°" | "";
+  /** Angles are camera estimates in pipeline units and show no degree sign. */
+  isAngle: boolean;
   warningThreshold?: number;
   compareDirection?: "above" | "below";
   warningActive?: boolean;
@@ -2839,6 +2845,13 @@ export default function CameraClient() {
   const [painBodyArea, setPainBodyArea] = useState("");
   const [painReportSaving, setPainReportSaving] = useState(false);
   const [painReportError, setPainReportError] = useState<string | null>(null);
+  // Before-session pain survey. A new patient session waits for its answer,
+  // and null (Back) cancels the start.
+  const [preSessionSurvey, setPreSessionSurvey] = useState<{ score: number; bodyArea: string } | null>(null);
+  const preSessionSurveyResolveRef = useRef<((answer: PreSessionPain | null) => void) | null>(null);
+  const preSessionPainRef = useRef<PreSessionPain | null>(null);
+  // The session the end card describes, for its PDF report.
+  const [lastSessionId, setLastSessionId] = useState<number | null>(null);
 
   /**
    * When true, the sidebar shows an inline confirm step instead of ending the
@@ -3054,6 +3067,7 @@ export default function CameraClient() {
           occurrenceId,
           exerciseId,
           coaching: coachingProvenanceRef.current ?? undefined,
+          preSessionPain: preSessionPainRef.current ?? undefined,
           deviceInfo:
             typeof navigator !== "undefined"
               ? { userAgent: navigator.userAgent }
@@ -3501,9 +3515,13 @@ export default function CameraClient() {
       // can record it on the row it self-closes (e.g. a fast End press).
       pendingStaleEndReasonRef.current = endReason;
       resetSessionPersistence();
+      setLastSessionId(null);
       return Promise.resolve(hasPatientAssignment ? "pending" : "skipped");
     }
     reportSessionIdRef.current = sessionId;
+    // The end card offers this session's PDF only once every result is saved.
+    setLastSessionId(null);
+    const endToken = sessionTokenRef.current;
     flushRawFrames();
     // Session-level capture-quality summary (% of active frames with OK capture).
     const framesTotal = captureFramesTotalRef.current;
@@ -3547,8 +3565,10 @@ export default function CameraClient() {
       // Anything still queued stays persisted for the next load; reset only
       // after the drain has had its chance, never before.
       resetSessionPersistence();
-      if (rowResult === "failed") return "failed";
-      return drainResult.drained ? "saved" : "partial";
+      const result = rowResult === "failed" ? "failed" : drainResult.drained ? "saved" : "partial";
+      // A newer run owns the end card if one started while this one drained.
+      if (sessionTokenRef.current === endToken) setLastSessionId(result === "saved" ? sessionId : null);
+      return result;
     })();
   };
   endSessionPersistenceRef.current = endSessionPersistence;
@@ -4115,7 +4135,20 @@ export default function CameraClient() {
    * are rebuilt so a restarted session does not inherit stale event buffers
    * or lifetime-of-instance rep indices from the previous session.
    */
-  const handleSessionStart = async () => {
+  const askPreSessionPain = () =>
+    new Promise<PreSessionPain | null>((resolve) => {
+      preSessionSurveyResolveRef.current = resolve;
+      setPreSessionSurvey({ score: 0, bodyArea: "" });
+    });
+  const answerPreSessionSurvey = (answer: PreSessionPain | null) => {
+    const resolve = preSessionSurveyResolveRef.current;
+    preSessionSurveyResolveRef.current = null;
+    setPreSessionSurvey(null);
+    resolve?.(answer);
+  };
+
+  /** `onConfirmed` runs once the start is no longer cancellable from the survey. */
+  const handleSessionStart = async (onConfirmed?: () => void) => {
     if (!activeDefinition) return;
     // Strict schedule lock: a patient may only start an exercise that is
     // actionable today (due, or still within its make-up window). Staff debug
@@ -4131,6 +4164,14 @@ export default function CameraClient() {
       return;
     }
     setScheduleNotice(null);
+    // A patient's new session opens with the pain survey; Back cancels it.
+    preSessionPainRef.current = null;
+    if (typeof prescriptionRef.current.patientExerciseId === "number") {
+      const answer = await askPreSessionPain();
+      if (answer === null) return;
+      preSessionPainRef.current = answer;
+    }
+    onConfirmed?.();
     coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
     if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
     const canPersist = await startSessionPersistence();
@@ -5368,7 +5409,7 @@ export default function CameraClient() {
       activeDefinition.kind === "dynamic"
         ? activeDefinition.primaryMetric.name
         : activeDefinition.isometric.metric;
-    const primaryUnit = metricUsesDegrees(primaryMetric) ? "°" : "";
+    const primaryIsAngle = metricUsesDegrees(primaryMetric);
     const perLimb =
       activeDefinition.bilateral &&
       activeDefinition.bilateralMode === "per-limb";
@@ -5380,7 +5421,7 @@ export default function CameraClient() {
           label: `${metricLabel(primaryMetric)} · ${side}`,
           value: displayPerSidePrimary?.[side] ?? null,
           kind: "primary",
-          unit: primaryUnit,
+          isAngle: primaryIsAngle,
         });
       }
     } else if (perLimb) {
@@ -5392,7 +5433,7 @@ export default function CameraClient() {
         label: `${metricLabel(primaryMetric)} · ${side}`,
         value: displayPerSidePrimary?.[side] ?? null,
         kind: "primary",
-        unit: primaryUnit,
+        isAngle: primaryIsAngle,
       });
     } else {
       cards.push({
@@ -5401,7 +5442,7 @@ export default function CameraClient() {
         label: metricLabel(primaryMetric),
         value: frameMetrics.metrics[primaryMetric] ?? null,
         kind: "primary",
-        unit: primaryUnit,
+        isAngle: primaryIsAngle,
       });
     }
 
@@ -5416,7 +5457,7 @@ export default function CameraClient() {
         label: `${metricLabel(comp.name)}${coupled ? " DEV" : ""}${sideSuffix}`,
         value: frameMetrics.metrics[comp.name] ?? null,
         kind: "compensation",
-        unit: metricUsesDegrees(comp.name) ? "°" : "",
+        isAngle: metricUsesDegrees(comp.name),
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
         // Single-cue consumption: only the metric the selector promoted is
@@ -5856,6 +5897,7 @@ export default function CameraClient() {
                 ? recapSideValue
                 : "both";
             recaps.set(exerciseId, {
+              sessionId: numberField(s, "id") ?? null,
               exerciseKind: exerciseKind(s.exerciseKind),
               prescribedSide: recapPrescribedSide,
               endedAt,
@@ -7640,6 +7682,7 @@ export default function CameraClient() {
     !actionableOccurrenceIds.has(selectedExerciseObj?.occurrenceId ?? -1);
   // Stepper navigation locked while a session is in progress.
   const sessionBusy =
+    preSessionSurvey !== null ||
     sessionState === "active" ||
     sessionState === "resting" ||
     sessionState === "countdown" ||
@@ -7765,12 +7808,12 @@ export default function CameraClient() {
   // first frame arrives before the model, and nothing restarts the loop when
   // the model finishes loading. The buttons that call this stay disabled too,
   // matching the Start camera buttons.
-  const startSessionWithCamera = async () => {
+  const startSessionWithCamera = async (onConfirmed?: () => void) => {
     if (!modelLoaded || isStarting || sessionStartPendingRef.current) return;
     sessionStartPendingRef.current = true;
     try {
       if (!cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) return;
-      await handleSessionStart();
+      await handleSessionStart(onConfirmed);
     } finally { sessionStartPendingRef.current = false; }
   };
 
@@ -8062,7 +8105,7 @@ export default function CameraClient() {
                 {/* Live Metrics */}
                 <div style={{ ...CARD_STYLE, flexShrink: 0, overflow: "hidden" }}>
                   <div style={{ ...STAFF_HEADING_STYLE, padding: "12px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-                    Live Metrics
+                    Live Metrics · angles are camera estimates
                   </div>
                   <ClinicalScoreRow score={score} tier={tier} />
                   {metricCards.map((card) => (
@@ -9295,7 +9338,7 @@ export default function CameraClient() {
               {/* Post-session summary — recap of the just-finished session. A
                   completed patient attempt reaches this only after the required
                   pain report/decline, and navigation waits for acknowledgement. */}
-              {sessionState === "ended" && (() => {
+              {sessionState === "ended" && !preSessionSurvey && (() => {
                 const def = activeDefinition;
                 const isIso = def?.kind === "isometric";
                 const setsLog = completedSetsLogRef.current;
@@ -9327,7 +9370,6 @@ export default function CameraClient() {
                 };
                 const isAngle = def && def.kind === "dynamic" ? def.primaryMetric.name !== "wristShoulderVertical" : true;
                 const target = def && def.kind === "dynamic" ? def.primaryMetric.thresholds.targetROM : 0;
-                const unit = isAngle ? "°" : "";
                 const fmtVal = (v: number) => (isAngle ? `${Math.round(v)}` : v.toFixed(2));
                 const avgAsym = setsDone ? setsLog.reduce((s, r) => s + r.asymmetryIndex, 0) / setsDone : 0;
                 const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
@@ -9372,10 +9414,12 @@ export default function CameraClient() {
                                 </div>
                                 {avgPeakBySide[side] !== null && (
                                   <div style={MODAL_ROW_STYLE}>
-                                    <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} avg peak</span>
+                                    <span style={MODAL_LABEL_STYLE}>
+                                      {sideLabel(side)} avg peak{isAngle ? ` ${ANGLE_ESTIMATE_LABEL}` : ""}
+                                    </span>
                                     <span style={MODAL_VALUE_STYLE}>
-                                      {fmtVal(avgPeakBySide[side]!)}{unit}
-                                      {target ? ` · target ${fmtVal(target)}${unit}` : ""}
+                                      {fmtVal(avgPeakBySide[side]!)}
+                                      {target ? ` · target ${fmtVal(target)}` : ""}
                                     </span>
                                   </div>
                                 )}
@@ -9403,10 +9447,21 @@ export default function CameraClient() {
                         {!pendingCompletionNavigation && (
                           <button
                             type="button"
-                            onClick={startSessionWithCamera}
+                            onClick={() => void startSessionWithCamera()}
                             disabled={!modelLoaded}
                             style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
                           >Redo</button>
+                        )}
+                        {isPatient && lastSessionId !== null && (
+                          <ReportButton
+                            label="Session report (PDF)"
+                            onDownload={async () => {
+                              const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
+                              await downloadSessionReport(lastSessionId, user?.name ?? "Patient");
+                            }}
+                            wrapperStyle={{ flex: "1 1 160px" }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                          />
                         )}
                         {isPatient && pendingCompletionNavigation ? (
                           <button
@@ -9434,7 +9489,7 @@ export default function CameraClient() {
                   when the selected exercise was finished in a prior visit. Built
                   from the persisted latest-finished session (the live in-memory
                   summary above is gone after the route unmounts). Dismissable. */}
-              {showCompletedRecap && selectedRecap && (() => {
+              {showCompletedRecap && selectedRecap && !preSessionSurvey && (() => {
                 const recap = selectedRecap;
                 const isIso = recap.exerciseKind === "isometric";
                 const isPatient = prescription.patientExerciseId !== undefined;
@@ -9475,7 +9530,6 @@ export default function CameraClient() {
                   activeDefinition?.kind === "dynamic"
                     ? activeDefinition.primaryMetric.name !== "wristShoulderVertical"
                     : true;
-                const recapUnit = recapIsAngle ? "°" : "";
                 const formatRecapPeak = (value: number) =>
                   recapIsAngle ? `${Math.round(value)}` : value.toFixed(2);
 
@@ -9520,9 +9574,11 @@ export default function CameraClient() {
                                 </div>
                                 {peakBySide[side] !== null && (
                                   <div style={MODAL_ROW_STYLE}>
-                                    <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} avg peak</span>
+                                    <span style={MODAL_LABEL_STYLE}>
+                                      {sideLabel(side)} avg peak{recapIsAngle ? ` ${ANGLE_ESTIMATE_LABEL}` : ""}
+                                    </span>
                                     <span style={MODAL_VALUE_STYLE}>
-                                      {formatRecapPeak(peakBySide[side]!)}{recapUnit}
+                                      {formatRecapPeak(peakBySide[side]!)}
                                     </span>
                                   </div>
                                 )}
@@ -9543,10 +9599,21 @@ export default function CameraClient() {
                         )}
                         <button
                           type="button"
-                          onClick={startSessionWithCamera}
+                          onClick={() => void startSessionWithCamera()}
                           disabled={!modelLoaded}
                           style={{ ...(hasNextExercise ? SECONDARY_BUTTON_STYLE : PRIMARY_BUTTON_STYLE), flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
                         >Redo</button>
+                        {isPatient && recap.sessionId !== null && (
+                          <ReportButton
+                            label="Session report (PDF)"
+                            onDownload={async () => {
+                              const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
+                              await downloadSessionReport(recap.sessionId!, user?.name ?? "Patient");
+                            }}
+                            wrapperStyle={{ flex: "1 1 160px" }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                          />
+                        )}
                         {isPatient && (
                           <Link
                             href="/dashboard/patient"
@@ -9563,7 +9630,7 @@ export default function CameraClient() {
                   session that was disrupted (not ended via the End button). The
                   counter/sets/timer come from the device-local resume snapshot;
                   Resume continues the SAME open session. */}
-              {showResumePrompt && resumeSnap && (() => {
+              {showResumePrompt && resumeSnap && !preSessionSurvey && (() => {
                 const snap = resumeSnap;
                 if (!snap) return null;
                 const isIso = snap.kind === "isometric";
@@ -9615,10 +9682,9 @@ export default function CameraClient() {
                         >Resume</button>
                         <button
                           type="button"
-                          onClick={() => {
-                            clearResumeSnapshot(snap.patientExerciseId);
-                            startSessionWithCamera();
-                          }}
+                          // The snapshot is cleared only once the survey is
+                          // answered, so Back still leaves Resume available.
+                          onClick={() => void startSessionWithCamera(() => clearResumeSnapshot(snap.patientExerciseId))}
                           disabled={!modelLoaded}
                           style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
                         >Start over</button>
@@ -9627,6 +9693,98 @@ export default function CameraClient() {
                   </div>
                 );
               })()}
+
+              {/* Before-session pain survey: every new patient session waits
+                  for Save or Skip, and Back returns without starting. */}
+              {preSessionSurvey && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="dialog" aria-modal="true" aria-labelledby="pre-session-pain-title" style={MODAL_CARD_STYLE}>
+                    <div id="pre-session-pain-title" style={{ marginBottom: 4, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Pain before you start
+                    </div>
+                    <p style={{ margin: "0 0 14px", fontSize: 15, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                      How much pain do you feel right now? Choose 0 for no pain. This report
+                      supports your therapist&apos;s review and is not a diagnosis.
+                    </p>
+                    <label htmlFor="pre-session-pain-score" style={{ display: "block", marginBottom: 6, fontSize: 15 }}>
+                      Pain score: <strong>{preSessionSurvey.score}/10</strong>
+                    </label>
+                    <input
+                      id="pre-session-pain-score"
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={1}
+                      value={preSessionSurvey.score}
+                      onChange={(event) => {
+                        const score = Number(event.target.value);
+                        setPreSessionSurvey((survey) => survey && { ...survey, score });
+                      }}
+                      style={{ width: "100%", accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="pre-session-pain-area" style={{ display: "block", marginTop: 12, marginBottom: 6, fontSize: 15 }}>
+                      Body area (optional)
+                    </label>
+                    <input
+                      id="pre-session-pain-area"
+                      value={preSessionSurvey.bodyArea}
+                      maxLength={80}
+                      onChange={(event) => {
+                        const bodyArea = event.target.value;
+                        setPreSessionSurvey((survey) => survey && { ...survey, bodyArea });
+                      }}
+                      placeholder="e.g. left shoulder"
+                      style={FIELD_STYLE}
+                    />
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
+                      <p role="status" style={{
+                        margin: "14px 0 0",
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "oklch(0.97 0.03 80)",
+                        border: "1px solid oklch(0.90 0.06 80)",
+                        fontSize: 14,
+                        lineHeight: 1.45,
+                        color: "oklch(0.38 0.08 75)",
+                      }}>
+                        That is a high pain score. Consider checking with your therapist before
+                        exercising today. You can still start if you feel able; press
+                        &ldquo;Stop — I have pain&rdquo; if the pain gets worse.
+                      </p>
+                    )}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
+                      <button
+                        type="button"
+                        onClick={() => answerPreSessionSurvey({
+                          status: "reported",
+                          score: preSessionSurvey.score,
+                          bodyArea: preSessionSurvey.bodyArea.trim() || null,
+                        })}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Save and start</button>
+                      <button
+                        type="button"
+                        onClick={() => answerPreSessionSurvey({ status: "declined" })}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Skip</button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => answerPreSessionSurvey(null)}
+                      style={{
+                        marginTop: 10,
+                        padding: "6px 0",
+                        border: "none",
+                        background: "none",
+                        color: "oklch(0.45 0.01 240)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 14,
+                        cursor: "pointer",
+                      }}
+                    >Back</button>
+                  </div>
+                </div>
+              )}
             </div>
           </main>
 
@@ -9957,7 +10115,7 @@ export default function CameraClient() {
                   {traceSyncReadout}
                   <button
                     type="button"
-                    onClick={startSessionWithCamera}
+                    onClick={() => void startSessionWithCamera()}
                     disabled={!activeDefinition || blockedBySchedule || !modelLoaded}
                     style={{
                       ...PRIMARY_BUTTON_STYLE,
@@ -11215,7 +11373,7 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
   const displayValue =
     card.value === null
       ? "—"
-      : Math.abs(card.value).toFixed(card.unit === "°" ? 1 : 3);
+      : Math.abs(card.value).toFixed(card.isAngle ? 1 : 3);
   const warnLabel = metricWarnLabel(card.metric);
   const warningText = compareDirection === "below" ? "Below threshold" : "Above threshold";
 
@@ -11271,9 +11429,6 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
         fontFamily: "var(--mono)",
       }}>
         {displayValue}
-        {displayValue !== "—" && card.unit && (
-          <span style={{ fontSize: 14, color: "oklch(0.60 0.01 240)", marginLeft: 1 }}>{card.unit}</span>
-        )}
       </div>
     </div>
   );

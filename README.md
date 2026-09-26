@@ -74,8 +74,8 @@
 - Type check, lint, and a production build pass
 - The database check passes against actual PostgreSQL using connection-private temporary tables, covering the outcome readers and the session detail, review, and roster queries; no public row or sequence changes
 - Replaying the saved pilot traces through the camera loop reproduces the recorded baseline byte for byte; these are tuning recordings, so this shows the coaching output is unchanged, not that it is accurate
-- The PDFs were rendered and checked page by page, and the video player was checked in Chrome with a real recording: the overlays stay aligned on the page and in letterboxed full screen, the native full-screen control and double-click do nothing, and a partly saved overlay shows its label after the saved point
-- A real session was recorded, uploaded, and played back on the development machine; a signed-in check of a new recording's overlays, Stop, reload and Resume across parts, therapist viewing, deletion, and the reload prompt after a notice change is still pending, and automated and fixture checks do not establish live or clinical acceptance
+- Sample PDF reports were rendered and checked page by page, and the video player was checked in Chrome on a fixture page with a generated test video and a synthetic overlay track, not a session recording: the overlays stay aligned on the page and in letterboxed full screen, the native full-screen control and double-click do nothing, and a partly saved overlay shows its label after the saved point
+- A real session was recorded, uploaded, and played back on the development machine before overlay tracks existed, so it did not test them; a signed-in check of a new recording's overlays, Stop, reload and Resume across parts, therapist viewing, deletion, and the reload prompt after a notice change is still pending, and automated and fixture checks do not establish live or clinical acceptance
 
 ### *Remaining boundaries*
 

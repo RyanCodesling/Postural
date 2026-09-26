@@ -1,5 +1,92 @@
 # Sprint Updates 
 
+## 📌 Update-9-27-26 | *RyanCodesling*
+
+- Added optional session video: a question before each patient session with a "remember my choice" option, upload to this clinic's computer during the session, and a player for the patient and their assigned therapist that marks sets, repetitions, and cues and can redraw the coaching overlays
+- Added a before-session pain survey on the after-session report's 0-10 scale, with a non-blocking caution at 7/10 or above
+- Added PDF session and progress reports, built in the browser from the saved data at download time
+- Labelled surfaced angles "angle (camera estimate)" without a degree sign, because they are pipeline units from a 2D camera
+- Recorded a versioned audit of what the coaching layer observed and drew for every set, under a coaching configuration fingerprint kept apart from the measurement version
+- Changed neck lateral flexion (`ex_004`) from an assisted hold to active alternating repetitions counted per side, pending a multi-person recording check
+- Restored finished sets, repetition outcomes, and the capture tally when a session is resumed after a reload
+- Showed a session's details when hovering, tapping, or focusing a point on the progress trend charts
+- Added wall angels and a one-sided standing side bend to the Reference Guide, and re-rendered its figure in an upgraded look (low priority)
+
+### *web\src\lib\recording*, *web\src\app\api\sessions\[id]\recording*, and *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*
+
+- Asked "Record video of this session?" after the pain survey, with a notice that the video uploads to this clinic's computer, that only the patient and their assigned therapist can watch it, that the patient can delete it at any time, that stored videos are not encrypted, and that videos are never used to train or tune the system
+- Let a patient remember the answer on this device, per patient, and reset it beside Start session; an answer remembered under an older notice is ignored, so the question returns
+- Stored the consent in the session's start context with its time, notice version, and whether it was remembered; session creation accepts consent only when the page sends the notice version it showed and that version is current, and otherwise asks the patient to reload
+- Recorded consented sessions with `MediaRecorder` and uploaded them in 4-second chunks during the session, so a reload keeps what was sent and Resume continues in a new part; uploads are retried, a request with no answer after 30 s is abandoned, and a recording failure shows on the camera view without affecting the session
+- Let the patient stop recording at any time from the camera view, and closed the recording when the session ends
+- Stored videos under `RECORDINGS_DIR` (by default `web\.recordings`, which is gitignored), one folder per session, with a limit of 600 MB and 20 parts per session; only the owning patient can upload or delete, and only the patient and their assigned therapist can list and play parts, with byte ranges for seeking
+- Saved each processed frame's pose landmarks and drawn cue beside the video as an overlay track (about 0.5 MB a minute) on an upload queue of its own, so the video never waits for it; closing a part records whether the whole track was saved and how far it reaches
+- Added the player to the patient's My Progress, under Session videos, and to the therapist's session detail, where sessions with a video carry a badge; its timeline marks sets, repetitions, and the moments a coaching cue was on screen from their stored timestamps, with jump buttons for each
+- Made "Show coaching overlays" redraw the skeleton and cues in step with playback using the live drawing code, label any stretch whose overlay was not saved, and fall back to the cue labels from the coaching record for videos without a track
+- Kept the overlay in full screen through the player's own Full screen button, and turned off the video's native full screen and picture-in-picture, which would show the video without it
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\prescriptionContext.ts*, and *web\src\app\api\sessions\route.ts*
+
+- Opened every new patient session with a pain survey on the after-session report's 0-10 scale with an optional body area; its button reads Continue when the video question follows and Save and start when a remembered answer skips it, Skip continues without an answer, and Back cancels without starting and keeps a pending Resume
+- Showed a non-blocking caution at 7/10 or above that suggests checking with the therapist first
+- Validated the answer on session creation and stored it as `preSessionPain` in the start context, so the schema is unchanged; the therapist's session detail shows it beside the after-session report, whose red follow-up banner now appears only for pain stops
+- Made camera Start and Resume wait for a playable stream before a session is created or reopened
+- Restored finished sets, repetition outcomes, and the capture tally from the resume snapshot after a reload, so the end-of-session card and capture summary cover the whole attempt instead of showing zeros; older snapshots still load
+
+### *web\src\lib\reports*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, and *web\src\app\(app)\dashboard\_components\ReportButton.tsx*
+
+- Built session and progress reports as PDFs in the browser with a small dependency-free writer that uses built-in Helvetica, A4 pages, tables, and line charts
+- Covered in the session report the prescription, results per side, sets, pain before and after, the coaching cues drawn (from the stored audits, including attempts that credited no movement), and camera tracking
+- Made the progress report fetch the saved sessions at download time and mirror the Progress Trends groups, so it always reflects the latest data
+- Took kind, primary metric, and targets from each session's own record, so an exercise whose definition changed keeps its history; the trend groups now prefer the recorded kind over the current registry too
+- Offered the end-of-session card's report only once every result is saved, and added report buttons to the therapist's patient page and session detail and to the patient's My Progress
+
+### *web\src\lib\sessionOutcomePresentation.ts*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, and *web\src\app\(app)\dashboard\_components\TrendChart.tsx*
+
+- Relabelled surfaced angles "angle (camera estimate)" with no degree sign across the trend charts and tooltips, the end-of-session card and recap, the staff live metric cards, and the therapist views
+- Showed a session's date and details when hovering, tapping, or focusing a trend point: the peak with sets and reps (or the hold time), and each side's full-ROM count on the reps chart
+- Gave each session index a target reaching halfway to its neighbours, because the dots alone are too small to aim at, with a native title element as the fallback
+
+### *web\src\lib\pose\coachingAudit.ts*, *web\src\lib\pose\coachingConfig.ts*, *web\src\lib\pose\holdQuality.ts*, and *web\src\app\api\sessions\[id]\set-events\route.ts*
+
+- Gave each session a coaching configuration fingerprint of its own (context version 3), separate from the measurement version, so trend grouping is unchanged
+- Stored a versioned audit of what the coaching layer observed and drew for each set inside the existing `hold_quality` column: `hold_quality_v2` for holds and `coaching_set_v1` for dynamic sets
+- Validated these envelopes in the set-events route and kept an invalid one in a quarantine envelope while still saving the set, so one bad record cannot block later sets
+- Saved an attempt that ended with no credited movement as an audit-only row, which every outcome reader excludes
+- Added `npm run verify:coaching`, which runs every web test file; `npm run replay:coaching`, which replays saved traces through the current camera loop; and `npm run verify:coaching:db`, which checks the outcome readers against private temporary PostgreSQL tables; `web\docs\coaching-measurement.md` describes the contract
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\neckLateralFlexionCounting.test.ts*
+
+- Changed neck lateral flexion (`ex_004`) from an assisted hold to active alternating repetitions: the signed ear-line angle is split by sign and each side runs its own `RepCounter`, so a return stroke past neutral lands on the other side's counter, which discards it below its minimum peak
+- Set engineering starting thresholds in pipeline units (start 12, complete 6, minimum peak 18, target 30) and restored shoulder symmetry as a compensation beside trunk lean
+- Pinned the overshoot, loose-neutral, noise, and reduced-range cases, including two runs through the camera loop; only `ex_004`'s measurement hash changes, and the side-split isometric path stays in the camera loop
+
+### *tools\blender*, *assets\blender*, and *web\src\lib\exercises\demoClips.ts* (low priority)
+
+- Added a wall angels animation (`ex_008`): the figure stands against a wall with its upper back and head resting on it, both arms slide in the wall's plane from a W up to a Y with each elbow a pure hinge, and one repetition is shown from the front and the next from the side
+- Added the standing side bend (`ex_005`) to one side only, so it does not suggest alternating, with the right hand kept on the hip just outside the clothing while the waist moves
+- Built an upgraded look from the unchanged figure with the CC0 MakeHuman short02 hairstyle, softer skin, rebalanced lights, and a seamless backdrop, and re-rendered the lateral raise, arm hold, and overhead press in it with unchanged motion
+- Checked every clip frame by frame against the lateral-raise guide's crop; the inspector reports that at the W the wall angels' wrists and knuckles sit 20-25 mm off the wall, so the clip does not show full hand contact
+
+### *Validation*
+
+- 52 framework-free TypeScript suites pass, including 19 session-video, 11 report, 8 before-session question, and 5 end-of-session report checks
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables, covering the outcome readers and the session detail, review, and roster queries; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop reproduces the recorded baseline byte for byte; these are tuning recordings, so this shows the coaching output is unchanged, not that it is accurate
+- The PDFs were rendered and checked page by page, and the video player was checked in Chrome with a real recording: the overlays stay aligned on the page and in letterboxed full screen, the native full-screen control and double-click do nothing, and a partly saved overlay shows its label after the saved point
+- A real session was recorded, uploaded, and played back on the development machine; a signed-in check of a new recording's overlays, Stop, reload and Resume across parts, therapist viewing, deletion, and the reload prompt after a notice change is still pending, and automated and fixture checks do not establish live or clinical acceptance
+
+### *Remaining boundaries*
+
+- The `ex_004` thresholds are engineering starting values in pipeline units, not clinician-approved; by 2026-10-02 the active counting must match multi-person recordings within one repetition per side per set, with none counted during neutral or rest, or the assisted stretch returns; its code path stays intact, and `ml\config\registry.json` still describes the stretch until then
+- Apart from `ex_004`, no metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the new data lives in the existing start-context and `hold_quality` columns
+- Angle outputs remain pipeline measurements, not validated anatomical angles
+- The 7/10 caution threshold and its wording await physical-therapist review
+- Session videos stay on the deployment's disk, unencrypted and outside the repository; only the patient and their assigned therapist can watch them, and they are never used to train or tune the system
+- Firefox ignores the setting that hides the video's native full-screen control, so full screen started there shows the video without overlays
+- The demonstration videos stay in the gitignored `web\public\demos\` folder, and three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
+
 ## 📌 Update-9-18-26 | *RyanCodesling*
 
 - Made manual recalibration and a dropout during calibration discard the measurement in progress, so no repetition or neutral baseline mixes readings from before and after them

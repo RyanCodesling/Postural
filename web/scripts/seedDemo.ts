@@ -7,13 +7,17 @@
 // rows are scoped to `demo_*` ids or the two known demo accounts.
 //
 // Run from Postural/web:   npm run seed:demo
-// Idempotent: clears demo_* rows and resets the two demo accounts, then reseeds.
+// Add login-only accounts: npm run seed:demo:accounts
+// Remove added demo accounts and their synthetic patient data: npm run remove:demo:accounts
+// Full seed resets demo_* rows and synthetic records for patient_001; account-only
+// mode preserves activity, and removal targets only the additional demo accounts.
 // Deterministic: fixed PRNG seed → identical data every run.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { hashPassword } from "../src/lib/crypto";
 import { getExerciseDefinition } from "../src/lib/exercises/registry";
 
 // ── DATABASE_URL (from env, else parse web/.env.local) ───────────────────────
@@ -57,6 +61,8 @@ const jitter = (amp: number) => (rand() * 2 - 1) * amp;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const THERAPIST_ID = "therapist_001";
+const DEMO_THERAPIST_ID = "demo_therapist_001";
+const DEMO_PASSWORD = "demo123";
 
 // ── Demo plan ────────────────────────────────────────────────────────────────
 type TrendDir = "improving" | "plateau" | "regressing";
@@ -73,13 +79,13 @@ interface ExercisePlan {
 interface PatientPlan {
   id: string;
   existing: boolean; // true → already in users (patient_001); false → create
+  therapistId: string;
   email: string;
   name: string;
   firstName: string;
   lastName: string;
   age: number;
   gender: string;
-  diagnosis: string;
   exercises: ExercisePlan[];
 }
 
@@ -89,9 +95,9 @@ const HOLD_SECONDS = 30;
 
 const PATIENTS: PatientPlan[] = [
   {
-    id: "patient_001", existing: true, email: "patient@example.com",
+    id: "patient_001", existing: true, therapistId: THERAPIST_ID, email: "patient@example.com",
     name: "John Patient", firstName: "John", lastName: "Patient",
-    age: 54, gender: "male", diagnosis: "Right rotator cuff tendinopathy",
+    age: 54, gender: "male",
     exercises: [
       { exerciseId: "ex_001", status: "completed",   sessions: 6, trend: "improving", lastEndReason: "completed" }, // Completed
       { exerciseId: "ex_004", status: "in_progress", sessions: 5, trend: "improving", lastEndReason: "user" },      // Ended Early
@@ -100,39 +106,145 @@ const PATIENTS: PatientPlan[] = [
     ],
   },
   {
-    id: "demo_patient_b", existing: false, email: "demo.maria@example.com",
+    id: "demo_patient_b", existing: false, therapistId: THERAPIST_ID, email: "demo.maria@example.com",
     name: "Maria Santos", firstName: "Maria", lastName: "Santos",
-    age: 38, gender: "female", diagnosis: "Post-op left shoulder (adhesive capsulitis)",
+    age: 38, gender: "female",
     exercises: [
       { exerciseId: "ex_001", status: "completed",   sessions: 6, trend: "improving", lastEndReason: "completed" },
       { exerciseId: "ex_005", status: "in_progress", sessions: 5, trend: "improving", lastEndReason: "completed" },
     ],
   },
   {
-    id: "demo_patient_c", existing: false, email: "demo.liam@example.com",
+    id: "demo_patient_c", existing: false, therapistId: THERAPIST_ID, email: "demo.liam@example.com",
     name: "Liam Cruz", firstName: "Liam", lastName: "Cruz",
-    age: 45, gender: "male", diagnosis: "Chronic neck and shoulder tension",
+    age: 45, gender: "male",
     exercises: [
       { exerciseId: "ex_008", status: "in_progress", sessions: 6, trend: "plateau",    lastEndReason: "completed" }, // Plateau badge
       { exerciseId: "ex_001", status: "in_progress", sessions: 6, trend: "regressing", lastEndReason: "user" },      // Regressing badge
     ],
   },
   {
-    id: "demo_patient_d", existing: false, email: "demo.aisha@example.com",
+    id: "demo_patient_d", existing: false, therapistId: THERAPIST_ID, email: "demo.aisha@example.com",
     name: "Aisha Khan", firstName: "Aisha", lastName: "Khan",
-    age: 29, gender: "female", diagnosis: "Cervical strain (whiplash)",
+    age: 29, gender: "female",
     exercises: [
       { exerciseId: "ex_001", status: "pending", sessions: 0, trend: "improving", lastEndReason: null }, // Needs attention
       { exerciseId: "ex_004", status: "pending", sessions: 0, trend: "improving", lastEndReason: null },
     ],
   },
   {
-    id: "demo_patient_e", existing: false, email: "demo.tomas@example.com",
+    id: "demo_patient_e", existing: false, therapistId: THERAPIST_ID, email: "demo.tomas@example.com",
     name: "Tomas Reyes", firstName: "Tomas", lastName: "Reyes",
-    age: 61, gender: "male", diagnosis: "Frozen shoulder (right)",
+    age: 61, gender: "male",
     exercises: [], // No exercises yet
   },
+  {
+    id: "demo_patient_f", existing: false, therapistId: DEMO_THERAPIST_ID, email: "demo.noor@example.com",
+    name: "Noor Ali", firstName: "Noor", lastName: "Ali",
+    age: 33, gender: "female",
+    exercises: [
+      { exerciseId: "ex_001", status: "completed", sessions: 4, trend: "improving", lastEndReason: "completed" },
+      { exerciseId: "ex_006", status: "pending", sessions: 0, trend: "improving", lastEndReason: null },
+    ],
+  },
+  {
+    id: "demo_patient_g", existing: false, therapistId: DEMO_THERAPIST_ID, email: "demo.ethan@example.com",
+    name: "Ethan Brooks", firstName: "Ethan", lastName: "Brooks",
+    age: 48, gender: "male",
+    exercises: [
+      { exerciseId: "ex_004", status: "in_progress", sessions: 3, trend: "plateau", lastEndReason: null },
+    ],
+  },
+  {
+    id: "demo_patient_h", existing: false, therapistId: DEMO_THERAPIST_ID, email: "demo.grace@example.com",
+    name: "Grace Miller", firstName: "Grace", lastName: "Miller",
+    age: 57, gender: "female",
+    exercises: [],
+  },
 ];
+
+async function seedDemoAccounts(client: Client) {
+  const passwordHash = hashPassword(DEMO_PASSWORD);
+  await client.query(
+    `INSERT INTO users
+       (id, email, password, name, first_name, last_name, role, "clinicId", therapist_id_num, specialty)
+     VALUES ($1,$2,$3,$4,$5,$6,'therapist',$7,$8,$9)
+     ON CONFLICT (id) DO UPDATE SET
+       email = EXCLUDED.email,
+       password = EXCLUDED.password,
+       name = EXCLUDED.name,
+       first_name = EXCLUDED.first_name,
+       last_name = EXCLUDED.last_name,
+       role = EXCLUDED.role,
+       "clinicId" = EXCLUDED."clinicId",
+       therapist_id_num = EXCLUDED.therapist_id_num,
+       specialty = EXCLUDED.specialty`,
+    [DEMO_THERAPIST_ID, "demo.therapist@example.com", passwordHash,
+     "Taylor Morgan", "Taylor", "Morgan", "DEMO_CLINIC", "DEMO-PT-001", "Physical Therapy"],
+  );
+
+  for (const patient of PATIENTS.filter((plan) => !plan.existing)) {
+    await client.query(
+      `INSERT INTO users (id, email, password, name, first_name, last_name, role, therapist_id, age, gender)
+       VALUES ($1,$2,$3,$4,$5,$6,'patient',$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET
+         email = EXCLUDED.email,
+         password = EXCLUDED.password,
+         name = EXCLUDED.name,
+         first_name = EXCLUDED.first_name,
+         last_name = EXCLUDED.last_name,
+         role = EXCLUDED.role,
+         therapist_id = EXCLUDED.therapist_id,
+         age = EXCLUDED.age,
+         gender = EXCLUDED.gender`,
+      [patient.id, patient.email, passwordHash, patient.name, patient.firstName,
+       patient.lastName, patient.therapistId, patient.age, patient.gender],
+    );
+  }
+}
+
+async function removeDemoAccounts(client: Client) {
+  const patientIds = PATIENTS.filter((plan) => !plan.existing).map((plan) => plan.id);
+  const sessions = await client.query(
+    "DELETE FROM sessions WHERE patient_id = ANY($1::varchar[])",
+    [patientIds],
+  );
+  const occurrences = await client.query(
+    `DELETE FROM exercise_occurrences
+      WHERE patient_exercise_id IN (
+        SELECT id FROM patient_exercises WHERE patient_id = ANY($1::varchar[])
+      )`,
+    [patientIds],
+  );
+  const prescriptions = await client.query(
+    "DELETE FROM patient_exercises WHERE patient_id = ANY($1::varchar[])",
+    [patientIds],
+  );
+  await client.query(
+    "DELETE FROM exercise_programs WHERE therapist_id = $1",
+    [DEMO_THERAPIST_ID],
+  );
+  await client.query(
+    "DELETE FROM exercises WHERE owner_therapist_id = $1",
+    [DEMO_THERAPIST_ID],
+  );
+  const patients = await client.query(
+    "DELETE FROM users WHERE id = ANY($1::varchar[])",
+    [patientIds],
+  );
+  const therapist = await client.query(
+    "DELETE FROM users WHERE id = $1",
+    [DEMO_THERAPIST_ID],
+  );
+
+  return {
+    patients: patients.rowCount ?? 0,
+    therapist: therapist.rowCount ?? 0,
+    prescriptions: prescriptions.rowCount ?? 0,
+    occurrences: occurrences.rowCount ?? 0,
+    sessions: sessions.rowCount ?? 0,
+  };
+}
 
 // 2 demo programs so the therapist "Programs" KPI is non-zero.
 const PROGRAMS = [
@@ -181,33 +293,51 @@ async function main() {
   const client = new Client({ connectionString: resolveDatabaseUrl() });
   await client.connect();
   try {
-    // Prereq accounts must exist (from user_credentials_pg.sql).
-    for (const id of [THERAPIST_ID, "patient_001"]) {
-      const r = await client.query("SELECT 1 FROM users WHERE id = $1", [id]);
-      if (r.rowCount === 0) {
-        throw new Error(`${id} is missing — run scripts/user_credentials_pg.sql (and the other *_pg.sql schema scripts) first.`);
+    const accountsOnly = process.argv.includes("--accounts-only");
+    const removeAccounts = process.argv.includes("--remove-accounts");
+
+    if (!accountsOnly && !removeAccounts) {
+      // Full dashboard-data seeding requires the original demo accounts.
+      for (const id of [THERAPIST_ID, "patient_001"]) {
+        const r = await client.query("SELECT 1 FROM users WHERE id = $1", [id]);
+        if (r.rowCount === 0) {
+          throw new Error(`${id} is missing — run scripts/user_credentials_pg.sql (and the other *_pg.sql schema scripts) first.`);
+        }
       }
     }
 
     await client.query("BEGIN");
+    if (removeAccounts) {
+      const removed = await removeDemoAccounts(client);
+      await client.query("COMMIT");
+      console.log("Added demo accounts and linked synthetic data removed:");
+      console.log(`  patients      : ${removed.patients}`);
+      console.log(`  therapists    : ${removed.therapist}`);
+      console.log(`  prescriptions : ${removed.prescriptions}`);
+      console.log(`  occurrences   : ${removed.occurrences}`);
+      console.log(`  sessions      : ${removed.sessions}`);
+      return;
+    }
+    if (process.argv.includes("--accounts-only")) {
+      await seedDemoAccounts(client);
+      await client.query("COMMIT");
+      console.log("Demo accounts are ready:");
+      console.log(`  therapist: demo.therapist@example.com / ${DEMO_PASSWORD}`);
+      console.log(`  patients: ${PATIENTS.filter((patient) => !patient.existing).map((patient) => patient.email).join(", ")} / ${DEMO_PASSWORD}`);
+      return;
+    }
 
-    // ── Idempotent cleanup (demo_* rows + the two demo accounts' content) ──
-    await client.query("DELETE FROM users WHERE id LIKE 'demo\\_%'"); // cascades their sessions/exercises
+    // ── Idempotent cleanup (demo patients before their demo therapist) ─────
+    await client.query("DELETE FROM users WHERE id LIKE 'demo\\_%' AND role = 'patient'");
     await client.query("DELETE FROM exercise_programs WHERE id LIKE 'demo\\_%'");
+    await client.query("DELETE FROM users WHERE id LIKE 'demo\\_%' AND role = 'therapist'");
     await client.query("DELETE FROM sessions WHERE patient_id = 'patient_001'"); // cascades set/rep events
     await client.query("DELETE FROM patient_exercises WHERE patient_id = 'patient_001'");
     await client.query("UPDATE users SET therapist_id = $1 WHERE id = 'patient_001'", [THERAPIST_ID]);
+    await seedDemoAccounts(client);
 
     // ── Patients ──
     for (const plan of PATIENTS) {
-      if (!plan.existing) {
-        await client.query(
-          `INSERT INTO users (id, email, password, name, first_name, last_name, role, therapist_id, age, gender, diagnosis)
-           VALUES ($1,$2,$3,$4,$5,$6,'patient',$7,$8,$9,$10)
-           ON CONFLICT (id) DO NOTHING`,
-          [plan.id, plan.email, "demo123", plan.name, plan.firstName, plan.lastName, THERAPIST_ID, plan.age, plan.gender, plan.diagnosis],
-        );
-      }
       tally.patients++;
 
       for (const ex of plan.exercises) {
@@ -397,13 +527,15 @@ async function main() {
   }
 
   console.log("Demo seed complete:");
-  console.log(`  patients : ${tally.patients} (under ${THERAPIST_ID})`);
+  console.log(`  patients : ${tally.patients} total (${PATIENTS.filter((patient) => patient.therapistId === THERAPIST_ID).length} under ${THERAPIST_ID}, ${PATIENTS.filter((patient) => patient.therapistId === DEMO_THERAPIST_ID).length} under ${DEMO_THERAPIST_ID})`);
   console.log(`  programs : ${tally.programs}`);
   console.log(`  sessions : ${tally.sessions}`);
   console.log(`  occurr.  : ${tally.occurrences}`);
   console.log(`  sets     : ${tally.sets}`);
   console.log(`  reps     : ${tally.reps}`);
-  console.log("Log in as therapist@clinic.com / therapist123 or patient@example.com / patient123.");
+  console.log("Original demo logins: therapist@clinic.com / therapist123; patient@example.com / patient123.");
+  console.log(`Additional therapist login: demo.therapist@example.com / ${DEMO_PASSWORD}.`);
+  console.log(`Additional patient logins: ${PATIENTS.filter((patient) => !patient.existing).map((patient) => patient.email).join(", ")} / ${DEMO_PASSWORD}.`);
 }
 
 main().catch((err) => {

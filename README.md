@@ -1,5 +1,31 @@
 # Sprint Updates 
 
+## 📌 Update-10-1-26 | *Ron*
+
+### *pt_session_summary_printable_report.html*
+Test phase only, not offical yet
+- Added editable clinical summary and goal-progress fields, displayed them in the printable report, and included them in JSON export
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\lib\db.ts*, and *web\src\app\api\therapist\overview\route.ts*
+
+- Added patient roster details and multi-patient exercise assignment
+- Added a separate patient-details module with one-at-a-time accordion profiles and smooth expand/collapse transitions
+- Made empty required fields show red borders only after clicking Assign Exercises, and guarded the page against missing exercise API data
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\api\users\route.ts*, *web\src\lib\db.ts*, and *scripts\user_credentials_pg.sql*
+
+- Added Diagnosis, Condition, and Prescription fields for patients when adding or editing users, and wired them through the API and database mapper
+- Restored the three user-table columns in the idempotent setup SQL; the local database migration still needs to be run by the table owner because the configured role lacks ownership permission
+
+### *web\scripts\seedDemo.ts* and *web\package.json*
+### REMOVE DEMO ACCOUNTS BEFORE FINAL DEFENSE
+- Added a demo therapist and seven demo patient accounts, with `npm run seed:demo:accounts` to add them and `npm run remove:demo:accounts` to remove them
+
+### *Validation*
+
+- ESLint and TypeScript checks pass for the updated web code
+- The demo account seed completed successfully; the clinical-column migration remains pending owner-level database access
+
 ## 📌 Update-9-27-26 | *RyanCodesling*
 
 - Added optional session video: a question before each patient session with a "remember my choice" option, upload to this clinic's computer during the session, and a player for the patient and their assigned therapist that marks sets, repetitions, and cues and can redraw the coaching overlays

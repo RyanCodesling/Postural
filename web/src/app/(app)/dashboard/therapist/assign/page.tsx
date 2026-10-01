@@ -175,6 +175,21 @@ interface PatientData {
   id: string;
   name: string;
   email: string;
+  diagnosis?: string | null;
+  condition?: string | null;
+}
+
+interface PatientRosterSummary {
+  id: string;
+  name: string;
+  totalSessions: number;
+  sessionsThisWeek: number;
+  lastSessionAt: string | null;
+  assignedCount: number;
+  dueCount: number;
+  completedCount: number;
+  missedCount: number;
+  painStoppedCount: number;
 }
 
 function todayStr(): string {
@@ -183,7 +198,10 @@ function todayStr(): string {
 
 function fmtDate(d: string) {
   if (!d) return "—";
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+  const value = d.length === 10 ? `${d}T00:00:00` : d;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", {
     month: "short", day: "numeric", year: "numeric",
   });
 }
@@ -257,16 +275,19 @@ export default function AssignExercisePage() {
   const { showToast } = useToast();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [patientRoster, setPatientRoster] = useState<Record<string, PatientRosterSummary>>({});
+  const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [loading, setLoading]     = useState(true);
 
-  const [assignPatientId,   setAssignPatientId]   = useState("");
+  const [assignPatientIds, setAssignPatientIds] = useState<string[]>([]);
   const [assignProgramId,   setAssignProgramId]   = useState("");
   const [assignSelected,    setAssignSelected]    = useState<Set<string>>(new Set());
   const [assignParams,      setAssignParams]      = useState<Record<string, AssignmentParams>>({});
   const [assigning,         setAssigning]         = useState(false);
   const [showAssignError,   setShowAssignError]   = useState(false);
   const [assignErrorMsg,    setAssignErrorMsg]    = useState("");
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
 
   // Existing assignments (loaded when patient changes)
   const [existingAssignments, setExistingAssignments] = useState<PatientExercise[]>([]);
@@ -291,30 +312,35 @@ export default function AssignExercisePage() {
     if (!user?.id) return;
     Promise.all([
       fetch(`/api/users?role=patient&therapistId=${user.id}`).then((r) => r.json()),
+      fetch("/api/therapist/overview").then((r) => r.json()),
       fetch("/api/exercises").then((r) => r.json()),
       fetch("/api/programs").then((r) => r.json()),
     ])
-      .then(([patientsData, exercisesData, programsData]) => {
-        setPatients(patientsData.users ?? []);
-        setExercises(exercisesData.exercises ?? []);
-        setPrograms(programsData.programs ?? []);
+      .then(([patientsData, overviewData, exercisesData, programsData]) => {
+        setPatients(Array.isArray(patientsData?.users) ? patientsData.users : []);
+        const rosterMap = Object.fromEntries(
+          Array.isArray(overviewData?.patients)
+            ? overviewData.patients.map((patient: PatientRosterSummary) => [patient.id, patient])
+            : [],
+        );
+        setPatientRoster(rosterMap);
+        setExercises(Array.isArray(exercisesData?.exercises) ? exercisesData.exercises : []);
+        setPrograms(Array.isArray(programsData?.programs) ? programsData.programs : []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [user?.id]);
 
-  // ── Load existing assignments when patient changes ───────────────────────
+  // ── Load existing assignments for a single selected patient ──────────────
   useEffect(() => {
-    if (!assignPatientId) {
-      setAssignSelected(new Set());
-      setAssignParams({});
-      setAssignProgramId("");
+    if (assignPatientIds.length !== 1) {
       setExistingAssignments([]);
       setDeleteSelected(new Set());
       setEditingExercises(new Set());
       return;
     }
-    fetch(`/api/patient-exercises?patientId=${assignPatientId}`)
+    const patientId = assignPatientIds[0];
+    fetch(`/api/patient-exercises?patientId=${patientId}`)
       .then((r) => r.json())
       .then((d) => {
         const existing: PatientExercise[] = d.exercises ?? [];
@@ -331,7 +357,7 @@ export default function AssignExercisePage() {
         setEditingExercises(new Set());
       })
       .catch(() => {});
-  }, [assignPatientId]);
+  }, [assignPatientIds]);
 
   // ── Program merge ─────────────────────────────────────────────────────────
   const handleProgramSelect = (programId: string) => {
@@ -369,7 +395,23 @@ export default function AssignExercisePage() {
     });
   };
 
+  const togglePatientSelection = (patientId: string) => {
+    const nextPatientIds = assignPatientIds.includes(patientId)
+      ? assignPatientIds.filter((id) => id !== patientId)
+      : [...assignPatientIds, patientId];
+    setAssignPatientIds(nextPatientIds);
+    setExpandedPatientId(nextPatientIds.length === 1 ? nextPatientIds[0] : null);
+    setShowValidationErrors(false);
+    setAssignSelected(new Set());
+    setAssignParams({});
+    setAssignProgramId("");
+    setExistingAssignments([]);
+    setDeleteSelected(new Set());
+    setEditingExercises(new Set());
+  };
+
   const toggleAssign = (exerciseId: string) => {
+    setShowValidationErrors(false);
     setAssignSelected((prev) => {
       const next = new Set(prev);
       if (next.has(exerciseId)) {
@@ -404,7 +446,8 @@ export default function AssignExercisePage() {
 
   // ── Assign: validate → build preview → show modal ───────────────────────
   const handleAssign = () => {
-    if (!assignPatientId) { setAssignErrorMsg("Please select a patient."); setShowAssignError(true); return; }
+    setShowValidationErrors(true);
+    if (assignPatientIds.length === 0) { setAssignErrorMsg("Please select at least one patient."); setShowAssignError(true); return; }
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
     const payload: AssignmentPayload[] = [];
@@ -595,21 +638,43 @@ export default function AssignExercisePage() {
   const handleConfirmAssign = async () => {
     setAssigning(true);
     try {
-      const res = await fetch("/api/patient-exercises", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId: assignPatientId, exercises: pendingPayload }),
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        setAssignErrorMsg(d.error ?? "Failed to assign.");
+      const results = await Promise.all(
+        assignPatientIds.map(async (patientId) => {
+          try {
+            const res = await fetch("/api/patient-exercises", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ patientId, exercises: pendingPayload }),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { patientId, ok: res.ok, error: data.error as string | undefined };
+          } catch {
+            return { patientId, ok: false, error: "Network request failed." };
+          }
+        }),
+      );
+      const failedPatients = results.filter((result) => !result.ok);
+      if (failedPatients.length > 0) {
+        const successfulCount = results.length - failedPatients.length;
+        const failedNames = failedPatients
+          .map((result) => patients.find((patient) => patient.id === result.patientId)?.name ?? result.patientId)
+          .join(", ");
+        setAssignErrorMsg(
+          successfulCount > 0
+            ? `Assigned to ${successfulCount} patient(s), but failed for: ${failedNames}. ${failedPatients[0].error ?? "Please try again."}`
+            : `${failedPatients[0].error ?? "Failed to assign exercises."} (${failedNames})`,
+        );
         setShowAssignError(true);
         setShowAssignPreview(false);
         return;
       }
       setShowAssignPreview(false);
-      showToast({ variant: "success", message: "Exercises assigned and synced." });
-      setAssignPatientId(""); setAssignProgramId("");
+      showToast({
+        variant: "success",
+        message: `Exercises assigned to ${assignPatientIds.length} patient${assignPatientIds.length === 1 ? "" : "s"} and synced.`,
+      });
+      setShowValidationErrors(false);
+      setAssignPatientIds([]); setAssignProgramId("");
       setAssignSelected(new Set()); setAssignParams({});
       setExistingAssignments([]); setDeleteSelected(new Set());
     } catch {
@@ -638,7 +703,7 @@ export default function AssignExercisePage() {
       const res = await fetch("/api/patient-exercises", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId: assignPatientId, exerciseIds: [...deleteSelected] }),
+        body: JSON.stringify({ patientId: assignPatientIds[0], exerciseIds: [...deleteSelected] }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -672,9 +737,16 @@ export default function AssignExercisePage() {
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
-  const systemExercises = exercises.filter((e) => !e.is_custom);
-  const customExercises = exercises.filter((e) => e.is_custom);
-  const selectedPatient = patients.find((p) => p.id === assignPatientId);
+  const systemExercises = Array.isArray(exercises) ? exercises.filter((e) => !e.is_custom) : [];
+  const customExercises = Array.isArray(exercises) ? exercises.filter((e) => e.is_custom) : [];
+  const selectedPatient = assignPatientIds.length === 1
+    ? patients.find((patient) => patient.id === assignPatientIds[0])
+    : undefined;
+  const selectedPatientNames = assignPatientIds
+    .map((patientId) => patients.find((patient) => patient.id === patientId)?.name ?? patientId);
+  const selectedPatients = assignPatientIds
+    .map((patientId) => patients.find((patient) => patient.id === patientId))
+    .filter((patient): patient is PatientData => Boolean(patient));
   const minDate = todayStr();
 
   // True when at least one selected exercise is new or has been edited and differs from existing
@@ -732,227 +804,317 @@ export default function AssignExercisePage() {
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Assign Exercise</h1>
       <p className="text-gray-500 mb-6">Assign exercises or a program to one of your patients.</p>
 
+      <div className="grid gap-6 items-start lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6 max-w-2xl">
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6 max-w-2xl">
-
-        {/* Step 1 — Select Patient */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            1. Select Patient <span className="text-red-500">*</span>
-          </label>
-          {patients.length === 0 ? (
-            <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
-          ) : (
-            <select
-              value={assignPatientId}
-              onChange={(e) => setAssignPatientId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
-            >
-              <option value="">— Select a patient —</option>
-              {patients.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {/* Existing Assignments (shown when patient has assigned exercises) */}
-        {assignPatientId && existingAssignments.length > 0 && (
+          {/* Step 1 — Select Patients */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-gray-700">
-                Currently Assigned to{" "}
-                <span className="text-green-700">{selectedPatient?.name}</span>
-              </p>
-              {deleteSelected.size > 0 && (
-                <button
-                  onClick={() => { setDeleteError(""); setShowDeleteModal(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
-                >
-                  <TrashIcon />
-                  End Selected ({deleteSelected.size})
-                </button>
-              )}
-            </div>
-            <div className="rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
-              {existingAssignments.map((ex) => (
-                <label
-                  key={ex.exercise_id}
-                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition ${
-                    deleteSelected.has(ex.exercise_id) ? "bg-red-50" : "hover:bg-gray-50"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={deleteSelected.has(ex.exercise_id)}
-                    onChange={() => toggleDelete(ex.exercise_id)}
-                    className="w-4 h-4 accent-red-600 shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-900">{ex.name}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500 shrink-0">
-                    <span>
-                      {ex.sets} sets ×{" "}
-                      {getExerciseDefinition(ex.exercise_id)?.kind === "isometric"
-                        ? `${ex.hold_seconds}s hold`
-                        : `${ex.reps} reps`}
-                    </span>
-                    <span>{ex.rest_seconds}s rest</span>
-                    <span className="text-green-700 font-medium">
-                      {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}
-                    </span>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5">
-              Select prescriptions to end. Historical occurrences and sessions will be preserved.
-            </p>
-          </div>
-        )}
-
-        {/* Step 2 — Load from Program */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            2. Load from Program{" "}
-            <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
-          </label>
-          {programs.length === 0 ? (
-            <p className="text-gray-400 text-sm">No programs yet.</p>
-          ) : (
-            <>
-              <select
-                value={assignProgramId}
-                onChange={(e) => handleProgramSelect(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
-              >
-                <option value="">— None —</option>
-                {programs.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-
-              {assignProgramId && (() => {
-                const tmpl = programs.find((t) => t.id === assignProgramId);
-                if (!tmpl || tmpl.exercises.length === 0) return null;
-                return (
-                  <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3">
-                    <p className="text-xs font-medium text-green-700 mb-2">
-                      {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this program:
-                    </p>
-                    <ul className="space-y-1">
-                      {tmpl.exercises.map((ex, i) => (
-                        <li key={i} className="flex items-center justify-between text-xs text-gray-700">
-                          <span>#{ex.sequenceIndex ?? i + 1} · {ex.name}</span>
-                          {(ex.sets || ex.reps || ex.holdSeconds) && (
-                            <span className="text-gray-400 font-mono ml-4 shrink-0">
-                              {ex.sets ?? "?"}×
-                              {prescriptionTargetText({
-                                exerciseId: ex.exerciseId,
-                                reps: ex.reps,
-                                holdSeconds: ex.holdSeconds,
-                              })}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-        </div>
-
-        {/* Step 3 — Select & Configure Exercises */}
-        <div>
-          <p className="text-sm font-semibold text-gray-700 mb-3">
-            3. Select Exercises <span className="text-red-500">*</span>
-          </p>
-
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-            System Exercises
-          </p>
-          <div className="space-y-2 mb-5">
-            {systemExercises.map((ex) => (
-              <AssignRow
-                key={ex.id}
-                exercise={ex}
-                checked={assignSelected.has(ex.id)}
-                params={assignParams[ex.id] ?? {}}
-                minDate={minDate}
-                isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
-                isEditing={editingExercises.has(ex.id)}
-                onToggle={() => toggleAssign(ex.id)}
-                onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
-                onCancelEdit={() => {
-                  setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
-                  const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
-                }}
-                onParam={(f, v) =>
-                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
-                }
-                onSchedule={(patch) =>
-                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
-                }
-              />
-            ))}
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              1. Select Patients <span className="text-red-500">*</span>
+            </label>
+            {patients.length === 0 ? (
+              <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
+            ) : (
+              <div className={`rounded-lg border ${assignPatientIds.length === 0 && showValidationErrors ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}>
+                <div className="max-h-52 overflow-y-auto divide-y divide-gray-100">
+                  {patients.map((patient) => (
+                    <label key={patient.id} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={assignPatientIds.includes(patient.id)}
+                        onChange={() => togglePatientSelection(patient.id)}
+                        className="w-4 h-4 accent-green-700 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{patient.name}</span>
+                      <span className="text-xs text-gray-400">{patient.email}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="border-t border-gray-100 px-3 py-2 text-xs text-gray-500">
+                  {assignPatientIds.length} selected
+                </div>
+              </div>
+            )}
           </div>
 
-          {customExercises.length > 0 && (
-            <>
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                Custom Exercises
-              </p>
-              <div className="space-y-2">
-                {customExercises.map((ex) => (
-                  <AssignRow
-                    key={ex.id}
-                    exercise={ex}
-                    checked={assignSelected.has(ex.id)}
-                    params={assignParams[ex.id] ?? {}}
-                    minDate={minDate}
-                    isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
-                    isEditing={editingExercises.has(ex.id)}
-                    onToggle={() => toggleAssign(ex.id)}
-                    onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
-                    onCancelEdit={() => {
-                      setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
-                      const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
-                    }}
-                    onParam={(f, v) =>
-                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
-                    }
-                    onSchedule={(patch) =>
-                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
-                    }
-                  />
+          {/* Existing Assignments (shown when patient has assigned exercises) */}
+          {assignPatientIds.length === 1 && existingAssignments.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-gray-700">
+                  Currently Assigned to{" "}
+                  <span className="text-green-700">{selectedPatient?.name}</span>
+                </p>
+                {deleteSelected.size > 0 && (
+                  <button
+                    onClick={() => { setDeleteError(""); setShowDeleteModal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
+                  >
+                    <TrashIcon />
+                    End Selected ({deleteSelected.size})
+                  </button>
+                )}
+              </div>
+              <div className="rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+                {existingAssignments.map((ex) => (
+                  <label
+                    key={ex.exercise_id}
+                    className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition ${
+                      deleteSelected.has(ex.exercise_id) ? "bg-red-50" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={deleteSelected.has(ex.exercise_id)}
+                      onChange={() => toggleDelete(ex.exercise_id)}
+                      className="w-4 h-4 accent-red-600 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-gray-900">{ex.name}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-gray-500 shrink-0">
+                      <span>
+                        {ex.sets} sets ×{" "}
+                        {getExerciseDefinition(ex.exercise_id)?.kind === "isometric"
+                          ? `${ex.hold_seconds}s hold`
+                          : `${ex.reps} reps`}
+                      </span>
+                      <span>{ex.rest_seconds}s rest</span>
+                      <span className="text-green-700 font-medium">
+                        {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}
+                      </span>
+                    </div>
+                  </label>
                 ))}
               </div>
-            </>
+              <p className="text-xs text-gray-400 mt-1.5">
+                Select prescriptions to end. Historical occurrences and sessions will be preserved.
+              </p>
+            </div>
           )}
-        </div>
 
-        {existingAssignments.length === 0 ? (
-          <button
-            onClick={handleAssign}
-            disabled={assigning}
-            className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
-          >
-            {assigning ? "Saving..." : "Assign Exercises"}
-          </button>
-        ) : hasAssignChanges ? (
-          <button
-            onClick={handleAssign}
-            disabled={assigning}
-            className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
-          >
-            {assigning ? "Saving..." : "Update Changes"}
-          </button>
-        ) : null}
+          {/* Step 2 — Load from Program */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              2. Load from Program{" "}
+              <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
+            </label>
+            {programs.length === 0 ? (
+              <p className="text-gray-400 text-sm">No programs yet.</p>
+            ) : (
+              <>
+                <select
+                  value={assignProgramId}
+                  onChange={(e) => handleProgramSelect(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+                >
+                  <option value="">— None —</option>
+                  {programs.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+
+                {assignProgramId && (() => {
+                  const tmpl = programs.find((t) => t.id === assignProgramId);
+                  if (!tmpl || tmpl.exercises.length === 0) return null;
+                  return (
+                    <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3">
+                      <p className="text-xs font-medium text-green-700 mb-2">
+                        {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this program:
+                      </p>
+                      <ul className="space-y-1">
+                        {tmpl.exercises.map((ex, i) => (
+                          <li key={i} className="flex items-center justify-between text-xs text-gray-700">
+                            <span>#{ex.sequenceIndex ?? i + 1} · {ex.name}</span>
+                            {(ex.sets || ex.reps || ex.holdSeconds) && (
+                              <span className="text-gray-400 font-mono ml-4 shrink-0">
+                                {ex.sets ?? "?"}×
+                                {prescriptionTargetText({
+                                  exerciseId: ex.exerciseId,
+                                  reps: ex.reps,
+                                  holdSeconds: ex.holdSeconds,
+                                })}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+
+          {/* Step 3 — Select & Configure Exercises */}
+          <div>
+            <p className="text-sm font-semibold text-gray-700 mb-3">
+              3. Select Exercises <span className="text-red-500">*</span>
+            </p>
+
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+              System Exercises
+            </p>
+            <div className="space-y-2 mb-5">
+              {systemExercises.map((ex) => (
+                <AssignRow
+                  key={ex.id}
+                  exercise={ex}
+                  checked={assignSelected.has(ex.id)}
+                  params={assignParams[ex.id] ?? {}}
+                  minDate={minDate}
+                  showValidationErrors={showValidationErrors}
+                  isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
+                  isEditing={editingExercises.has(ex.id)}
+                  onToggle={() => toggleAssign(ex.id)}
+                  onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
+                  onCancelEdit={() => {
+                    setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
+                    const original = existingAssignments.find((e) => e.exercise_id === ex.id);
+                    if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
+                  }}
+                  onParam={(f, v) =>
+                    setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
+                  }
+                  onSchedule={(patch) =>
+                    setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
+                  }
+                />
+              ))}
+            </div>
+
+            {customExercises.length > 0 && (
+              <>
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Custom Exercises
+                </p>
+                <div className="space-y-2">
+                  {customExercises.map((ex) => (
+                    <AssignRow
+                      key={ex.id}
+                      exercise={ex}
+                      checked={assignSelected.has(ex.id)}
+                      params={assignParams[ex.id] ?? {}}
+                      minDate={minDate}
+                      showValidationErrors={showValidationErrors}
+                      isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
+                      isEditing={editingExercises.has(ex.id)}
+                      onToggle={() => toggleAssign(ex.id)}
+                      onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
+                      onCancelEdit={() => {
+                        setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
+                        const original = existingAssignments.find((e) => e.exercise_id === ex.id);
+                        if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
+                      }}
+                      onParam={(f, v) =>
+                        setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
+                      }
+                      onSchedule={(patch) =>
+                        setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {existingAssignments.length === 0 ? (
+            <button
+              onClick={handleAssign}
+              disabled={assigning}
+              className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+            >
+              {assigning ? "Saving..." : "Assign Exercises"}
+            </button>
+          ) : hasAssignChanges ? (
+            <button
+              onClick={handleAssign}
+              disabled={assigning}
+              className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+            >
+              {assigning ? "Saving..." : "Update Changes"}
+            </button>
+          ) : null}
+        </div>
+        {selectedPatients.length > 0 && (
+          <aside className="sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
+              <h2 className="text-sm font-semibold text-gray-800">
+                Selected patients <span className="font-normal text-gray-400">({selectedPatients.length})</span>
+              </h2>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {selectedPatients.map((patient) => {
+                const isExpanded = expandedPatientId === patient.id;
+                const roster = patientRoster[patient.id];
+                const currentAssignments = assignPatientIds.length === 1
+                  ? existingAssignments
+                  : [];
+                const assignedCount = roster?.assignedCount ?? currentAssignments.length;
+                const progress = roster
+                  ? roster.dueCount > 0
+                    ? `${roster.completedCount}/${roster.dueCount} completed`
+                    : roster.assignedCount > 0
+                      ? "No due occurrences"
+                      : "No active prescriptions"
+                  : currentAssignments.length > 0
+                    ? "Active plan"
+                    : "No activity recorded";
+
+                return (
+                  <div key={patient.id}>
+                    <button
+                      type="button"
+                      aria-expanded={isExpanded}
+                      onClick={() => setExpandedPatientId(isExpanded ? null : patient.id)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 transition"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-gray-900">{patient.name}</span>
+                        <span className="block truncate text-xs text-gray-500">{patient.email || "No email on file"}</span>
+                      </span>
+                      <span className="shrink-0 text-xs font-medium text-green-700">
+                        {isExpanded ? "Hide details" : "View details"}
+                      </span>
+                    </button>
+                    <div
+                      aria-hidden={!isExpanded}
+                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out motion-reduce:transition-none ${isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-gray-100 bg-white px-4 py-4 text-sm">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Last visit</p>
+                            <p className="text-gray-700">{roster?.lastSessionAt ? fmtDate(roster.lastSessionAt) : "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Last session</p>
+                            <p className="text-gray-700">{roster?.lastSessionAt ? fmtDate(roster.lastSessionAt) : "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Progress</p>
+                            <p className="text-gray-700">{progress}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Prescriptions</p>
+                            <p className="text-gray-700">{assignedCount} active</p>
+                          </div>
+                          <div className="col-span-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Diagnosis</p>
+                            <p className="text-gray-700 leading-relaxed">
+                              {patient.diagnosis ?? patient.condition ?? "No diagnosis recorded in system"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* ── Delete Confirmation Modal ──────────────────────────────────────── */}
@@ -1049,8 +1211,13 @@ export default function AssignExercisePage() {
               <h2 className="text-lg font-bold text-gray-900 mb-1">Review Changes</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Assigning to{" "}
-                <span className="font-semibold text-gray-700">{selectedPatient?.name}</span>
+                <span className="font-semibold text-gray-700">{selectedPatientNames.join(", ")}</span>
               </p>
+              {assignPatientIds.length > 1 && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+                  Matching active prescriptions will be updated for each selected patient.
+                </p>
+              )}
 
               {/* New */}
               {previewItems.filter((i) => i.type === "new").length > 0 && (
@@ -1146,12 +1313,13 @@ export default function AssignExercisePage() {
 // ── AssignRow ─────────────────────────────────────────────────────────────────
 
 function AssignRow({
-  exercise, checked, params, minDate, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onSchedule,
+  exercise, checked, params, minDate, showValidationErrors, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onSchedule,
 }: {
   exercise: Exercise;
   checked: boolean;
   params: AssignmentParams;
   minDate: string;
+  showValidationErrors: boolean;
   isExisting: boolean;
   isEditing: boolean;
   onToggle: () => void;
@@ -1171,6 +1339,12 @@ function AssignRow({
   const weekdays = params.weekdays ?? [];
   const presetId = presetIdFor(params);
   const showWeekdayPicker = recurrence === "weekly";
+  const orderInvalid = showValidationErrors && checked && params.sequenceIndex == null;
+  const setsInvalid = showValidationErrors && checked && params.sets == null;
+  const repsInvalid = showValidationErrors && checked && !isIsometric && params.reps == null;
+  const startDateInvalid = showValidationErrors && checked && !params.scheduledDate;
+  const endDateInvalid = showValidationErrors && checked && !params.endDate;
+  const repeatInvalid = showValidationErrors && checked && recurrence === "interval" && params.intervalDays == null;
   const applyPreset = (id: string) => {
     const preset = CADENCE_PRESETS.find((c) => c.id === id);
     if (!preset) return;
@@ -1194,7 +1368,12 @@ function AssignRow({
   return (
     <div className={`rounded-xl border p-3 transition ${checked ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
       <label className="flex items-start gap-3 cursor-pointer">
-        <input type="checkbox" checked={checked} onChange={onToggle} className="mt-1 w-4 h-4 accent-green-600" />
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="mt-1 w-4 h-4 accent-green-600"
+        />
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-900 text-sm">{exercise.name}</span>
@@ -1250,7 +1429,8 @@ function AssignRow({
                 onChange={(e) => onParam("sequenceIndex", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="1"
                 disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                aria-invalid={orderInvalid}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : orderInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
               />
             </div>
             <div>
@@ -1260,7 +1440,8 @@ function AssignRow({
                 onChange={(e) => onParam("sets", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="e.g. 3"
                 disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                aria-invalid={setsInvalid}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : setsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
               />
             </div>
             {isIsometric ? (
@@ -1282,7 +1463,8 @@ function AssignRow({
                   onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
                   placeholder="e.g. 12"
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={repsInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
                 />
               </div>
             )}
@@ -1311,7 +1493,8 @@ function AssignRow({
               value={presetId}
               onChange={(e) => applyPreset(e.target.value)}
               disabled={locked}
-              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+              aria-invalid={repeatInvalid}
+              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repeatInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
             >
               {CADENCE_PRESETS.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
@@ -1319,7 +1502,7 @@ function AssignRow({
             </select>
 
             {showWeekdayPicker && (
-              <div className="flex flex-wrap gap-1 mb-2">
+              <div className={`flex flex-wrap gap-1 mb-2 rounded-md ${showValidationErrors && checked && weekdays.length === 0 ? "ring-1 ring-red-400 p-1" : ""}`}>
                 {WEEKDAY_SHORT.map((lbl, d) => {
                   const on = weekdays.includes(d);
                   return (
@@ -1353,7 +1536,8 @@ function AssignRow({
                   value={params.scheduledDate ?? ""}
                   onChange={(e) => onSchedule({ scheduledDate: e.target.value })}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={startDateInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : startDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
                 />
               </div>
               <div>
@@ -1366,7 +1550,8 @@ function AssignRow({
                   value={params.endDate ?? ""}
                   onChange={(e) => onSchedule({ endDate: e.target.value })}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={endDateInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : endDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
                 />
               </div>
             </div>

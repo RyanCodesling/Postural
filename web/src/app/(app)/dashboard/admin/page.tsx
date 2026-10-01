@@ -24,6 +24,9 @@ interface User {
   // Therapist-specific fields
   therapistIDNum?: string;
   specialty?: string;
+  diagnosis?: string | null;
+  prescription?: string | null;
+  condition?: string | null;
   isArchived?: boolean;
   archivedAt?: string;
 }
@@ -142,7 +145,10 @@ export default function AdminDashboard() {
     age: undefined,
     gender: "",
     therapistIDNum: "",
-    specialty: ""
+    specialty: "",
+    diagnosis: "",
+    prescription: "",
+    condition: "",
   });
   const [emailError, setEmailError] = useState<string | null>(null);
   const [editEmailError, setEditEmailError] = useState<string | null>(null);
@@ -258,7 +264,7 @@ export default function AdminDashboard() {
     }
 
     setShowAddPreview(false);
-    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "" });
+    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "", diagnosis: "", prescription: "", condition: "" });
     setEmailError(null);
     setSelectedRole(null);
     setShowUserForm(false);
@@ -932,7 +938,10 @@ export default function AdminDashboard() {
                         age: undefined,
                         gender: "",
                         therapistIDNum: "",
-                        specialty: ""
+                        specialty: "",
+                        diagnosis: "",
+                        prescription: "",
+                        condition: "",
                       });
                       setEmailError(null);
                     }
@@ -1110,6 +1119,35 @@ export default function AdminDashboard() {
                             />
                             {emailError && <p className="mt-1 text-xs text-red-600">{emailError}</p>}
                           </div>
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Diagnosis</label>
+                              <textarea
+                                value={newUser.diagnosis || ""}
+                                onChange={(e) => setNewUser({ ...newUser, diagnosis: e.target.value })}
+                                rows={2}
+                                className="w-full border border-gray-300 rounded px-3 py-2"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Condition</label>
+                              <textarea
+                                value={newUser.condition || ""}
+                                onChange={(e) => setNewUser({ ...newUser, condition: e.target.value })}
+                                rows={2}
+                                className="w-full border border-gray-300 rounded px-3 py-2"
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Prescription</label>
+                              <textarea
+                                value={newUser.prescription || ""}
+                                onChange={(e) => setNewUser({ ...newUser, prescription: e.target.value })}
+                                rows={3}
+                                className="w-full border border-gray-300 rounded px-3 py-2"
+                              />
+                            </div>
+                          </div>
                         </>
                       )}
 
@@ -1286,6 +1324,35 @@ export default function AdminDashboard() {
                         />
                         {editEmailError && <p className="mt-1 text-xs text-red-600">{editEmailError}</p>}
                       </div>
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Diagnosis</label>
+                          <textarea
+                            value={editingUser.diagnosis || ""}
+                            onChange={(e) => setEditingUser({ ...editingUser, diagnosis: e.target.value })}
+                            rows={2}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Condition</label>
+                          <textarea
+                            value={editingUser.condition || ""}
+                            onChange={(e) => setEditingUser({ ...editingUser, condition: e.target.value })}
+                            rows={2}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Prescription</label>
+                          <textarea
+                            value={editingUser.prescription || ""}
+                            onChange={(e) => setEditingUser({ ...editingUser, prescription: e.target.value })}
+                            rows={3}
+                            className="w-full border border-gray-300 rounded px-3 py-2"
+                          />
+                        </div>
+                      </div>
                     </>
                   )}
 
@@ -1378,6 +1445,22 @@ export default function AdminDashboard() {
                       <span className="w-32 shrink-0 text-gray-500">Gender</span>
                       <span className="font-medium text-gray-900 capitalize">{newUser.gender}</span>
                     </div>
+                    {newUser.role === "patient" && (
+                      <>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Diagnosis</span>
+                          <span className="font-medium text-gray-900">{newUser.diagnosis || "—"}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Condition</span>
+                          <span className="font-medium text-gray-900">{newUser.condition || "—"}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="w-32 shrink-0 text-gray-500">Prescription</span>
+                          <span className="font-medium text-gray-900">{newUser.prescription || "—"}</span>
+                        </div>
+                      </>
+                    )}
                     {newUser.role === "therapist" && (
                       <div className="flex gap-2">
                         <span className="w-32 shrink-0 text-gray-500">Specialty</span>
@@ -1416,6 +1499,11 @@ export default function AdminDashboard() {
                 { label: "Date of Birth", oldVal: original?.dateOfBirth, newVal: editingUser.dateOfBirth },
                 { label: "Age", oldVal: original?.age, newVal: editingUser.age },
                 { label: "Gender", oldVal: original?.gender, newVal: editingUser.gender },
+                ...(editingUser.role === "patient" ? [
+                  { label: "Diagnosis", oldVal: original?.diagnosis ?? undefined, newVal: editingUser.diagnosis ?? undefined },
+                  { label: "Condition", oldVal: original?.condition ?? undefined, newVal: editingUser.condition ?? undefined },
+                  { label: "Prescription", oldVal: original?.prescription ?? undefined, newVal: editingUser.prescription ?? undefined },
+                ] : []),
                 ...(editingUser.role === "therapist" ? [
                   { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
                 ] : []),

@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physical Therapy Session Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        clinic: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#09517d',
+                            800: '#073959',
+                            900: '#0c2a40',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        @media print {
+            body {
+                background: white !important;
+                color: black !important;
+                font-size: 11pt;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .print-only {
+                display: block !important;
+            }
+            .print-container {
+                padding: 0 !important;
+                margin: 0 !important;
+                box-shadow: none !important;
+                max-width: 100% !important;
+                width: 100% !important;
+            }
+            .page-break {
+                page-break-before: always;
+            }
+            @page {
+                size: letter portrait;
+                margin: 0.5in;
+            }
+        }
+
+        .print-only {
+            display: none;
+        }
+
+        /* Custom styling for sleek medical sliders and UI */
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #0284c7;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -6px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #e2e8f0;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 font-sans text-slate-800 min-h-screen flex flex-col">
+
+    <header class="bg-slate-900 text-white shadow-md no-print sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="bg-clinic-500 text-white p-2 rounded-lg font-bold text-xl flex items-center justify-center h-10 w-10">
+                    <i class="fa-solid fa-heart-pulse"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold leading-tight">Apex Movement Physical Therapy</h1>
+                    <p class="text-xs text-slate-400">Clinical Session Documentation Portal</p>
+                </div>
+            </div>
+
+            <!-- Header Action Controls -->
+            <div class="flex items-center space-x-2 sm:space-x-3">
+                <button id="toggleViewBtn" onclick="toggleView()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition flex items-center gap-2">
+                    <i class="fa-solid fa-eye" id="viewBtnIcon"></i>
+                    <span id="viewBtnText">Report Preview</span>
+                </button>
+                <button onclick="window.print()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-clinic-600 hover:bg-clinic-500 text-white rounded-lg transition shadow flex items-center gap-2">
+                    <i class="fa-solid fa-print"></i>
+                    <span>Print / Save PDF</span>
+                </button>
+                <button onclick="downloadJSON()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition flex items-center gap-1.5" title="Export Digital Record">
+                    <i class="fa-solid fa-download"></i>
+                    <span class="hidden md:inline">Export Record</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="flex-grow max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+
+        <div id="formView" class="no-print">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
+                <div class="bg-gradient-to-r from-clinic-800 to-slate-900 px-6 py-4 text-white flex justify-between items-center">
+                    <div>
+                        <h2 class="text-lg font-semibold flex items-center gap-2">
+                            <i class="fa-solid fa-file-signature text-clinic-500"></i> New Session Summary Input
+                        </h2>
+                        <p class="text-xs text-slate-300 mt-0.5">Fill out session details. All information syncs in real-time to the printable report.</p>
+                    </div>
+                    <span class="text-xs bg-clinic-700 text-clinic-100 px-2.5 py-1 rounded-full border border-clinic-600 font-mono">Form Mode</span>
+                </div>
+
+                <form id="ptForm" class="p-6 space-y-8" onsubmit="event.preventDefault();">
+                    
+                    <!-- Section 1: General Info -->
+                    <div>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
+                            <i class="fa-solid fa-user-doctor"></i> 1. General Session Details
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Patient Name</label>
+                                <input type="text" id="patientName" value="Eleanor Vance" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Patient ID / DOB</label>
+                                <input type="text" id="patientIdDob" value="PT-88349 / Oct 14, 1985" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Date of Session</label>
+                                <input type="date" id="sessionDate" onchange="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Session Number</label>
+                                <input type="text" id="sessionNum" value="Session 4 of 12" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Attending Therapist</label>
+                                <input type="text" id="therapistName" value="Dr. Marcus Thorne, PT, DPT" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Therapy Focus / Diagnosis</label>
+                                <input type="text" id="therapyFocus" value="Post-Op ACL Reconstruction (Right Knee)" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
+                            <i class="fa-solid fa-notes-medical"></i> 2. Session Summary & Pain Comparison
+                        </h3>
+                        
+                        <!-- Interactive Pain Sliders -->
+                        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <div class="flex justify-between items-center mb-1">
+                                    <label class="text-xs font-semibold text-slate-700 uppercase">Pre-Session Pain Level</label>
+                                    <span id="prePainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-amber-100 text-amber-800">6 / 10</span>
+                                </div>
+                                <input type="range" id="prePain" min="0" max="10" value="6" oninput="updatePainVisuals(); updateReport();" class="w-full">
+                                <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                                    <span>0 (None)</span>
+                                    <span>5 (Moderate)</span>
+                                    <span>10 (Severe)</span>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="flex justify-between items-center mb-1">
+                                    <label class="text-xs font-semibold text-slate-700 uppercase">Post-Session Pain Level</label>
+                                    <span id="postPainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800">3 / 10</span>
+                                </div>
+                                <input type="range" id="postPain" min="0" max="10" value="3" oninput="updatePainVisuals(); updateReport();" class="w-full">
+                                <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                                    <span>0 (None)</span>
+                                    <span>5 (Moderate)</span>
+                                    <span>10 (Severe)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Interventions Performed Today</label>
+                                <div class="space-y-2 text-sm bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                    <label class="flex items-center space-x-2">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Manual Therapy / Patellar Mobilization" checked onchange="updateReport()">
+                                        <span>Manual Therapy / Patellar Mobilization</span>
+                                    </label>
+                                    <label class="flex items-center space-x-2">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Therapeutic Exercise & Strength" checked onchange="updateReport()">
+                                        <span>Therapeutic Exercise & Strength</span>
+                                    </label>
+                                    <label class="flex items-center space-x-2">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Neuromuscular Re-education / Gait Training" checked onchange="updateReport()">
+                                        <span>Neuromuscular Re-education / Gait</span>
+                                    </label>
+                                    <label class="flex items-center space-x-2">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Cryotherapy & Compression" checked onchange="updateReport()">
+                                        <span>Cryotherapy / Ice & Compression</span>
+                                    </label>
+                                    <label class="flex items-center space-x-2">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Dry Needling / TENS Modalities" onchange="updateReport()">
+                                        <span>Dry Needling / TENS Modalities</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Therapist Clinical Notes & Observations</label>
+                                <textarea id="therapistNotes" rows="5" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Enter session observations...">Patient demonstrated excellent compliance during manual extension stretches. Mild muscle fatigue noted during end-range quad sets. Gait mechanics improved post-mobilization with reduced antalgic limp.</textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
+                            <i class="fa-solid fa-chart-line"></i> 3. Progress & Objective Improvements
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Range of Motion (ROM) Changes</label>
+                                <textarea id="romNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Knee flexion increased from 95° to 110°">Active Knee Flexion: 110° (was 95°). Full passive extension restored (0°).</textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Strength & Functional Gains</label>
+                                <textarea id="strengthNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Quad strength 4/5, improved sit-to-stand">Quad strength improved to 4/5. Able to execute independent sit-to-stand without upper body compensation.</textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Milestones / Objective Achievements</label>
+                                <textarea id="milestoneNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Walked 10 mins without limp">Cleared for full weight-bearing treadmill walking at 2.5 mph for 10 minutes without assistance.</textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
+                            <i class="fa-solid fa-notes-medical"></i> 4. Clinical Summary Highlights
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Clinical Summary</label>
+                                <textarea id="clinicalSummary" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Add a brief summary of the patient's current functional status...">Patient is progressing well with improved confidence during stair negotiation and reduced pain with daily movement. Strength and mobility are trending in the right direction with consistent effort and appropriate symptom control.</textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Goal Progress / Patient Focus</label>
+                                <textarea id="goalProgress" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Highlight key goals or patient-specific progress...">Primary focus remains restoring terminal knee extension, improving single-leg control, and progressing toward return-to-sport readiness without symptom recurrence.</textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 5: Adjustments & Modifications -->
+                    <div>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 border-b border-slate-200 pb-2 mb-4 flex items-center gap-2">
+                            <i class="fa-solid fa-sliders"></i> 5. Plan Adjustments & Next Session Focus
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Treatment Plan Adjustments Today</label>
+                                <input type="text" id="planAdjustments" value="Increased straight leg raise weight to 2 lbs. Added single-leg balance protocol." oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Target Focus for Next Session</label>
+                                <input type="text" id="nextFocus" value="Introduce lateral step-downs and eccentric leg press drills." oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between items-center border-b border-slate-200 pb-2 mb-4">
+                            <h3 class="text-sm font-bold uppercase tracking-wider text-clinic-700 flex items-center gap-2">
+                                <i class="fa-solid fa-house-medical"></i> 5. Home Exercise Program (HEP) & Recommendations
+                            </h3>
+                            <button type="button" onclick="addExerciseField()" class="text-xs bg-clinic-50 hover:bg-clinic-100 text-clinic-700 border border-clinic-200 px-3 py-1 rounded-md font-semibold transition flex items-center gap-1">
+                                <i class="fa-solid fa-plus"></i> Add Exercise
+                            </button>
+                        </div>
+
+                        <!-- Dynamic Exercise Container -->
+                        <div id="hepInputsContainer" class="space-y-3 mb-4">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Self-Care & Activity Restrictions</label>
+                                <textarea id="selfCareNotes" rows="2" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">Apply ice pack for 15-20 mins post-exercise. Avoid high-impact running or pivoting until cleared.</textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Next Scheduled Appointment</label>
+                                <input type="text" id="nextAppt" value="Thursday, Oct 2, 2026 @ 10:00 AM" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+
+                </form>
+            </div>
+        </div>
+
+        <div id="reportView" class="print-container max-w-6xl mx-auto bg-white p-8 md:p-12 rounded-xl shadow-lg border border-slate-200 text-slate-800 my-2">
+            
+            <!-- Document Header -->
+            <div class="flex justify-between items-start border-b-2 border-clinic-700 pb-6 mb-6">
+                <div>
+                    <div class="flex items-center gap-2 text-clinic-700 font-bold text-2xl tracking-tight">
+                        <i class="fa-solid fa-heart-pulse text-clinic-500"></i> APEX MOVEMENT PT
+                    </div>
+                    <p class="text-xs text-slate-500 font-medium mt-1">104 Medical Plaza Suite 300, San Francisco, CA</p>
+                    <p class="text-xs text-slate-500">Phone: (555) 234-8901 | Email: clinical@apexpt.com</p>
+                </div>
+                <div class="text-right">
+                    <span class="inline-block bg-clinic-50 text-clinic-800 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded border border-clinic-200 mb-2">
+                        Clinical Session Summary
+                    </span>
+                    <p class="text-xs text-slate-500">Generated: <span id="rptGenDate" class="font-semibold text-slate-700"></span></p>
+                </div>
+            </div>
+
+            <!-- Patient & Session Meta Info Table -->
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-200 mb-6 grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4 text-xs">
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Patient Name</span>
+                    <span id="rptPatientName" class="font-semibold text-slate-800 text-sm"></span>
+                </div>
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Patient ID / DOB</span>
+                    <span id="rptPatientIdDob" class="font-medium text-slate-800"></span>
+                </div>
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Date of Session</span>
+                    <span id="rptSessionDate" class="font-medium text-slate-800"></span>
+                </div>
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Session Progress</span>
+                    <span id="rptSessionNum" class="font-medium text-slate-800"></span>
+                </div>
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Attending Physical Therapist</span>
+                    <span id="rptTherapistName" class="font-medium text-slate-800"></span>
+                </div>
+                <div>
+                    <span class="text-slate-400 block uppercase font-bold text-[10px]">Diagnosis / Focus Area</span>
+                    <span id="rptTherapyFocus" class="font-semibold text-clinic-700"></span>
+                </div>
+            </div>
+
+            <!-- Section: Pain Level Visual Comparison -->
+            <div class="mb-6">
+                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">
+                    Pain Rating Comparison (VAS Scale)
+                </h4>
+                <div class="grid grid-cols-2 gap-4 bg-slate-50/50 p-3 rounded-lg border border-slate-200">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-xs font-medium text-slate-600">Pre-Session:</span>
+                        <div class="flex-grow bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                            <div id="rptPrePainBar" class="bg-amber-500 h-full rounded-full" style="width: 60%"></div>
+                        </div>
+                        <span id="rptPrePainText" class="text-xs font-bold text-slate-700 w-8">6/10</span>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <span class="text-xs font-medium text-slate-600">Post-Session:</span>
+                        <div class="flex-grow bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                            <div id="rptPostPainBar" class="bg-emerald-500 h-full rounded-full" style="width: 30%"></div>
+                        </div>
+                        <span id="rptPostPainText" class="text-xs font-bold text-slate-700 w-8">3/10</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">Interventions & Modalities</h4>
+                    <ul id="rptInterventions" class="text-xs space-y-1.5 list-disc list-inside text-slate-700">
+                        <!-- Populated dynamically -->
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">Therapist Clinical Notes</h4>
+                    <p id="rptTherapistNotes" class="text-xs text-slate-700 leading-relaxed italic bg-slate-50/50 p-2.5 rounded border border-slate-100"></p>
+                </div>
+            </div>
+
+            <!-- Objective Progress Section -->
+            <div class="mb-6">
+                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">Objective Improvements & Progress</h4>
+                <div class="grid grid-cols-3 gap-3 text-xs">
+                    <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                        <span class="font-semibold text-clinic-700 block mb-1"><i class="fa-solid fa-ruler-vertical"></i> ROM Changes</span>
+                        <span id="rptRomNotes" class="text-slate-600"></span>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                        <span class="font-semibold text-clinic-700 block mb-1"><i class="fa-solid fa-dumbbell"></i> Strength & Function</span>
+                        <span id="rptStrengthNotes" class="text-slate-600"></span>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                        <span class="font-semibold text-clinic-700 block mb-1"><i class="fa-solid fa-bullseye"></i> Milestones Reached</span>
+                        <span id="rptMilestoneNotes" class="text-slate-600"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Clinical Summary Highlights -->
+            <div class="mb-6">
+                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">Clinical Summary Highlights</h4>
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                    <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                        <span class="font-semibold text-clinic-700 block mb-1"><i class="fa-solid fa-file-medical"></i> Clinical Summary</span>
+                        <p id="rptClinicalSummary" class="text-slate-600 leading-relaxed"></p>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded border border-slate-200">
+                        <span class="font-semibold text-clinic-700 block mb-1"><i class="fa-solid fa-bullseye"></i> Goal Progress</span>
+                        <p id="rptGoalProgress" class="text-slate-600 leading-relaxed"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Plan Modifications -->
+            <div class="mb-6 grid grid-cols-2 gap-4 text-xs">
+                <div class="border border-slate-200 p-3 rounded">
+                    <span class="font-bold text-slate-700 block mb-0.5">Today's Plan Adjustments:</span>
+                    <span id="rptPlanAdjustments" class="text-slate-600"></span>
+                </div>
+                <div class="border border-slate-200 p-3 rounded">
+                    <span class="font-bold text-slate-700 block mb-0.5">Next Session Focus:</span>
+                    <span id="rptNextFocus" class="text-slate-600"></span>
+                </div>
+            </div>
+
+            <!-- Home Exercise Program Section -->
+            <div class="mb-6">
+                <h4 class="text-xs font-bold uppercase tracking-wider text-clinic-700 mb-2 border-b border-clinic-200 pb-1 flex justify-between items-center">
+                    <span>Home Exercise Program (HEP) Prescribed</span>
+                    <i class="fa-solid fa-house-medical text-clinic-500"></i>
+                </h4>
+                <table class="w-full text-left text-xs border-collapse">
+                    <thead>
+                        <tr class="bg-slate-100 border-b border-slate-200 text-slate-600">
+                            <th class="py-1.5 px-2 font-semibold">Exercise Name</th>
+                            <th class="py-1.5 px-2 font-semibold">Sets & Reps</th>
+                            <th class="py-1.5 px-2 font-semibold">Frequency</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rptHepTable" class="divide-y divide-slate-100">
+                        <!-- Populated dynamically -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Self care & Next appointment -->
+            <div class="grid grid-cols-2 gap-4 text-xs mb-8">
+                <div class="bg-amber-50/60 p-3 rounded border border-amber-200">
+                    <span class="font-bold text-amber-900 block mb-1"><i class="fa-solid fa-triangle-exclamation"></i> Self-Care & Restrictions:</span>
+                    <span id="rptSelfCareNotes" class="text-amber-800"></span>
+                </div>
+                <div class="bg-clinic-50/60 p-3 rounded border border-clinic-200 flex flex-col justify-center">
+                    <span class="font-bold text-clinic-900 block"><i class="fa-regular fa-calendar-check"></i> Next Scheduled Session:</span>
+                    <span id="rptNextAppt" class="text-clinic-800 font-semibold text-sm mt-0.5"></span>
+                </div>
+            </div>
+
+            <div class="pt-6 border-t border-slate-200 grid grid-cols-2 gap-8 items-end text-xs">
+                <div>
+                    <div class="border-b border-slate-400 h-8 mb-1 flex items-end">
+                        <span class="font-serif italic text-slate-600 text-sm" id="rptSignatureText">Dr. Marcus Thorne, PT, DPT</span>
+                    </div>
+                    <p class="text-slate-500 font-medium">Licensed Physical Therapist Signature</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-slate-400">Electronic Sign-off Timestamp:</p>
+                    <p id="rptTimestamp" class="font-mono text-slate-600 text-[11px]"></p>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // Initial Exercise List for Home Exercise Program
+        let hepList = [
+            { name: "Quad Sets with Towel Roll", setsReps: "3 sets x 10 reps", freq: "2x Daily" },
+            { name: "Straight Leg Raises (SLR)", setsReps: "3 sets x 8 reps (2lb ankle weight)", freq: "1x Daily" },
+            { name: "Seated Heel Slides", setsReps: "2 sets x 15 reps", freq: "3x Daily" }
+        ];
+
+        // Initialize Page Data on Load
+        window.onload = function() {
+            // Set default date to today
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('sessionDate').value = today;
+            
+            renderHepInputs();
+            updatePainVisuals();
+            updateReport();
+        };
+
+        // Render HEP Inputs in Form
+        function renderHepInputs() {
+            const container = document.getElementById('hepInputsContainer');
+            container.innerHTML = '';
+
+            hepList.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = "grid grid-cols-12 gap-2 items-center bg-slate-50 p-2 rounded-lg border border-slate-200";
+                row.innerHTML = `
+                    <div class="col-span-5">
+                        <input type="text" value="${item.name}" oninput="hepList[${index}].name = this.value; updateReport();" placeholder="Exercise Name" class="w-full px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none">
+                    </div>
+                    <div class="col-span-3">
+                        <input type="text" value="${item.setsReps}" oninput="hepList[${index}].setsReps = this.value; updateReport();" placeholder="Sets x Reps" class="w-full px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none">
+                    </div>
+                    <div class="col-span-3">
+                        <input type="text" value="${item.freq}" oninput="hepList[${index}].freq = this.value; updateReport();" placeholder="Frequency" class="w-full px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none">
+                    </div>
+                    <div class="col-span-1 text-right">
+                        <button type="button" onclick="removeExerciseField(${index})" class="text-rose-500 hover:text-rose-700 text-xs px-1"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function addExerciseField() {
+            hepList.push({ name: "", setsReps: "", freq: "" });
+            renderHepInputs();
+            updateReport();
+        }
+
+        function removeExerciseField(index) {
+            hepList.splice(index, 1);
+            renderHepInputs();
+            updateReport();
+        }
+
+        // Update Slider UI Visual Badges
+        function updatePainVisuals() {
+            const preVal = document.getElementById('prePain').value;
+            const postVal = document.getElementById('postPain').value;
+
+            document.getElementById('prePainBadge').innerText = `${preVal} / 10`;
+            document.getElementById('postPainBadge').innerText = `${postVal} / 10`;
+        }
+
+        // Synchronize Form Data with Report Preview
+        function updateReport() {
+            // Meta Information
+            document.getElementById('rptPatientName').innerText = document.getElementById('patientName').value || 'N/A';
+            document.getElementById('rptPatientIdDob').innerText = document.getElementById('patientIdDob').value || 'N/A';
+            document.getElementById('rptSessionDate').innerText = document.getElementById('sessionDate').value || 'N/A';
+            document.getElementById('rptSessionNum').innerText = document.getElementById('sessionNum').value || 'N/A';
+            document.getElementById('rptTherapistName').innerText = document.getElementById('therapistName').value || 'N/A';
+            document.getElementById('rptTherapyFocus').innerText = document.getElementById('therapyFocus').value || 'N/A';
+
+            // Pain Ratings
+            const prePain = document.getElementById('prePain').value;
+            const postPain = document.getElementById('postPain').value;
+            document.getElementById('rptPrePainBar').style.width = `${prePain * 10}%`;
+            document.getElementById('rptPrePainText').innerText = `${prePain}/10`;
+            document.getElementById('rptPostPainBar').style.width = `${postPain * 10}%`;
+            document.getElementById('rptPostPainText').innerText = `${postPain}/10`;
+
+            // Interventions
+            const checkboxes = document.querySelectorAll('.intervention-cb:checked');
+            const interventionsList = document.getElementById('rptInterventions');
+            interventionsList.innerHTML = '';
+            checkboxes.forEach(cb => {
+                const li = document.createElement('li');
+                li.innerText = cb.value;
+                interventionsList.appendChild(li);
+            });
+
+            // Notes & Observations
+            document.getElementById('rptTherapistNotes').innerText = document.getElementById('therapistNotes').value || 'None documented.';
+            document.getElementById('rptRomNotes').innerText = document.getElementById('romNotes').value || 'N/A';
+            document.getElementById('rptStrengthNotes').innerText = document.getElementById('strengthNotes').value || 'N/A';
+            document.getElementById('rptMilestoneNotes').innerText = document.getElementById('milestoneNotes').value || 'N/A';
+
+            // Clinical Summary Highlights
+            document.getElementById('rptClinicalSummary').innerText = document.getElementById('clinicalSummary').value || 'N/A';
+            document.getElementById('rptGoalProgress').innerText = document.getElementById('goalProgress').value || 'N/A';
+
+            // Plan Adjustments
+            document.getElementById('rptPlanAdjustments').innerText = document.getElementById('planAdjustments').value || 'N/A';
+            document.getElementById('rptNextFocus').innerText = document.getElementById('nextFocus').value || 'N/A';
+
+            // HEP Table
+            const hepTable = document.getElementById('rptHepTable');
+            hepTable.innerHTML = '';
+            hepList.forEach(item => {
+                if(item.name.trim() !== "") {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-slate-50";
+                    tr.innerHTML = `
+                        <td class="py-1.5 px-2 font-medium text-slate-800">${item.name}</td>
+                        <td class="py-1.5 px-2 text-slate-600">${item.setsReps}</td>
+                        <td class="py-1.5 px-2 text-slate-600">${item.freq}</td>
+                    `;
+                    hepTable.appendChild(tr);
+                }
+            });
+
+            // Self Care & Next Appt
+            document.getElementById('rptSelfCareNotes').innerText = document.getElementById('selfCareNotes').value || 'None';
+            document.getElementById('rptNextAppt').innerText = document.getElementById('nextAppt').value || 'TBD';
+
+            // Footer metadata
+            document.getElementById('rptSignatureText').innerText = document.getElementById('therapistName').value;
+            const now = new Date();
+            document.getElementById('rptGenDate').innerText = now.toLocaleDateString();
+            document.getElementById('rptTimestamp').innerText = now.toLocaleString();
+        }
+
+        // Toggle Between Editor Mode and Full Screen Preview Mode
+        function toggleView() {
+            const formView = document.getElementById('formView');
+            const viewBtnText = document.getElementById('viewBtnText');
+            const viewBtnIcon = document.getElementById('viewBtnIcon');
+
+            if (formView.classList.contains('hidden')) {
+                formView.classList.remove('hidden');
+                viewBtnText.innerText = "Report Preview";
+                viewBtnIcon.className = "fa-solid fa-eye";
+            } else {
+                formView.classList.add('hidden');
+                viewBtnText.innerText = "Edit Form";
+                viewBtnIcon.className = "fa-solid fa-pen-to-square";
+            }
+        }
+
+        // Download JSON format for digital medical archives
+        function downloadJSON() {
+            const formData = {
+                patientName: document.getElementById('patientName').value,
+                patientIdDob: document.getElementById('patientIdDob').value,
+                sessionDate: document.getElementById('sessionDate').value,
+                sessionNum: document.getElementById('sessionNum').value,
+                therapistName: document.getElementById('therapistName').value,
+                therapyFocus: document.getElementById('therapyFocus').value,
+                prePainScore: document.getElementById('prePain').value,
+                postPainScore: document.getElementById('postPain').value,
+                interventions: Array.from(document.querySelectorAll('.intervention-cb:checked')).map(cb => cb.value),
+                therapistNotes: document.getElementById('therapistNotes').value,
+                romNotes: document.getElementById('romNotes').value,
+                strengthNotes: document.getElementById('strengthNotes').value,
+                milestoneNotes: document.getElementById('milestoneNotes').value,
+                clinicalSummary: document.getElementById('clinicalSummary').value,
+                goalProgress: document.getElementById('goalProgress').value,
+                planAdjustments: document.getElementById('planAdjustments').value,
+                nextFocus: document.getElementById('nextFocus').value,
+                homeExerciseProgram: hepList,
+                selfCareNotes: document.getElementById('selfCareNotes').value,
+                nextAppointment: document.getElementById('nextAppt').value,
+                exportedAt: new Date().toISOString()
+            };
+
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(formData, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `PT_Report_${formData.patientName.replace(/\s+/g, '_')}_${formData.sessionDate}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+    </script>
+</body>
+</html>

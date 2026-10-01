@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
   name              VARCHAR(255) NOT NULL,
   role              VARCHAR(20)  NOT NULL CHECK (role IN ('patient', 'therapist', 'admin')),
   "clinicId"        VARCHAR(50),
+  diagnosis         TEXT,
+  prescription      TEXT,
+  condition         TEXT,
   created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 ); 
@@ -26,12 +29,15 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS age               INT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gender            VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS therapist_id_num  VARCHAR(100);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty         VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS diagnosis         TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS prescription      TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS condition         TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_archived       BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at       TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
 CREATE INDEX IF NOT EXISTS idx_is_archived  ON users (is_archived);
 
--- Insert demo credentials
+
 INSERT INTO users (id, email, password, name, first_name, last_name, role, "clinicId") VALUES
 ('patient_001',   'patient@example.com',           'patient123',   'John Patient',    'John',  'Patient',   'patient',   NULL),
 ('therapist_001', 'therapist@clinic.com',          'therapist123', 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
@@ -41,9 +47,18 @@ ON CONFLICT (id) DO NOTHING;
 -- Sync admin email to the system address on re-runs
 UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001';
 
--- Remove deprecated clinical fields
-ALTER TABLE users DROP COLUMN IF EXISTS diagnosis;
-ALTER TABLE users DROP COLUMN IF EXISTS prescription;
-ALTER TABLE users DROP COLUMN IF EXISTS condition;
-
 GRANT ALL PRIVILEGES ON TABLE users TO postural;
+
+
+-- Insert demo credentials
+-- Local demo login reference only; do not use these credentials in production.
+-- Seeded below:
+--   Patient:   patient@example.com / patient123
+--   Therapist: therapist@clinic.com / therapist123
+--   Admin:     accbpostural.noreply@gmail.com / admin123
+-- Added by `cd web` then `npm run seed:demo:accounts` (not inserted by this SQL):
+--   Therapist: demo.therapist@example.com / demo123
+--   Patients:  demo.maria@example.com, demo.liam@example.com,
+--              demo.aisha@example.com, demo.tomas@example.com,
+--              demo.noor@example.com, demo.ethan@example.com,
+--              demo.grace@example.com (all use demo123)

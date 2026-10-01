@@ -79,6 +79,9 @@ function mapUser(row: Record<string, unknown>) {
     gender:         row.gender            ?? null,
     therapistIDNum: row.therapist_id_num  ?? null,
     specialty:      row.specialty         ?? null,
+    diagnosis:      row.diagnosis         ?? null,
+    prescription:   row.prescription      ?? null,
+    condition:      row.condition         ?? null,
     createdAt:      row.created_at        ?? null,
     mustChangePassword: row.must_change_password ?? false,
     isArchived:     row.is_archived       ?? false,
@@ -178,14 +181,17 @@ export async function createUser(data: {
   gender?: string;
   therapistIDNum?: string;
   specialty?: string;
+  diagnosis?: string;
+  prescription?: string;
+  condition?: string;
 }) {
   const hashedPassword = hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
         role, date_of_birth, age, gender,
-        therapist_id_num, specialty)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          therapist_id_num, specialty, diagnosis, prescription, condition)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING *`,
     [
       data.id,
@@ -201,6 +207,9 @@ export async function createUser(data: {
       data.gender ?? null,
       data.therapistIDNum ?? null,
       data.specialty ?? null,
+      data.diagnosis ?? null,
+      data.prescription ?? null,
+      data.condition ?? null,
     ]
   );
   return mapUser(result.rows[0]);
@@ -218,6 +227,9 @@ export async function updateUser(id: string, data: Partial<{
   gender: string;
   therapistIDNum: string;
   specialty: string;
+  diagnosis: string;
+  prescription: string;
+  condition: string;
 }>) {
   const fields: string[] = [];
   const params: unknown[] = [];
@@ -234,6 +246,9 @@ export async function updateUser(id: string, data: Partial<{
     gender:         "gender",
     therapistIDNum: "therapist_id_num",
     specialty:      "specialty",
+    diagnosis:      "diagnosis",
+    prescription:   "prescription",
+    condition:      '"condition"',
   };
 
   for (const [key, col] of Object.entries(columnMap)) {

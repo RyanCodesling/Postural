@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUsers, createUser, getNextUserId, setMustChangePassword, isEmailTaken } from "@/lib/db";
+import { getUsers, createUser, getNextUserId, setMustChangePassword, isEmailTaken, UserClinicalFieldsUnavailableError } from "@/lib/db";
 import { sendAccountCreationEmail, sendAccountCreatedAdminEmail } from "@/lib/email";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 
@@ -119,6 +119,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ user, emailSent }, { status: 201 });
   } catch (error) {
     console.error("POST /api/users error:", error);
+    if (error instanceof UserClinicalFieldsUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "clinical_fields_unavailable" }, { status: 409 });
+    }
     return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
   }
 }

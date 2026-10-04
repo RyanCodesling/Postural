@@ -232,14 +232,26 @@ async function run() {
     for (const expected of [
       "Progress report", "Data as of Sep 26, 2026, 9:00 AM", "download it again to include later sessions",
       "Sessions with results 5, from Sep 10, 2026 to Sep 13, 2026", "Exercises 2",
-      "Lateral Arm Raises", "Trend Improving", "Peak angle (camera estimate) first 88 · latest 97",
+      "Lateral Arm Raises", "Trend (left) Rising, change +", "Trend (right) Rising, change +",
+      "Form score (left)", "Peak angle (camera estimate) first 88 · latest 97",
       "Left full-range reps", "7/10 · neck", "skipped", "declined", "1/10", "Ended early", "Completed",
-      iso.name, "Hold time", "25.0s", "Needs at least 3 sessions",
+      iso.name, "Hold time", "25.0s", "needs at least 3 counted sessions", "machine-learning trend model",
+      "Other measure", "Repetitions reaching the target range",
     ]) assert(text.includes(expected), `missing: ${expected}`);
     assert.equal((text.match(/Sep 14, 2026/g) ?? []).length, 0, "a session without a set is left out");
   });
 
   const opts = { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" };
+
+  await test("progress report: a measure without a model band lists its measured values", () => {
+    // Lateral-raise lowering time failed its band check, so the report gives values, not a model change.
+    const sessions = [0, 1, 2].map((i) => trend(i, 90 + i, { avgLeftLoweringMs: 650 + 50 * i, avgRightLoweringMs: 600 }));
+    const text = drawnText(progressReportPdf(sessions, opts));
+    for (const expected of [
+      "Lowering time (descent control)", "no model band; measured",
+      "Sep 10, 2026: 0.65 s", "Sep 11, 2026: 0.70 s", "Sep 12, 2026: 0.75 s",
+    ]) assert(text.includes(expected), `missing: ${expected}`);
+  });
 
   await test("old sessions keep their own target, kind and metric, not today's registry", () => {
     const oldDefinition = structuredClone(getExerciseDefinition("ex_001")!) as any;

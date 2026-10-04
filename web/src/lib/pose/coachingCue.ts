@@ -1,4 +1,5 @@
 import type { CompensationCueSpec, CompensationMetricSpec, MetricName } from "@/lib/exercises/registry";
+import { compensationWarningIsOneSided, cueTriggerLevel } from "./compensationWarningState";
 
 /**
  * Single-cue arbitration for the patient-facing compensation warnings.
@@ -26,6 +27,13 @@ import type { CompensationCueSpec, CompensationMetricSpec, MetricName } from "@/
  * rendered — the canvas keeps its existing labels until the messages have been
  * reviewed by a clinician.
  *
+ * HIDDEN CUES
+ * A registry cue that declares `hidden` failed the pilot replay check (it fired
+ * on correct form, or never on the fault it names). Its warning is still
+ * evaluated, latched and logged by the caller, but it never competes for the
+ * slot here: it is never drawn, never highlights its metric card, and never
+ * blocks a visible lower-priority cue.
+ *
  * NOT CLINICAL VALUES
  * The timing defaults below and the `priority` numbers in the registry are
  * engineering defaults for display behaviour, not clinical parameters. They
@@ -46,11 +54,20 @@ export const COACHING_CUE_MIN_ACTIVE_MS = 600;
  * How long a displayed cue keeps the slot before a higher-priority candidate
  * may replace it. Prevents two competing compensations from swapping the
  * overlay back and forth faster than a patient can read it. This does NOT hold
- * a cue on screen after it resolves — a corrected compensation is released
- * immediately (see `selectCoachingCue`), because continuing to ask for a
- * correction the patient already made is worse than showing nothing.
+ * a cue on screen after it resolves; only `COACHING_CUE_MIN_VISIBLE_MS` does.
  */
 export const COACHING_CUE_MIN_DISPLAY_MS = 1500;
+
+/**
+ * How long a shown cue stays on screen even if its warning clears sooner.
+ * Without it, cues on repetitions sometimes vanished 0.2-0.6 s after
+ * appearing, too briefly to read. 700 ms (first set at 1 s, shortened at the
+ * user's request) bounds how long a corrected cue lingers: in the pilot replay
+ * the longest linger was 0.58 s, against 0.96 s at 1 s. Past this window a
+ * corrected compensation is released at once, because continuing to ask for a
+ * correction the patient already made is worse than showing nothing.
+ */
+export const COACHING_CUE_MIN_VISIBLE_MS = 700;
 
 /**
  * How long a cue stays out of the running after it clears. Stops a metric
@@ -90,6 +107,7 @@ export type CoachingCueTiming = {
   minActiveMs: number;
   minDisplayMs: number;
   cooldownMs: number;
+  minVisibleMs: number;
 };
 
 /**
@@ -103,6 +121,8 @@ export type CoachingCueTiming = {
  *  - `held`             the displayed cue is still active and still the best
  *  - `held-min-display` a better candidate is ready but the minimum-display
  *                       window blocks the switch
+ *  - `held-min-visible` the displayed cue's latch cleared, but it is kept on
+ *                       screen until its minimum visible time has passed
  *  - `switched`         a better candidate replaced the displayed cue
  *  - `cleared`          the displayed cue's latch cleared and nothing replaced it
  */
@@ -113,6 +133,7 @@ export type CoachingCueReason =
   | "promoted"
   | "held"
   | "held-min-display"
+  | "held-min-visible"
   | "switched"
   | "cleared";
 
@@ -192,6 +213,7 @@ export function resolveCoachingCueTiming(cue: CompensationCueSpec): CoachingCueT
     minActiveMs: cue.minActiveMs ?? COACHING_CUE_MIN_ACTIVE_MS,
     minDisplayMs: cue.minDisplayMs ?? COACHING_CUE_MIN_DISPLAY_MS,
     cooldownMs: cue.cooldownMs ?? COACHING_CUE_COOLDOWN_MS,
+    minVisibleMs: cue.minVisibleMs ?? COACHING_CUE_MIN_VISIBLE_MS,
   };
 }
 
@@ -199,7 +221,10 @@ export function resolveCoachingCueTiming(cue: CompensationCueSpec): CoachingCueT
  * Excess past the warning threshold, in the metric's own units, matching the
  * roadmap's exposure definition: for an upper-bound rule
  * `max(0, |value| − threshold)`, for a lower-bound rule
- * `max(0, threshold − value)`.
+ * `max(0, threshold − value)`. A `primary-coupled` residual counts only its
+ * excess over the expectation, `max(0, value − threshold)`, matching the
+ * one-sided warning latch. The threshold is the cue's own switch-on level
+ * (`cueTriggerLevel`), the same one the latch uses.
  *
  * This is a magnitude for ORDERING two simultaneous cues. It is not the
  * persisted effective-exposure quantity, which additionally needs movement
@@ -210,13 +235,17 @@ export function coachingCueExcess(
   value: number | null | undefined,
 ): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return (spec.compareDirection ?? "above") === "below"
-    ? Math.max(0, spec.warningThreshold - value)
-    : Math.max(0, Math.abs(value) - spec.warningThreshold);
+  const threshold = cueTriggerLevel(spec);
+  if ((spec.compareDirection ?? "above") === "below") {
+    return Math.max(0, threshold - value);
+  }
+  return compensationWarningIsOneSided(spec)
+    ? Math.max(0, value - threshold)
+    : Math.max(0, Math.abs(value) - threshold);
 }
 
 /**
- * `coachingCueExcess` divided by the metric's threshold, so a 3° trunk lean
+ * `coachingCueExcess` divided by the cue's switch-on level, so a 3° trunk lean
  * over a 5° threshold (0.6) ranks against a 0.02 scapular excess over a 0.04
  * threshold (0.5) without the degree-scale metric always winning. A comparison
  * heuristic for tie-breaking only — not a clinical severity measure.
@@ -225,7 +254,7 @@ export function normalizedCoachingCueExcess(
   spec: CompensationMetricSpec,
   value: number | null | undefined,
 ): number {
-  const denominator = Math.abs(spec.warningThreshold);
+  const denominator = Math.abs(cueTriggerLevel(spec));
   const excess = coachingCueExcess(spec, value);
   return denominator > 0 ? excess / denominator : excess;
 }
@@ -256,12 +285,13 @@ export function selectCoachingCue(
     cueBySpec.set(cue.id, { spec, cue });
   }
 
-  // Cue ids latched right now.
+  // Cue ids latched right now that may take the slot. A hidden cue stays
+  // latched in the caller's warning map and audit, but never competes here.
   const activeByCueId = new Map<string, { spec: CompensationMetricSpec; cue: CompensationCueSpec }>();
   for (const spec of specs) {
     if (!activeNames.has(spec.name)) continue;
     const entry = cueBySpec.get(resolveCoachingCue(spec).id);
-    if (entry) activeByCueId.set(entry.cue.id, entry);
+    if (entry && !entry.cue.hidden) activeByCueId.set(entry.cue.id, entry);
   }
 
   // Continuous-active clock. An id absent from the active set loses its run,
@@ -285,17 +315,28 @@ export function selectCoachingCue(
     if (nowMs - clearedAt < cooldownMs) clearedAtMs.set(cueId, clearedAt);
   }
 
-  // A displayed cue whose latch dropped is released at once and starts its
-  // cooldown. Holding a resolved correction on screen for the rest of the
-  // minimum-display window would ask the patient to fix what they just fixed.
+  // A displayed cue whose latch dropped stays on screen until it has been
+  // visible for its minimum visible time, so a brief cue can still be read.
+  // After that it is released at once and starts its cooldown: holding a
+  // resolved correction any longer would ask the patient to fix what they just
+  // fixed.
   let currentCueId = previous.currentCueId;
   let currentSinceMs = previous.currentSinceMs;
   let clearedCueId: string | null = null;
+  let heldForVisibility = false;
   if (currentCueId !== null && !activeByCueId.has(currentCueId)) {
-    clearedCueId = currentCueId;
-    clearedAtMs.set(currentCueId, nowMs);
-    currentCueId = null;
-    currentSinceMs = null;
+    const entry = cueBySpec.get(currentCueId);
+    const minVisibleMs = entry
+      ? resolveCoachingCueTiming(entry.cue).minVisibleMs
+      : COACHING_CUE_MIN_VISIBLE_MS;
+    if (entry && !entry.cue.hidden && currentSinceMs !== null && nowMs - currentSinceMs < minVisibleMs) {
+      heldForVisibility = true;
+    } else {
+      clearedCueId = currentCueId;
+      clearedAtMs.set(currentCueId, nowMs);
+      currentCueId = null;
+      currentSinceMs = null;
+    }
   }
 
   const candidates: CoachingCueCandidate[] = [];
@@ -332,6 +373,11 @@ export function selectCoachingCue(
 
   const decide = (): { cueId: string | null; sinceMs: number | null; reason: CoachingCueReason } => {
     if (currentCueId !== null) {
+      // Its latch cleared inside the minimum visible window: keep it readable.
+      // This window is shorter than the minimum display, so no switch is lost.
+      if (heldForVisibility) {
+        return { cueId: currentCueId, sinceMs: currentSinceMs, reason: "held-min-visible" };
+      }
       // The displayed cue is still latched, so it is always among the
       // candidates and never blocked: its active run predates this tick and a
       // cue only enters cooldown once it has left the slot.
@@ -361,7 +407,9 @@ export function selectCoachingCue(
   };
 
   const { cueId, sinceMs, reason } = decide();
-  const selected = cueId !== null ? activeByCueId.get(cueId) ?? null : null;
+  // A cue held for visibility is no longer latched, so look it up among all
+  // declared cues.
+  const selected = cueId !== null ? activeByCueId.get(cueId) ?? cueBySpec.get(cueId) ?? null : null;
 
   return {
     state: { currentCueId: cueId, currentSinceMs: sinceMs, activeSinceMs, clearedAtMs },

@@ -2,7 +2,7 @@ import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 
 export const PRESCRIPTION_SNAPSHOT_VERSION = 2 as const;
 export const SESSION_CONTEXT_VERSION = 3 as const;
-export const REP_QUALITY_VERSION = "dynamic_rep_quality_v2" as const;
+export const REP_QUALITY_VERSION = "dynamic_rep_quality_v3" as const;
 
 export type PrescribedSide = "both" | "left" | "right";
 export type ResistanceType =
@@ -112,14 +112,17 @@ export type SessionContextSnapshotV2 = SessionContextSnapshotBase & {
     exerciseConfig: string;
     appRevision: string;
     poseMetrics: typeof POSE_METRIC_ALGORITHM_VERSION;
-    repQuality: typeof REP_QUALITY_VERSION;
+    repQuality: "dynamic_rep_quality_v2";
     model: null;
   };
 };
 
 export type SessionContextSnapshotV3 = Omit<SessionContextSnapshotV2, "version" | "versions"> & {
   version: typeof SESSION_CONTEXT_VERSION;
-  versions: SessionContextSnapshotV2["versions"] & { coachingConfig: string };
+  versions: Omit<SessionContextSnapshotV2["versions"], "repQuality"> & {
+    coachingConfig: string;
+    repQuality: "dynamic_rep_quality_v2" | typeof REP_QUALITY_VERSION;
+  };
   coaching: import("./pose/coachingConfig").CoachingProvenance & { source: "executing-client" | "server-default-unverified" };
   /** Absent when the start showed no survey, as for every session started before it existed. */
   preSessionPain?: PreSessionPain;
@@ -371,4 +374,17 @@ export function formatPreSessionPain(pain: PreSessionPain | null): string {
   if (pain === null) return "not recorded";
   if (pain.status === "declined") return "skipped";
   return `${pain.score}/10${pain.bodyArea ? ` · ${pain.bodyArea}` : ""}`;
+}
+
+/** "3/10 · after · left shoulder", "declined", or "not reported". */
+export function formatPainAfter(report: {
+  status: PainReportStatus;
+  score: number | null;
+  timing: PainTiming | null;
+  bodyArea: string | null;
+}): string {
+  if (report.status === "declined") return "declined";
+  if (report.status !== "reported" || report.score === null) return "not reported";
+  const timing = report.timing === "both" ? "during and after" : report.timing;
+  return [`${report.score}/10`, timing, report.bodyArea].filter(Boolean).join(" · ");
 }

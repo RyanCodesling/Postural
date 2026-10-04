@@ -1,13 +1,14 @@
-// Export recorded tuning traces (raw_frames) plus their sessions' rep_events
+// Export recorded tuning traces (raw_frames) plus rep_events and set_events
 // to newline-delimited JSON for the offline analysis pipeline.
 //
 // For each matching session, writes to ml/data/real/<exercise_id>/:
 //   session_<id>_frames.ndjson — one line per raw frame (payload + timing)
 //   session_<id>_reps.ndjson   — that session's counted reps (rep windows)
-//   session_<id>_meta.json     — session metadata (exercise, start/end, reason)
+//   session_<id>_sets.ndjson   — saved set windows, targets and outcomes
+//   session_<id>_meta.json     — metadata, row counts and historical measurement context
 //
 // The frames are RAW/unsmoothed metric values captured by the camera's
-// "Record tuning trace" toggle (current trace_kind upper_body_v3), its
+// "Record tuning trace" toggle (current trace_kind upper_body_v4), its
 // upper_body_v2 predecessor, or the original ex_007-only trace
 // (ex_007_upper_body_v1). No image data exists in the DB.
 //
@@ -18,6 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { measurementExportContext } from "../src/lib/pose/measurementExportContext";
 
 // Every kind the camera has ever written. Rows are never migrated, so this
 // list only grows — and it MUST gain each new kind the client starts writing,
@@ -109,7 +111,8 @@ async function main() {
     }
 
     const sessions = await client.query(
-      `SELECT s.id, s.exercise_id, s.patient_id, s.started_at, s.ended_at, s.end_reason
+      `SELECT s.id, s.exercise_id, s.patient_id, s.started_at, s.ended_at, s.end_reason,
+              s.context_snapshot
        FROM sessions s
        WHERE ${conditions.join(" AND ")}
        ORDER BY s.id`,
@@ -141,6 +144,15 @@ async function main() {
       );
 
       const framesPath = join(outDir, `session_${s.id}_frames.ndjson`);
+      const sets = await client.query(
+        `SELECT set_index, exercise_kind, target_reps, left_reps, right_reps,
+                paired_reps, target_hold_ms, paired_hold_ms, duration_ms,
+                terminated_by, start_ts, end_ts
+         FROM set_events WHERE session_id = $1 ORDER BY set_index`,
+        [s.id],
+      );
+      writeFileSync(join(outDir, `session_${s.id}_sets.ndjson`),
+        sets.rows.map((r) => JSON.stringify(r)).join("\n") + (sets.rows.length ? "\n" : ""), "utf8");
       writeFileSync(
         framesPath,
         frames.rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
@@ -167,6 +179,8 @@ async function main() {
             traceKinds: [...new Set(frames.rows.map((r) => r.trace_kind))],
             frameCount: frames.rows.length,
             repCount: reps.rows.length,
+            setCount: sets.rows.length,
+            measurementContext: measurementExportContext(s.context_snapshot),
           },
           null,
           2,

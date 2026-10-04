@@ -1,5 +1,20 @@
 # Sprint Updates 
 
+## Update-10-4-26 | Integration corrections
+
+- Cancel and invalidate pending single-patient assignment requests when selection
+  changes. A late reply cannot fill or lock a multi-patient form with one patient's
+  prescription; normal single-patient loading remains available.
+- Remove the test report from normal therapist navigation. Its direct route and
+  both HTML copies now identify it as a demo, start with blank entries, and mark
+  preview, print output, and JSON exports as unverified demo material. The timestamp
+  records preview generation, not clinical sign-off.
+- Keep ordinary account creation/editing compatible with databases missing the
+  optional Diagnosis, Condition, and Prescription columns. Nonempty unsupported
+  fields return a clear error before saving. The narrow, additive owner-run
+  migration is [`scripts/user_clinical_fields_pg.sql`](scripts/user_clinical_fields_pg.sql);
+  deployment guidance and temporary-table verification are in [`web/README.md`](web/README.md).
+
 ## 📌 Update-10-1-26 | *Ron*
 
 ### *pt_session_summary_printable_report.html*

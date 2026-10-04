@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "build:trend-worker": "node scripts/build-trend-worker.mjs",
+    "predev": "npm run build:trend-worker",
     "dev": "next dev",
+    "prebuild": "npm run build:trend-worker",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -34,6 +37,7 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19",
+    "esbuild": "0.27.7",
     "eslint": "^9",
     "eslint-config-next": "16.0.10",
     "tailwindcss": "^4",

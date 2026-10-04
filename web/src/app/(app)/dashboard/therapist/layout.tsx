@@ -82,7 +82,6 @@ const NAV = [
   { href: "/dashboard/therapist/exercises", Icon: DumbbellIcon,  label: "Manage Exercises"               },
   { href: "/dashboard/therapist/assign",    Icon: ClipboardIcon, label: "Assign Exercise"                },
   { href: "/dashboard/therapist/programs",  Icon: DocumentIcon,  label: "Exercise Program"               },
-  { href: "/dashboard/therapist/session-report", Icon: DocumentIcon, label: "Printable Session Report"     },
   { href: "/camera",                        Icon: CameraIcon,    label: "Camera"                         },
 ];
 

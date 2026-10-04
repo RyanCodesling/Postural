@@ -116,8 +116,9 @@ def test_per_limb_two_rows_scap_sign_and_rep_join(tmp_path):
     assert np.isnan(left["rep_index"].tolist()[2])
     assert np.isnan(right["rep_index"].tolist()[2])
 
-    # Within-rep frame counter restarts per rep group; rest frames carry NaN.
-    assert left["frame"].tolist()[:2] == [0, 1]
+    # A one-second gap must not become one synthetic 30 Hz sample interval.
+    assert left["frame"].tolist()[:2] == [0, 30]
+    assert (left["captured_at"].iloc[1] - left["captured_at"].iloc[0]).total_seconds() == 1
     assert np.isnan(left["frame"].tolist()[2])
 
 

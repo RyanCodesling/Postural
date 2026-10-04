@@ -209,5 +209,14 @@ test("every registry exercise resolves to a stable, distinct config version", ()
   );
 });
 
+test("scalar precision separates only the affected side-bend measurement history", () => {
+  for (const definition of Object.values(EXERCISE_REGISTRY)) {
+    const current = exerciseVersionPayload(definition);
+    const legacy = { ...current };
+    delete legacy.scalarPrecision;
+    assertEq(sha256Version(current) !== sha256Version(legacy), definition.id === "ex_005", definition.id);
+  }
+});
+
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);
 process.exit(testsFailed === 0 ? 0 : 1);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
@@ -291,6 +291,7 @@ export default function AssignExercisePage() {
 
   // Existing assignments (loaded when patient changes)
   const [existingAssignments, setExistingAssignments] = useState<PatientExercise[]>([]);
+  const assignmentRequest = useRef<AbortController | null>(null);
 
   // Delete state
   const [deleteSelected,  setDeleteSelected]  = useState<Set<string>>(new Set());
@@ -333,6 +334,8 @@ export default function AssignExercisePage() {
 
   // ── Load existing assignments for a single selected patient ──────────────
   useEffect(() => {
+    assignmentRequest.current?.abort();
+    assignmentRequest.current = null;
     if (assignPatientIds.length !== 1) {
       setExistingAssignments([]);
       setDeleteSelected(new Set());
@@ -340,9 +343,14 @@ export default function AssignExercisePage() {
       return;
     }
     const patientId = assignPatientIds[0];
-    fetch(`/api/patient-exercises?patientId=${patientId}`)
+    const controller = new AbortController();
+    assignmentRequest.current = controller;
+    fetch(`/api/patient-exercises?patientId=${patientId}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((d) => {
+        // A response can finish after selection changes, even when its fetch
+        // transport ignores abort. Only the current selection may fill the form.
+        if (controller.signal.aborted || assignmentRequest.current !== controller) return;
         const existing: PatientExercise[] = d.exercises ?? [];
         setExistingAssignments(existing);
         if (existing.length === 0) return;
@@ -357,6 +365,10 @@ export default function AssignExercisePage() {
         setEditingExercises(new Set());
       })
       .catch(() => {});
+    return () => {
+      controller.abort();
+      if (assignmentRequest.current === controller) assignmentRequest.current = null;
+    };
   }, [assignPatientIds]);
 
   // ── Program merge ─────────────────────────────────────────────────────────
@@ -396,6 +408,8 @@ export default function AssignExercisePage() {
   };
 
   const togglePatientSelection = (patientId: string) => {
+    // Invalidate immediately, before the next render/effect cleanup.
+    assignmentRequest.current?.abort();
     const nextPatientIds = assignPatientIds.includes(patientId)
       ? assignPatientIds.filter((id) => id !== patientId)
       : [...assignPatientIds, patientId];
@@ -674,6 +688,7 @@ export default function AssignExercisePage() {
         message: `Exercises assigned to ${assignPatientIds.length} patient${assignPatientIds.length === 1 ? "" : "s"} and synced.`,
       });
       setShowValidationErrors(false);
+      assignmentRequest.current?.abort();
       setAssignPatientIds([]); setAssignProgramId("");
       setAssignSelected(new Set()); setAssignParams({});
       setExistingAssignments([]); setDeleteSelected(new Set());

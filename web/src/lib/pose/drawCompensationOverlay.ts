@@ -11,6 +11,7 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
   trunkLean:         [11, 12, 23, 24], // shoulders + hips
   scapularElevation: [7, 11, 8, 12], // ear-to-shoulder both sides
   elbowFlexion:      [13, 14],       // elbow joints only (most focused)
+  hipShift:          [23, 24],       // both hips (display-only side-bend check)
 };
 
 /**
@@ -41,6 +42,9 @@ export const OVERLAY_LABELS: Partial<Record<MetricName, string>> = {
   // failure here; misdirecting a patient is not.
   scapularElevation: "Shoulder / head position",
   elbowFlexion:      "Straighten arms",
+  // Names the movement the check measures: the hip midpoint moved sideways,
+  // away from the bend, from the stance before the bend (hipShiftWarning.ts).
+  hipShift:          "Hips shifted",
 };
 
 export const OVERLAY_DIRECTION_LABELS = { shoulderSymmetry: "LOWER", straighten: "STRAIGHTEN" } as const;
@@ -112,6 +116,48 @@ export function higherShoulderLandmarkIndex(landmarks: { y: number }[]): 11 | 12
   const y11 = landmarks[11]?.y ?? Infinity;
   const y12 = landmarks[12]?.y ?? Infinity;
   return y11 <= y12 ? 11 : 12;
+}
+
+/**
+ * Landmark index of the shoulder `computeShoulderSymmetry` reports as elevated
+ * after camera-tilt correction. Its line runs from landmark 12 to landmark 11
+ * and a positive angle means 11 sits lower, so its "right" is landmark 12 and
+ * its "left" landmark 11. Null when it reports the shoulders level.
+ */
+export function elevatedShoulderLandmarkIndex(elevatedSide: "left" | "right" | "level"): 11 | 12 | null {
+  return elevatedSide === "left" ? 11 : elevatedSide === "right" ? 12 : null;
+}
+
+/**
+ * The shoulder the LOWER arrow is drawn on this frame. The arrow keeps the
+ * shoulder it was first drawn on (`locked`), so it does not jump between
+ * shoulders while they are near level. It moves only when the tilt-corrected
+ * reading reports the other shoulder higher by more than `switchAbove`, the
+ * cue's switch-off level. In alternating neck side bends the tilt can reverse
+ * while the warning stays on, and the arrow would otherwise stay on the lower
+ * shoulder.
+ */
+export function lowerArrowShoulder(
+  locked: 11 | 12 | null,
+  landmarks: { y: number }[],
+  symmetry: { angleDeg: number; elevatedSide: "left" | "right" | "level" } | null,
+  switchAbove: number,
+): 11 | 12 {
+  const current = locked ?? higherShoulderLandmarkIndex(landmarks);
+  if (symmetry === null || !(symmetry.angleDeg > switchAbove)) return current;
+  return elevatedShoulderLandmarkIndex(symmetry.elevatedSide) ?? current;
+}
+
+/**
+ * Whether a per-limb warning's side ("which arm") may become its overlay
+ * direction. Trunk lean and neck tilt draw their arrow from their own lean
+ * direction, which the camera sets first. A whole-body metric reads the same on
+ * both limbs, so its limb side says nothing about the lean; using it turned the
+ * trunk-lean arrow toward the lean, instead of away from it, for leans to the
+ * image's right on two-arm exercises.
+ */
+export function limbSideIsOverlayDirection(metric: MetricName): boolean {
+  return metric !== "trunkLean" && metric !== "neckTilt";
 }
 
 /** Draws a rounded rect path (stroke or fill by the caller). */
@@ -251,8 +297,12 @@ function drawShoulderAsymmetry(
   landmarks: NormalizedLandmark[],
   canvasW: number, canvasH: number,
   mirroredDisplay = true,
+  lockedIdx?: 11 | 12,
 ): boolean {
-  const elevatedIdx = higherShoulderLandmarkIndex(landmarks);
+  // A locked index keeps the cue on the shoulder it first appeared on; picking
+  // the higher shoulder afresh every frame made it jump sides when the
+  // shoulders were close to level.
+  const elevatedIdx = lockedIdx ?? higherShoulderLandmarkIndex(landmarks);
   const otherIdx = elevatedIdx === 11 ? 12 : 11;
   const elevated = landmarks[elevatedIdx];
   const other = landmarks[otherIdx];
@@ -304,7 +354,9 @@ function drawShoulderAsymmetry(
  *
  * `options.mirroredDisplay` (default true, the live camera) pre-flips label
  * text for a canvas shown mirrored; video playback passes false. Geometry is
- * drawn in raw image space either way.
+ * drawn in raw image space either way. `options.shoulderElevatedIndex` keeps
+ * the shoulder-asymmetry cue on one shoulder (landmark 11 or 12) for a whole
+ * display; without it the higher shoulder is picked every frame.
  */
 export function drawCompensationOverlay(
   ctx: CanvasRenderingContext2D,
@@ -315,7 +367,7 @@ export function drawCompensationOverlay(
   metricValues: Partial<Record<MetricName, number | null>>,
   metricDirections?: Partial<Record<MetricName, string>>,
   activeWarningNames?: ReadonlySet<MetricName>,
-  options: { mirroredDisplay?: boolean } = {},
+  options: { mirroredDisplay?: boolean; shoulderElevatedIndex?: 11 | 12 } = {},
 ): RenderedCompensationCue[] {
   const mirroredDisplay = options.mirroredDisplay ?? true;
   const rendered: RenderedCompensationCue[] = [];
@@ -329,11 +381,12 @@ export function drawCompensationOverlay(
 
     // ── Shoulder asymmetry: per-shoulder boxes + down-arrow on the high side ──
     // The warning has already fired (isWarning above); place the cue on the
-    // higher shoulder by raw y inside drawShoulderAsymmetry.
+    // caller's locked shoulder, else the higher shoulder by raw y.
     if (spec.name === "shoulderSymmetry") {
-      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH, mirroredDisplay)) {
+      const elevatedIdx = options.shoulderElevatedIndex ?? higherShoulderLandmarkIndex(landmarks);
+      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH, mirroredDisplay, elevatedIdx)) {
         rendered.push({ metric: spec.name, text: OVERLAY_DIRECTION_LABELS.shoulderSymmetry,
-          direction: higherShoulderLandmarkIndex(landmarks) === 11 ? "right" : "left" });
+          direction: elevatedIdx === 11 ? "right" : "left" });
       }
       continue;
     }

@@ -22,11 +22,13 @@ import {
 } from "@mediapipe/tasks-vision";
 
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
+import { buildCaptureQualitySummary } from "@/lib/sessionReadModels";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
-import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
+import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
 import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
 import { CoachingAuditBuffer, observeMovement, type CoachingObservation } from "@/lib/pose/coachingAudit";
 import type { HoldQualityV2, HoldSideQuality, SetMeasurement } from "@/lib/pose/holdQuality";
+import { roundFilteredMetric } from "@/lib/pose/metricPrecision";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
@@ -50,6 +52,8 @@ import {
   type TiltReference,
 } from "@/lib/pose/poseMetrics";
 import {
+  cueClearLevel,
+  cueTriggerLevel,
   updateCompensationWarningMap,
   type CompensationWarningLatch,
 } from "@/lib/pose/compensationWarningState";
@@ -68,6 +72,7 @@ import {
   shouldBlockCoachingShadowPlanTransition,
 } from "@/lib/pose/coachingShadowPlan";
 import {
+  coachingWarningSpecs,
   getCompensationScoring,
   getExerciseDefinition,
   type ExerciseDefinition,
@@ -124,6 +129,17 @@ import {
   singleCompensationWarningSignal,
   type CompensationWarningSignal,
 } from "@/lib/pose/compensationSignals";
+import {
+  newRepWindowState,
+  repWindowCompensationWarningSignal,
+  type RepWindowState,
+} from "@/lib/pose/repWindowWarning";
+import {
+  hipShiftGeometry,
+  newHipShiftState,
+  updateHipShift,
+  type HipShiftState,
+} from "@/lib/pose/hipShiftWarning";
 import {
   EventOutbox,
   persistedOutboxSessionIds,
@@ -334,7 +350,7 @@ type ResumeSnapshot = {
    */
   completedSetsLog?: CompletedSetRecord[];
   repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames?: { total: number; ok: number };
+  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number };
   /** The patient opted in to video for this session and has not stopped it. */
   recordVideo?: boolean;
 };
@@ -375,7 +391,7 @@ function readResumeSnapshot(
 function restoredSessionProgress(snap: ResumeSnapshot): {
   setsLog: CompletedSetRecord[];
   repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames: { total: number; ok: number };
+  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number };
 } {
   const count = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -401,10 +417,23 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
         )
       : [];
   const frames = snap.captureFrames;
+  // The rejection reasons and dropout resets came later; a snapshot without
+  // them restores none.
+  const rejected = frames?.rejectedByStatus;
+  const rejectedByStatus =
+    rejected && typeof rejected === "object" && !Array.isArray(rejected) &&
+    Object.values(rejected).every(count)
+      ? { ...rejected }
+      : {};
   const captureFrames =
     frames && count(frames.total) && count(frames.ok) && frames.ok <= frames.total
-      ? { total: frames.total, ok: frames.ok }
-      : { total: 0, ok: 0 };
+      ? {
+          total: frames.total,
+          ok: frames.ok,
+          rejectedByStatus,
+          dropoutResets: count(frames.dropoutResets) ? frames.dropoutResets : 0,
+        }
+      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0 };
   return {
     setsLog,
     repOutcomes: {
@@ -1863,6 +1892,17 @@ export default function CameraClient() {
   // Read by the per-frame overlay path, which runs faster than the 150 ms
   // metrics tick that produces the decision.
   const selectedCoachingCueMetricRef = useRef<MetricName | null>(null);
+  // Landmark (11 or 12) the LOWER arrow was drawn on when the shoulder cue
+  // appeared; kept until that cue leaves the slot so the arrow cannot jump.
+  const lockedShoulderIndexRef = useRef<11 | 12 | null>(null);
+  // Per-metric state of rep-window warnings (cues judged once per repetition).
+  const repWindowStatesRef = useRef(new Map<MetricName, RepWindowState>());
+  // Per-check state of display-only coaching checks (hipShiftWarning.ts).
+  const hipShiftStatesRef = useRef(new Map<MetricName, HipShiftState>());
+  // The cue last drawn, with the reading and direction it was drawn with. A cue
+  // kept for its minimum visible time is drawn with these once its own reading
+  // has gone, as the per-repetition, hip and at-rest coupled readings do.
+  const lastDrawnCueRef = useRef<{ metric: MetricName; value: number; direction: string | null } | null>(null);
   const coachingProvenanceRef = useRef<CoachingProvenance | null>(null);
   const coachingAuditRef = useRef(new CoachingAuditBuffer());
   const coachingDecisionRef = useRef<CoachingObservation["selected"]>(null);
@@ -1877,6 +1917,12 @@ export default function CameraClient() {
     coachingCueStateRef.current = newCoachingCueState();
     selectedCoachingCueMetricRef.current = null;
     coachingDecisionRef.current = null;
+    // Per-repetition and hip-check state, the LOWER lock and the last drawn
+    // cue belong to the run being reset, like the latches above.
+    repWindowStatesRef.current.clear();
+    hipShiftStatesRef.current.clear();
+    lockedShoulderIndexRef.current = null;
+    lastDrawnCueRef.current = null;
     setSelectedCoachingCueMetric(null);
   }, []);
   /**
@@ -1892,7 +1938,11 @@ export default function CameraClient() {
       compensationWarningLatchesRef.current.size > 0 ||
       cue.currentCueId !== null ||
       cue.activeSinceMs.size > 0 ||
-      cue.clearedAtMs.size > 0
+      cue.clearedAtMs.size > 0 ||
+      repWindowStatesRef.current.size > 0 ||
+      hipShiftStatesRef.current.size > 0 ||
+      lockedShoulderIndexRef.current !== null ||
+      lastDrawnCueRef.current !== null
     );
   }, []);
 
@@ -3026,6 +3076,11 @@ export default function CameraClient() {
   // session from one degraded by poor tracking/framing. Reset on session start.
   const captureFramesTotalRef = useRef<number>(0);
   const captureFramesOkRef = useRef<number>(0);
+  // Why active frames were rejected (the readiness status, or "NOT_VISIBLE"
+  // when no person was found), and how often a rejection lasting the dropout
+  // grace discarded the movement in progress. Saved with the summary.
+  const captureRejectedByStatusRef = useRef<Record<string, number>>({});
+  const captureDropoutResetsRef = useRef<number>(0);
 
   /**
    * Reset all in-memory session-persistence state (no DB call).
@@ -3546,13 +3601,15 @@ export default function CameraClient() {
     setLastSessionId(null);
     const endToken = sessionTokenRef.current;
     flushRawFrames();
-    // Session-level capture-quality summary (% of active frames with OK capture).
-    const framesTotal = captureFramesTotalRef.current;
-    const framesOk = captureFramesOkRef.current;
-    const captureQualitySummary =
-      framesTotal > 0
-        ? { framesTotal, framesOk, pctOk: Math.round((framesOk / framesTotal) * 100) }
-        : undefined;
+    // Session-level capture-quality summary: the % of active frames with OK
+    // capture, why the others were rejected, and how often a sustained
+    // rejection discarded the movement in progress.
+    const captureQualitySummary = buildCaptureQualitySummary({
+      total: captureFramesTotalRef.current,
+      ok: captureFramesOkRef.current,
+      rejectedByStatus: captureRejectedByStatusRef.current,
+      dropoutResets: captureDropoutResetsRef.current,
+    });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
     const endRequest = fetch(`/api/sessions/${sessionId}`, {
@@ -3788,6 +3845,8 @@ export default function CameraClient() {
       captureFrames: {
         total: captureFramesTotalRef.current,
         ok: captureFramesOkRef.current,
+        rejectedByStatus: { ...captureRejectedByStatusRef.current },
+        dropoutResets: captureDropoutResetsRef.current,
       },
     };
     try {
@@ -4263,6 +4322,8 @@ export default function CameraClient() {
     coachingAuditRef.current.reset();
     captureFramesTotalRef.current = 0;
     captureFramesOkRef.current = 0;
+    captureRejectedByStatusRef.current = {};
+    captureDropoutResetsRef.current = 0;
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
@@ -4325,6 +4386,8 @@ export default function CameraClient() {
     const progress = restoredSessionProgress(snap);
     captureFramesTotalRef.current = progress.captureFrames.total;
     captureFramesOkRef.current = progress.captureFrames.ok;
+    captureRejectedByStatusRef.current = { ...progress.captureFrames.rejectedByStatus };
+    captureDropoutResetsRef.current = progress.captureFrames.dropoutResets;
 
     setCompletedSets(snap.completedSets);
     completedSetsLogRef.current = progress.setsLog;
@@ -4387,6 +4450,12 @@ export default function CameraClient() {
     // collide with rows already persisted under this session id.
     resetSessionPersistence();
     sessionIdRef.current = snap.sessionId;
+    // Anchor this page's clock before anything reads it: the recorder takes
+    // the resumed part's start time through perfToIso, and after a reload the
+    // anchors are still 0 (the part's start was then stored as milliseconds
+    // since page load, so playback could not place its overlays or markers).
+    sessionWallStartMsRef.current = Date.now();
+    sessionPerfStartMsRef.current = performance.now();
     // The consent given at the start covers the rest of the session; the
     // resumed part is recorded as a new part.
     if (snap.recordVideo === true) startSessionRecording(snap.sessionId);
@@ -4401,8 +4470,6 @@ export default function CameraClient() {
     }
     globalRepIndexRef.current = snap.globalRepIndex;
     rawFrameIndexRef.current = snap.rawFrameIndex;
-    sessionWallStartMsRef.current = Date.now();
-    sessionPerfStartMsRef.current = performance.now();
     sessionTokenRef.current++;
     pendingStaleEndReasonRef.current = undefined;
 
@@ -5270,6 +5337,9 @@ export default function CameraClient() {
   function resetAfterSustainedCaptureDropout(
     definition: ExerciseDefinition | null,
   ): void {
+    // Counted for the capture summary: each reset discards the movement in
+    // progress, so it can explain repetitions that were not counted.
+    if (sessionStateRef.current === "active") captureDropoutResetsRef.current += 1;
     discardInProgressMovement();
 
     if (baselinePhaseRef.current === "captured") {
@@ -6299,7 +6369,12 @@ export default function CameraClient() {
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
             captureFramesTotalRef.current += 1;
-            if (r.ok) captureFramesOkRef.current += 1;
+            if (r.ok) {
+              captureFramesOkRef.current += 1;
+            } else {
+              const rejected = captureRejectedByStatusRef.current;
+              rejected[r.status] = (rejected[r.status] ?? 0) + 1;
+            }
           }
 
           const now = performance.now();
@@ -6565,7 +6640,7 @@ export default function CameraClient() {
                 }
                 const filtered = filter.filterWithDerivative(value, tNow);
                 smoothedMetrics[metricName] =
-                  Math.round(filtered.value * 10) / 10;
+                  roundFilteredMetric(metricName, filtered.value);
                 smoothedMetricVelocities[metricName] = filtered.velocity;
               }
 
@@ -6750,7 +6825,55 @@ export default function CameraClient() {
                 MetricName,
                 CompensationWarningSignal
               >();
+              // Coupled deviations exist only while the movement is under way:
+              // below the repetition start threshold the body is at rest and
+              // gives no coupled warning value, so it cannot raise a cue.
+              const warningRestOptions = {
+                restBelow:
+                  activeDefinition.kind === "dynamic"
+                    ? activeDefinition.primaryMetric.thresholds.startThreshold
+                    : undefined,
+              };
               for (const comp of activeDefinition.compensationMetrics) {
+                // A cue with a rep window is judged once per repetition, per
+                // limb, inside that window (see repWindowWarning.ts).
+                const repWindow = comp.cue?.evaluation;
+                if (
+                  repWindow &&
+                  scoreIsPerLimb &&
+                  activeDefinition.kind === "dynamic"
+                ) {
+                  const result = repWindowCompensationWarningSignal(
+                    comp,
+                    prescriptionRef.current.prescribedSide,
+                    {
+                      left: {
+                        value: smoothedLeftCompensations[comp.name] ?? null,
+                        primary: smoothedPrimaryLeft,
+                        phase: leftRepCounterRef.current?.getState() ?? null,
+                      },
+                      right: {
+                        value: smoothedRightCompensations[comp.name] ?? null,
+                        primary: smoothedPrimaryRight,
+                        phase: rightRepCounterRef.current?.getState() ?? null,
+                      },
+                    },
+                    repWindowStatesRef.current.get(comp.name) ?? newRepWindowState(),
+                    tNow,
+                    {
+                      from: activeDefinition.primaryMetric.thresholds.startThreshold,
+                      upTo: repWindow.upTo,
+                      persistMs: repWindow.persistMs,
+                    },
+                  );
+                  repWindowStatesRef.current.set(comp.name, result.state);
+                  warningSignals.set(comp.name, result.signal);
+                  warningDisplayMetrics[comp.name] = result.signal.value;
+                  if (result.signal.side !== null && limbSideIsOverlayDirection(comp.name)) {
+                    metricDirections[comp.name] = result.signal.side;
+                  }
+                  continue;
+                }
                 const signal = scoreIsPerLimb
                   ? perLimbCompensationWarningSignal(
                       comp,
@@ -6763,16 +6886,42 @@ export default function CameraClient() {
                           smoothedRightCompensations[comp.name] ?? null,
                         rightPrimary: smoothedPrimaryRight,
                       },
+                      warningRestOptions,
                     )
                   : singleCompensationWarningSignal(
                       comp,
                       smoothedMetrics[comp.name] ?? null,
                       smoothedMetrics[scorePrimaryName] ?? null,
+                      warningRestOptions,
                     );
                 warningSignals.set(comp.name, signal);
                 warningDisplayMetrics[comp.name] = signal.value;
-                if (signal.side !== null) {
+                // An arm side must not replace the trunk-lean or neck-tilt lean
+                // direction set above (limbSideIsOverlayDirection).
+                if (signal.side !== null && limbSideIsOverlayDirection(comp.name)) {
                   metricDirections[comp.name] = signal.side;
+                }
+              }
+              // Display-only coaching checks (hipShiftWarning.ts): warned and
+              // cued like a compensation, but never scored or stored.
+              if (activeDefinition.kind === "dynamic") {
+                for (const check of activeDefinition.coachingChecks ?? []) {
+                  const result = updateHipShift(
+                    hipShiftStatesRef.current.get(check.name) ?? newHipShiftState(),
+                    {
+                      geometry: hipShiftGeometry(landmarks),
+                      lean: smoothedMetrics[activeDefinition.primaryMetric.name] ?? null,
+                      nowMs: tNow,
+                    },
+                    {
+                      ...check.check,
+                      restBelow: activeDefinition.primaryMetric.thresholds.startThreshold,
+                    },
+                    cueTriggerLevel(check),
+                  );
+                  hipShiftStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: null });
+                  warningDisplayMetrics[check.name] = result.value;
                 }
               }
               compensationWarningSignalsRef.current = warningSignals;
@@ -7291,12 +7440,14 @@ export default function CameraClient() {
 
               if (tNow - lastMetricsUpdateRef.current > COACHING_TICK_MS) {
                 lastMetricsUpdateRef.current = tNow;
+                // Compensation metrics, then display-only coaching checks.
+                const cueSpecs = coachingWarningSpecs(activeDefinition);
                 const coachingWarningsEnabled =
                   sessionStateRef.current === "active" &&
                   lastCaptureOkRef.current &&
                   baselineReadyForExercise;
                 const suppressedWarningNames = new Set(
-                  activeDefinition.compensationMetrics
+                  cueSpecs
                     .filter(
                       (comp) =>
                         !coachingWarningsEnabled ||
@@ -7308,7 +7459,7 @@ export default function CameraClient() {
                 );
                 const activeWarningNames = updateCompensationWarningMap(
                   compensationWarningLatchesRef.current,
-                  activeDefinition.compensationMetrics,
+                  cueSpecs,
                   warningDisplayMetrics,
                   tNow,
                   suppressedWarningNames,
@@ -7321,7 +7472,7 @@ export default function CameraClient() {
                 // per-cue timing is measured on one consistent clock.
                 const cueDecision = selectCoachingCue(
                   coachingCueStateRef.current,
-                  activeDefinition.compensationMetrics,
+                  cueSpecs,
                   activeWarningNames,
                   warningDisplayMetrics,
                   tNow,
@@ -7332,7 +7483,7 @@ export default function CameraClient() {
                   declaredMessage: cueDecision.message, reason: cueDecision.reason,
                   decisionAtMs: tNow, selectedSinceMs: cueDecision.state.currentSinceMs,
                   side: cueDecision.metric ? warningSignals.get(cueDecision.metric)?.side ?? null : null,
-                  warningValuesSmoothed: Object.fromEntries(activeDefinition.compensationMetrics.map(comp => [comp.name, warningDisplayMetrics[comp.name] ?? null])),
+                  warningValuesSmoothed: Object.fromEntries(cueSpecs.map(comp => [comp.name, warningDisplayMetrics[comp.name] ?? null])),
                   activeLatches: [...activeWarningNames],
                 };
                 if (selectedCoachingCueMetricRef.current !== cueDecision.metric) {
@@ -7438,7 +7589,7 @@ export default function CameraClient() {
               // rather than the whole compensation list, so nothing about how
               // it draws (or its tests) changes.
               const overlayWarningNames = new Set<MetricName>();
-              const overlayComps = activeDefinition.compensationMetrics.filter((comp) => {
+              const overlayComps = coachingWarningSpecs(activeDefinition).filter((comp) => {
                 if (comp.name !== selectedCoachingCueMetricRef.current) return false;
                 if (
                   sessionStateRef.current !== "active" ||
@@ -7454,28 +7605,76 @@ export default function CameraClient() {
                 ) {
                   return false;
                 }
+                // A cue the selector keeps for its minimum visible time stays
+                // drawn after its warning clears, so it can be read.
                 const isActive =
-                  compensationWarningLatchesRef.current.get(comp.name)?.active === true;
+                  compensationWarningLatchesRef.current.get(comp.name)?.active === true ||
+                  coachingDecisionRef.current?.reason === "held-min-visible";
                 if (isActive) overlayWarningNames.add(comp.name);
                 return isActive;
               });
+              // The LOWER arrow keeps the shoulder it first appeared on until
+              // the cue leaves the slot, and moves only once the other shoulder
+              // reads higher than the cue's switch-off level (lowerArrowShoulder).
+              const lowerSpec = overlayComps.find((comp) => comp.name === "shoulderSymmetry");
+              if (lowerSpec) {
+                lockedShoulderIndexRef.current = lowerArrowShoulder(
+                  lockedShoulderIndexRef.current,
+                  landmarks,
+                  computeShoulderSymmetry(landmarks, raw.tiltReference),
+                  cueClearLevel(lowerSpec),
+                );
+              } else if (selectedCoachingCueMetricRef.current !== "shoulderSymmetry") {
+                lockedShoulderIndexRef.current = null;
+              }
+              // A shown cue whose reading has gone (the per-repetition, hip and
+              // coupled readings are absent at rest) is drawn with the reading
+              // and direction it was last drawn with, so its minimum visible
+              // time holds on screen. A shown cue with no direction this frame
+              // (a trunk lean momentarily centred) keeps its last direction, so
+              // its label does not switch while it is held. The gates above
+              // still apply.
+              const drawValues: Partial<Record<MetricName, number | null>> = { ...warningDisplayMetrics };
+              const drawDirections: Partial<Record<MetricName, string>> = { ...metricDirections };
+              const lastDrawn = lastDrawnCueRef.current;
+              for (const comp of overlayComps) {
+                if (!lastDrawn || lastDrawn.metric !== comp.name) continue;
+                if (typeof drawValues[comp.name] !== "number") drawValues[comp.name] = lastDrawn.value;
+                if (lastDrawn.direction !== null) drawDirections[comp.name] ??= lastDrawn.direction;
+              }
               const renderedCues = drawCompensationOverlay(
                 ctx,
                 landmarks,
                 canvas.width,
                 canvas.height,
                 overlayComps,
-                warningDisplayMetrics,
-                metricDirections,
+                drawValues,
+                drawDirections,
                 overlayWarningNames,
+                { shoulderElevatedIndex: lockedShoulderIndexRef.current ?? undefined },
               );
-              if (overlayFrame && renderedCues[0]) {
+              const drawnCue = renderedCues[0];
+              if (drawnCue) {
+                lastDrawnCueRef.current = {
+                  metric: drawnCue.metric,
+                  value: drawValues[drawnCue.metric] as number,
+                  direction: drawDirections[drawnCue.metric] ?? null,
+                };
+              } else if (lastDrawnCueRef.current?.metric !== selectedCoachingCueMetricRef.current) {
+                lastDrawnCueRef.current = null;
+              }
+              // The saved video's track records the cue as drawn, including the
+              // shoulder the LOWER arrow is locked to, so playback matches.
+              if (overlayFrame && drawnCue) {
                 overlayFrame.cue = {
-                  metric: renderedCues[0].metric,
-                  direction: metricDirections[renderedCues[0].metric] ?? null,
+                  metric: drawnCue.metric,
+                  direction: drawnCue.direction,
+                  ...(drawnCue.metric === "shoulderSymmetry" && lockedShoulderIndexRef.current !== null
+                    ? { shoulder: lockedShoulderIndexRef.current }
+                    : {}),
                 };
               }
-              const suppressedMetrics = activeDefinition.compensationMetrics.filter(comp =>
+              const suppressedMetrics = coachingWarningSpecs(activeDefinition).filter(comp =>
                 sessionStateRef.current !== "active" || !lastCaptureOkRef.current || !baselineReadyForExercise ||
                 comp.peakRelevant === true && !nearPeakNow ||
                 prescriptionRef.current.prescribedSide !== "both" && comp.name === "shoulderSymmetry",
@@ -7543,6 +7742,8 @@ export default function CameraClient() {
           // pctOk rather than being invisible to the capture-quality summary.
           if (sessionStateRef.current === "active") {
             captureFramesTotalRef.current += 1;
+            const rejected = captureRejectedByStatusRef.current;
+            rejected.NOT_VISIBLE = (rejected.NOT_VISIBLE ?? 0) + 1;
           }
         }
 
@@ -12470,6 +12671,7 @@ function metricLabel(name: MetricName): string {
     case "elbowFlexion":           return "ELBOW FLEX";
     case "wristShoulderVertical":  return "OVERHEAD";
     case "shoulderElbowDistance":  return "ELBOW POS";
+    case "hipShift":               return "HIP SHIFT";
   }
 }
 

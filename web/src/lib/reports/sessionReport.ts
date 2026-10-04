@@ -10,6 +10,7 @@ import { getExerciseDefinition, type MetricName } from "@/lib/exercises/registry
 import { cueEpisodes, setCoachingAudit } from "@/lib/pose/coachingAudit";
 import { OVERLAY_LABELS } from "@/lib/pose/drawCompensationOverlay";
 import {
+  formatPainAfter,
   formatPreSessionPain,
   formatResistanceContext,
   preSessionPainFromContext,
@@ -125,12 +126,7 @@ export function sessionExercise(input: Pick<SessionReportInput, "exerciseId" | "
   };
 }
 
-export function formatPainAfter(report: SessionReportInput["painReport"]): string {
-  if (report.status === "declined") return "declined";
-  if (report.status !== "reported" || report.score === null) return "not reported";
-  const timing = report.timing === "both" ? "during and after" : report.timing;
-  return [`${report.score}/10`, timing, report.bodyArea].filter(Boolean).join(" · ");
-}
+export { formatPainAfter };
 
 /**
  * Cue display per compensation, from the stored coaching audits of the sets

@@ -2,8 +2,18 @@
  * The cumulative progress PDF. Every download fetches the saved sessions
  * afresh, so it covers everything saved by then; a downloaded file is a dated
  * snapshot. Groups, values and trend labels are the same as the Progress
- * Trends cards; like them, it is descriptive statistics, not a diagnosis.
+ * Trends cards: the labels and change estimates come from the machine-learning
+ * trend model. Supplementary information, not a diagnosis.
  */
+import { TREND_MODEL } from "@/lib/analytics/trendModel";
+import {
+  changeText,
+  extraTrendMeasures,
+  groupModelSeries,
+  TREND_LABEL_TEXT,
+  trendMeasures,
+  type ModelSeries,
+} from "@/lib/analytics/trendSeries";
 import {
   formatPreSessionPain,
   formatResistanceContext,
@@ -22,11 +32,10 @@ import {
 import { prescribedOutcomeSides, sideLabel } from "@/lib/sessionOutcomePresentation";
 import {
   groupSessionsByExercise,
+  modelMeasureMeta,
   primaryMetricMeta,
   sessionPrimaryValue,
-  trendStatus,
   type TrendSession,
-  type TrendStatus,
 } from "./ExerciseTrends";
 
 /** A `GET /api/sessions` summary; the extra fields are optional for older rows. */
@@ -41,11 +50,16 @@ export type ProgressReportSession = TrendSession & {
   };
 };
 
-const STATUS_TEXT: Record<TrendStatus, string> = {
-  improving: "Improving",
-  plateau: "Plateau (no clear change)",
-  regressing: "Regressing",
-};
+/** One report row per series: the model label with its change estimate. */
+function modelRow(series: ModelSeries, format: (value: number) => string, unit: string): [string, string] {
+  const side = series.side === "card" ? "" : ` (${series.side})`;
+  if (!series.spec) return [`Trend${side}`, "no trend model for this exercise"];
+  if (!series.fit || series.counted < TREND_MODEL.minSessions) {
+    return [`Trend${side}`, `needs at least ${TREND_MODEL.minSessions} counted sessions`];
+  }
+  const change = `change ${changeText(series.fit, (v) => `${format(v)}${unit}`)}`;
+  return [`Trend${side}`, series.label ? `${TREND_LABEL_TEXT[series.label]}, ${change}` : change];
+}
 
 const ENDINGS: Record<string, string> = {
   completed: "Completed",
@@ -78,7 +92,8 @@ export function progressReportPdf(
   layout.paragraph(
     "Built from the sessions saved when it was downloaded; download it again to include later sessions. " +
       "Sessions are grouped by exercise, prescribed side, resistance and scoring configuration, as in the app's Progress Trends. " +
-      "Trends are descriptive statistics, not a diagnosis.",
+      "Trend labels come from the machine-learning trend model: Rising or Falling appears only when a side's change since its " +
+      "first counted session is larger than normal session-to-session variation. Supplementary information, not a diagnosis.",
     { size: 8.5, color: COLORS.muted },
   );
   if (groups.length === 0) layout.paragraph("No session with a recorded set yet.");
@@ -89,19 +104,34 @@ export function progressReportPdf(
     const sides = prescribedOutcomeSides(group.prescribedSide);
     const values = group.sessions.map(sessionPrimaryValue);
     const present = values.filter((v): v is number => v !== null);
-    const status = trendStatus(present, meta.isAngle);
     const fmt = (v: number) => (isIso ? `${v.toFixed(1)}s` : meta.isAngle ? String(Math.round(v)) : v.toFixed(2));
     const first = group.sessions[0].startedAt;
     const last = group.sessions[group.sessions.length - 1].startedAt;
+    const measures = trendMeasures(group.exerciseKind);
+    const modelMeta = modelMeasureMeta(group.exerciseKind, group.primaryMetric);
+    const primary = groupModelSeries(group.exerciseId, group.prescribedSide, group.sessions, measures.primary, true);
+    const form = groupModelSeries(group.exerciseId, group.prescribedSide, group.sessions, measures.form, measures.formPerSide);
 
     layout.heading(group.exerciseName);
     layout.keyValues([
       ["Context", `${group.prescribedSide === "both" ? "Both sides" : `${sideLabel(group.prescribedSide)} side`} · ${formatResistanceContext(group.resistance)}`],
       ["Sessions", `${group.sessions.length}, ${day(first)} to ${day(last)}`],
-      ["Trend", status ? STATUS_TEXT[status] : "Needs at least 3 sessions"],
+      ...primary.map((s) => modelRow(s, modelMeta.format, modelMeta.changeUnit)),
+      ...form.map((s): [string, string] => {
+        const [key, value] = modelRow(s, (v) => v.toFixed(0), "");
+        return [key.replace("Trend", "Form score"), value];
+      }),
       [meta.label, present.length ? `first ${fmt(present[0])} · latest ${fmt(present[present.length - 1])}` : "not recorded"],
     ]);
-    layout.chart([{ label: meta.label, color: COLORS.green, values }], { first: day(first), last: day(last) }, fmt);
+    layout.chart(
+      primary.map((s) => ({
+        label: `${s.side === "card" ? "" : `${sideLabel(s.side)} `}${modelMeta.label.toLowerCase()}`,
+        color: s.side === "right" ? COLORS.orange : s.side === "left" ? COLORS.blue : COLORS.green,
+        values: s.values,
+      })),
+      { first: day(first), last: day(last) },
+      (v) => `${modelMeta.format(v)}${modelMeta.unit}`,
+    );
     if (!isIso) {
       layout.chart(
         sides.map((side) => ({
@@ -140,11 +170,53 @@ export function progressReportPdf(
         (s.endReason && ENDINGS[s.endReason]) || "—",
       ];
     }));
+
+    // Other measures: the model's change estimate, never a label. Where the
+    // model gives no estimate (no band for the measure, or too few sessions),
+    // the dated measured values stand in for it.
+    const extras = extraTrendMeasures(group.exerciseId, group.exerciseKind)
+      .map((def) => ({ def, series: groupModelSeries(group.exerciseId, group.prescribedSide, group.sessions, def.measure, true) }))
+      .filter(({ series }) => series.some((s) => s.counted > 0));
+    const measured = (s: ModelSeries, format: (value: number) => string, unit: string) =>
+      group.sessions
+        .flatMap((session, i) => {
+          const value = s.values[i];
+          return value === null ? [] : [`${day(session.startedAt)}: ${format(value)}${unit}`];
+        })
+        .join(" · ");
+    if (extras.length > 0) {
+      layout.table(
+        [
+          { header: "Other measure", width: 3.4 },
+          { header: "Side", width: 0.7 },
+          { header: "Sessions", width: 0.8, align: "right" },
+          { header: "Model change since first counted session (95 % range), or measured values", width: 3.6 },
+        ],
+        extras.flatMap(({ def, series }) =>
+          series.filter((s) => s.counted > 0).map((s) => [
+            def.title,
+            s.side === "card" ? "—" : sideLabel(s.side),
+            String(s.counted),
+            s.spec?.band === false
+              ? `no model band; measured ${measured(s, def.format, def.unit)}`
+              : s.fit
+                ? changeText(s.fit, (v) => `${def.format(v)}${def.changeUnit}`)
+                : `needs at least 2 counted sessions; measured ${measured(s, def.format, def.unit)}`,
+          ]),
+        ),
+      );
+    }
   }
 
   layout.heading("Notes");
   for (const note of REPORT_NOTES) layout.paragraph(note, { size: 8.5, color: COLORS.muted });
   layout.paragraph("Sessions that were started but recorded no set are left out.", { size: 8.5, color: COLORS.muted });
+  layout.paragraph(
+    `Trend model ${TREND_MODEL.version}: a Gaussian-process model of each side's session results that learned how much ` +
+      "results normally vary between sessions. Sessions with fewer than 3 repetitions on a side are not counted, " +
+      "and holds are compared as time in the target band relative to the prescribed hold.",
+    { size: 8.5, color: COLORS.muted },
+  );
   return layout.finish();
 }
 

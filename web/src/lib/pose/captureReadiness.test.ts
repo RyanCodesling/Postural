@@ -143,5 +143,46 @@ test("overhead and lateral ceilings are untouched by the default change", () => 
   assert(okAt(0.90, "lateral"), "lateral must still accept 0.90");
 });
 
+console.log("\ncaptureReadiness - side-bend (lateral) knee and hip gate\n");
+
+// A live side-bend session (2026-10-02) lost frames and bends because the knee
+// visibility score fell below 0.5 at the bottom of deep bends while both knees
+// stayed inside the picture and unobstructed.
+test("lateral mode accepts in-frame knees whose visibility score drops", () => {
+  const landmarks = readyLandmarks();
+  landmarks[25].visibility = 0.3;
+  landmarks[26].visibility = 0.2;
+  const result = evaluateCaptureReadiness(landmarks, 1280, 720, "lateral", "both");
+  assert(result.ok, `expected ok, got ${result.status}`);
+});
+
+test("lateral mode still rejects a knee outside the picture", () => {
+  const landmarks = readyLandmarks();
+  landmarks[26] = { x: 0.58, y: 1.04, visibility: 0.9 };
+  const result = evaluateCaptureReadiness(landmarks, 1280, 720, "lateral", "both");
+  assert(!result.ok && result.status === "KNEES_NOT_VISIBLE", `expected KNEES_NOT_VISIBLE, got ${result.status}`);
+});
+
+test("lateral mode rejects poorly detected or clipped hips", () => {
+  const faint = readyLandmarks();
+  faint[23].visibility = 0.3;
+  const a = evaluateCaptureReadiness(faint, 1280, 720, "lateral", "both");
+  assert(!a.ok && a.status === "HIPS_NOT_VISIBLE", `expected HIPS_NOT_VISIBLE, got ${a.status}`);
+  const clipped = readyLandmarks();
+  clipped[24] = { x: 1.02, y: 0.6, visibility: 0.9 };
+  const b = evaluateCaptureReadiness(clipped, 1280, 720, "lateral", "both");
+  assert(!b.ok && b.status === "HIPS_NOT_VISIBLE", `expected HIPS_NOT_VISIBLE, got ${b.status}`);
+});
+
+test("default and overhead modes keep the knee visibility requirement", () => {
+  for (const mode of ["default", "overhead"] as const) {
+    const landmarks = readyLandmarks();
+    landmarks[25].visibility = 0.3;
+    if (mode === "overhead") landmarks[0] = { x: 0.5, y: 0.3, visibility: 1 };
+    const result = evaluateCaptureReadiness(landmarks, 1280, 720, mode, "both");
+    assert(!result.ok && result.status === "KNEES_NOT_VISIBLE", `${mode}: expected KNEES_NOT_VISIBLE, got ${result.status}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exitCode = 1;

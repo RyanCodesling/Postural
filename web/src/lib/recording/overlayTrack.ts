@@ -13,8 +13,13 @@ export type OverlayFrame = {
   t: number;
   /** x, y of each pose landmark, normalized to the frame (3 decimals). */
   lm: number[];
-  /** The compensation cue drawn on this frame, if any. */
-  cue?: { metric: MetricName; direction: string | null };
+  /**
+   * The compensation cue drawn on this frame, if any. `shoulder` is the
+   * shoulder landmark (11 or 12) a LOWER arrow was locked to live; tracks saved
+   * before it existed lack it, and playback then picks the higher shoulder each
+   * frame, as the live drawing did when they were saved.
+   */
+  cue?: { metric: MetricName; direction: string | null; shoulder?: 11 | 12 };
 };
 
 // MediaPipe Pose's 33-landmark skeleton, as the live camera draws it.
@@ -94,16 +99,16 @@ export function drawOverlayFrame(ctx: CanvasRenderingContext2D, frame: OverlayFr
   }
   ctx.restore();
   if (frame.cue) {
-    const { metric, direction } = frame.cue;
-    // The recorded cue was on screen, so it is drawn as active; only its name
-    // and direction matter to the drawing.
+    const { metric, direction, shoulder } = frame.cue;
+    // The recorded cue was on screen, so it is drawn as active; only its name,
+    // direction and locked shoulder matter to the drawing.
     drawCompensationOverlay(
       ctx, landmarks, width, height,
       [{ name: metric } as CompensationMetricSpec],
       { [metric]: 0 },
       direction ? { [metric]: direction } : {},
       new Set([metric]),
-      { mirroredDisplay: false },
+      { mirroredDisplay: false, shoulderElevatedIndex: shoulder === 11 || shoulder === 12 ? shoulder : undefined },
     );
   }
 }

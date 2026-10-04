@@ -7,7 +7,7 @@
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import TrendChart from "./TrendChart";
+import TrendChart, { axisTicks } from "./TrendChart";
 import { primaryPointDetail, repPointDetail, type TrendSession } from "./ExerciseTrends";
 
 let passed = 0;
@@ -57,6 +57,43 @@ test("two series share one target per session and fall back to their values", ()
   }));
   assert((html.match(/data-point="/g) ?? []).length === 2, "one target per session, not per dot");
   assert(html.includes("<title>Day 2\nLeft: 11\nRight: 11</title>"), "both sides listed with value fallback");
+});
+
+test("a model band is drawn behind its series, and a skipped session gets no dot", () => {
+  const html = renderToStaticMarkup(createElement(TrendChart, {
+    series: [{
+      label: "Left", color: "#2563eb", values: [90, null, 94],
+      band: { mean: [90.5, null, 93.5], low: [88, null, 91], high: [93, null, 96] },
+    }],
+    pointTitles: ["Day 1", "Day 2", "Day 3"],
+  }));
+  assert(html.includes('data-band="Left"') && html.includes("<polygon"), "band polygon drawn");
+  assert((html.match(/<circle/g) ?? []).length === 2, "no dot for the skipped session");
+  assert((html.match(/data-point="/g) ?? []).length === 3, "every session keeps a hover target");
+  assert(html.includes("<title>Day 2</title>"), "the skipped session lists no value");
+});
+
+test("value-axis ticks sit at round steps inside the plotted range", () => {
+  assert(axisTicks(57, 104).values.join(",") === "60,80,100", JSON.stringify(axisTicks(57, 104)));
+  const seconds = axisTicks(0.45, 0.82);
+  assert(seconds.values.join(",") === "0.6,0.8" && seconds.decimals === 1, JSON.stringify(seconds));
+  const drift = axisTicks(-0.11, 1.6);
+  assert(drift.values.length >= 2 && drift.values.every((v) => v >= -0.11 && v <= 1.6), JSON.stringify(drift));
+  const reps = axisTicks(0, 1, 3, 1);
+  assert(reps.values.join(",") === "0,1" && reps.decimals === 0, `counts get whole-number ticks: ${JSON.stringify(reps)}`);
+});
+
+test("the chart draws axis values, the first and last dates, and the selected session", () => {
+  const html = renderToStaticMarkup(createElement(TrendChart, {
+    series: [{ label: "Left", color: "#2563eb", values: [80, 90, 100] }],
+    pointTitles: ["Day 1", "Day 2", "Day 3"],
+    pointDates: ["Sep 7", "Sep 12", "Sep 26"],
+    selected: 1,
+    onSelect: () => {},
+  }));
+  assert((html.match(/data-tick="/g) ?? []).length === 3, "value ticks 80, 90, 100");
+  assert(html.includes(">Sep 7<") && html.includes(">Sep 26<") && !html.includes(">Sep 12<"), "first and last dates only");
+  assert(html.includes('data-selected="1"'), "selected session marked");
 });
 
 test("primary-point details: angle, normalized and hold metrics", () => {

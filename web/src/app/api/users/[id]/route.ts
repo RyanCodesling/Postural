@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   PermanentUserDeletionError,
+  UserClinicalFieldsUnavailableError,
   archiveUser,
   createNotification,
   deleteUser,
@@ -144,6 +145,9 @@ export async function PUT(
     return NextResponse.json({ user: updated });
   } catch (error) {
     console.error("PUT /api/users/[id] error:", error);
+    if (error instanceof UserClinicalFieldsUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "clinical_fields_unavailable" }, { status: 409 });
+    }
     return NextResponse.json({ error: "Failed to update user" }, { status: 500 });
   }
 }

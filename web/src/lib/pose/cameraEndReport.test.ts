@@ -13,11 +13,13 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { cameraDeclarations, transpile } from "../../../scripts/lib/cameraReplayHarness";
+import { buildCaptureQualitySummary } from "../sessionReadModels";
 
 const ref = (current: any) => ({ current });
 
 function harness(options: { sessionId: number | null; rowOk?: boolean; drained?: boolean }) {
   const offered: Array<number | null> = [];
+  const bodies: any[] = [];
   let stoppedRecording = 0;
   let releaseDrain: () => void = () => {};
   const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
@@ -30,11 +32,17 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
     reportSessionIdRef: ref(null),
     captureFramesTotalRef: ref(100),
     captureFramesOkRef: ref(90),
+    captureRejectedByStatusRef: ref({ KNEES_NOT_VISIBLE: 8, NOT_VISIBLE: 2 }),
+    captureDropoutResetsRef: ref(1),
+    buildCaptureQualitySummary,
     resetSessionPersistence: () => {},
     stopSessionRecording: () => { stoppedRecording += 1; },
     flushRawFrames: () => {},
     setLastSessionId: (id: number | null) => offered.push(id),
-    fetch: async () => ({ ok: options.rowOk ?? true, status: options.rowOk === false ? 500 : 200 }),
+    fetch: async (_url: string, init?: { body?: string }) => {
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      return { ok: options.rowOk ?? true, status: options.rowOk === false ? 500 : 200 };
+    },
     eventOutboxRef: ref({
       drain: async () => { await drainGate; return { drained: options.drained ?? true }; },
       clearStorage: () => {},
@@ -42,7 +50,7 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
   });
   vm.runInContext(transpile(cameraDeclarations(["SESSION_END_DRAIN_TIMEOUT_MS", "endSessionPersistence"]) +
     "\nglobalThis.end = endSessionPersistence;"), context);
-  return { context, offered, releaseDrain, recordingStops: () => stoppedRecording, end: () => context.end(false, "user") as Promise<string> };
+  return { context, offered, bodies, releaseDrain, recordingStops: () => stoppedRecording, end: () => context.end(false, "user") as Promise<string> };
 }
 
 async function run() {
@@ -56,6 +64,10 @@ async function run() {
     assert.equal(await ending, "saved");
     assert.deepEqual(h.offered, [null, 218], "a fully saved session gets its report");
     assert.equal(h.recordingStops(), 1, "ending the session ends its video recording");
+    assert.deepEqual(h.bodies[0]?.captureQualitySummary, {
+      framesTotal: 100, framesOk: 90, pctOk: 90,
+      rejectedFramesByStatus: { KNEES_NOT_VISIBLE: 8, NOT_VISIBLE: 2 }, sustainedDropoutResets: 1,
+    }, "the end request saves why frames were rejected and the dropout resets");
     console.log("  ✓ saved: the report is offered after the save completes");
   }
 

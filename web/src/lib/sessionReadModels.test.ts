@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseCaptureQualitySummary, summarizeDeviceInfo } from "./sessionReadModels";
+import { buildCaptureQualitySummary, parseCaptureQualitySummary, summarizeDeviceInfo } from "./sessionReadModels";
 
 let passed = 0;
 let failed = 0;
@@ -44,6 +44,27 @@ test("capture summary accepts the persisted numeric shape", () => {
   const parsed = parseCaptureQualitySummary({ framesTotal: 300, framesOk: 276, pctOk: 92 });
   assert(parsed?.pctOk === 92, "expected 92% capture quality");
   assert(parsed?.framesOk === 276, "expected valid frame count");
+});
+
+test("capture summary saves and reads back why frames were rejected", () => {
+  const saved = buildCaptureQualitySummary({
+    total: 300, ok: 270, rejectedByStatus: { KNEES_NOT_VISIBLE: 26, NOT_VISIBLE: 4 }, dropoutResets: 2,
+  });
+  const parsed = parseCaptureQualitySummary(JSON.parse(JSON.stringify(saved)));
+  assert(parsed?.pctOk === 90, "expected 90% capture quality");
+  assert(parsed?.rejectedFramesByStatus?.KNEES_NOT_VISIBLE === 26, "expected the knee rejections");
+  assert(parsed?.rejectedFramesByStatus?.NOT_VISIBLE === 4, "expected the no-person frames");
+  assert(parsed?.sustainedDropoutResets === 2, "expected the dropout resets");
+  assert(buildCaptureQualitySummary({ total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0 }) === undefined,
+    "no active frame, no summary");
+  const older = parseCaptureQualitySummary({ framesTotal: 300, framesOk: 276, pctOk: 92 });
+  assert(older !== null && older.rejectedFramesByStatus === undefined && older.sustainedDropoutResets === undefined,
+    "older summaries read as before");
+  const inconsistent = parseCaptureQualitySummary({
+    framesTotal: 10, framesOk: 8, pctOk: 80, rejectedFramesByStatus: { KNEES_NOT_VISIBLE: 5 },
+  });
+  assert(inconsistent?.pctOk === 80 && inconsistent.rejectedFramesByStatus === undefined,
+    "more rejected frames than frames not OK drops only the detail");
 });
 
 test("capture summary rejects inconsistent frame counts", () => {

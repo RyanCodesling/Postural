@@ -64,6 +64,7 @@ const context: any = vm.createContext({
   priorRepOutcomesRef: ref({ left: [], right: [] }),
   repLogRef: ref({ left: twelve(), right: twelve() }),
   captureFramesTotalRef: ref(1000), captureFramesOkRef: ref(950),
+  captureRejectedByStatusRef: ref({ KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }), captureDropoutResetsRef: ref(2),
   recordingWantedRef: ref(false),
 });
 vm.runInContext(transpile(cameraDeclarations([
@@ -86,7 +87,8 @@ test("a snapshot written after a completed set restores its sets, reps and captu
   assert.equal(progress.repOutcomes.right.length, 12);
   assert.deepEqual(progress.repOutcomes.left[0], { peakValue: 70, classification: "partial" });
   assert.equal(progress.repOutcomes.left.filter((o: any) => o.classification === "complete").length, 11);
-  assert.deepEqual(progress.captureFrames, { total: 1000, ok: 950 });
+  assert.deepEqual(progress.captureFrames,
+    { total: 1000, ok: 950, rejectedByStatus: { KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }, dropoutResets: 2 });
 });
 
 test("a second disruption keeps the restored outcomes plus the new ones", () => {
@@ -107,7 +109,11 @@ test("an older snapshot without the new fields restores nothing", () => {
     currentSetReps: { left: 0, right: 0 }, pairedHoldMs: 0, elapsedMs: 40_000, globalRepIndex: 24, rawFrameIndex: 0,
     updatedAtWallMs: Date.now() };
   const progress = plain(api.restoredSessionProgress(old));
-  assert.deepEqual(progress, { setsLog: [], repOutcomes: { left: [], right: [] }, captureFrames: { total: 0, ok: 0 } });
+  assert.deepEqual(progress, { setsLog: [], repOutcomes: { left: [], right: [] },
+    captureFrames: { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0 } });
+  // A snapshot from before the rejection reasons keeps its tally, with none.
+  const tallyOnly = plain(api.restoredSessionProgress({ ...old, captureFrames: { total: 5, ok: 4 } }));
+  assert.deepEqual(tallyOnly.captureFrames, { total: 5, ok: 4, rejectedByStatus: {}, dropoutResets: 0 });
 });
 
 test("malformed fields are dropped rather than restored", () => {
@@ -119,7 +125,7 @@ test("malformed fields are dropped rather than restored", () => {
   const progress = plain(api.restoredSessionProgress(bad));
   assert.deepEqual(progress.setsLog, [setRecord]);
   assert.deepEqual(progress.repOutcomes, { left: [{ peakValue: 88, classification: "partial" }], right: [] });
-  assert.deepEqual(progress.captureFrames, { total: 0, ok: 0 }, "ok cannot exceed total");
+  assert.deepEqual(progress.captureFrames, { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0 }, "ok cannot exceed total");
 });
 
 test("whole-attempt outcomes list restored ones before this page's", () => {

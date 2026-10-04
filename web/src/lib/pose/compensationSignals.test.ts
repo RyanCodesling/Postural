@@ -75,4 +75,44 @@ assert(
   "below-direction selection did not choose the lower value",
 );
 
+// At rest (primary below the repetition start threshold) a coupled warning has
+// no value; during the movement it does; a static metric is unaffected.
+assert(
+  singleCompensationWarningSignal(coupled, 0.09, 3, { restBelow: 5 }).value === null,
+  "coupled warning must be absent at rest",
+);
+assert(
+  Math.abs(singleCompensationWarningSignal(coupled, 0.09, 90, { restBelow: 5 }).value ?? 1) < 1e-9,
+  "coupled warning must be present during the movement",
+);
+const staticSpec: CompensationMetricSpec = { name: "trunkLean", warningThreshold: 5 };
+assert(
+  singleCompensationWarningSignal(staticSpec, 7, 0, { restBelow: 5 }).value === 7,
+  "a static metric is unaffected at rest",
+);
+
+// Per limb: a resting limb gives no coupled value, so the moving limb is shown.
+const oneArmUp = perLimbCompensationWarningSignal(coupled, "both", {
+  leftValue: 0.3,
+  leftPrimary: 2,
+  rightValue: 0.14,
+  rightPrimary: 90,
+}, { restBelow: 20 });
+assert(
+  oneArmUp.side === "right" && Math.abs((oneArmUp.value ?? 0) - 0.05) < 1e-9,
+  "a resting limb must not be selected",
+);
+
+// One-sided worst side: the larger signed excess wins over a larger deficit.
+const signed = perLimbCompensationWarningSignal(coupled, "both", {
+  leftValue: 0.02,
+  leftPrimary: 90,
+  rightValue: 0.14,
+  rightPrimary: 90,
+});
+assert(
+  signed.side === "right" && Math.abs((signed.value ?? 0) - 0.05) < 1e-9,
+  "a deficit on one limb must not mask an excess on the other",
+);
+
 console.log("compensationSignals tests passed");

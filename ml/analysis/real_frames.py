@@ -11,8 +11,8 @@ under data/real/<exercise_id>/):
 Output: a DataFrame with the same columns as the synthetic frames parquet —
     session_id, subject_id, label, set_index, side, rep_index, frame,
     primary, <one column per compensation metric>
-so `features.extract.extract_rep_features` and `baselines.banded_deduction` /
-`compensation_score_frames` run on real data unchanged.
+Timestamped observations are for descriptive analysis. ML extraction requires
+the explicit resampling and compatibility gate in analysis.prepare_real.
 
 Mapping notes (mirrors the live camera loop / scoring semantics):
   - per-limb exercises (ex_001/ex_007/ex_008, isometric ex_006): TWO rows per
@@ -141,7 +141,7 @@ def _f(v) -> float:
 
 
 def _assign_rep_index(
-    captured: pd.Series, reps: list[dict], side: str | None
+    captured: pd.Series, reps: list[dict], side: str | None, sets=None
 ) -> pd.Series:
     """rep_index per frame from rep windows (NaN outside every window)."""
     out = pd.Series(np.nan, index=captured.index)
@@ -151,18 +151,23 @@ def _assign_rep_index(
         start = pd.Timestamp(rep["start_ts"])
         end = pd.Timestamp(rep["end_ts"])
         mask = (captured >= start) & (captured <= end)
+        if sets is not None:
+            mask &= pd.Series(sets, index=captured.index) == rep["set_index"]
+        if (mask & out.notna()).any():
+            raise ValueError("Overlapping repetition windows on the same side/set")
         out[mask] = rep["rep_index"]
     return out
 
 
-def _rep_side_lookup(reps: list[dict]) -> dict[int, str]:
-    return {r["rep_index"]: r["side"] for r in reps}
+def _rep_side_lookup(reps: list[dict]) -> dict[tuple[int, int], str]:
+    return {(r["set_index"], r["rep_index"]): r["side"] for r in reps}
 
 
 def real_frames(
     exercise_id: str,
     params: ExerciseParams | None = None,
     data_dir: Path | None = None,
+    session_id: int | None = None,
 ) -> pd.DataFrame:
     """All exported sessions of one exercise, in the synthetic frames schema."""
     params = params or get_exercise(exercise_id)
@@ -170,13 +175,25 @@ def real_frames(
     chunks: list[pd.DataFrame] = []
 
     for sid, frame_rows, rep_rows, _meta in load_session_files(exercise_id, data_dir):
+        if session_id is not None and sid != session_id:
+            continue
         if not frame_rows:
             continue
         captured = pd.Series(
-            pd.to_datetime([r["captured_at"] for r in frame_rows], utc=True)
+            pd.to_datetime([r["captured_at"] for r in frame_rows], utc=True, format="ISO8601")
         )
         set_index = [r["set_index"] for r in frame_rows]
         metrics = [r["metrics"] for r in frame_rows]
+        timing = {
+            "captured_at": captured,
+            "elapsed_ms": [r.get("elapsed_ms") for r in frame_rows],
+            "source_frame_index": [r.get("frame_index") for r in frame_rows],
+            "trace_kind": [r.get("trace_kind") for r in frame_rows],
+            "metric_algorithm_version": [m.get("metricAlgorithmVersion") for m in metrics],
+            "baseline_phase": [m.get("baselinePhase") for m in metrics],
+            "calibration_key": [json.dumps({"baselines": m.get("baselines"),
+                "tilt": (m.get("calibration") or {}).get("frozenCameraTiltDeg")}, sort_keys=True) for m in metrics],
+        }
 
         if params.framing == "bidirectional":
             # ex_005 — neutral-baseline-relative head lean
@@ -185,19 +202,19 @@ def real_frames(
                 for m in metrics
             ]
             df = pd.DataFrame({
+                **timing,
                 "session_id": sid,
-                "subject_id": 0,
-                "label": 0,
+                "subject_id": None,
+                "label": None,
                 "set_index": set_index,
                 "primary": primary,
             })
             for name in comp_names:
                 df[name] = [_channel_value(m, name, None) for m in metrics]
-            df["rep_index"] = _assign_rep_index(captured, rep_rows, None)
+            df["rep_index"] = _assign_rep_index(captured, rep_rows, None, set_index)
             side_of = _rep_side_lookup(rep_rows)
-            df["side"] = df["rep_index"].map(
-                lambda ri: side_of.get(int(ri)) if pd.notna(ri) else None
-            )
+            df["side"] = [side_of.get((int(si), int(ri))) if pd.notna(ri) else None
+                          for si, ri in zip(df["set_index"], df["rep_index"])]
             chunks.append(df)
         elif (
             params.kind == "isometric"
@@ -214,9 +231,10 @@ def real_frames(
                 # NaN-safe: NaN * sign is NaN, NaN > 0 is False -> stays NaN.
                 primary = [s * sign if s * sign > 0 else np.nan for s in signed]
                 df = pd.DataFrame({
+                    **timing,
                     "session_id": sid,
-                    "subject_id": 0,
-                    "label": 0,
+                    "subject_id": None,
+                    "label": None,
                     "set_index": set_index,
                     "side": side,
                     "primary": primary,
@@ -231,9 +249,10 @@ def real_frames(
             for side in ("left", "right"):
                 primary = [_f((m.get(field) or {}).get(side)) for m in metrics]
                 df = pd.DataFrame({
+                    **timing,
                     "session_id": sid,
-                    "subject_id": 0,
-                    "label": 0,
+                    "subject_id": None,
+                    "label": None,
                     "set_index": set_index,
                     "side": side,
                     "primary": primary,
@@ -244,7 +263,7 @@ def real_frames(
                     # No rep_events for isometrics: group by set instead.
                     df["rep_index"] = 1.0
                 else:
-                    df["rep_index"] = _assign_rep_index(captured, rep_rows, side)
+                    df["rep_index"] = _assign_rep_index(captured, rep_rows, side, set_index)
                 chunks.append(df)
 
     if not chunks:
@@ -254,10 +273,12 @@ def real_frames(
         )
 
     out = pd.concat(chunks, ignore_index=True)
-    # Within-rep frame counter, matching the synthetic schema's `frame` column.
+    # Fractional 30 Hz position on the observed timeline, NOT a sample count.
+    # Raw frames remain explicitly gated from ML extraction until resampled.
     grouped = out.groupby(
         ["session_id", "set_index", "side", "rep_index"], dropna=True, sort=False
     )
-    out["frame"] = grouped.cumcount()
+    first = grouped["captured_at"].transform("min")
+    out["frame"] = (out["captured_at"] - first).dt.total_seconds() * 30
     out.loc[out["rep_index"].isna(), "frame"] = np.nan
     return out

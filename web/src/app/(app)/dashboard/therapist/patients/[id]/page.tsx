@@ -658,18 +658,13 @@ export default function PatientDetailPage() {
             )}
           </div>
 
-          {/* Calibrated ML score — reserved slot, not yet integrated */}
-          <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-700">Calibrated form-quality score</p>
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-600 font-medium">
-                coming soon
-              </span>
-            </div>
-            <p className="text-2xl font-semibold text-gray-300">0–100</p>
-            <p className="text-xs text-gray-400 mt-1">
-              A calibrated machine-learning quality score will appear here once the model is
-              integrated.
+          {/* Machine-learning trend analytics: the Progress Trends below. */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <p className="text-sm font-medium text-gray-700 mb-1">Trend model</p>
+            <p className="text-xs text-gray-500">
+              The Rising / No clear change / Falling labels and shaded bands in Progress Trends come from a
+              machine-learning trend model. A label appears only when a side&apos;s change is larger than normal
+              session-to-session variation. Supplementary information, not a diagnosis.
             </p>
           </div>
         </div>

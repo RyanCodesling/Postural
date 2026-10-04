@@ -11,6 +11,9 @@
 import type { CompensationMetricSpec } from "@/lib/exercises/registry";
 import {
   COMPENSATION_WARNING_DEBOUNCE_MS,
+  compensationWarningIsOneSided,
+  cueClearLevel,
+  cueTriggerLevel,
   compensationWarningMargin,
   updateCompensationWarningLatch,
   updateCompensationWarningMap,
@@ -159,6 +162,71 @@ test("map updater returns only latched active warnings and drops stale specs", (
   active = updateCompensationWarningMap(latches, [elbowFlexion], { elbowFlexion: 90 }, 450);
   assertEq(active.has("trunkLean"), false, "stale trunk spec removed");
   assertEq(latches.has("trunkLean"), false, "stale trunk latch removed");
+});
+
+const coupledScapular: CompensationMetricSpec = {
+  name: "scapularElevation",
+  warningThreshold: 0.04,
+  scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" },
+};
+
+test("coupled residuals warn only on an excess over the expectation", () => {
+  assertEq(compensationWarningIsOneSided(coupledScapular), true, "coupled metric is one-sided");
+  assertEq(compensationWarningIsOneSided(scapularElevation), false, "static metric stays two-sided");
+  assertEq(compensationWarningIsOneSided(elbowFlexion), false, "below-direction metric unchanged");
+
+  let latch = update(undefined, coupledScapular, -0.06, 0);
+  latch = update(latch, coupledScapular, -0.06, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "a deficit beyond the threshold does not latch");
+
+  let staticLatch = update(undefined, scapularElevation, -0.06, 0);
+  staticLatch = update(staticLatch, scapularElevation, -0.06, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(staticLatch.active, true, "a static metric keeps the |value| test");
+
+  latch = update(latch, coupledScapular, 0.05, 400);
+  latch = update(latch, coupledScapular, 0.05, 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "an excess latches after the debounce");
+  latch = update(latch, coupledScapular, -0.06, 800);
+  latch = update(latch, coupledScapular, -0.06, 800 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "a swing to a deficit clears it");
+});
+
+const triggeredSymmetry: CompensationMetricSpec = {
+  name: "shoulderSymmetry",
+  warningThreshold: 5,
+  cue: { id: "t.shoulder-symmetry", message: "Level your shoulders.", priority: 30, trigger: { on: 7, off: 5 } },
+};
+
+test("a cue trigger replaces the warning line for switching on and off", () => {
+  assertEq(cueTriggerLevel(triggeredSymmetry), 7, "on level");
+  assertEq(cueTriggerLevel(trunkLean), 5, "without a trigger the warning line is used");
+
+  let latch = update(undefined, triggeredSymmetry, 6, 0);
+  latch = update(latch, triggeredSymmetry, 6, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "6 is past the warning line but below the on level");
+
+  latch = update(latch, triggeredSymmetry, 7.5, 400);
+  latch = update(latch, triggeredSymmetry, 7.5, 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "on at the trigger level");
+
+  latch = update(latch, triggeredSymmetry, 5.5, 800);
+  latch = update(latch, triggeredSymmetry, 5.5, 800 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "stays on above the off level");
+
+  latch = update(latch, triggeredSymmetry, 4.8, 1200);
+  latch = update(latch, triggeredSymmetry, 4.8, 1200 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "off at the off level");
+});
+
+test("the switch-off level is the cue's off level, else the warning line less the margin", () => {
+  assertEq(cueClearLevel(triggeredSymmetry), 5, "trigger off level");
+  assertEq(cueClearLevel(trunkLean), 5 - compensationWarningMargin("trunkLean", 5), "warning line less the margin");
+
+  let latch = update(undefined, triggeredSymmetry, 8, 0);
+  latch = update(latch, triggeredSymmetry, 8, COMPENSATION_WARNING_DEBOUNCE_MS);
+  latch = update(latch, triggeredSymmetry, cueClearLevel(triggeredSymmetry), 400);
+  latch = update(latch, triggeredSymmetry, cueClearLevel(triggeredSymmetry), 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "the latch switches off at that level");
 });
 
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);

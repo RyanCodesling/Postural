@@ -167,6 +167,38 @@ export async function getUsers(filters?: { role?: string; therapistId?: string }
   return result.rows.map(mapUser);
 }
 
+const userClinicalKeys = ["diagnosis", "prescription", "condition"] as const;
+
+export class UserClinicalFieldsUnavailableError extends Error {
+  constructor() {
+    super("Clinical fields are not enabled in this database yet. Ask the database administrator to enable them, or leave Diagnosis, Condition and Prescription blank.");
+    this.name = "UserClinicalFieldsUnavailableError";
+  }
+}
+
+// Allow ordinary account maintenance before the additive clinical-field migration.
+// Never silently discard non-empty clinical information. Read capabilities on each
+// affected write so applying the migration does not require a server restart.
+async function userDataForSchema(data: Record<string, unknown>) {
+  const requested = userClinicalKeys.filter(key => key in data);
+  if (requested.length === 0) return data;
+  const { rows } = await pool.query(
+    `SELECT attname FROM pg_attribute
+     WHERE attrelid = 'users'::regclass AND attnum > 0 AND NOT attisdropped
+       AND attname = ANY($1::text[])`,
+    [requested],
+  );
+  const available = new Set(rows.map(row => String(row.attname)));
+  const writable = { ...data };
+  for (const key of requested) {
+    if (available.has(key)) continue;
+    const value = data[key];
+    if (value != null && String(value).trim() !== "") throw new UserClinicalFieldsUnavailableError();
+    delete writable[key];
+  }
+  return writable;
+}
+
 export async function createUser(data: {
   id: string;
   name: string;
@@ -185,13 +217,17 @@ export async function createUser(data: {
   prescription?: string;
   condition?: string;
 }) {
+  const writable = await userDataForSchema(data);
+  const clinicalKeys = userClinicalKeys.filter(key => key in writable);
+  const clinicalColumns = clinicalKeys.map(key => `, "${key}"`).join("");
+  const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 14}`).join("");
   const hashedPassword = hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
         role, date_of_birth, age, gender,
-          therapist_id_num, specialty, diagnosis, prescription, condition)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        therapist_id_num, specialty${clinicalColumns})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13${clinicalParameters})
      RETURNING *`,
     [
       data.id,
@@ -207,9 +243,7 @@ export async function createUser(data: {
       data.gender ?? null,
       data.therapistIDNum ?? null,
       data.specialty ?? null,
-      data.diagnosis ?? null,
-      data.prescription ?? null,
-      data.condition ?? null,
+      ...clinicalKeys.map(key => writable[key] ?? null),
     ]
   );
   return mapUser(result.rows[0]);
@@ -231,6 +265,7 @@ export async function updateUser(id: string, data: Partial<{
   prescription: string;
   condition: string;
 }>) {
+  const writable = await userDataForSchema(data);
   const fields: string[] = [];
   const params: unknown[] = [];
 
@@ -252,13 +287,13 @@ export async function updateUser(id: string, data: Partial<{
   };
 
   for (const [key, col] of Object.entries(columnMap)) {
-    if (key in data) {
-      params.push((data as Record<string, unknown>)[key]);
+    if (key in writable) {
+      params.push(writable[key]);
       fields.push(`${col} = $${params.length}`);
     }
   }
 
-  if (fields.length === 0) return null;
+  if (fields.length === 0) return userClinicalKeys.some(key => key in data) ? getUserById(id) : null;
 
   params.push(id);
   const result = await pool.query(
@@ -2043,6 +2078,24 @@ export async function getSessionsForPatient(patientId: string) {
          r.avg_left_peak_value,
          r.avg_right_peak_value,
          r.avg_dynamic_score,
+         r.avg_left_form_score,
+         r.avg_right_form_score,
+         r.left_form_reps,
+         r.right_form_reps,
+         r.avg_left_lowering_ms,
+         r.avg_right_lowering_ms,
+         r.avg_left_raising_ms,
+         r.avg_right_raising_ms,
+         r.sd_left_peak_value,
+         r.sd_right_peak_value,
+         st.avg_left_hold_sd,
+         st.avg_right_hold_sd,
+         st.avg_left_hold_error,
+         st.avg_right_hold_error,
+         st.avg_left_hold_droop,
+         st.avg_right_hold_droop,
+         st.hold_sets,
+         cx.exposure,
         st.set_count,
         st.exercise_kind,
          st.total_paired_hold_ms,
@@ -2077,7 +2130,19 @@ export async function getSessionsForPatient(patientId: string) {
                    THEN (compensations->'rawRule'->>'meanScore')::numeric
                    ELSE NULL
                  END
-               ) AS avg_dynamic_score
+               ) AS avg_dynamic_score,
+               AVG(CASE WHEN side = 'left' AND jsonb_typeof(compensations->'rawRule'->'meanScore') = 'number' AND jsonb_typeof(compensations->'rawRule'->'coveragePct') = 'number' AND (compensations->'rawRule'->>'coveragePct')::numeric >= 80
+                        THEN (compensations->'rawRule'->>'meanScore')::numeric END) AS avg_left_form_score,
+               AVG(CASE WHEN side = 'right' AND jsonb_typeof(compensations->'rawRule'->'meanScore') = 'number' AND jsonb_typeof(compensations->'rawRule'->'coveragePct') = 'number' AND (compensations->'rawRule'->>'coveragePct')::numeric >= 80
+                        THEN (compensations->'rawRule'->>'meanScore')::numeric END) AS avg_right_form_score,
+               COUNT(CASE WHEN side = 'left' AND jsonb_typeof(compensations->'rawRule'->'meanScore') = 'number' AND jsonb_typeof(compensations->'rawRule'->'coveragePct') = 'number' AND (compensations->'rawRule'->>'coveragePct')::numeric >= 80 THEN 1 END) AS left_form_reps,
+               COUNT(CASE WHEN side = 'right' AND jsonb_typeof(compensations->'rawRule'->'meanScore') = 'number' AND jsonb_typeof(compensations->'rawRule'->'coveragePct') = 'number' AND (compensations->'rawRule'->>'coveragePct')::numeric >= 80 THEN 1 END) AS right_form_reps,
+               AVG(descent_ms) FILTER (WHERE side = 'left') AS avg_left_lowering_ms,
+               AVG(descent_ms) FILTER (WHERE side = 'right') AS avg_right_lowering_ms,
+               AVG(time_to_peak_ms) FILTER (WHERE side = 'left') AS avg_left_raising_ms,
+               AVG(time_to_peak_ms) FILTER (WHERE side = 'right') AS avg_right_raising_ms,
+               STDDEV_SAMP(peak_value) FILTER (WHERE side = 'left') AS sd_left_peak_value,
+               STDDEV_SAMP(peak_value) FILTER (WHERE side = 'right') AS sd_right_peak_value
         FROM rep_events GROUP BY session_id
      ) r ON r.session_id = s.id
      LEFT JOIN (
@@ -2112,7 +2177,25 @@ export async function getSessionsForPatient(patientId: string) {
                      THEN (hold_quality->>'meanCompensationScore')::numeric
                    ELSE NULL
                  END
-               ) AS avg_compensation_score
+               ) AS avg_compensation_score,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'left'->'sdDeg') = 'number' THEN (hold_quality->'left'->>'sdDeg')::numeric END) AS avg_left_hold_sd,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'right'->'sdDeg') = 'number' THEN (hold_quality->'right'->>'sdDeg')::numeric END) AS avg_right_hold_sd,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'left'->'meanErrorDeg') = 'number' THEN ABS((hold_quality->'left'->>'meanErrorDeg')::numeric) END) AS avg_left_hold_error,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'right'->'meanErrorDeg') = 'number' THEN ABS((hold_quality->'right'->>'meanErrorDeg')::numeric) END) AS avg_right_hold_error,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'left'->'droopSlopeDegPerSec') = 'number' THEN (hold_quality->'left'->>'droopSlopeDegPerSec')::numeric END) AS avg_left_hold_droop,
+               AVG(CASE WHEN jsonb_typeof(hold_quality->'right'->'droopSlopeDegPerSec') = 'number' THEN (hold_quality->'right'->>'droopSlopeDegPerSec')::numeric END) AS avg_right_hold_droop,
+               -- Each hold set's own measurements, so the trend model applies its
+               -- per-set rule to them (trendBreakdown measureFromDetail).
+               jsonb_agg(jsonb_build_object(
+                 'setIndex', set_index,
+                 'targetHoldMs', target_hold_ms,
+                 'holdQuality', jsonb_build_object(
+                   'leftInBandMs', hold_quality->'leftInBandMs',
+                   'rightInBandMs', hold_quality->'rightInBandMs',
+                   'meanCompensationScore', hold_quality->'meanCompensationScore',
+                   'left', hold_quality->'left',
+                   'right', hold_quality->'right')
+               ) ORDER BY set_index) FILTER (WHERE exercise_kind = 'isometric') AS hold_sets
         FROM set_events
         WHERE (hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
         GROUP BY session_id
@@ -2124,6 +2207,25 @@ export async function getSessionsForPatient(patientId: string) {
         ORDER BY sr.created_at DESC, sr.id DESC
         LIMIT 1
      ) review ON TRUE
+     LEFT JOIN LATERAL (
+       -- Trend model extra measures: per-side share of repetition time over each scored
+       -- compensation's threshold, from the raw repetition features.
+       SELECT jsonb_object_agg(x.metric, jsonb_build_object(
+                'left', x.left_avg, 'right', x.right_avg, 'leftN', x.left_n, 'rightN', x.right_n)) AS exposure
+         FROM (
+           SELECT c.key AS metric,
+                  AVG(CASE WHEN re.side = 'left' AND jsonb_typeof(c.value->'overThresholdFrac') = 'number' THEN (c.value->>'overThresholdFrac')::numeric END) AS left_avg,
+                  AVG(CASE WHEN re.side = 'right' AND jsonb_typeof(c.value->'overThresholdFrac') = 'number' THEN (c.value->>'overThresholdFrac')::numeric END) AS right_avg,
+                  COUNT(CASE WHEN re.side = 'left' AND jsonb_typeof(c.value->'overThresholdFrac') = 'number' THEN 1 END) AS left_n,
+                  COUNT(CASE WHEN re.side = 'right' AND jsonb_typeof(c.value->'overThresholdFrac') = 'number' THEN 1 END) AS right_n
+             FROM rep_events re
+             CROSS JOIN LATERAL jsonb_each(
+               CASE WHEN jsonb_typeof(re.compensations->'rawFeatures'->'compensations') = 'object'
+                    THEN re.compensations->'rawFeatures'->'compensations' ELSE '{}'::jsonb END) AS c
+            WHERE re.session_id = s.id
+            GROUP BY c.key
+         ) x
+     ) cx ON TRUE
      WHERE s.patient_id = $1
      ORDER BY s.started_at DESC`,
     [patientId]
@@ -2183,6 +2285,26 @@ export async function getSessionsForPatient(patientId: string) {
       avgPeakValue:      row.avg_peak_value != null ? Number(row.avg_peak_value) : null,
       avgLeftPeakValue:  row.avg_left_peak_value != null ? Number(row.avg_left_peak_value) : null,
       avgRightPeakValue: row.avg_right_peak_value != null ? Number(row.avg_right_peak_value) : null,
+      // Rule form score per side, from repetitions with >= 80 % score coverage (trend model input).
+      avgLeftFormScore:  row.avg_left_form_score != null ? Number(row.avg_left_form_score) : null,
+      avgRightFormScore: row.avg_right_form_score != null ? Number(row.avg_right_form_score) : null,
+      leftFormReps:      row.left_form_reps != null ? Number(row.left_form_reps) : 0,
+      rightFormReps:     row.right_form_reps != null ? Number(row.right_form_reps) : 0,
+      // Trend model extra measures (per side): lowering/raising time, peak spread, holds.
+      avgLeftLoweringMs:  row.avg_left_lowering_ms != null ? Number(row.avg_left_lowering_ms) : null,
+      avgRightLoweringMs: row.avg_right_lowering_ms != null ? Number(row.avg_right_lowering_ms) : null,
+      avgLeftRaisingMs:   row.avg_left_raising_ms != null ? Number(row.avg_left_raising_ms) : null,
+      avgRightRaisingMs:  row.avg_right_raising_ms != null ? Number(row.avg_right_raising_ms) : null,
+      sdLeftPeakValue:    row.sd_left_peak_value != null ? Number(row.sd_left_peak_value) : null,
+      sdRightPeakValue:   row.sd_right_peak_value != null ? Number(row.sd_right_peak_value) : null,
+      avgLeftHoldSd:      row.avg_left_hold_sd != null ? Number(row.avg_left_hold_sd) : null,
+      avgRightHoldSd:     row.avg_right_hold_sd != null ? Number(row.avg_right_hold_sd) : null,
+      avgLeftHoldError:   row.avg_left_hold_error != null ? Number(row.avg_left_hold_error) : null,
+      avgRightHoldError:  row.avg_right_hold_error != null ? Number(row.avg_right_hold_error) : null,
+      avgLeftHoldDroop:   row.avg_left_hold_droop != null ? Number(row.avg_left_hold_droop) : null,
+      avgRightHoldDroop:  row.avg_right_hold_droop != null ? Number(row.avg_right_hold_droop) : null,
+      holdSets:          Array.isArray(row.hold_sets) ? row.hold_sets : null,
+      exposure: (row.exposure as Record<string, { left: number | null; right: number | null; leftN: number; rightN: number }> | null) ?? null,
       totalPairedHoldMs: row.total_paired_hold_ms != null ? Number(row.total_paired_hold_ms) : null,
       totalTargetHoldMs: row.total_target_hold_ms != null ? Number(row.total_target_hold_ms) : null,
       totalLeftHoldMs:   row.total_left_hold_ms != null ? Number(row.total_left_hold_ms) : null,

@@ -68,9 +68,29 @@ export type DynamicRepQualityV2 = Omit<DynamicRepQualityV1, "version"> & {
   metricAlgorithmVersion: typeof POSE_METRIC_ALGORITHM_VERSION;
 };
 
+export type RawRepFeaturesV2 = Omit<NonNullable<DynamicRepQualityV1["rawFeatures"]>,
+  "featureDefinition" | "negLogDimensionlessJerk" | "submovementCount" |
+  "shapeP25" | "shapeP50" | "shapeP75"> & {
+  featureDefinition: "ml.features.extract.rep-v2";
+  targetSampleCount: number;
+  temporalStatus: "complete" | "gapped" | "insufficient-motion";
+  negLogDimensionlessJerk: number | null;
+  submovementCount: number | null;
+  shapeP25: number | null;
+  shapeP50: number | null;
+  shapeP75: number | null;
+};
+
+/** Corrected time/amplitude normalization; gaps never become adjacent samples. */
+export type DynamicRepQualityV3 = Omit<DynamicRepQualityV2, "version" | "rawFeatures"> & {
+  version: 3;
+  rawFeatures: RawRepFeaturesV2 | null;
+};
+
 export type DynamicRepQuality =
   | DynamicRepQualityV1
-  | DynamicRepQualityV2;
+  | DynamicRepQualityV2
+  | DynamicRepQualityV3;
 
 export type RepQualityChannel = "left" | "right" | "single";
 
@@ -182,8 +202,8 @@ function smoothness(primary: number[]): {
   submovementCount: number;
 } {
   const n = primary.length;
-  const durationSec = n / RESAMPLE_HZ;
-  const peakAbs = Math.max(...primary.map((value) => Math.abs(value)), 0) || 1;
+  const durationSec = (n - 1) / RESAMPLE_HZ;
+  const amplitude = Math.max(...primary) - Math.min(...primary);
 
   let jerk = diff(diff(diff(primary)));
   if (jerk.length === 0) jerk = [0];
@@ -192,7 +212,7 @@ function smoothness(primary: number[]): {
     jerk.reduce((sum, value) => sum + (value * jerkScale) ** 2, 0) /
     RESAMPLE_HZ;
   const dimensionlessJerk =
-    (durationSec ** 3 / peakAbs ** 2) * integralJerkSq + 1e-9;
+    (durationSec ** 5 / amplitude ** 2) * integralJerkSq + 1e-9;
   const negLogDimensionlessJerk = -Math.log(dimensionlessJerk);
 
   const speed = diff(movingAverageSame(primary, 5)).map(
@@ -219,7 +239,7 @@ function resample(
   select: (sample: DynamicRepQualitySample) => number | null | undefined,
 ): ResampledValues {
   const durationMs = Math.max(0, endMs - startMs);
-  const targetCount = Math.max(1, Math.floor(durationMs / RESAMPLE_STEP_MS) + 1);
+  const targetCount = Math.max(1, Math.floor(durationMs / RESAMPLE_STEP_MS + 1e-9) + 1);
   const targets = Array.from(
     { length: targetCount },
     (_, index) => startMs + index * RESAMPLE_STEP_MS,
@@ -230,7 +250,7 @@ function resample(
   for (const target of targets) {
     while (
       rightIndex < samples.length &&
-      samples[rightIndex].tMs < target
+      samples[rightIndex].tMs < target - 1e-6
     ) {
       rightIndex += 1;
     }
@@ -296,7 +316,7 @@ function summarizeRawFeatures(
   samples: DynamicRepQualitySample[],
   event: RepEvent,
   scoredCompensations: CompensationMetricSpec[],
-): DynamicRepQualityV1["rawFeatures"] {
+): DynamicRepQualityV3["rawFeatures"] {
   const primaryResampled = resample(
     samples,
     event.startTimeMs,
@@ -305,6 +325,11 @@ function summarizeRawFeatures(
   );
   const primary = primaryResampled.values;
   if (primary.length === 0) return null;
+  const temporalStatus: RawRepFeaturesV2["temporalStatus"] =
+    primary.length !== primaryResampled.targetCount ? "gapped" :
+    primary.length < 4 || Math.max(...primary) - Math.min(...primary) <= 1e-9
+      ? "insufficient-motion" : "complete";
+  const temporalValid = temporalStatus === "complete";
 
   const coveragePct = roundTo(
     clampPct((primary.length / primaryResampled.targetCount) * 100),
@@ -324,7 +349,7 @@ function summarizeRawFeatures(
     Math.floor(fraction * (primary.length - 1));
   const shapeValue = (fraction: number): number =>
     peakValue === 0 ? 0 : primary[shapeIndex(fraction)] / peakValue;
-  const smooth = smoothness(primary);
+  const smooth = temporalValid ? smoothness(primary) : null;
 
   const compensations: NonNullable<
     DynamicRepQualityV1["rawFeatures"]
@@ -360,29 +385,28 @@ function summarizeRawFeatures(
   return {
     source: "raw-unsmoothed",
     boundarySource: "smoothed-rep-counter",
-    featureDefinition: "ml.features.extract.rep-v1",
+    featureDefinition: "ml.features.extract.rep-v2",
+    targetSampleCount: primaryResampled.targetCount,
+    temporalStatus,
     resampledHz: RESAMPLE_HZ,
     sampleCount: samples.length,
     resampledSampleCount: primary.length,
     coveragePct,
     scoredCompensationNames: scoredCompensations.map((spec) => spec.name),
     mlEligible:
-      coveragePct >= MIN_ML_COVERAGE_PCT &&
+      temporalValid && coveragePct >= MIN_ML_COVERAGE_PCT &&
       primary.length >= 4 &&
       scoredCompensations.every(
         (spec) =>
           compensations[spec.name] !== undefined &&
           compensations[spec.name]!.coveragePct >= MIN_ML_COVERAGE_PCT,
       ),
-    tempoRatio: tempoRatio === null ? null : roundTo(tempoRatio, 6),
-    negLogDimensionlessJerk: roundTo(
-      smooth.negLogDimensionlessJerk,
-      6,
-    ),
-    submovementCount: smooth.submovementCount,
-    shapeP25: roundTo(shapeValue(0.25), 6),
-    shapeP50: roundTo(shapeValue(0.5), 6),
-    shapeP75: roundTo(shapeValue(0.75), 6),
+    tempoRatio: !temporalValid || tempoRatio === null ? null : roundTo(tempoRatio, 6),
+    negLogDimensionlessJerk: smooth === null ? null : roundTo(smooth.negLogDimensionlessJerk, 6),
+    submovementCount: smooth?.submovementCount ?? null,
+    shapeP25: temporalValid ? roundTo(shapeValue(0.25), 6) : null,
+    shapeP50: temporalValid ? roundTo(shapeValue(0.5), 6) : null,
+    shapeP75: temporalValid ? roundTo(shapeValue(0.75), 6) : null,
     compensations,
   };
 }
@@ -422,7 +446,7 @@ export class DynamicRepQualityBuffer {
     channel: RepQualityChannel,
     event: RepEvent,
     scoredCompensations: CompensationMetricSpec[],
-  ): DynamicRepQualityV2 {
+  ): DynamicRepQualityV3 {
     const channelSamples = this.byChannel[channel];
     const samples = channelSamples.filter(
       (sample) =>
@@ -432,7 +456,7 @@ export class DynamicRepQualityBuffer {
       (sample) => sample.tMs > event.endTimeMs,
     );
     return {
-      version: 2,
+      version: 3,
       metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION,
       liveRule: summarizeRuleScore(
         samples,
@@ -503,10 +527,12 @@ function isDynamicRepQualityBody(value: unknown): value is Record<string, unknow
   if (value.rawFeatures === null) return true;
   const raw = value.rawFeatures;
   if (!isRecord(raw)) return false;
+  const v3 = value.version === 3;
+  const temporalMissing = v3 && raw.temporalStatus !== "complete";
   if (
     raw.source !== "raw-unsmoothed" ||
     raw.boundarySource !== "smoothed-rep-counter" ||
-    raw.featureDefinition !== "ml.features.extract.rep-v1" ||
+    raw.featureDefinition !== (v3 ? "ml.features.extract.rep-v2" : "ml.features.extract.rep-v1") ||
     raw.resampledHz !== RESAMPLE_HZ ||
     !Number.isInteger(raw.sampleCount) ||
     !inRange(raw.sampleCount, 0, Number.MAX_SAFE_INTEGER) ||
@@ -516,15 +542,22 @@ function isDynamicRepQualityBody(value: unknown): value is Record<string, unknow
     !Array.isArray(raw.scoredCompensationNames) ||
     typeof raw.mlEligible !== "boolean" ||
     !(raw.tempoRatio === null || isFiniteNumber(raw.tempoRatio)) ||
-    !isFiniteNumber(raw.negLogDimensionlessJerk) ||
-    !Number.isInteger(raw.submovementCount) ||
-    !inRange(raw.submovementCount, 0, Number.MAX_SAFE_INTEGER) ||
-    !isFiniteNumber(raw.shapeP25) ||
-    !isFiniteNumber(raw.shapeP50) ||
-    !isFiniteNumber(raw.shapeP75) ||
+    (temporalMissing ? raw.negLogDimensionlessJerk !== null : !isFiniteNumber(raw.negLogDimensionlessJerk)) ||
+    (temporalMissing ? raw.submovementCount !== null :
+      !Number.isInteger(raw.submovementCount) || !inRange(raw.submovementCount, 0, Number.MAX_SAFE_INTEGER)) ||
+    [raw.shapeP25, raw.shapeP50, raw.shapeP75].some(v => temporalMissing ? v !== null : !isFiniteNumber(v)) ||
     !isRecord(raw.compensations)
   ) {
     return false;
+  }
+  if (v3) {
+    if (!Number.isInteger(raw.targetSampleCount) || !inRange(raw.targetSampleCount, 1, Number.MAX_SAFE_INTEGER) ||
+      raw.resampledSampleCount > raw.targetSampleCount ||
+      !["complete", "gapped", "insufficient-motion"].includes(String(raw.temporalStatus)) ||
+      (raw.temporalStatus === "gapped") !== (raw.resampledSampleCount < raw.targetSampleCount) ||
+      (raw.temporalStatus === "complete" && raw.resampledSampleCount < 4) ||
+      (temporalMissing && raw.tempoRatio !== null) ||
+      raw.coveragePct !== roundTo(100 * raw.resampledSampleCount / raw.targetSampleCount, 1)) return false;
   }
   const compensationRecord = raw.compensations as Record<string, unknown>;
   if (raw.scoredCompensationNames.length > 32) return false;
@@ -546,7 +579,7 @@ function isDynamicRepQualityBody(value: unknown): value is Record<string, unknow
   });
   if (
     raw.mlEligible !==
-    (raw.coveragePct >= MIN_ML_COVERAGE_PCT &&
+    (!temporalMissing && raw.coveragePct >= MIN_ML_COVERAGE_PCT &&
       raw.resampledSampleCount >= 4 &&
       expectedChannelsReady)
   ) {
@@ -596,5 +629,10 @@ export function isDynamicRepQualityV2(
 export function isDynamicRepQuality(
   value: unknown,
 ): value is DynamicRepQuality {
-  return isDynamicRepQualityV1(value) || isDynamicRepQualityV2(value);
+  return isDynamicRepQualityV1(value) || isDynamicRepQualityV2(value) || isDynamicRepQualityV3(value);
+}
+
+export function isDynamicRepQualityV3(value: unknown): value is DynamicRepQualityV3 {
+  return isRecord(value) && value.version === 3 &&
+    value.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION && isDynamicRepQualityBody(value);
 }

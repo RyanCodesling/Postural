@@ -10,6 +10,7 @@ export type ReadinessStatus =
   | "NOT_VISIBLE"
   | "HANDS_NOT_VISIBLE"
   | "KNEES_NOT_VISIBLE"
+  | "HIPS_NOT_VISIBLE"
   | "HEAD_NOT_POSITIONED";
 
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -159,6 +160,16 @@ const HEAD_X_CENTER = 0.5;
 const KNEE_VIS_MIN = 0.5;
 
 /**
+ * HIP VISIBILITY THRESHOLD (lateral mode)
+ *
+ * In lateral mode (side bends) the hips are checked directly, because the knee
+ * visibility score proved unreliable there (see Gate 4). 0.5 matches the
+ * landmark rule the side-bend metric itself applies (`MIN_VIS` in
+ * poseMetrics.ts).
+ */
+const HIP_VIS_MIN = 0.5;
+
+/**
  * WRIST VISIBILITY THRESHOLD
  *
  * Kept from the previous implementation. Wrist visibility ensures the full
@@ -295,12 +306,22 @@ export function evaluateCaptureReadiness(
    *
    * We check inFrame01 here because a landmark can have reasonable visibility
    * score even when it's being extrapolated just outside the frame boundary.
+   *
+   * LATERAL MODE (side bends), changed 2026-10-02: the knees must still lie
+   * inside the picture, but their visibility score is not required. At the
+   * bottom of a deep side bend MediaPipe's knee visibility falls below 0.5
+   * although both knees are plainly visible: a live side-bend session lost 342
+   * frames (12.8 s) and 12 bends that way, with the knees at about 80% of the
+   * frame height and no hand over them. What this gate protects, the hips in
+   * frame and well detected, is checked directly below instead.
    */
   const leftKnee  = landmarks[25];
   const rightKnee = landmarks[26];
+  const kneeSeen = (knee: LM | undefined) =>
+    !!knee && inFrame01(knee) && (isLateral || vis(knee) >= KNEE_VIS_MIN);
 
-  const leftKneeOk  = !!leftKnee  && inFrame01(leftKnee)  && vis(leftKnee)  >= KNEE_VIS_MIN;
-  const rightKneeOk = !!rightKnee && inFrame01(rightKnee) && vis(rightKnee) >= KNEE_VIS_MIN;
+  const leftKneeOk  = kneeSeen(leftKnee);
+  const rightKneeOk = kneeSeen(rightKnee);
 
   if (!leftKneeOk || !rightKneeOk) {
     const msg = !leftKneeOk && !rightKneeOk
@@ -320,6 +341,29 @@ export function evaluateCaptureReadiness(
         vis(rightKnee ?? { x: 0, y: 0 })
       ),
     };
+  }
+
+  // ── Gate 4b: hip visibility (lateral mode only) ─────────────────────────
+  // Replaces the knee visibility score in lateral mode (see Gate 4): the side
+  // bend's metric runs from the hip midpoint, so both hips must be inside the
+  // picture and well detected.
+  if (isLateral) {
+    const leftHip  = landmarks[23];
+    const rightHip = landmarks[24];
+    const hipSeen = (hip: LM | undefined) => !!hip && inFrame01(hip) && vis(hip) >= HIP_VIS_MIN;
+    if (!hipSeen(leftHip) || !hipSeen(rightHip)) {
+      return {
+        ok: false,
+        status: "HIPS_NOT_VISIBLE",
+        message: "Step back so your hips and knees are in the picture.",
+        target,
+        person,
+        score01: Math.min(
+          vis(leftHip  ?? { x: 0, y: 0 }),
+          vis(rightHip ?? { x: 0, y: 0 })
+        ),
+      };
+    }
   }
 
   // ── Gate 5: wrist visibility (SKIPPED in overhead/lateral modes) ─────────

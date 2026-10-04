@@ -1,10 +1,10 @@
-import type { ExerciseDefinition } from "@/lib/exercises/registry";
+import { coachingWarningSpecs, type ExerciseDefinition } from "@/lib/exercises/registry";
 import { resolveCoachingCue, resolveCoachingCueTiming } from "./coachingCue";
 import { COMPENSATION_WARNING_DEBOUNCE_MS } from "./compensationWarningState";
 import { OVERLAY_LABELS, OVERLAY_DIRECTION_LABELS } from "./drawCompensationOverlay";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v1";
+export const COACHING_ALGORITHM_VERSION = "coaching_v9_cue_review_fixes";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {
@@ -17,10 +17,15 @@ export function coachingConfiguration(definition: ExerciseDefinition) {
     messageRendered: false,
     labels: OVERLAY_LABELS,
     directionLabels: OVERLAY_DIRECTION_LABELS,
-    cues: definition.compensationMetrics.map((spec) => {
+    cues: coachingWarningSpecs(definition).map((spec) => {
       const cue = resolveCoachingCue(spec);
       return { metric: spec.name, ...cue, ...resolveCoachingCueTiming(cue) };
     }),
+    // Display-only checks are outside the measurement version, so their
+    // thresholds and settings are fingerprinted here.
+    checks: (definition.kind === "dynamic" ? definition.coachingChecks ?? [] : []).map((check) => ({
+      metric: check.name, warningThreshold: check.warningThreshold, ...check.check,
+    })),
   };
 }
 
@@ -40,7 +45,13 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
     !!c.directionLabels && typeof c.directionLabels.shoulderSymmetry === "string" && typeof c.directionLabels.straighten === "string" &&
     Array.isArray(c.cues) && c.cues.length <= 20 && c.cues.every(q => !!q &&
       typeof q.metric === "string" && typeof q.id === "string" && typeof q.message === "string" && q.message.length <= 500 &&
-      [q.priority, q.minActiveMs, q.minDisplayMs, q.cooldownMs].every(n => Number.isFinite(n) && n >= 0));
+      [q.priority, q.minActiveMs, q.minDisplayMs, q.cooldownMs].every(n => Number.isFinite(n) && n >= 0) &&
+      // Absent from configurations recorded before the minimum visible time.
+      (q.minVisibleMs === undefined || Number.isFinite(q.minVisibleMs) && q.minVisibleMs >= 0)) &&
+    // Absent from configurations recorded before display-only checks.
+    (c.checks === undefined || Array.isArray(c.checks) && c.checks.length <= 20 && c.checks.every(k => !!k &&
+      typeof k.metric === "string" && typeof k.mode === "string" &&
+      [k.warningThreshold, k.stanceMs, k.from, k.persistMs].every(n => Number.isFinite(n) && n >= 0)));
 }
 
 /** Same canonical serialization as the server's measurement fingerprint. */

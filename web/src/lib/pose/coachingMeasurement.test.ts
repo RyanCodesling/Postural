@@ -14,6 +14,7 @@ import * as readModels from "../sessionReadModels";
 import { getExerciseDefinition, EXERCISE_REGISTRY } from "../exercises/registry";
 import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
 import { RepCounter } from "./repCounter";
+import { COACHING_CUE_MIN_VISIBLE_MS } from "./coachingCue";
 import { BidirectionalRepCounter } from "./bidirectionalRepCounter";
 import { validCoachingAudit, CoachingAuditBuffer, MAX_COACHING_RECORDS } from "./coachingAudit";
 import * as hold from "./holdQuality";
@@ -81,9 +82,15 @@ async function run() {
   }
   assert.equal(replay.emitted.filter(r => r.side === "left").length, 1);
   assert.equal(replay.emitted.filter(r => r.side === "right").length, 0);
-  assert(isDynamicRepQuality(replay.emitted[0].compensations), "actual rep writer retains V2 raw/live/features contract");
+  assert(isDynamicRepQuality(replay.emitted[0].compensations), "actual rep writer retains versioned raw/live/features contract");
+  assert.equal(replay.emitted[0].compensations.version, 3);
   assert(replay.emitted[0].compensations.rawFeatures);
+  // Coupled cues are off at rest: the same head-toward-shoulder change raises
+  // no cue with the arm down, and does once the arm is raised past the start.
+  const atRestFrom = replay.frames.length;
   for (let i = 0; i < 30; i++) replay.tick({ tMs: now += 100, landmarks: pose(0, 0, 0.07), baselines: baseline });
+  assert(replay.frames.slice(atRestFrom).every(f => !f.renderedTexts.includes("Shoulder / head position")), "no coupled cue at rest");
+  for (let i = 0; i < 30; i++) replay.tick({ tMs: now += 100, landmarks: pose(30, 0, 0.07), baselines: baseline });
   assert(replay.frames.some(f => f.renderedTexts.includes("Shoulder / head position")), "actual renderer records the label");
   assert(replay.frames.every(f => !f.renderedTexts.includes("Relax your shoulders down.")), "declared sentence stays unrendered");
   const countBefore = replay.emitted.length;
@@ -92,10 +99,134 @@ async function run() {
   assert.equal(replay.emitted.length, countBefore);
   assert.equal(replay.context.leftRepCounterRef.current.getState(), "WAITING_FOR_REP_START");
   assert.equal(replay.context.calibrationStaleRef.current, true);
+  // The capture summary counts the no-person frames and the one dropout
+  // reset that discarded the movement in progress.
+  assert.equal(replay.context.captureRejectedByStatusRef.current.NOT_VISIBLE, 2, "no-person frames counted");
+  assert.equal(replay.context.captureDropoutResetsRef.current, 1, "one sustained-dropout reset counted");
+  const rejecting = createCameraReplay(definition, provenance);
+  rejecting.tick({ tMs: 1000, landmarks: pose(0, 0), baselines: baseline, accepted: false });
+  assert.equal(rejecting.context.captureRejectedByStatusRef.current.LOW_CONFIDENCE, 1, "a rejected frame is counted by its status");
+  assert.equal(rejecting.context.captureFramesOkRef.current, 0);
   const set = replay.close();
   assert(hold.validSetMeasurement(set.holdQuality, "dynamic"));
   assert(set.holdQuality.coaching.records.some((r: any) => r.absenceReason === "capture-unavailable" && r.rendered.length === 0));
   assert(!JSON.stringify(set.holdQuality).includes('"corrected"'));
+
+  // Review fixes, 2026-10-02, through the actual camera loop.
+  // (1) A shrug flag held when capture drops does not come back: a clean
+  // re-entry with the arms already raised draws no shoulder/head cue.
+  const interrupted = createCameraReplay(definition, provenance);
+  now = 950;
+  for (let i = 0; i < 24; i++) interrupted.tick({ tMs: now += 50, landmarks: pose(30, 30, 0.07), baselines: baseline });
+  assert((interrupted.context.repWindowStatesRef.current.get("scapularElevation")?.left.heldValue ?? 0) > 0.04, "the shrug is flagged");
+  interrupted.tick({ tMs: now += 50, noPerson: true });
+  interrupted.tick({ tMs: now += 400, noPerson: true });
+  assert.equal(interrupted.context.repWindowStatesRef.current.size, 0, "the dropout reset clears the per-repetition state");
+  const reentry: any[] = [];
+  for (let i = 0; i < 30; i++) reentry.push(interrupted.tick({ tMs: now += 50, landmarks: pose(90), baselines: baseline }));
+  assert(reentry.every(f => !f.renderedTexts.includes("Shoulder / head position")), "no stale cue after re-entry");
+  // (2) A cue whose reading goes at rest stays drawn for its minimum visible time.
+  const brief = createCameraReplay(definition, provenance);
+  now = 950;
+  for (const angle of [...Array(8).fill(30), ...Array(4).fill(90), ...Array(24).fill(0)]) {
+    brief.tick({ tMs: now += 50, landmarks: pose(angle, angle, angle ? 0.07 : 0), baselines: baseline });
+  }
+  const shown = brief.frames.filter(f => f.renderedTexts.includes("Shoulder / head position"));
+  assert(shown.length > 0, "the shrug cue is drawn");
+  assert(shown.at(-1)!.tMs - shown[0].tMs + 50 >= COACHING_CUE_MIN_VISIBLE_MS, "drawn for at least the minimum visible time");
+  assert(brief.frames.every(f => f.selected?.reason !== "held-min-visible" || f.renderedTexts.length > 0), "every held frame is drawn");
+  // (3) The saved video's track records the shoulder the LOWER arrow is drawn
+  // on. Cue review, 2026-10-03: the arrow keeps its shoulder through a small
+  // reversal and moves once the other shoulder reads above the switch-off level.
+  const holdDefinition = getExerciseDefinition("ex_006")!;
+  const holdProvenance = await config.captureCoachingProvenance(holdDefinition);
+  const video = createCameraReplay(holdDefinition, holdProvenance);
+  const saved: any[] = [];
+  video.context.recorderRef.current = { addOverlayFrame: () => { const frame = { t: 0, lm: [] }; saved.push(frame); return frame; } };
+  const firstHigher = pose(90); firstHigher[11].y = 0.31; firstHigher[12].y = 0.39;
+  now = 950;
+  for (let i = 0; i < 28; i++) video.tick({ tMs: now += 50, landmarks: firstHigher, baselines: baseline });
+  assert.equal(video.context.lockedShoulderIndexRef.current, 11, "LOWER is locked to landmark 11");
+  const slightlyOther = pose(90); slightlyOther[11].y = 0.355; slightlyOther[12].y = 0.345;
+  video.tick({ tMs: now += 50, landmarks: slightlyOther, baselines: baseline });
+  assert.deepEqual(plain(saved.at(-1).cue), { metric: "shoulderSymmetry", direction: "right", shoulder: 11 },
+    "a small reversal keeps the arrow on its shoulder");
+  const otherHigher = pose(90); otherHigher[11].y = 0.39; otherHigher[12].y = 0.31;
+  video.tick({ tMs: now += 50, landmarks: otherHigher, baselines: baseline });
+  assert.deepEqual(plain(saved.at(-1).cue), { metric: "shoulderSymmetry", direction: "left", shoulder: 12 },
+    "a clear reversal moves the arrow, and the track records the shoulder drawn");
+
+  // (4) The trunk-lean arrow follows the lean on a two-arm exercise. Before the
+  // cue review the per-limb warning's arm side ("left" when both limbs read the
+  // same) replaced the lean direction, so a lean to the image's right was
+  // drawn as a lean to the left.
+  for (const [shift, lean] of [[0.06, "right"], [-0.06, "left"]] as const) {
+    const leaning = createCameraReplay(holdDefinition, holdProvenance);
+    const track: any[] = [];
+    leaning.context.recorderRef.current = { addOverlayFrame: () => { const frame = { t: 0, lm: [] }; track.push(frame); return frame; } };
+    const leaned = pose(90);
+    for (const i of [7, 8, 11, 12, 13, 14, 15, 16]) leaned[i].x += shift;
+    now = 950;
+    for (let i = 0; i < 30; i++) leaning.tick({ tMs: now += 50, landmarks: leaned, baselines: baseline });
+    const drawn = track.filter(f => f.cue?.metric === "trunkLean");
+    assert(drawn.length > 0, `the trunk-lean cue is drawn for a ${lean} lean`);
+    assert(drawn.every(f => f.cue.direction === lean), `the arrow uses the ${lean} lean, not an arm side`);
+    // Upright again while the cue is still held: it keeps its last direction,
+    // so its label does not switch to the plain "Trunk lean".
+    const heldFrom = track.length;
+    for (let i = 0; i < 6; i++) leaning.tick({ tMs: now += 50, landmarks: pose(90), baselines: baseline });
+    const held = track.slice(heldFrom).filter(f => f.cue?.metric === "trunkLean");
+    assert(held.length > 0, "the cue is still held after straightening");
+    assert(held.every(f => f.cue.direction === lean), "a held cue keeps its last direction");
+    assert(leaning.frames.slice(-6).every(f => !f.renderedTexts.includes("Trunk lean")), "its label does not switch while held");
+  }
+
+  // (5) Neck side bends judge LOWER once per bend. A shoulder line that turns
+  // with the head for part of a bend of about 1 s shows LOWER; the continuous
+  // judgement it replaced, which needs about 0.9 s past the line, did not;
+  // still shoulders show nothing.
+  const neckDefinition = getExerciseDefinition("ex_004")!;
+  const neckPose = (headDeg: number, shoulderDeg: number) => {
+    const lm = pose(0);
+    const earDrop = 0.2 * Math.tan(headDeg * Math.PI / 180);
+    lm[7].y = 0.23 + earDrop / 2; lm[8].y = 0.23 - earDrop / 2;
+    const shoulderDrop = 0.2 * Math.tan(shoulderDeg * Math.PI / 180);
+    lm[11].y = 0.35 + shoulderDrop / 2; lm[12].y = 0.35 - shoulderDrop / 2;
+    return lm;
+  };
+  const bendProfile = [0, 6, 12, 18, 24, 30, 34, 36, 36, 36, 34, 30, 24, 18, 12, 6, 0];
+  const neckBend = async (definition: typeof neckDefinition, turn: boolean) => {
+    const neck = createCameraReplay(definition, await config.captureCoachingProvenance(definition));
+    now = 950;
+    for (let i = 0; i < 10; i++) neck.tick({ tMs: now += 60, landmarks: neckPose(0, 0) });
+    let flagged = false;
+    for (const head of bendProfile) {
+      neck.tick({ tMs: now += 60, landmarks: neckPose(head, turn && head >= 18 ? 10 : 0) });
+      flagged ||= (neck.context.repWindowStatesRef.current.get("shoulderSymmetry")?.left.heldValue ?? 0) >= 7;
+    }
+    for (let i = 0; i < 20; i++) neck.tick({ tMs: now += 60, landmarks: neckPose(0, 0) });
+    return { neck, flagged };
+  };
+  const turned = await neckBend(neckDefinition, true);
+  assert.equal(turned.neck.emitted.filter(r => r.side === "left").length, 1, "the bend is counted");
+  assert(turned.flagged, "the bend is flagged for LOWER");
+  assert(turned.neck.frames.some(f => f.renderedTexts.includes("LOWER")), "LOWER is drawn for the bend");
+  const continuousNeck = structuredClone(neckDefinition);
+  for (const comp of continuousNeck.compensationMetrics) {
+    if (comp.cue) { delete comp.cue.evaluation; delete comp.cue.minActiveMs; delete comp.cue.cooldownMs; }
+  }
+  const continuousTurned = await neckBend(continuousNeck, true);
+  assert(continuousTurned.neck.frames.every(f => !f.renderedTexts.includes("LOWER")), "the continuous judgement missed the bend");
+  const still = await neckBend(neckDefinition, false);
+  assert(!still.flagged && still.neck.frames.every(f => !f.renderedTexts.includes("LOWER")), "still shoulders show no LOWER");
+
+  // (6) LOWER is hidden on lateral arm raises: still evaluated, never drawn.
+  const raise = createCameraReplay(definition, provenance);
+  const tiltedRaise = pose(90); tiltedRaise[11].y = 0.31; tiltedRaise[12].y = 0.39;
+  now = 950;
+  for (let i = 0; i < 30; i++) raise.tick({ tMs: now += 50, landmarks: tiltedRaise, baselines: baseline });
+  assert.equal(raise.context.compensationWarningLatchesRef.current.get("shoulderSymmetry")?.active, true, "the warning is still evaluated");
+  assert(raise.frames.every(f => !f.renderedTexts.includes("LOWER")), "LOWER is never drawn on arm raises");
   const noCredit = createCameraReplay(definition, provenance);
   noCredit.tick({ tMs: 1000, noPerson: true });
   noCredit.end();

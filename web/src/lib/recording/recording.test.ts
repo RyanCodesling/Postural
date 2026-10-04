@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import stream from "node:stream";
 import vm from "node:vm";
-import { transpile } from "../../../scripts/lib/cameraReplayHarness";
+import { cameraDeclarations, transpile } from "../../../scripts/lib/cameraReplayHarness";
 import { getExerciseDefinition } from "../exercises/registry";
 import { captureCoachingProvenance } from "../pose/coachingConfig";
 import { CoachingAuditBuffer } from "../pose/coachingAudit";
@@ -169,6 +169,28 @@ async function run() {
     drawCueLabel(old.ctx, 'Trunk lean: "STRAIGHTEN"', 1280);
     assert.deepEqual(old.calls.find(([name]) => name === "fillText")![1].slice(0, 2), ['Trunk lean: "STRAIGHTEN"', 640],
       "older videos show the cue label, centred");
+  });
+
+  await test("a saved LOWER cue is redrawn on the shoulder it was locked to; older tracks draw as before", () => {
+    // The live arrow was locked to landmark 11, but landmark 12 is now higher.
+    const landmarks = standing().map((p, i) => (i === 11 ? { ...p, y: 0.39 } : i === 12 ? { ...p, y: 0.31 } : p));
+    const lm = encodeLandmarks(landmarks);
+    const rounded = Array.from({ length: 33 }, (_, i) => ({ x: lm[2 * i], y: lm[2 * i + 1], z: 0, visibility: 1 }));
+    const lowerAt = (canvas: ReturnType<typeof fakeCanvas>) =>
+      canvas.calls.find(([name, args]) => name === "fillText" && args[0] === "LOWER")![1].slice(1, 3);
+    const drawLive = (shoulderElevatedIndex?: 11 | 12) => {
+      const canvas = fakeCanvas();
+      drawCompensationOverlay(canvas.ctx, rounded, 1280, 720, [{ name: "shoulderSymmetry", warningThreshold: 5 }],
+        { shoulderSymmetry: 8 }, {}, new Set(["shoulderSymmetry"] as const), { mirroredDisplay: false, shoulderElevatedIndex });
+      return canvas;
+    };
+    const saved = fakeCanvas();
+    drawOverlayFrame(saved.ctx, { t: 0, lm, cue: { metric: "shoulderSymmetry", direction: "right", shoulder: 11 } }, 1280, 720);
+    assert.deepEqual(lowerAt(saved), lowerAt(drawLive(11)), "playback places LOWER where it was drawn live");
+    const older = fakeCanvas();
+    drawOverlayFrame(older.ctx, { t: 0, lm, cue: { metric: "shoulderSymmetry", direction: "left" } }, 1280, 720);
+    assert.deepEqual(lowerAt(older), lowerAt(drawLive()), "a track without the shoulder picks the higher one, as before");
+    assert.notDeepEqual(lowerAt(saved), lowerAt(older), "the two cases differ in this pose");
   });
 
   await test("overlay tracks are stored per part in order and read back", async () => {
@@ -427,6 +449,20 @@ async function run() {
     assert.deepEqual(finishes, [{ action: "finish", part: 3, endWallMs: 1_000, complete: false, overlayComplete: false }],
       "the late part is closed as incomplete");
     assert(!states.includes("recording"), "never reports recording after Stop");
+  });
+
+  await test("Resume anchors the page clock before the resumed part starts recording", () => {
+    // After a reload the clock anchors are 0 until Resume sets them, and the
+    // recorder reads the time through perfToIso. Starting it first stored the
+    // resumed part's start as milliseconds since page load (live check,
+    // 2026-10-02: startWallMs 20134), so playback could not place that part.
+    const resume = cameraDeclarations(["resumeSession"]);
+    const anchor = resume.indexOf("sessionWallStartMsRef.current = Date.now()");
+    const record = resume.indexOf("startSessionRecording(snap.sessionId)");
+    assert(anchor >= 0 && record >= 0, "both steps are present in resumeSession");
+    assert(anchor < record, "the wall-clock anchor is set before the recorder starts");
+    assert(resume.indexOf("sessionPerfStartMsRef.current = performance.now()") < record,
+      "the performance-clock anchor is set before the recorder starts");
   });
 
   await test("the recorder sends the overlay track with each video chunk and at the end", async () => {

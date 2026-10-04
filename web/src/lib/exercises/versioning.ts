@@ -8,6 +8,7 @@ import {
 } from "./registry";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import { coachingConfiguration } from "@/lib/pose/coachingConfig";
+import { SCALAR_PRECISION_VERSION } from "@/lib/pose/metricPrecision";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -58,6 +59,10 @@ export function effectiveCompensationBands(
  *
  * Coaching configuration is fingerprinted separately and stored in session
  * context and set audit records. It never participates in trend grouping.
+ *
+ * Display-only coaching checks (`coachingChecks`, added 2026-10-02) are
+ * removed for the same reason: they drive cues only, and are never scored or
+ * stored as measurements.
  */
 function measurementDefinition(definition: ExerciseDefinition): ExerciseDefinition {
   const compensationMetrics = definition.compensationMetrics.map((metric) => {
@@ -67,9 +72,12 @@ function measurementDefinition(definition: ExerciseDefinition): ExerciseDefiniti
     return withoutCue;
   });
   // `ExerciseDefinition` is a dynamic/isometric union, and spreading it widens
-  // past the discriminant. Only `compensationMetrics` is replaced, and each
-  // element keeps its own type, so the shape is unchanged.
-  return { ...definition, compensationMetrics } as ExerciseDefinition;
+  // past the discriminant. Only `compensationMetrics` is replaced and
+  // `coachingChecks` dropped, and each element keeps its own type, so the
+  // shape is otherwise unchanged.
+  const measurement = { ...definition, compensationMetrics } as ExerciseDefinition;
+  if (measurement.kind === "dynamic") delete measurement.coachingChecks;
+  return measurement;
 }
 
 export function exerciseVersionPayload(definition: ExerciseDefinition) {
@@ -77,6 +85,11 @@ export function exerciseVersionPayload(definition: ExerciseDefinition) {
     definition: measurementDefinition(definition),
     effectiveCompensationBands: effectiveCompensationBands(definition),
     poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION,
+    // Only the scalar path's normalized compensation changed. Per-limb
+    // compensations already used three decimals; keep their history grouped.
+    ...(definition.bilateralMode !== "per-limb" && definition.compensationMetrics.some(
+      metric => metric.name === "scapularElevation",
+    ) ? { scalarPrecision: SCALAR_PRECISION_VERSION } : {}),
   };
 }
 

@@ -30,12 +30,11 @@
  *   2. every direct metric caller, including the trace-metrics builder and the
  *      baseline/scapular-delta helpers, or traces will mix corrected and
  *      uncorrected channels in one record;
- *   3. the source frame width/height into the persisted trace, which is not
- *      recorded today and without which past sessions cannot be reprocessed;
+ *   3. the source frame width/height from the persisted trace (V4 records it;
+ *      older traces need independently established dimensions);
  *   4. the four `primary-coupled` scoring fits, which regress a compensation on
  *      a primary that the correction changes;
  *   5. this identifier.
  */
 export const POSE_METRIC_ALGORITHM_VERSION =
   "pose_metrics_v2_frozen_neutral_tilt" as const;
-

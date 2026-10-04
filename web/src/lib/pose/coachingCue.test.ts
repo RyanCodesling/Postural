@@ -15,6 +15,7 @@ import {
   COACHING_CUE_COOLDOWN_MS,
   COACHING_CUE_MIN_ACTIVE_MS,
   COACHING_CUE_MIN_DISPLAY_MS,
+  COACHING_CUE_MIN_VISIBLE_MS,
   coachingCueExcess,
   newCoachingCueState,
   normalizedCoachingCueExcess,
@@ -85,6 +86,8 @@ const elbowFlexion: CompensationMetricSpec = {
     minActiveMs: 100,
     minDisplayMs: 200,
     cooldownMs: 400,
+    // Short-window fixture: the minimum visible time is tested separately.
+    minVisibleMs: 0,
   },
 };
 
@@ -379,7 +382,8 @@ test("a cue that clears enters cooldown and cannot immediately return", () => {
   );
   assertEq(promoted.decision.cueId, "t.trunk-lean", "setup");
 
-  const clearedAt = COACHING_CUE_MIN_ACTIVE_MS + 100;
+  // Shown for its minimum visible time, so the drop releases it at once.
+  const clearedAt = COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_VISIBLE_MS;
   const cleared = tick(promoted.state, specs, active(), { trunkLean: 2 }, clearedAt);
   assertEq(cleared.decision.cueId, null, "released as soon as the latch drops");
   assertEq(cleared.decision.reason, "cleared", "reason");
@@ -420,9 +424,9 @@ test("a cue in cooldown yields the slot to a lower-priority cue that is ready", 
     COACHING_CUE_MIN_ACTIVE_MS,
   );
 
-  // Trunk clears; scapular has been latched all along, so it is already past
-  // its own min-active window and takes the slot on the same tick.
-  const clearedAt = COACHING_CUE_MIN_ACTIVE_MS + 50;
+  // Trunk clears after its minimum visible time; scapular has been latched all
+  // along, so it is already past its own min-active window and takes the slot.
+  const clearedAt = COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_VISIBLE_MS + 50;
   let s = promoted.state;
   s = tick(s, specs, active("trunkLean", "scapularElevation"), { trunkLean: 9, scapularElevation: 0.06 }, clearedAt - 25).state;
   const handover = hold(
@@ -488,6 +492,8 @@ test("a cooldown override LONGER than the default survives inactive ticks", () =
       priority: 10,
       minActiveMs: 50,
       cooldownMs: COACHING_CUE_COOLDOWN_MS + 2000,
+      // Cleared 50 ms after promotion; this test is about cooldown pruning.
+      minVisibleMs: 0,
     },
   };
   const specs = [longCooldown];
@@ -529,7 +535,8 @@ test("a cooldown override LONGER than the default survives inactive ticks", () =
 
 // ── Clear reset ─────────────────────────────────────────────────────────────
 
-test("a resolved cue is released at once rather than held for its display window", () => {
+test("a resolved cue is released after its minimum visible time, not held for its display window", () => {
+  assertEq(COACHING_CUE_MIN_VISIBLE_MS < COACHING_CUE_MIN_DISPLAY_MS, true, "visible window is the shorter one");
   const specs = [trunkLean];
   const promoted = hold(
     newCoachingCueState(),
@@ -539,8 +546,8 @@ test("a resolved cue is released at once rather than held for its display window
     0,
     COACHING_CUE_MIN_ACTIVE_MS,
   );
-  // One millisecond into the display window, far short of minDisplayMs.
-  const cleared = tick(promoted.state, specs, active(), { trunkLean: 1 }, COACHING_CUE_MIN_ACTIVE_MS + 1);
+  // Past the minimum visible time but still inside the minimum-display window.
+  const cleared = tick(promoted.state, specs, active(), { trunkLean: 1 }, COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_VISIBLE_MS);
   assertEq(cleared.decision.cueId, null, "not held on a corrected compensation");
   assertEq(cleared.decision.state.currentCueId, null, "slot is empty in the successor state");
   assertEq(cleared.decision.displayedForMs, null, "no display clock while empty");
@@ -582,6 +589,88 @@ test("no latched warnings yields no cue and no candidates", () => {
 
   const noSpecs = tick(newCoachingCueState(), [], active("trunkLean"), { trunkLean: 9 }, 1_000);
   assertEq(noSpecs.decision.reason, "none-active", "an exercise with no compensations is quiet");
+});
+
+// ── Hidden cues and coupled residuals ───────────────────────────────────────
+
+const hiddenTrunkLean: CompensationMetricSpec = {
+  ...trunkLean,
+  cue: { ...trunkLean.cue!, hidden: { reason: "fixture: failed replay", since: "2026-10-01" } },
+};
+
+const coupledScapular: CompensationMetricSpec = {
+  ...scapularElevation,
+  scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" },
+};
+
+test("a hidden cue never takes the slot, even alone and long latched", () => {
+  const alone = hold(
+    newCoachingCueState(),
+    [hiddenTrunkLean],
+    active("trunkLean"),
+    { trunkLean: 9 },
+    0,
+    COACHING_CUE_MIN_ACTIVE_MS * 4,
+  );
+  assertEq(alone.decision.cueId, null, "no cue");
+  assertEq(alone.decision.reason, "none-active", "hidden latch is not a candidate");
+  assertEq(alone.decision.candidates.length, 0, "no candidates");
+});
+
+test("a hidden higher-priority cue does not block a visible lower-priority cue", () => {
+  const both = hold(
+    newCoachingCueState(),
+    [hiddenTrunkLean, scapularElevation],
+    active("trunkLean", "scapularElevation"),
+    { trunkLean: 9, scapularElevation: 0.06 },
+    0,
+    COACHING_CUE_MIN_ACTIVE_MS + 150,
+  );
+  assertEq(both.decision.cueId, "t.scapular-elevation", "the visible cue is promoted");
+  assertEq(both.decision.metric, "scapularElevation", "its metric is the one highlighted");
+});
+
+test("a coupled residual's excess counts only above the expectation", () => {
+  assertClose(coachingCueExcess(coupledScapular, 0.07), 0.03, "excess over the expectation");
+  assertClose(coachingCueExcess(coupledScapular, -0.07), 0, "a deficit is no excess");
+  assertClose(coachingCueExcess(scapularElevation, -0.07), 0.03, "a static metric keeps |value|");
+});
+
+// ── Minimum visible time and cue triggers ───────────────────────────────────
+
+test("a cue whose warning clears early stays visible for its minimum visible time", () => {
+  const shown = hold(newCoachingCueState(), [trunkLean], active("trunkLean"), { trunkLean: 9 }, 0, COACHING_CUE_MIN_ACTIVE_MS);
+  assertEq(shown.decision.cueId, "t.trunk-lean", "promoted");
+  const since = shown.state.currentSinceMs!;
+
+  const early = tick(shown.state, [trunkLean], active(), { trunkLean: 1 }, since + 200);
+  assertEq(early.decision.cueId, "t.trunk-lean", "still shown 200 ms after appearing");
+  assertEq(early.decision.reason, "held-min-visible", "held so it can be read");
+  assertEq(early.decision.metric, "trunkLean", "its metric is still reported");
+  assertEq(early.decision.clearedCueId, null, "not cleared yet");
+
+  const later = tick(early.state, [trunkLean], active(), { trunkLean: 1 }, since + COACHING_CUE_MIN_VISIBLE_MS);
+  assertEq(later.decision.cueId, null, "released once the minimum visible time has passed");
+  assertEq(later.decision.clearedCueId, "t.trunk-lean", "cleared then");
+  assertEq(later.state.clearedAtMs.get("t.trunk-lean"), since + COACHING_CUE_MIN_VISIBLE_MS, "cooldown starts at release");
+});
+
+test("a cue shown longer than the minimum visible time is released at once", () => {
+  const until = COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_VISIBLE_MS + 300;
+  const shown = hold(newCoachingCueState(), [trunkLean], active("trunkLean"), { trunkLean: 9 }, 0, until);
+  const cleared = tick(shown.state, [trunkLean], active(), { trunkLean: 1 }, until + 150);
+  assertEq(cleared.decision.cueId, null, "released");
+  assertEq(cleared.decision.reason, "cleared", "reason");
+});
+
+test("a cue trigger sets the switch-on level used for ordering", () => {
+  const triggered: CompensationMetricSpec = {
+    ...shoulderSymmetry,
+    cue: { ...shoulderSymmetry.cue!, trigger: { on: 7, off: 5 } },
+  };
+  assertClose(coachingCueExcess(triggered, 9), 2, "excess over the on level");
+  assertClose(coachingCueExcess(triggered, 6), 0, "below the on level there is no excess");
+  assertClose(normalizedCoachingCueExcess(triggered, 9), 2 / 7, "normalized by the on level");
 });
 
 test("the input state is not mutated", () => {

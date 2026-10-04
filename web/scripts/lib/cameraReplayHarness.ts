@@ -80,7 +80,10 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
     drawCutoutOverlay: noop,
     // Stored traces omit knees/nose, so readiness cannot be recomputed for
     // historical accepted rows. Synthetic cases can explicitly reject frames.
-    evaluateCaptureReadiness: () => ({ ok: accepted, message: accepted ? "Captured" : "fixture capture interruption" }),
+    // A rejected fixture frame reports LOW_CONFIDENCE, so the capture summary
+    // has a status to count it under.
+    evaluateCaptureReadiness: () => ({ ok: accepted, status: accepted ? "OK" : "LOW_CONFIDENCE",
+      message: accepted ? "Captured" : "fixture capture interruption" }),
     inferEx004FaceShadow: () => null, recordEx004FaceShadow: noop,
     pushEx005DebugRecord: noop, bufferTuningRawFrame: noop, writeTraceSyncReadout: noop,
     updateNeutralCalibrationProgress: noop, finalizeNeutralCalibration: noop,
@@ -109,14 +112,15 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
     showCompletionRecapAfterReportRef: ref(false), terminalOccurrenceAfterReportRef: ref(null),
   };
   const refGroups: [any, string[]][] = [
-    [0, ["fpsFrameCount", "fpsWindowStartMs", "perfSampleCount", "inferMsSum", "frameMsSum", "stableOkSince", "lastBadCaptureAt", "captureFramesTotal", "captureFramesOk", "lastEx005DebugMs", "lastMetricsUpdate", "leftHoldMs", "rightHoldMs", "pairedHoldMs", "neckRepDebugSeq"]],
+    [0, ["fpsFrameCount", "fpsWindowStartMs", "perfSampleCount", "inferMsSum", "frameMsSum", "stableOkSince", "lastBadCaptureAt", "captureFramesTotal", "captureFramesOk", "lastEx005DebugMs", "lastMetricsUpdate", "leftHoldMs", "rightHoldMs", "pairedHoldMs", "neckRepDebugSeq", "captureDropoutResets"]],
     [false, ["captureDropoutResetDone", "leftInBand", "rightInBand", "coachingShadowEnabled", "coachingShadowStaffAllowed", "traceSyncWroteThisFrame", "calibrationStale"]],
-    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder"]],
+    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder", "lockedShoulderIndex", "lastDrawnCue"]],
   ];
   for (const [initial, names] of refGroups) for (const name of names) context[`${name}Ref`] = ref(initial);
-  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals"]) context[`${name}Ref`] = ref(new Map());
+  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals", "repWindowStates", "hipShiftStates"]) context[`${name}Ref`] = ref(new Map());
   for (const name of ["leftBaseline", "rightBaseline", "leftScapBaseline", "rightScapBaseline", "bidirectionalBaseline"]) context[`${name}Ref`] = ref({ value: null, samples: [] });
   context.lastCaptureOkRef = ref(true); context.lastCaptureMsgRef = ref("Captured");
+  context.captureRejectedByStatusRef = ref({});
   context.neckRepDebugRef = ref([]); context.neutralCalibrationSamplesRef = ref([]);
   context.neutralCalibrationClockRef = ref(globals.newNeutralCalibrationClock());
   const params = definition.kind === "dynamic" ? definition.primaryMetric.smoothing : undefined;

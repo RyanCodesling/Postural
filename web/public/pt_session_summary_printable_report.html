@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Physical Therapy Session Report</title>
+    <title>Demo session report template</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -32,6 +32,10 @@
     </script>
 
     <style>
+        .demo-notice { border: 2px solid #b45309; padding: 12px; margin-bottom: 20px; color: #78350f; font-weight: 700; }
+        @media print {
+            body::before { content: "DEMO — NOT A CLINICAL RECORD"; position: fixed; top: 45%; left: 0; width: 100%; text-align: center; font: bold 32px Arial, sans-serif; color: #92400e; opacity: 0.18; transform: rotate(-20deg); pointer-events: none; z-index: 1000; }
+        }
         @media print {
             body {
                 background: white !important;
@@ -64,23 +68,6 @@
             display: none;
         }
 
-        /* Custom styling for sleek medical sliders and UI */
-        input[type=range]::-webkit-slider-thumb {
-            height: 18px;
-            width: 18px;
-            border-radius: 50%;
-            background: #0284c7;
-            cursor: pointer;
-            -webkit-appearance: none;
-            margin-top: -6px;
-        }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 6px;
-            cursor: pointer;
-            background: #e2e8f0;
-            border-radius: 3px;
-        }
     </style>
 </head>
 <body class="bg-slate-100 font-sans text-slate-800 min-h-screen flex flex-col">
@@ -92,8 +79,8 @@
                     <i class="fa-solid fa-heart-pulse"></i>
                 </div>
                 <div>
-                    <h1 class="text-lg font-bold leading-tight">Apex Movement Physical Therapy</h1>
-                    <p class="text-xs text-slate-400">Clinical Session Documentation Portal</p>
+                    <h1 class="text-lg font-bold leading-tight">Session report prototype</h1>
+                    <p class="text-xs text-slate-400">Demo template — not connected to patient sessions</p>
                 </div>
             </div>
 
@@ -105,11 +92,11 @@
                 </button>
                 <button onclick="window.print()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-clinic-600 hover:bg-clinic-500 text-white rounded-lg transition shadow flex items-center gap-2">
                     <i class="fa-solid fa-print"></i>
-                    <span>Print / Save PDF</span>
+                    <span>Print demo / Save PDF</span>
                 </button>
-                <button onclick="downloadJSON()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition flex items-center gap-1.5" title="Export Digital Record">
+                <button onclick="downloadJSON()" class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition flex items-center gap-1.5" title="Export Demo JSON">
                     <i class="fa-solid fa-download"></i>
-                    <span class="hidden md:inline">Export Record</span>
+                    <span class="hidden md:inline">Export Demo JSON</span>
                 </button>
             </div>
         </div>
@@ -123,9 +110,9 @@
                 <div class="bg-gradient-to-r from-clinic-800 to-slate-900 px-6 py-4 text-white flex justify-between items-center">
                     <div>
                         <h2 class="text-lg font-semibold flex items-center gap-2">
-                            <i class="fa-solid fa-file-signature text-clinic-500"></i> New Session Summary Input
+                            <i class="fa-solid fa-file-signature text-clinic-500"></i> Demo Session Summary Input
                         </h2>
-                        <p class="text-xs text-slate-300 mt-0.5">Fill out session details. All information syncs in real-time to the printable report.</p>
+                        <p class="text-xs text-slate-300 mt-0.5">Use fictional entries only. This page does not save to patient records.</p>
                     </div>
                     <span class="text-xs bg-clinic-700 text-clinic-100 px-2.5 py-1 rounded-full border border-clinic-600 font-mono">Form Mode</span>
                 </div>
@@ -140,11 +127,11 @@
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Patient Name</label>
-                                <input type="text" id="patientName" value="Eleanor Vance" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="patientName" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Patient ID / DOB</label>
-                                <input type="text" id="patientIdDob" value="PT-88349 / Oct 14, 1985" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="patientIdDob" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Date of Session</label>
@@ -152,15 +139,15 @@
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Session Number</label>
-                                <input type="text" id="sessionNum" value="Session 4 of 12" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="sessionNum" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Attending Therapist</label>
-                                <input type="text" id="therapistName" value="Dr. Marcus Thorne, PT, DPT" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="therapistName" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Therapy Focus / Diagnosis</label>
-                                <input type="text" id="therapyFocus" value="Post-Op ACL Reconstruction (Right Knee)" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="therapyFocus" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                         </div>
                     </div>
@@ -170,14 +157,14 @@
                             <i class="fa-solid fa-notes-medical"></i> 2. Session Summary & Pain Comparison
                         </h3>
                         
-                        <!-- Interactive Pain Sliders -->
+                        <!-- Optional demo pain ratings -->
                         <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <div class="flex justify-between items-center mb-1">
                                     <label class="text-xs font-semibold text-slate-700 uppercase">Pre-Session Pain Level</label>
-                                    <span id="prePainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-amber-100 text-amber-800">6 / 10</span>
+                                    <span id="prePainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-amber-100 text-amber-800">Not recorded</span>
                                 </div>
-                                <input type="range" id="prePain" min="0" max="10" value="6" oninput="updatePainVisuals(); updateReport();" class="w-full">
+                                <input type="number" id="prePain" min="0" max="10" value="" placeholder="Not recorded" oninput="updatePainVisuals(); updateReport();" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
                                 <div class="flex justify-between text-[10px] text-slate-400 mt-1">
                                     <span>0 (None)</span>
                                     <span>5 (Moderate)</span>
@@ -188,9 +175,9 @@
                             <div>
                                 <div class="flex justify-between items-center mb-1">
                                     <label class="text-xs font-semibold text-slate-700 uppercase">Post-Session Pain Level</label>
-                                    <span id="postPainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800">3 / 10</span>
+                                    <span id="postPainBadge" class="text-xs px-2 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800">Not recorded</span>
                                 </div>
-                                <input type="range" id="postPain" min="0" max="10" value="3" oninput="updatePainVisuals(); updateReport();" class="w-full">
+                                <input type="number" id="postPain" min="0" max="10" value="" placeholder="Not recorded" oninput="updatePainVisuals(); updateReport();" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
                                 <div class="flex justify-between text-[10px] text-slate-400 mt-1">
                                     <span>0 (None)</span>
                                     <span>5 (Moderate)</span>
@@ -204,19 +191,19 @@
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Interventions Performed Today</label>
                                 <div class="space-y-2 text-sm bg-slate-50 p-3 rounded-lg border border-slate-200">
                                     <label class="flex items-center space-x-2">
-                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Manual Therapy / Patellar Mobilization" checked onchange="updateReport()">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Manual Therapy / Patellar Mobilization" onchange="updateReport()">
                                         <span>Manual Therapy / Patellar Mobilization</span>
                                     </label>
                                     <label class="flex items-center space-x-2">
-                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Therapeutic Exercise & Strength" checked onchange="updateReport()">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Therapeutic Exercise & Strength" onchange="updateReport()">
                                         <span>Therapeutic Exercise & Strength</span>
                                     </label>
                                     <label class="flex items-center space-x-2">
-                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Neuromuscular Re-education / Gait Training" checked onchange="updateReport()">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Neuromuscular Re-education / Gait Training" onchange="updateReport()">
                                         <span>Neuromuscular Re-education / Gait</span>
                                     </label>
                                     <label class="flex items-center space-x-2">
-                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Cryotherapy & Compression" checked onchange="updateReport()">
+                                        <input type="checkbox" class="intervention-cb rounded text-clinic-600 focus:ring-clinic-500" value="Cryotherapy & Compression" onchange="updateReport()">
                                         <span>Cryotherapy / Ice & Compression</span>
                                     </label>
                                     <label class="flex items-center space-x-2">
@@ -228,7 +215,7 @@
 
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Therapist Clinical Notes & Observations</label>
-                                <textarea id="therapistNotes" rows="5" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Enter session observations...">Patient demonstrated excellent compliance during manual extension stretches. Mild muscle fatigue noted during end-range quad sets. Gait mechanics improved post-mobilization with reduced antalgic limp.</textarea>
+                                <textarea id="therapistNotes" rows="5" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Enter session observations..."></textarea>
                             </div>
                         </div>
                     </div>
@@ -240,15 +227,15 @@
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Range of Motion (ROM) Changes</label>
-                                <textarea id="romNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Knee flexion increased from 95° to 110°">Active Knee Flexion: 110° (was 95°). Full passive extension restored (0°).</textarea>
+                                <textarea id="romNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Knee flexion increased from 95° to 110°"></textarea>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Strength & Functional Gains</label>
-                                <textarea id="strengthNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Quad strength 4/5, improved sit-to-stand">Quad strength improved to 4/5. Able to execute independent sit-to-stand without upper body compensation.</textarea>
+                                <textarea id="strengthNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Quad strength 4/5, improved sit-to-stand"></textarea>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Milestones / Objective Achievements</label>
-                                <textarea id="milestoneNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Walked 10 mins without limp">Cleared for full weight-bearing treadmill walking at 2.5 mph for 10 minutes without assistance.</textarea>
+                                <textarea id="milestoneNotes" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="e.g. Walked 10 mins without limp"></textarea>
                             </div>
                         </div>
                     </div>
@@ -260,11 +247,11 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Clinical Summary</label>
-                                <textarea id="clinicalSummary" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Add a brief summary of the patient's current functional status...">Patient is progressing well with improved confidence during stair negotiation and reduced pain with daily movement. Strength and mobility are trending in the right direction with consistent effort and appropriate symptom control.</textarea>
+                                <textarea id="clinicalSummary" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Add a brief summary of the patient's current functional status..."></textarea>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Goal Progress / Patient Focus</label>
-                                <textarea id="goalProgress" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Highlight key goals or patient-specific progress...">Primary focus remains restoring terminal knee extension, improving single-leg control, and progressing toward return-to-sport readiness without symptom recurrence.</textarea>
+                                <textarea id="goalProgress" rows="3" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none" placeholder="Highlight key goals or patient-specific progress..."></textarea>
                             </div>
                         </div>
                     </div>
@@ -277,11 +264,11 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Treatment Plan Adjustments Today</label>
-                                <input type="text" id="planAdjustments" value="Increased straight leg raise weight to 2 lbs. Added single-leg balance protocol." oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="planAdjustments" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Target Focus for Next Session</label>
-                                <input type="text" id="nextFocus" value="Introduce lateral step-downs and eccentric leg press drills." oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="nextFocus" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                         </div>
                     </div>
@@ -304,11 +291,11 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Self-Care & Activity Restrictions</label>
-                                <textarea id="selfCareNotes" rows="2" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">Apply ice pack for 15-20 mins post-exercise. Avoid high-impact running or pivoting until cleared.</textarea>
+                                <textarea id="selfCareNotes" rows="2" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none"></textarea>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Next Scheduled Appointment</label>
-                                <input type="text" id="nextAppt" value="Thursday, Oct 2, 2026 @ 10:00 AM" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
+                                <input type="text" id="nextAppt" value="" oninput="updateReport()" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-clinic-500 focus:outline-none">
                             </div>
                         </div>
                     </div>
@@ -319,18 +306,19 @@
 
         <div id="reportView" class="print-container max-w-6xl mx-auto bg-white p-8 md:p-12 rounded-xl shadow-lg border border-slate-200 text-slate-800 my-2">
             
+            <p class="demo-notice">DEMO TEMPLATE — NOT A CLINICAL RECORD. Entries are not verified against patient sessions.</p>
             <!-- Document Header -->
             <div class="flex justify-between items-start border-b-2 border-clinic-700 pb-6 mb-6">
                 <div>
                     <div class="flex items-center gap-2 text-clinic-700 font-bold text-2xl tracking-tight">
-                        <i class="fa-solid fa-heart-pulse text-clinic-500"></i> APEX MOVEMENT PT
+                        <i class="fa-solid fa-heart-pulse text-clinic-500"></i> POSTURAL — DEMO TEMPLATE
                     </div>
-                    <p class="text-xs text-slate-500 font-medium mt-1">104 Medical Plaza Suite 300, San Francisco, CA</p>
-                    <p class="text-xs text-slate-500">Phone: (555) 234-8901 | Email: clinical@apexpt.com</p>
+                    <p class="text-xs text-slate-500 font-medium mt-1">Manually entered demonstration data</p>
+                    <p class="text-xs text-slate-500">No patient record or clinical sign-off is created</p>
                 </div>
                 <div class="text-right">
                     <span class="inline-block bg-clinic-50 text-clinic-800 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded border border-clinic-200 mb-2">
-                        Clinical Session Summary
+                        Demo Session Summary
                     </span>
                     <p class="text-xs text-slate-500">Generated: <span id="rptGenDate" class="font-semibold text-slate-700"></span></p>
                 </div>
@@ -367,22 +355,22 @@
             <!-- Section: Pain Level Visual Comparison -->
             <div class="mb-6">
                 <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-100 pb-1">
-                    Pain Rating Comparison (VAS Scale)
+                    Pain Rating Comparison (0–10)
                 </h4>
                 <div class="grid grid-cols-2 gap-4 bg-slate-50/50 p-3 rounded-lg border border-slate-200">
                     <div class="flex items-center space-x-3">
                         <span class="text-xs font-medium text-slate-600">Pre-Session:</span>
                         <div class="flex-grow bg-slate-200 h-2.5 rounded-full overflow-hidden">
-                            <div id="rptPrePainBar" class="bg-amber-500 h-full rounded-full" style="width: 60%"></div>
+                            <div id="rptPrePainBar" class="bg-amber-500 h-full rounded-full" style="width: 0%"></div>
                         </div>
-                        <span id="rptPrePainText" class="text-xs font-bold text-slate-700 w-8">6/10</span>
+                        <span id="rptPrePainText" class="text-xs font-bold text-slate-700 whitespace-nowrap">Not recorded</span>
                     </div>
                     <div class="flex items-center space-x-3">
                         <span class="text-xs font-medium text-slate-600">Post-Session:</span>
                         <div class="flex-grow bg-slate-200 h-2.5 rounded-full overflow-hidden">
-                            <div id="rptPostPainBar" class="bg-emerald-500 h-full rounded-full" style="width: 30%"></div>
+                            <div id="rptPostPainBar" class="bg-emerald-500 h-full rounded-full" style="width: 0%"></div>
                         </div>
-                        <span id="rptPostPainText" class="text-xs font-bold text-slate-700 w-8">3/10</span>
+                        <span id="rptPostPainText" class="text-xs font-bold text-slate-700 whitespace-nowrap">Not recorded</span>
                     </div>
                 </div>
             </div>
@@ -481,12 +469,12 @@
             <div class="pt-6 border-t border-slate-200 grid grid-cols-2 gap-8 items-end text-xs">
                 <div>
                     <div class="border-b border-slate-400 h-8 mb-1 flex items-end">
-                        <span class="font-serif italic text-slate-600 text-sm" id="rptSignatureText">Dr. Marcus Thorne, PT, DPT</span>
+                        <span class="font-serif italic text-slate-600 text-sm" id="rptSignatureText"></span>
                     </div>
-                    <p class="text-slate-500 font-medium">Licensed Physical Therapist Signature</p>
+                    <p class="text-slate-500 font-medium">Entered therapist name (unverified)</p>
                 </div>
                 <div class="text-right">
-                    <p class="text-slate-400">Electronic Sign-off Timestamp:</p>
+                    <p class="text-slate-400">Preview generated:</p>
                     <p id="rptTimestamp" class="font-mono text-slate-600 text-[11px]"></p>
                 </div>
             </div>
@@ -496,17 +484,11 @@
 
     <script>
         // Initial Exercise List for Home Exercise Program
-        let hepList = [
-            { name: "Quad Sets with Towel Roll", setsReps: "3 sets x 10 reps", freq: "2x Daily" },
-            { name: "Straight Leg Raises (SLR)", setsReps: "3 sets x 8 reps (2lb ankle weight)", freq: "1x Daily" },
-            { name: "Seated Heel Slides", setsReps: "2 sets x 15 reps", freq: "3x Daily" }
-        ];
+        let hepList = [];
 
         // Initialize Page Data on Load
         window.onload = function() {
-            // Set default date to today
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('sessionDate').value = today;
+            // Dates and clinical fields stay blank until a demo entry is made.
             
             renderHepInputs();
             updatePainVisuals();
@@ -551,13 +533,13 @@
             updateReport();
         }
 
-        // Update Slider UI Visual Badges
+        // Update optional pain-rating badges
         function updatePainVisuals() {
             const preVal = document.getElementById('prePain').value;
             const postVal = document.getElementById('postPain').value;
 
-            document.getElementById('prePainBadge').innerText = `${preVal} / 10`;
-            document.getElementById('postPainBadge').innerText = `${postVal} / 10`;
+            document.getElementById('prePainBadge').innerText = preVal === "" ? "Not recorded" : `${preVal} / 10`;
+            document.getElementById('postPainBadge').innerText = postVal === "" ? "Not recorded" : `${postVal} / 10`;
         }
 
         // Synchronize Form Data with Report Preview
@@ -574,9 +556,9 @@
             const prePain = document.getElementById('prePain').value;
             const postPain = document.getElementById('postPain').value;
             document.getElementById('rptPrePainBar').style.width = `${prePain * 10}%`;
-            document.getElementById('rptPrePainText').innerText = `${prePain}/10`;
+            document.getElementById('rptPrePainText').innerText = prePain === "" ? "Not recorded" : `${prePain}/10`;
             document.getElementById('rptPostPainBar').style.width = `${postPain * 10}%`;
-            document.getElementById('rptPostPainText').innerText = `${postPain}/10`;
+            document.getElementById('rptPostPainText').innerText = postPain === "" ? "Not recorded" : `${postPain}/10`;
 
             // Interventions
             const checkboxes = document.querySelectorAll('.intervention-cb:checked');
@@ -646,17 +628,20 @@
             }
         }
 
-        // Download JSON format for digital medical archives
+        // Export this unverified demo with explicit provenance
         function downloadJSON() {
             const formData = {
+                reportType: "demo_template",
+                clinicalRecord: false,
+                notice: "DEMO TEMPLATE — NOT A CLINICAL RECORD. Not connected to patient sessions.",
                 patientName: document.getElementById('patientName').value,
                 patientIdDob: document.getElementById('patientIdDob').value,
                 sessionDate: document.getElementById('sessionDate').value,
                 sessionNum: document.getElementById('sessionNum').value,
                 therapistName: document.getElementById('therapistName').value,
                 therapyFocus: document.getElementById('therapyFocus').value,
-                prePainScore: document.getElementById('prePain').value,
-                postPainScore: document.getElementById('postPain').value,
+                prePainScore: document.getElementById('prePain').value === '' ? null : Number(document.getElementById('prePain').value),
+                postPainScore: document.getElementById('postPain').value === '' ? null : Number(document.getElementById('postPain').value),
                 interventions: Array.from(document.querySelectorAll('.intervention-cb:checked')).map(cb => cb.value),
                 therapistNotes: document.getElementById('therapistNotes').value,
                 romNotes: document.getElementById('romNotes').value,
@@ -675,7 +660,7 @@
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(formData, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `PT_Report_${formData.patientName.replace(/\s+/g, '_')}_${formData.sessionDate}.json`);
+            downloadAnchor.setAttribute("download", `DEMO_ONLY_PT_Report_${formData.patientName.replace(/\s+/g, '_')}_${formData.sessionDate}.json`);
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();

@@ -1,4 +1,8 @@
-import type { CompensationMetricSpec, MetricName } from "@/lib/exercises/registry";
+import {
+  getCompensationScoring,
+  type CompensationMetricSpec,
+  type MetricName,
+} from "@/lib/exercises/registry";
 
 export const COMPENSATION_WARNING_DEBOUNCE_MS = 300;
 
@@ -30,14 +34,57 @@ export function compensationWarningMargin(
   return Math.min(2.5, threshold * 0.5);
 }
 
+/**
+ * A `primary-coupled` warning value is a SIGNED residual: the measured value
+ * minus the value the pilot fit expects at the current primary. Only an excess
+ * over that expectation is the compensation (more shoulder rise or more neck
+ * tilt than the movement itself produces). A deficit means the body part moved
+ * LESS than the fit predicts. That is not the compensation the cue names, and
+ * because the fits come from one pilot subject, an absolute test turned it into
+ * a cue on correct form. Static metrics keep their two-sided |value| test.
+ *
+ * Display-only: the compensation score still deducts on |residual|, so scores,
+ * thresholds and stored measurements are unchanged.
+ */
+export function compensationWarningIsOneSided(spec: CompensationMetricSpec): boolean {
+  return (
+    (spec.compareDirection ?? "above") === "above" &&
+    getCompensationScoring(spec).mode === "primary-coupled"
+  );
+}
+
+/**
+ * The level at which a cue switches on: the cue's own `trigger.on` when the
+ * registry gives one (it then switches off at `trigger.off`), else the
+ * metric's `warningThreshold`. A cue trigger exists where the warning line sits
+ * inside the range of correct form. Display only: the measurement threshold,
+ * the stored time over it and the score are unchanged.
+ */
+export function cueTriggerLevel(spec: CompensationMetricSpec): number {
+  return spec.cue?.trigger?.on ?? spec.warningThreshold;
+}
+
+/**
+ * The level at or below which a shown cue's warning switches off: the cue's own
+ * `trigger.off` when the registry gives one, else the warning threshold less
+ * the metric's margin, as the latch computes it. Upper-bound metrics only. The
+ * LOWER arrow uses it to tell when the other shoulder has clearly become the
+ * higher one.
+ */
+export function cueClearLevel(spec: CompensationMetricSpec): number {
+  const trigger = spec.cue?.trigger;
+  if (trigger) return trigger.off;
+  return Math.max(0, spec.warningThreshold - compensationWarningMargin(spec.name, spec.warningThreshold));
+}
+
 function crossesTrigger(
   value: number,
   threshold: number,
   direction: CompareDirection,
+  oneSided: boolean,
 ): boolean {
-  return direction === "below"
-    ? value < threshold
-    : Math.abs(value) >= threshold;
+  if (direction === "below") return value < threshold;
+  return oneSided ? value >= threshold : Math.abs(value) >= threshold;
 }
 
 function crossesClear(
@@ -45,10 +92,11 @@ function crossesClear(
   threshold: number,
   direction: CompareDirection,
   margin: number,
+  oneSided: boolean,
 ): boolean {
-  return direction === "below"
-    ? value >= threshold + margin
-    : Math.abs(value) <= Math.max(0, threshold - margin);
+  if (direction === "below") return value >= threshold + margin;
+  const clearLevel = Math.max(0, threshold - margin);
+  return oneSided ? value <= clearLevel : Math.abs(value) <= clearLevel;
 }
 
 function settleToward(
@@ -102,12 +150,16 @@ export function updateCompensationWarningLatch(
 
   const latch = previous ?? INACTIVE_WARNING;
   const direction = spec.compareDirection ?? "above";
-  const margin = options.margin ?? compensationWarningMargin(spec.name, spec.warningThreshold);
+  const oneSided = compensationWarningIsOneSided(spec);
+  const threshold = cueTriggerLevel(spec);
+  const trigger = spec.cue?.trigger;
+  const margin = options.margin ??
+    (trigger ? Math.abs(trigger.on - trigger.off) : compensationWarningMargin(spec.name, spec.warningThreshold));
 
   if (latch.active) {
     return settleToward(
       latch,
-      crossesClear(value, spec.warningThreshold, direction, margin) ? false : true,
+      crossesClear(value, threshold, direction, margin, oneSided) ? false : true,
       nowMs,
       options.debounceMs ?? COMPENSATION_WARNING_DEBOUNCE_MS,
     );
@@ -115,7 +167,7 @@ export function updateCompensationWarningLatch(
 
   return settleToward(
     latch,
-    crossesTrigger(value, spec.warningThreshold, direction),
+    crossesTrigger(value, threshold, direction, oneSided),
     nowMs,
     options.debounceMs ?? COMPENSATION_WARNING_DEBOUNCE_MS,
   );

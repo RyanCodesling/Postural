@@ -14,7 +14,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from features.extract import (DATA_DIR, aggregate_session_features,
+from features.extract import (DATA_DIR, FEATURE_DIR, aggregate_session_features,
                               extract_rep_features, feature_columns)
 from generators.ex_generator import generate_dataset
 from training import train
@@ -39,8 +39,9 @@ def main() -> None:
     sessions = pd.read_parquet(DATA_DIR / f"{ex}_sessions.parquet")
     rep = extract_rep_features(frames, ex)
     sess = aggregate_session_features(rep, sets, sessions, ex, frames=frames)
-    rep.to_parquet(DATA_DIR / f"{ex}_rep_features.parquet", index=False)
-    sess.to_parquet(DATA_DIR / f"{ex}_session_features.parquet", index=False)
+    FEATURE_DIR.mkdir(parents=True, exist_ok=True)
+    rep.to_parquet(FEATURE_DIR / f"{ex}_rep_features.parquet", index=False)
+    sess.to_parquet(FEATURE_DIR / f"{ex}_session_features.parquet", index=False)
     print(f"      {len(rep):,} reps -> {len(sess)} sessions, "
           f"{len(feature_columns(sess))} session features")
 

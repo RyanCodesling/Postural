@@ -5,14 +5,16 @@
  * Run with: npx tsx src/lib/analytics/trendSeries.test.ts
  */
 import {
+  BAND_WITHHELD,
   changeText,
+  displayMeasureSpec,
   extraTrendMeasures,
   groupModelSeries,
   modelSeries,
   sessionMeasure,
   type TrendModelSession,
 } from "./trendSeries";
-import { fitTrend, type TrendFit } from "./trendModel";
+import { fitTrend, trendMeasureSpec, type TrendFit } from "./trendModel";
 
 let passed = 0;
 let failed = 0;
@@ -141,6 +143,19 @@ test("ranges are cut to the values a measure can take", () => {
   const peak = modelSeries("ex_001", [80, 84, 88].map((p) => rep(p, p)), "peak", "left");
   const rawPeak = fitTrend([80, 84, 88], [12, 12, 12], peak.spec!);
   assert(peak.fit!.changeHigh === rawPeak.changeHigh, "an open measure is not cut");
+});
+
+test("the side-bend completion share shows measured values only; its frozen settings are untouched", () => {
+  const sessions = [12, 10, 11, 12].map((complete) => ({ ...rep(20, 20), completeLeftReps: complete, completeRightReps: complete }));
+  const series = modelSeries("ex_005", sessions, "completionPct", "left");
+  assert(BAND_WITHHELD.has("ex_005:completionPct"), "withheld");
+  assert(series.spec?.band === false && series.fit === null && series.label === null, "no band, no fit, no label");
+  assert(series.values.map((v) => v?.toFixed(1)).join(",") === "100.0,83.3,91.7,100.0", `measured values kept: ${series.values}`);
+  assert(series.bandMean.every((v) => v === null) && series.bandLow.every((v) => v === null), "no band drawn");
+  assert(trendMeasureSpec("ex_005", "completionPct")?.band === true, "the frozen settings still read band true");
+  assert(displayMeasureSpec("ex_005", "peak")?.band === true && modelSeries("ex_005", sessions, "peak", "left").fit !== null,
+    "the side-bend peak keeps its band");
+  assert(modelSeries("ex_001", sessions, "completionPct", "left").fit !== null, "other exercises' completion keeps its band");
 });
 
 test("compensation charts use the app's own labels", () => {

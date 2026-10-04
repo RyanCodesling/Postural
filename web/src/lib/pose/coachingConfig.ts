@@ -4,7 +4,7 @@ import { COMPENSATION_WARNING_DEBOUNCE_MS } from "./compensationWarningState";
 import { OVERLAY_LABELS, OVERLAY_DIRECTION_LABELS } from "./drawCompensationOverlay";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v9_cue_review_fixes";
+export const COACHING_ALGORITHM_VERSION = "coaching_v10_elbow_bend_check";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {
@@ -23,8 +23,11 @@ export function coachingConfiguration(definition: ExerciseDefinition) {
     }),
     // Display-only checks are outside the measurement version, so their
     // thresholds and settings are fingerprinted here.
-    checks: (definition.kind === "dynamic" ? definition.coachingChecks ?? [] : []).map((check) => ({
-      metric: check.name, warningThreshold: check.warningThreshold, ...check.check,
+    checks: (definition.coachingChecks ?? []).map((check) => ({
+      metric: check.name,
+      warningThreshold: check.warningThreshold,
+      compareDirection: "compareDirection" in check ? check.compareDirection : "above",
+      ...check.check,
     })),
   };
 }
@@ -49,9 +52,18 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
       // Absent from configurations recorded before the minimum visible time.
       (q.minVisibleMs === undefined || Number.isFinite(q.minVisibleMs) && q.minVisibleMs >= 0)) &&
     // Absent from configurations recorded before display-only checks.
-    (c.checks === undefined || Array.isArray(c.checks) && c.checks.length <= 20 && c.checks.every(k => !!k &&
-      typeof k.metric === "string" && typeof k.mode === "string" &&
-      [k.warningThreshold, k.stanceMs, k.from, k.persistMs].every(n => Number.isFinite(n) && n >= 0)));
+    (c.checks === undefined || Array.isArray(c.checks) && c.checks.length <= 20 && c.checks.every(check => {
+      if (!check || typeof check !== "object") return false;
+      const k = check as Record<string, unknown>;
+      const count = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+      return typeof k.metric === "string" && typeof k.mode === "string" &&
+        [k.warningThreshold, k.from, k.persistMs].every(count) &&
+        // The hip check's stance window; the elbow check has none.
+        (k.stanceMs === undefined || count(k.stanceMs)) &&
+        // Absent from configurations recorded before the elbow check.
+        (k.compareDirection === undefined || k.compareDirection === "above" || k.compareDirection === "below") &&
+        (k.hold === undefined || k.hold === "repetition" || k.hold === "live");
+    }));
 }
 
 /** Same canonical serialization as the server's measurement fingerprint. */

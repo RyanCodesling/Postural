@@ -6,9 +6,10 @@
 export { SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
 
 export const SESSION_VIDEO_NOTICE = [
-  "The video uploads to this clinic's computer while you exercise.",
-  "Once it is uploaded, your assigned therapist can watch it. No one else can.",
-  "You can delete it at any time. It is not sent online.",
+  "The video uploads over an encrypted connection to the project's cloud server while you exercise.",
+  "In the app, only you and your assigned therapist can watch it.",
+  "The researcher who runs the server can also reach the stored files.",
+  "You can delete it at any time.",
   "This prototype does not encrypt stored videos.",
-  "Videos are never used to train or tune the system.",
+  "After the study's evaluation, your recordings may be used to improve the system.",
 ] as const;

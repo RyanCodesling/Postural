@@ -7,6 +7,7 @@
  */
 import { TREND_MODEL } from "@/lib/analytics/trendModel";
 import {
+  BAND_WITHHELD,
   changeText,
   extraTrendMeasures,
   groupModelSeries,
@@ -198,7 +199,9 @@ export function progressReportPdf(
             s.side === "card" ? "—" : sideLabel(s.side),
             String(s.counted),
             s.spec?.band === false
-              ? `no model band; measured ${measured(s, def.format, def.unit)}`
+              ? `${BAND_WITHHELD.has(`${s.spec.exercise}:${s.spec.measure}`)
+                ? "band withheld, target changed after learning"
+                : "no model band"}; measured ${measured(s, def.format, def.unit)}`
               : s.fit
                 ? changeText(s.fit, (v) => `${def.format(v)}${def.changeUnit}`)
                 : `needs at least 2 counted sessions; measured ${measured(s, def.format, def.unit)}`,

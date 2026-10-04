@@ -324,7 +324,7 @@ export function SessionVideoPlayer({
         {part.status !== "complete" && (
           <p>Part of this recording could not be saved, so it may end early.</p>
         )}
-        <p>Stored on this clinic&apos;s computer. This prototype does not encrypt videos.</p>
+        <p>Stored on the project&apos;s server. This prototype does not encrypt videos.</p>
       </div>
       {onDelete && (
         <div className="flex items-center gap-3">

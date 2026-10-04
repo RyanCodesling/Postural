@@ -60,9 +60,9 @@ export function effectiveCompensationBands(
  * Coaching configuration is fingerprinted separately and stored in session
  * context and set audit records. It never participates in trend grouping.
  *
- * Display-only coaching checks (`coachingChecks`, added 2026-10-02) are
- * removed for the same reason: they drive cues only, and are never scored or
- * stored as measurements.
+ * Display-only coaching checks (`coachingChecks`, added 2026-10-02; on holds
+ * too since 2026-10-04) are removed for the same reason: they drive cues only,
+ * and are never scored or stored as measurements.
  */
 function measurementDefinition(definition: ExerciseDefinition): ExerciseDefinition {
   const compensationMetrics = definition.compensationMetrics.map((metric) => {
@@ -76,7 +76,7 @@ function measurementDefinition(definition: ExerciseDefinition): ExerciseDefiniti
   // `coachingChecks` dropped, and each element keeps its own type, so the
   // shape is otherwise unchanged.
   const measurement = { ...definition, compensationMetrics } as ExerciseDefinition;
-  if (measurement.kind === "dynamic") delete measurement.coachingChecks;
+  delete measurement.coachingChecks;
   return measurement;
 }
 

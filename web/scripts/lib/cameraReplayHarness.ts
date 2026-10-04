@@ -117,7 +117,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
     [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder", "lockedShoulderIndex", "lastDrawnCue"]],
   ];
   for (const [initial, names] of refGroups) for (const name of names) context[`${name}Ref`] = ref(initial);
-  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals", "repWindowStates", "hipShiftStates"]) context[`${name}Ref`] = ref(new Map());
+  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals", "repWindowStates", "hipShiftStates", "elbowBendStates"]) context[`${name}Ref`] = ref(new Map());
   for (const name of ["leftBaseline", "rightBaseline", "leftScapBaseline", "rightScapBaseline", "bidirectionalBaseline"]) context[`${name}Ref`] = ref({ value: null, samples: [] });
   context.lastCaptureOkRef = ref(true); context.lastCaptureMsgRef = ref("Captured");
   context.captureRejectedByStatusRef = ref({});

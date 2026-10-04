@@ -87,7 +87,8 @@ export type MetricName =
   | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
   | "shoulderElbowDistance"  // NEW 2026-05-21 — retained for future Wall Angels variants; removed from active ex_008 v1 compensation after live testing showed 2D foreshortening was too noisy
-  | "hipShift";              // NEW 2026-10-02 — display-only coaching check on ex_005 (hips pushed sideways, in hip widths), computed in hipShiftWarning.ts rather than poseMetrics.ts; never scored or stored (see CoachingCheckSpec)
+  | "hipShift"               // NEW 2026-10-02 — display-only coaching check on ex_005 (hips pushed sideways, in hip widths), computed in hipShiftWarning.ts rather than poseMetrics.ts; never scored or stored (see CoachingCheckSpec)
+  | "elbowBend";             // NEW 2026-10-04 — display-only coaching check on ex_001/ex_006 (elbow interior angle with the arm raised, 180 = straight), computed in elbowBendWarning.ts; never scored or stored (see CoachingCheckSpec)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRY TYPES
@@ -424,13 +425,27 @@ export function getCompensationBands(
  *     `stanceMs`). Judged from a head lean of `from` (primary units); a shift
  *     that stays at or above the switch-on level for `persistMs` flags the
  *     bend. Bidirectional-alternating dynamic exercises only.
+ *   - "elbow-bend" (`elbowBendWarning.ts`): each arm's elbow angle on the
+ *     image (180 = straight), warned BELOW the line. An arm is judged while
+ *     its own primary is at least `from`. With `hold: "repetition"` an angle
+ *     below the line for `persistMs` flags the arm until it is back below the
+ *     repetition start; with `hold: "live"` (holds; `persistMs` 0) the live
+ *     angle passes through. Per-limb bilateral exercises only.
  */
-export type CoachingCheckSpec = {
-  name: "hipShift";
-  warningThreshold: number;
-  cue: CompensationCueSpec;
-  check: { mode: "hip-shift-from-stance"; stanceMs: number; from: number; persistMs: number };
-};
+export type CoachingCheckSpec =
+  | {
+      name: "hipShift";
+      warningThreshold: number;
+      cue: CompensationCueSpec;
+      check: { mode: "hip-shift-from-stance"; stanceMs: number; from: number; persistMs: number };
+    }
+  | {
+      name: "elbowBend";
+      warningThreshold: number;
+      compareDirection: "below";
+      cue: CompensationCueSpec;
+      check: { mode: "elbow-bend"; from: number; persistMs: number; hold: "repetition" | "live" };
+    };
 
 /**
  * Every spec whose warning can raise a coaching cue: the compensation metrics,
@@ -439,8 +454,7 @@ export type CoachingCheckSpec = {
  * `compensationMetrics` alone.
  */
 export function coachingWarningSpecs(definition: ExerciseDefinition): CompensationMetricSpec[] {
-  const checks = definition.kind === "dynamic" ? definition.coachingChecks ?? [] : [];
-  return [...definition.compensationMetrics, ...checks];
+  return [...definition.compensationMetrics, ...(definition.coachingChecks ?? [])];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -630,6 +644,8 @@ export type ExerciseDefinition =
       requiresLateralRoom?: boolean;
       isometric: IsometricSpec;
       compensationMetrics: CompensationMetricSpec[];
+      /** Display-only coaching checks; see `CoachingCheckSpec`. */
+      coachingChecks?: CoachingCheckSpec[];
     };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -771,6 +787,42 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+    ],
+    // Display-only coaching check, added 2026-10-04 by user decision. A
+    // clinical exercise library raises the arm to the side "with your elbow
+    // straight" (Physitrack, How to perform the Arm Abduction,
+    // https://www.physitrack.com/exercise-library/how-to-perform-the-arm-abduction-exercise).
+    // The reading is the elbow's interior angle on the image, 180 when
+    // straight. A straight arm reads close to 180 from any camera angle; a bend
+    // toward the camera reads smaller than it is, so the check can miss a bend
+    // rather than cue a straight arm. One image-based comparison also reported
+    // poor elbow-flexion accuracy (Moreira et al. 2024, Sensors, PMID
+    // 39771719), which is why only a clear bend is cued.
+    // `warningThreshold: 130`, below which the elbow is clearly bent: with the
+    // arm raised to 75 or more, the pilot subject's correct raises read 144 at
+    // the lowest and slouched raises 136 (one subject; tuning data); no frame
+    // read below 135. An engineering line, not a clinical cut-off. Detection
+    // is untested, since no pilot recording contains the fault; the
+    // groupmates' recordings test it with this value fixed beforehand. `from:
+    // 75` matches that analysis. `persistMs: 100` (two trace frames, about
+    // three live) keeps one noisy frame from flagging a repetition, and the
+    // flag is held until the arm is back at rest. No wait and no cooldown, so
+    // each repetition can show its own cue. Last in priority, after the
+    // compensation cues above.
+    coachingChecks: [
+      {
+        name: "elbowBend",
+        warningThreshold: 130,
+        compareDirection: "below",
+        check: { mode: "elbow-bend", from: 75, persistMs: 100, hold: "repetition" },
+        cue: {
+          id: "ex_001.elbow-bend",
+          message: "Keep your elbows straight as you raise your arms.",
+          priority: 40,
+          minActiveMs: 0,
+          cooldownMs: 0,
+        },
+      },
     ],
   },
 
@@ -1277,6 +1329,28 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         },
         warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
     ],
+    // Display-only coaching check, added 2026-10-04 by user decision: the same
+    // elbow reading, source and 130 line as on ex_001 (see the comment there).
+    // The same library keeps the "elbows straight" while the arm is out. In the
+    // pilot subject's arm holds (one subject; tuning data) the elbows read 163
+    // at the lowest. Judged from `from: 80`, the bottom of the target band. A
+    // hold has no repetitions, so `hold: "live"` passes the live angle and the
+    // cue clears once the arms are straightened; the warning latch's debounce
+    // and the default cue wait give the persistence (`persistMs` 0). Last in
+    // priority, after the compensation cues above.
+    coachingChecks: [
+      {
+        name: "elbowBend",
+        warningThreshold: 130,
+        compareDirection: "below",
+        check: { mode: "elbow-bend", from: 80, persistMs: 0, hold: "live" },
+        cue: {
+          id: "ex_006.elbow-bend",
+          message: "Keep your elbows straight.",
+          priority: 40,
+        },
+      },
+    ],
   },
 
   // ────────────────────────────────────────────────────────────────────────
@@ -1729,30 +1803,61 @@ function validateRegistry(): void {
   // Display-only coaching checks. Latches and cues are keyed by metric name,
   // so a check must not share one with a compensation metric.
   for (const def of Object.values(EXERCISE_REGISTRY)) {
-    if (def.kind !== "dynamic" || !def.coachingChecks) continue;
+    if (!def.coachingChecks) continue;
     const names = new Set<MetricName>(def.compensationMetrics.map((comp) => comp.name));
     for (const check of def.coachingChecks) {
       const owner = `${def.id} coaching check "${check.name}"`;
-      const { mode, stanceMs, from, persistMs } = check.check;
-      if (
-        mode !== "hip-shift-from-stance" || check.name !== "hipShift" ||
-        !def.bilateral || def.bilateralMode !== "bidirectional-alternating"
-      ) {
-        throw new Error(
-          `Registry invariant violated for ${owner}: the hip-shift-from-stance ` +
-          `check is named "hipShift" and needs a bidirectional-alternating dynamic exercise.`
-        );
-      }
-      if (
-        !(Number.isFinite(check.warningThreshold) && check.warningThreshold > 0) ||
-        !(Number.isFinite(stanceMs) && stanceMs > 0) ||
-        !(Number.isFinite(from) && from >= def.primaryMetric.thresholds.startThreshold) ||
-        !(Number.isFinite(persistMs) && persistMs >= 0)
-      ) {
-        throw new Error(
-          `Registry invariant violated for ${owner}: warningThreshold and stanceMs ` +
-          `must be positive, from at least the repetition start, and persistMs at least 0.`
-        );
+      if (check.name === "hipShift") {
+        const { mode, stanceMs, from, persistMs } = check.check;
+        if (
+          def.kind !== "dynamic" || mode !== "hip-shift-from-stance" ||
+          !def.bilateral || def.bilateralMode !== "bidirectional-alternating"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the hip-shift-from-stance ` +
+            `check is named "hipShift" and needs a bidirectional-alternating dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > 0) ||
+          !(Number.isFinite(stanceMs) && stanceMs > 0) ||
+          !(Number.isFinite(from) && from >= def.primaryMetric.thresholds.startThreshold) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold and stanceMs ` +
+            `must be positive, from at least the repetition start, and persistMs at least 0.`
+          );
+        }
+      } else {
+        // An elbow angle runs from 0 to 180 and is warned below the line; a
+        // repetition hold needs a dynamic exercise's repetition start, and a
+        // live hold has no persistence of its own.
+        const { mode, from, persistMs, hold } = check.check;
+        const repetition = hold === "repetition";
+        if (
+          mode !== "elbow-bend" || check.compareDirection !== "below" ||
+          !def.bilateral || def.bilateralMode !== "per-limb" ||
+          (repetition ? def.kind !== "dynamic" : hold !== "live")
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the elbow-bend check is named ` +
+            `"elbowBend", warns below its line, needs a per-limb bilateral exercise, ` +
+            `and holds per repetition only on a dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > 0 && check.warningThreshold < 180) ||
+          !Number.isFinite(from) ||
+          (def.kind === "dynamic" && !(from >= def.primaryMetric.thresholds.startThreshold)) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0) || (!repetition && persistMs !== 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must lie ` +
+            `between 0 and 180, from be finite (at least the repetition start on a ` +
+            `dynamic exercise), and persistMs at least 0 (0 for a live hold).`
+          );
+        }
       }
       if (names.has(check.name)) {
         throw new Error(

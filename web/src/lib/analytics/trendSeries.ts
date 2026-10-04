@@ -135,6 +135,27 @@ export function minUnitsFor(exerciseId: string, measure: TrendMeasureName, confi
 }
 
 /**
+ * Bands withheld after the model's settings were frozen, because the measure
+ * itself changed. The side-bend target moved from 25 to 17 on 2026-10-02 by
+ * user decision; this band's variation had been learned under 25, when almost
+ * no repetitions reached the target, and the share now behaves differently.
+ * The chart shows measured values only, like any measure without a checked
+ * band, until the band is checked under the new target. The frozen settings
+ * file is unchanged.
+ */
+export const BAND_WITHHELD: ReadonlySet<string> = new Set(["ex_005:completionPct"]);
+
+/** The measure's settings as the charts use them: a withheld band reads as no band. */
+export function displayMeasureSpec(
+  exerciseId: string,
+  measure: TrendMeasureName,
+  config: TrendModelConfig = TREND_MODEL,
+): TrendMeasureSpec | null {
+  const spec = trendMeasureSpec(exerciseId, measure, config);
+  return spec && BAND_WITHHELD.has(`${exerciseId}:${measure}`) ? { ...spec, band: false } : spec;
+}
+
+/**
  * The values a measure can take. Time in band can pass 100 % when a hold runs
  * past the prescribed time; peaks and drift are left open.
  */
@@ -186,7 +207,7 @@ export function prepareModelSeries(
   side: TrendSide,
   config: TrendModelConfig = TREND_MODEL,
 ): ModelSeries {
-  const spec = trendMeasureSpec(exerciseId, measure, config);
+  const spec = displayMeasureSpec(exerciseId, measure, config);
   const minUnits = minUnitsFor(exerciseId, measure, config);
   const values: (number | null)[] = [];
   const units: (number | null)[] = [];

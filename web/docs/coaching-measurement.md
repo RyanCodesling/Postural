@@ -42,7 +42,37 @@ phase gating, thresholds, aspect correction, or model inference.
   Provenance validates `messageRendered` as a boolean; the current configuration
   remains false. Accepting a future snapshot does not enable message rendering.
 
-## Cue display policy (coaching_v9_cue_review_fixes)
+## Cue display policy (coaching_v10_elbow_bend_check)
+
+- **v10: a display-only elbow check on lateral arm raises and the arm hold
+  (2026-10-04).** Label "Straighten arms", drawn as a box around both elbows.
+  - `elbowBendWarning.ts` reads each arm's elbow angle on the image
+    (`computeElbowFlexion`, 180 when straight), the value the tuning trace
+    stores as `elbowFlexionDeg`. The check warns BELOW its line
+    (`compareDirection: "below"`, 130 on both exercises). An arm is judged only
+    while its own raise reading is at least `from` (75 on `ex_001`, 80, the
+    bottom of the target band, on `ex_006`), and only prescribed arms count.
+    With both arms judged, the more bent arm and its side are the warning.
+  - Arm raises (`hold: "repetition"`): an angle below the line for 100 ms
+    flags the arm, and its smallest angle is held until that arm is back below
+    the repetition start, so the warning latch's 300 ms switch-on can complete
+    as the arm comes down. No wait and no cooldown.
+  - Arm hold (`hold: "live"`): the live angle passes through while the arm is
+    judged, so the cue clears once the arms are straightened. The latch's
+    switch-on and the default cue wait give the persistence.
+  - `coachingChecks` may now be declared on holds; the measurement version
+    strips them from both kinds, and the coaching configuration fingerprints
+    their direction and settings. Last in priority on both exercises.
+  - The line is an engineering value from one subject's pilot data: with the
+    arm raised, no pilot frame read below 135. A straight arm reads close to
+    180 from any camera angle, while a bend toward the camera reads smaller than
+    it is, so misses are the expected failure rather than false cues.
+  - Pilot replay: never drawn, so the summary is unchanged from v9; the lowest
+    readings were 143.7 (C1), 135.5 (session 199) and 155.4 (C3). With the
+    elbows bent to 110 in software it flagged all 9 C1 repetitions on both arms
+    and was drawn on the 6 without a higher-priority shrug cue, and in C3 on
+    every hold phase except the trunk-lean one, where trunk lean outranks it.
+    That tests the wiring only. No measurement version changed.
 
 - **v9: fixes from a review of each cue against published exercise
   instructions and measurement practice (2026-10-03).** Each cue's sources are

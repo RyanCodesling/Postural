@@ -12,6 +12,7 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
   scapularElevation: [7, 11, 8, 12], // ear-to-shoulder both sides
   elbowFlexion:      [13, 14],       // elbow joints only (most focused)
   hipShift:          [23, 24],       // both hips (display-only side-bend check)
+  elbowBend:         [13, 14],       // elbow joints (display-only arm-raise and arm-hold check)
 };
 
 /**
@@ -45,6 +46,9 @@ export const OVERLAY_LABELS: Partial<Record<MetricName, string>> = {
   // Names the movement the check measures: the hip midpoint moved sideways,
   // away from the bend, from the stance before the bend (hipShiftWarning.ts).
   hipShift:          "Hips shifted",
+  // The same instruction as the shoulder press elbow cue: the display-only
+  // check on lateral arm raises and the arm hold (elbowBendWarning.ts).
+  elbowBend:         "Straighten arms",
 };
 
 export const OVERLAY_DIRECTION_LABELS = { shoulderSymmetry: "LOWER", straighten: "STRAIGHTEN" } as const;

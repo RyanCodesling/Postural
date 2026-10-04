@@ -51,6 +51,13 @@ saved sessions, creates no clinical record or sign-off, and marks its preview,
 print output, and JSON export as demo material. Use fictional entries only. The
 existing saved-session and progress report buttons remain the reporting workflow.
 
+### Evaluation deployment
+
+For sessions reached through a temporary HTTPS tunnel, follow
+[`docs/evaluation-deployment.md`](docs/evaluation-deployment.md): passwords, backups with
+`npm run backup:local` (database and session videos, with a restore check), the release
+check and the second-device test.
+
 ## Common checks
 
 `npm run dev` and `npm run build` first bundle the trend Web Worker with esbuild.

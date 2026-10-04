@@ -141,6 +141,11 @@ import {
   type HipShiftState,
 } from "@/lib/pose/hipShiftWarning";
 import {
+  newElbowBendState,
+  updateElbowBend,
+  type ElbowBendState,
+} from "@/lib/pose/elbowBendWarning";
+import {
   EventOutbox,
   persistedOutboxSessionIds,
   recoverPersistedOutboxes,
@@ -1899,6 +1904,8 @@ export default function CameraClient() {
   const repWindowStatesRef = useRef(new Map<MetricName, RepWindowState>());
   // Per-check state of display-only coaching checks (hipShiftWarning.ts).
   const hipShiftStatesRef = useRef(new Map<MetricName, HipShiftState>());
+  // Per-check state of the display-only elbow check (elbowBendWarning.ts).
+  const elbowBendStatesRef = useRef(new Map<MetricName, ElbowBendState>());
   // The cue last drawn, with the reading and direction it was drawn with. A cue
   // kept for its minimum visible time is drawn with these once its own reading
   // has gone, as the per-repetition, hip and at-rest coupled readings do.
@@ -1921,6 +1928,7 @@ export default function CameraClient() {
     // cue belong to the run being reset, like the latches above.
     repWindowStatesRef.current.clear();
     hipShiftStatesRef.current.clear();
+    elbowBendStatesRef.current.clear();
     lockedShoulderIndexRef.current = null;
     lastDrawnCueRef.current = null;
     setSelectedCoachingCueMetric(null);
@@ -1941,6 +1949,7 @@ export default function CameraClient() {
       cue.clearedAtMs.size > 0 ||
       repWindowStatesRef.current.size > 0 ||
       hipShiftStatesRef.current.size > 0 ||
+      elbowBendStatesRef.current.size > 0 ||
       lockedShoulderIndexRef.current !== null ||
       lastDrawnCueRef.current !== null
     );
@@ -6902,10 +6911,12 @@ export default function CameraClient() {
                   metricDirections[comp.name] = signal.side;
                 }
               }
-              // Display-only coaching checks (hipShiftWarning.ts): warned and
-              // cued like a compensation, but never scored or stored.
-              if (activeDefinition.kind === "dynamic") {
-                for (const check of activeDefinition.coachingChecks ?? []) {
+              // Display-only coaching checks (hipShiftWarning.ts,
+              // elbowBendWarning.ts): warned and cued like a compensation, but
+              // never scored or stored.
+              for (const check of activeDefinition.coachingChecks ?? []) {
+                if (check.name === "hipShift") {
+                  if (activeDefinition.kind !== "dynamic") continue;
                   const result = updateHipShift(
                     hipShiftStatesRef.current.get(check.name) ?? newHipShiftState(),
                     {
@@ -6922,7 +6933,37 @@ export default function CameraClient() {
                   hipShiftStatesRef.current.set(check.name, result.state);
                   warningSignals.set(check.name, { name: check.name, value: result.value, side: null });
                   warningDisplayMetrics[check.name] = result.value;
+                  continue;
                 }
+                // Each arm is judged from its own raise reading, with the
+                // elbow angle the tuning trace stores (elbowFlexionDeg).
+                const result = updateElbowBend(
+                  elbowBendStatesRef.current.get(check.name) ?? newElbowBendState(),
+                  {
+                    left: {
+                      primary: smoothedPrimaryLeft,
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "left"),
+                    },
+                    right: {
+                      primary: smoothedPrimaryRight,
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "right"),
+                    },
+                    sides: prescribedOutcomeSides(prescriptionRef.current.prescribedSide),
+                    nowMs: tNow,
+                  },
+                  {
+                    ...check.check,
+                    restBelow:
+                      activeDefinition.kind === "dynamic"
+                        ? activeDefinition.primaryMetric.thresholds.startThreshold
+                        : 0,
+                  },
+                  cueTriggerLevel(check),
+                );
+                elbowBendStatesRef.current.set(check.name, result.state);
+                warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                warningDisplayMetrics[check.name] = result.value;
+                if (result.side !== null) metricDirections[check.name] = result.side;
               }
               compensationWarningSignalsRef.current = warningSignals;
 
@@ -12672,6 +12713,7 @@ function metricLabel(name: MetricName): string {
     case "wristShoulderVertical":  return "OVERHEAD";
     case "shoulderElbowDistance":  return "ELBOW POS";
     case "hipShift":               return "HIP SHIFT";
+    case "elbowBend":              return "ELBOW BEND";
   }
 }
 

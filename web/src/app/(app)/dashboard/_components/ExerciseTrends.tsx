@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { TREND_MODEL } from "@/lib/analytics/trendModel";
 import {
+  BAND_WITHHELD,
   changeText,
   extraTrendMeasures,
   prepareGroupModelSeries,
@@ -342,6 +343,9 @@ export function extraMeasureSummary(series: ModelSeries[], def: ExtraMeasureDefi
     .filter((s) => s.counted > 0)
     .map((s) => {
       const side = s.side === "card" ? "" : `${sideLabel(s.side)}: `;
+      if (s.spec && BAND_WITHHELD.has(`${s.spec.exercise}:${s.spec.measure}`)) {
+        return `${side}measured values only (band withheld: the target changed after the model learned this measure)`;
+      }
       if (s.spec?.band === false) return `${side}measured values only (no model band for this measure yet)`;
       if (!s.fit) return `${side}needs at least 2 counted sessions`;
       return `${side}change ${changeText(s.fit, (v) => `${def.format(v)}${def.changeUnit}`)}`;
@@ -592,8 +596,9 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
           {openedFromExtras && breakdown}
           <p className="text-[11px] leading-4 text-gray-400 mt-3">
             These measures show the trend model&apos;s band and estimated change but never a Rising or Falling label.
-            Where a measure has no band, its range did not pass the model&apos;s check, or it has no learned
-            variation yet, so only the measured values are shown.
+            Where a measure has no band, its range did not pass the model&apos;s check, it has no learned
+            variation yet, or its band is withheld (the line under that chart says so), so only the measured
+            values are shown.
             {!isIso && " Compensation threshold shares describe raw signals, not time a cue was shown or time in incorrect form."}
           </p>
         </details>

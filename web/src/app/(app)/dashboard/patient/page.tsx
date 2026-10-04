@@ -123,7 +123,7 @@ function SessionVideoList({
     <div className="mt-8">
       <h2 className="text-lg font-semibold text-green-800">Session videos</h2>
       <p className="text-xs text-gray-500 mt-1 mb-3">
-        Only you and your therapist can watch these. They are kept on this clinic&apos;s computer, and you can delete them.
+        In the app, only you and your therapist can watch these. They are kept on the project&apos;s server, and you can delete them.
       </p>
       <div className="space-y-2">
         {sessions.map((s) => (

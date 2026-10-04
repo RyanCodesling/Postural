@@ -2144,6 +2144,10 @@ function computeMetricByName(
       // Display-only coaching check, computed per bend in hipShiftWarning.ts.
       // It is never a compensation metric, so this path is never asked for it.
       return null;
+    case "elbowBend":
+      // Display-only coaching check, computed per arm in elbowBendWarning.ts
+      // from computeElbowFlexion. Never asked for here, like hipShift.
+      return null;
     default: {
       // Exhaustiveness guard — TypeScript will complain if a MetricName is
       // ever added without a case here.

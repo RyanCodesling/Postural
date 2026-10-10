@@ -9,6 +9,7 @@
     "prebuild": "npm run build:trend-worker",
     "build": "next build",
     "start": "next start",
+    "dev:demo": "node scripts/dev-demo.mjs",
     "lint": "eslint",
     "verify:coaching": "tsx scripts/verify-coaching.ts",
     "verify:coaching:db": "tsx scripts/verify-coaching-readers.ts",

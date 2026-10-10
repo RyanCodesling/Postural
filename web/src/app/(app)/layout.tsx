@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { DemoClockProvider } from "@/lib/DemoClockContext";
 
 const DASHBOARD_BY_ROLE = {
   admin: "/dashboard/admin",
@@ -66,5 +67,5 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  return children;
+  return <DemoClockProvider>{children}</DemoClockProvider>;
 }

@@ -3,7 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import {
   WEEKDAY_SHORT,
@@ -192,10 +194,6 @@ interface PatientRosterSummary {
   painStoppedCount: number;
 }
 
-function todayStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
-}
-
 function fmtDate(d: string) {
   if (!d) return "—";
   const value = d.length === 10 ? `${d}T00:00:00` : d;
@@ -273,6 +271,8 @@ function PrescriptionDetails({
 export default function AssignExercisePage() {
   const { user } = useAuth();
   const { showToast } = useToast();
+  // Today's Manila day, by the demo clock in demo mode.
+  const { todayKey } = useDemoClock();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [patientRoster, setPatientRoster] = useState<Record<string, PatientRosterSummary>>({});
@@ -318,7 +318,15 @@ export default function AssignExercisePage() {
       fetch("/api/programs").then((r) => r.json()),
     ])
       .then(([patientsData, overviewData, exercisesData, programsData]) => {
-        setPatients(Array.isArray(patientsData?.users) ? patientsData.users : []);
+        const loadedPatients: PatientData[] = Array.isArray(patientsData?.users)
+          ? patientsData.users
+          : [];
+        setPatients(loadedPatients);
+        const requestedPatientId = new URLSearchParams(window.location.search).get("patientId");
+        if (requestedPatientId && loadedPatients.some((patient) => patient.id === requestedPatientId)) {
+          setAssignPatientIds([requestedPatientId]);
+          setExpandedPatientId(requestedPatientId);
+        }
         const rosterMap = Object.fromEntries(
           Array.isArray(overviewData?.patients)
             ? overviewData.patients.map((patient: PatientRosterSummary) => [patient.id, patient])
@@ -509,6 +517,18 @@ export default function AssignExercisePage() {
       }
       if (!p.endDate) {
         setAssignErrorMsg(`Please select an end date for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      // A new or changed date may not be in the past; a running prescription keeps its start.
+      const existingSchedule = existingAssignments.find((item) => item.exercise_id === exId);
+      const pastDate = pastScheduleDate(
+        { startDate: p.scheduledDate, endDate: p.endDate },
+        existingSchedule ? storedScheduleDates(existingSchedule) : null,
+        todayKey,
+      );
+      if (pastDate) {
+        setAssignErrorMsg(`The ${pastDate} date for "${ex?.name ?? exId}" must be today or later.`);
         setShowAssignError(true);
         return;
       }
@@ -762,7 +782,7 @@ export default function AssignExercisePage() {
   const selectedPatients = assignPatientIds
     .map((patientId) => patients.find((patient) => patient.id === patientId))
     .filter((patient): patient is PatientData => Boolean(patient));
-  const minDate = todayStr();
+  const minDate = todayKey;
 
   // True when at least one selected exercise is new or has been edited and differs from existing
   const hasAssignChanges = (() => {
@@ -1561,7 +1581,7 @@ function AssignRow({
                 </label>
                 <input
                   type="date"
-                  min={params.scheduledDate || minDate}
+                    min={params.scheduledDate && params.scheduledDate > minDate ? params.scheduledDate : minDate}
                   value={params.endDate ?? ""}
                   onChange={(e) => onSchedule({ endDate: e.target.value })}
                   disabled={locked}

@@ -10,8 +10,10 @@ import {
   getPatientOccurrences,
   getUsers,
   createNotification,
+  getEffectiveNow,
 } from "@/lib/db";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
   MAX_RECURRENCE_SPAN_DAYS,
   MAX_INTERVAL_DAYS,
@@ -248,11 +250,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Every schedule needs a start + an end within the span cap. Interval mode
+    const today = (await getEffectiveNow()).toLocaleDateString("en-CA", {
+      timeZone: "Asia/Manila",
+    });
+    const existingAssignments = await getPatientExercises(patientId);
+
+    // Every schedule needs a start + end within the span cap, and a new or changed date
+    // may not be in the past (a running prescription keeps its start). Interval mode
     // needs a valid N (1..cap); weekly mode needs ≥1 weekday.
     const invalidSchedule = normalizedExercises.find((exercise) => {
       if (!exercise.scheduledDate) return true;
       if (!exercise.endDate) return true;
+      const existing = existingAssignments.find(
+        (assignment) => assignment.exercise_id === exercise.exerciseId,
+      );
+      if (pastScheduleDate(
+        { startDate: exercise.scheduledDate, endDate: exercise.endDate },
+        existing ? storedScheduleDates(existing) : null,
+        today,
+      )) {
+        return true;
+      }
       const span = spanDays(exercise.scheduledDate, exercise.endDate);
       if (span === null || span > MAX_RECURRENCE_SPAN_DAYS) return true;
       if (exercise.recurrence === "weekly") {
@@ -269,7 +287,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
+            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days), and a new or changed date can't be in the past. ` +
             `Choose a repeat interval (1–${MAX_INTERVAL_DAYS} days) or at least one weekday.`,
         },
         { status: 400 },

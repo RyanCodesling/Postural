@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
+import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
+import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 
-type Tab = "dashboard" | "users" | "exercises" | "assignments";
+type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
 interface User {
   id: string;
@@ -38,9 +40,25 @@ interface Exercise {
   is_custom: boolean;
 }
 
+async function uploadPatientAttachments(patientId: string, files: File[]) {
+  if (files.length === 0) return;
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  const response = await fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "File upload failed.");
+  }
+}
+
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  // Today's Manila day by the demo clock; the clock's tab exists only in demo mode.
+  const { todayKey, enabled: demoClockOn } = useDemoClock();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -155,6 +173,8 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [newPatientImages, setNewPatientImages] = useState<File[]>([]);
+  const [editPatientImages, setEditPatientImages] = useState<File[]>([]);
   const [showStatusModal,  setShowStatusModal]  = useState(false);
   const [statusModalMsg,   setStatusModalMsg]   = useState("");
   const [statusModalType,  setStatusModalType]  = useState<"success" | "error">("success");
@@ -244,12 +264,20 @@ export default function AdminDashboard() {
       if (res.ok) {
         setUsers([...users, data.user]);
         const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
-        setStatusModalType("success");
-        setStatusModalMsg(
-          newUser.email
+        let imageUploadError = "";
+        if (newUser.role === "patient" && newPatientImages.length > 0) {
+          try {
+            await uploadPatientAttachments(data.user.id, newPatientImages);
+          } catch (error) {
+            imageUploadError = error instanceof Error ? error.message : "File upload failed.";
+          }
+        }
+        setStatusModalType(imageUploadError ? "error" : "success");
+        setStatusModalMsg(imageUploadError
+          ? `${fullName} was added, but the files could not be saved: ${imageUploadError} Edit the patient to try again.`
+          : newUser.email
             ? `${fullName} successfully added. An activation email with login credentials has been sent to ${newUser.email}.`
-            : `${fullName} successfully added.`
-        );
+            : `${fullName} successfully added.`);
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -264,6 +292,7 @@ export default function AdminDashboard() {
     }
 
     setShowAddPreview(false);
+    setNewPatientImages([]);
     setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "", diagnosis: "", prescription: "", condition: "" });
     setEmailError(null);
     setSelectedRole(null);
@@ -412,6 +441,7 @@ export default function AdminDashboard() {
   const handleEditUser = (user: User) => {
     setEditingUser({ ...user });
     setEditingUserId(user.id);
+    setEditPatientImages([]);
     setShowUserForm(false);
   };
 
@@ -436,12 +466,20 @@ export default function AdminDashboard() {
         const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
         const originalEmail = users.find((u) => u.id === editingUserId)?.email;
         const emailChanged = editingUser.email && originalEmail && editingUser.email !== originalEmail;
-        setStatusModalType("success");
-        setStatusModalMsg(
-          emailChanged
+        let imageUploadError = "";
+        if (editingUser.role === "patient" && editPatientImages.length > 0) {
+          try {
+            await uploadPatientAttachments(editingUser.id, editPatientImages);
+          } catch (error) {
+            imageUploadError = error instanceof Error ? error.message : "File upload failed.";
+          }
+        }
+        setStatusModalType(imageUploadError ? "error" : "success");
+        setStatusModalMsg(imageUploadError
+          ? `${fullName} was updated, but the files could not be saved: ${imageUploadError} Edit the patient to try again.`
+          : emailChanged
             ? `${fullName} successfully updated. Email notifications have been sent to ${originalEmail} and ${editingUser.email} about the email address change.`
-            : `${fullName} successfully updated.`
-        );
+            : `${fullName} successfully updated.`);
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -455,6 +493,7 @@ export default function AdminDashboard() {
       setShowStatusModal(true);
     }
     setShowEditPreview(false);
+    setEditPatientImages([]);
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -462,6 +501,7 @@ export default function AdminDashboard() {
   const handleCancelEdit = () => {
     setEditingUserId(null);
     setEditingUser(null);
+    setEditPatientImages([]);
     setEditEmailError(null);
   };
 
@@ -596,7 +636,7 @@ export default function AdminDashboard() {
 
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
-    const phToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const phToday = todayKey;
     const [ty, tm, td] = phToday.split("-").map(Number);
     const [by, bm, bd] = dob.split("-").map(Number);
     let age = ty - by;
@@ -697,6 +737,20 @@ export default function AdminDashboard() {
                 Assign Patients
               </button>
             </li>
+            {demoClockOn && (
+              <li>
+                <button
+                  onClick={() => { setActiveTab("demo-clock"); setSidebarOpen(false); }}
+                  className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
+                    activeTab === "demo-clock"
+                      ? "bg-green-700 text-white font-medium"
+                      : "text-green-200 hover:bg-green-800"
+                  }`}
+                >
+                  Demo Clock
+                </button>
+              </li>
+            )}
             <li>
               <Link
                 href="/camera"
@@ -710,15 +764,6 @@ export default function AdminDashboard() {
           </ul>
         </nav>
 
-        <div className="mt-auto pt-6 mb-4">
-          <button
-            onClick={async () => { await logout(); router.push("/"); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
-          >
-            <AdminLogoutIcon />
-            Log Out
-          </button>
-        </div>
       </aside>
 
       {/* Main Content */}
@@ -731,10 +776,21 @@ export default function AdminDashboard() {
             ☰ Menu
           </button>
           <div className="md:hidden flex-1" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
             <NotificationBell />
+            <button
+              type="button"
+              onClick={async () => { await logout(); router.push("/"); }}
+              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+            >
+              <AdminLogoutIcon />
+              Log Out
+            </button>
           </div>
         </div>
+        {activeTab === "demo-clock" && demoClockOn && (
+          <DemoClockPanel />
+        )}
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
           <div>
@@ -1064,7 +1120,7 @@ export default function AdminDashboard() {
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
-                            max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                            max={todayKey}
                             min="1900-01-01"
                             required
                           />
@@ -1148,6 +1204,7 @@ export default function AdminDashboard() {
                               />
                             </div>
                           </div>
+                          <PatientImagePicker files={newPatientImages} onChange={setNewPatientImages} />
                         </>
                       )}
 
@@ -1270,7 +1327,7 @@ export default function AdminDashboard() {
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
-                        max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                        max={todayKey}
                         min="1900-01-01"
                       />
                     </div>
@@ -1353,6 +1410,8 @@ export default function AdminDashboard() {
                           />
                         </div>
                       </div>
+                      <PatientAttachmentList patientId={editingUser.id} />
+                      <PatientImagePicker files={editPatientImages} onChange={setEditPatientImages} />
                     </>
                   )}
 
@@ -1459,6 +1518,12 @@ export default function AdminDashboard() {
                           <span className="w-32 shrink-0 text-gray-500">Prescription</span>
                           <span className="font-medium text-gray-900">{newUser.prescription || "—"}</span>
                         </div>
+                        {newPatientImages.length > 0 && (
+                          <div className="flex gap-2">
+                            <span className="w-32 shrink-0 text-gray-500">Files</span>
+                            <span className="font-medium text-gray-900">{newPatientImages.map((file) => file.name).join(", ")}</span>
+                          </div>
+                        )}
                       </>
                     )}
                     {newUser.role === "therapist" && (
@@ -1503,6 +1568,7 @@ export default function AdminDashboard() {
                   { label: "Diagnosis", oldVal: original?.diagnosis ?? undefined, newVal: editingUser.diagnosis ?? undefined },
                   { label: "Condition", oldVal: original?.condition ?? undefined, newVal: editingUser.condition ?? undefined },
                   { label: "Prescription", oldVal: original?.prescription ?? undefined, newVal: editingUser.prescription ?? undefined },
+                  ...(editPatientImages.length > 0 ? [{ label: "Files to attach", oldVal: undefined, newVal: `${editPatientImages.length} file${editPatientImages.length === 1 ? "" : "s"}` }] : []),
                 ] : []),
                 ...(editingUser.role === "therapist" ? [
                   { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
@@ -2369,6 +2435,315 @@ function AdminExerciseRow({
       )}
     </div>
   );
+}
+
+interface StoredAttachment {
+  id: number;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+/**
+ * The patient's attached files, each with a Delete, in the edit form: a file
+ * put on the wrong patient, or one the patient asks to remove, is deleted here.
+ * Deleting is permanent, so it asks first.
+ */
+function PatientAttachmentList({ patientId }: { patientId: string }) {
+  const [files, setFiles] = useState<StoredAttachment[] | null>(null);
+  const [error, setError] = useState("");
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load the attached files.");
+        if (!cancelled) {
+          setFiles(Array.isArray(data.attachments) ? data.attachments : []);
+          setError("");
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load the attached files.");
+      });
+    return () => { cancelled = true; };
+  }, [patientId, reload]);
+
+  const remove = async (file: StoredAttachment) => {
+    setDeletingId(file.id);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/users/${encodeURIComponent(patientId)}/attachments/${file.id}`,
+        { method: "DELETE" },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "The file could not be deleted.");
+      setConfirmId(null);
+      setReload((n) => n + 1);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "The file could not be deleted.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <p className="text-sm font-medium text-gray-700 mb-2">Files already attached</p>
+      {error && <p role="alert" className="mb-2 text-xs text-red-600">{error}</p>}
+      {files === null ? (
+        !error && <p className="text-xs text-gray-500">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="text-xs text-gray-500">No files attached.</p>
+      ) : (
+        <ul className="space-y-2">
+          {files.map((file) => (
+            <li key={file.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-700">
+              <span className="min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
+              {confirmId === file.id ? (
+                <span className="flex items-center gap-2">
+                  <span className="text-red-700">Delete for good?</span>
+                  <button
+                    type="button"
+                    onClick={() => void remove(file)}
+                    disabled={deletingId === file.id}
+                    className="rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {deletingId === file.id ? "Deleting…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmId(null)}
+                    className="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmId(file.id)}
+                  className="shrink-0 text-red-700 hover:underline"
+                  aria-label={`Delete ${file.fileName}`}
+                >
+                  Delete
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PatientImagePicker({
+  files,
+  onChange,
+}: {
+  files: File[];
+  onChange: (files: File[]) => void;
+}) {
+  const [error, setError] = useState("");
+
+  const selectFiles = (selected: File[]) => {
+    if (selected.length > 5) {
+      setError("Choose up to 5 files.");
+      return;
+    }
+    const invalid = selected.find((file) =>
+      !patientAttachmentMimeType(file) || file.size > 5 * 1024 * 1024 || file.size === 0,
+    );
+    if (invalid) {
+      setError("Choose a supported image or document up to 5 MB each.");
+      return;
+    }
+    setError("");
+    onChange(selected);
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <label className="block text-sm font-medium text-gray-700 mb-1">Attached files</label>
+      <p className="text-xs text-gray-500 mb-1">Optional · Images, PDF, Word, Excel, PowerPoint, RTF, or TXT · Up to 5 files, 5 MB each</p>
+      <p className="text-xs font-medium text-amber-800 mb-3">Upload a patient&apos;s documents only with their permission.</p>
+      <input
+        type="file"
+        accept={PATIENT_ATTACHMENT_ACCEPT}
+        multiple
+        onChange={(event) => {
+          selectFiles(Array.from(event.currentTarget.files ?? []));
+          event.currentTarget.value = "";
+        }}
+        className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-green-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-green-800 hover:file:bg-green-100"
+      />
+      {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
+      {files.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {files.map((file, index) => (
+            <li key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center justify-between gap-3 text-xs text-gray-700">
+              <span className="truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => onChange(files.filter((_, fileIndex) => fileIndex !== index))}
+                className="shrink-0 text-red-700 hover:underline"
+                aria-label={`Remove ${file.name}`}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function DemoClockPanel() {
+  const { now, overrideActive, settingsAvailable } = useDemoClock();
+  // Only this panel and the badge tick every second; the pages read the date.
+  const appTime = useTickingLabel(now);
+  const computerTime = useTickingLabel(realTime);
+  const [targetAt, setTargetAt] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/demo-clock", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load demo clock settings.");
+        if (!cancelled) setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load demo clock settings.");
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const target = new Date(targetAt);
+      if (!targetAt || Number.isNaN(target.getTime())) throw new Error("Choose a valid date and time.");
+      const response = await fetch("/api/demo-clock", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetAt: target.toISOString() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not set demo clock.");
+      setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      setMessage("Demo clock updated for all signed-in users.");
+      window.dispatchEvent(new Event("demo-clock-updated"));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not set demo clock.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/demo-clock", { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not reset demo clock.");
+      setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      setMessage("Demo clock reset to real system time.");
+      window.dispatchEvent(new Event("demo-clock-updated"));
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "Could not reset demo clock.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="max-w-2xl rounded-xl border border-green-100 bg-white p-6">
+      <h1 className="text-2xl font-bold text-green-800">Demo Clock</h1>
+      <p className="mt-1 text-sm text-gray-600">
+        Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.
+        Sessions recorded while a demo date is set are saved with that date, so use a demo account.
+      </p>
+      <dl className="mt-5 grid gap-3 border-y border-gray-100 py-4 sm:grid-cols-2">
+        <div>
+          <dt className="text-xs text-gray-500">Computer time</dt>
+          <dd className="mt-1 text-sm font-medium text-gray-900">{computerTime}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-gray-500">App time</dt>
+          <dd className="mt-1 text-sm font-medium text-gray-900">
+            {appTime} {overrideActive ? "(demo)" : "(system)"}
+          </dd>
+        </div>
+      </dl>
+      {!settingsAvailable ? (
+        <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          Run scripts/demo_clock_settings_pg.sql as the database owner to enable the demo clock.
+        </p>
+      ) : (
+        <form onSubmit={save} className="mt-5 space-y-4">
+          <label htmlFor="demo-clock-target" className="block text-sm font-medium text-gray-700">
+            Simulated date and time
+            <input
+              id="demo-clock-target"
+              type="datetime-local"
+              required
+              value={targetAt}
+              onChange={(event) => setTargetAt(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={saving || !targetAt}
+              className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Set demo time"}
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              disabled={saving || !overrideActive}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Reset to system time
+            </button>
+          </div>
+        </form>
+      )}
+      {message && <p role="status" className="mt-4 text-sm text-green-800">{message}</p>}
+      {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
+      <p className="mt-5 text-xs text-gray-500">
+        The demo clock works only while the app runs with npm run dev:demo. A normal start uses the real date and
+        ignores the demo date. Sign-in and password-expiry timers always use the real time.
+      </p>
+    </section>
+  );
+}
+
+const realTime = () => new Date();
+
+function toDateTimeLocalValue(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // ── Sidebar icons ──────────────────────────────────────────────────────────

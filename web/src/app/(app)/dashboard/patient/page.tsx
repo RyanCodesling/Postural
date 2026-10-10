@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import NotificationBell from "../_components/NotificationBell";
 import {
   prescriptionMetricLabel,
@@ -157,6 +158,7 @@ function SessionVideoList({
 
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
+  const { todayKey } = useDemoClock();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -269,7 +271,8 @@ export default function PatientDashboardPage() {
   }
   const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
 
-  const today = sessionTodayPH();
+  // Today's Manila day (YYYY-MM-DD), by the demo clock in demo mode.
+  const today = todayKey;
   const actionableOccurrences = occurrences
     .filter((occurrence) =>
       isOccurrenceActionable(
@@ -372,15 +375,6 @@ export default function PatientDashboardPage() {
           </ul>
         </nav>
 
-        <div className="mt-auto pt-6 mb-4">
-          <button
-            onClick={async () => { await logout(); router.push("/"); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
-          >
-            <PatLogoutIcon />
-            Log Out
-          </button>
-        </div>
       </aside>
 
       {/* Main */}
@@ -393,8 +387,16 @@ export default function PatientDashboardPage() {
             ☰ Menu
           </button>
           <div className="md:hidden flex-1" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
             <NotificationBell />
+            <button
+              type="button"
+              onClick={async () => { await logout(); router.push("/"); }}
+              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+            >
+              <PatLogoutIcon />
+              Log Out
+            </button>
           </div>
         </div>
 
@@ -848,10 +850,6 @@ export default function PatientDashboardPage() {
 }
 
 // ── Session helpers ────────────────────────────────────────────────────────
-
-function sessionTodayPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
-}
 
 interface ScheduleDateGroup {
   date: string;

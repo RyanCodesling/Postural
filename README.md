@@ -22,6 +22,45 @@
 - `deploy/server`: setup scripts and runbook for the evaluation server (base system, app and database,
   backups, HTTPS, and a tool to set the admin password). Secrets are generated on the server.
 
+## 📌 Update-10-10-26 | Ron
+### Web admin navigation
+Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications.
+
+### Web therapist patient profiles and exercise assignment
+Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
+Added diagnosis, condition, and prescription to the therapist’s Patient Profile
+Prevented new or changed exercise dates from being in the past; a running prescription keeps its start date, so it can still be extended
+
+### Patient attachments
+Renamed Patient Images to Attached Files and added image/document uploads during patient creation and editing
+Added support for JPEG, PNG, WebP, PDF, Word, Excel, PowerPoint, RTF, and TXT files, limited to 5 files at 5 MB each
+Added password verification before files can be opened; images and PDFs preview, while other documents download
+Added PostgreSQL storage and an idempotent migration that expands the existing image-only attachment constraint
+Listed a patient's attached files in the admin's edit form, where each can be deleted after a confirmation
+Asked admins to upload a patient's documents only with the patient's permission
+
+### ⚠️ *IMPORTANT* ⚠️ Before final setup
+Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
+Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
+Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
+
+### Development Demo Clock
+Added an admin-only Demo Clock control to set or reset the app’s simulated date and time without changing the computer clock
+Applied simulated time to schedule validation, patient calendars, camera schedule selection, and session timestamps
+Kept authentication and password-expiry timers on real time; scheduling days continue to use Manila time
+Made the clock work only in a development server started with `npm run dev:demo`; a normal `npm run dev` and every production build use the real time and ignore a demo date left in the database
+Made pages read only the demo day, which changes once a day, so the camera page does not redraw for the clock; reminders take tomorrow from the same clock as today
+
+Database setup
+Run these scripts as the PostgreSQL database owner before using the new features:
+
+patient_image_attachments_pg.sql
+demo_clock_settings_pg.sql (only where the demo clock is used)
+The setup order is documented in AUTHENTICATION_SETUP.md.
+
+Validation
+TypeScript, ESLint, the web test suite, and npm run build pass
+
 ## Update-10-4-26 | Integration corrections
 
 - Cancel and invalidate pending single-patient assignment requests when selection

@@ -1,5 +1,6 @@
 import { Pool, PoolClient, types } from "pg";
 import { hashPassword } from "./crypto";
+import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
 import {
   deriveAssignmentStatus,
   generateSchedule,
@@ -55,12 +56,80 @@ types.setTypeParser(1082, (val: string) => val);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// Local (Asia/Manila) YYYY-MM-DD day key. The whole app treats "a day" as a
-// Manila calendar day (calendar, session gating); scheduling math must agree, so
-// occurrence lookups compute today here rather than relying on the DB's
-// CURRENT_DATE (which follows the server/session timezone).
-function todayKeyPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+export interface DemoClockState {
+  available: boolean;
+  isOverridden: boolean;
+  offsetMs: number;
+  effectiveAt: string;
+}
+
+/** The saved demo offset, or null when the demo-clock table has not been installed. */
+async function readDemoClockOffsetMs(): Promise<number | null> {
+  try {
+    const result = await pool.query(
+      "SELECT offset_ms FROM demo_clock_settings WHERE id = 1",
+    );
+    return Number(result.rows[0]?.offset_ms ?? 0);
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") return null;
+    throw error;
+  }
+}
+
+/** For the demo-clock controls, which exist only in demo mode (`demoClockEnabled`). */
+export async function getDemoClockState(): Promise<DemoClockState> {
+  const offsetMs = await readDemoClockOffsetMs();
+  return {
+    available: offsetMs !== null,
+    isOverridden: offsetMs !== null && offsetMs !== 0,
+    offsetMs: offsetMs ?? 0,
+    effectiveAt: new Date(Date.now() + (offsetMs ?? 0)).toISOString(),
+  };
+}
+
+export async function setDemoClock(targetAt: string, updatedBy: string): Promise<void> {
+  const targetMs = Date.parse(targetAt);
+  if (!Number.isFinite(targetMs)) throw new Error("Enter a valid demo date and time.");
+  const offsetMs = targetMs - Date.now();
+  if (Math.abs(offsetMs) > 10 * 366 * 24 * 60 * 60 * 1000) {
+    throw new Error("Demo time must be within 10 years of the real clock.");
+  }
+  await pool.query(
+    `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
+     VALUES (1, $1, $2, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET offset_ms = EXCLUDED.offset_ms,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()`,
+    [Math.trunc(offsetMs), updatedBy],
+  );
+}
+
+export async function resetDemoClock(updatedBy: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
+     VALUES (1, 0, $1, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET offset_ms = 0,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()`,
+    [updatedBy],
+  );
+}
+
+/**
+ * The app's current time. Outside demo mode (`npm run dev:demo`) this is the
+ * real time whatever demo date the database still holds, so sessions,
+ * completions and pain stops are never stamped with a forgotten demo date.
+ */
+export async function getEffectiveNow(): Promise<Date> {
+  if (!demoClockEnabled(process.env)) return new Date();
+  return new Date(Date.now() + ((await readDemoClockOffsetMs()) ?? 0));
+}
+
+// Scheduling uses Manila calendar days; in demo mode the demo clock supplies the instant.
+async function todayKeyPH(): Promise<string> {
+  return manilaDayKey((await getEffectiveNow()).getTime());
 }
 
 // Maps snake_case DB columns to camelCase for the app
@@ -302,6 +371,68 @@ export async function updateUser(id: string, data: Partial<{
     params
   );
   return result.rows.length > 0 ? mapUser(result.rows[0]) : null;
+}
+
+export interface PatientAttachment {
+  fileName: string;
+  mimeType: string;
+  data: Buffer;
+}
+
+export async function listPatientAttachments(patientId: string) {
+  const result = await pool.query(
+    `SELECT id, file_name AS "fileName", mime_type AS "mimeType",
+            octet_length(data)::integer AS size, created_at AS "createdAt"
+       FROM patient_image_attachments
+      WHERE patient_id = $1
+      ORDER BY created_at DESC, id DESC`,
+    [patientId],
+  );
+  return result.rows;
+}
+
+export async function createPatientAttachments(
+  patientId: string,
+  attachments: PatientAttachment[],
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const attachment of attachments) {
+      await client.query(
+        `INSERT INTO patient_image_attachments
+           (patient_id, file_name, mime_type, data)
+         VALUES ($1, $2, $3, $4)`,
+        [patientId, attachment.fileName, attachment.mimeType, attachment.data],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getPatientAttachment(attachmentId: number) {
+  const result = await pool.query(
+    `SELECT id, patient_id AS "patientId", file_name AS "fileName",
+            mime_type AS "mimeType", data, created_at AS "createdAt"
+       FROM patient_image_attachments
+      WHERE id = $1`,
+    [attachmentId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Deletes one of a patient's attached files; false when it is not theirs or is already gone. */
+export async function deletePatientAttachment(patientId: string, attachmentId: number): Promise<boolean> {
+  const result = await pool.query(
+    "DELETE FROM patient_image_attachments WHERE id = $1 AND patient_id = $2",
+    [attachmentId, patientId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export type PermanentUserDeletionBlocker =
@@ -621,7 +752,7 @@ export async function archiveExercise(id: string, archivedBy: string): Promise<b
             AND status = 'pending'
             AND cancelled_at IS NULL
             AND COALESCE(makeup_until, due_date) >= $3::date`,
-        [assignmentIds, archivedBy, todayKeyPH()],
+        [assignmentIds, archivedBy, await todayKeyPH()],
       );
     }
 
@@ -723,7 +854,7 @@ export async function assignExercisesToPatient(
       const startDate =
         ex.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.scheduledDate)
           ? ex.scheduledDate
-          : todayKeyPH();
+          : await todayKeyPH();
       // Default to 'interval' (daily, single-day window) when unspecified so a
       // missing rule yields exactly one occurrence rather than zero.
       const recurrence: Recurrence = ex.recurrence === "weekly" ? "weekly" : "interval";
@@ -787,7 +918,7 @@ export async function assignExercisesToPatient(
             AND status = 'pending'
             AND due_date > $2::date
             AND cancelled_at IS NULL`,
-        [patientExerciseId, todayKeyPH(), therapistId]
+        [patientExerciseId, await todayKeyPH(), therapistId]
       );
       const schedule = generateSchedule({ recurrence, intervalDays, weekdays, startDate, endDate });
       for (const occ of schedule) {
@@ -871,7 +1002,7 @@ export async function archivePatientExercises(
             AND status = 'pending'
             AND cancelled_at IS NULL
             AND COALESCE(makeup_until, due_date) >= $3::date`,
-        [assignmentIds, archivedBy, todayKeyPH()],
+        [assignmentIds, archivedBy, await todayKeyPH()],
       );
     }
     await client.query("COMMIT");
@@ -934,7 +1065,8 @@ export async function getPatientExercises(
     occurrencesByAssignment.set(patientExerciseId, occurrences);
   }
 
-  const today = todayKeyPH();
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   return exerciseResult.rows.map((row) => {
     const { stored_status: storedStatus, ...exercise } = row;
     const occurrences = occurrencesByAssignment.get(Number(row.id)) ?? [];
@@ -1296,9 +1428,10 @@ export async function completeManualOccurrence(
   occurrenceId: number,
   patientId: string,
 ): Promise<{ exerciseName: string; therapistId: string | null }> {
+  const effectiveAt = await getEffectiveNow();
   const result = await pool.query(
     `UPDATE exercise_occurrences eo
-        SET status = 'completed', completed_at = NOW()
+        SET status = 'completed', completed_at = $4
        FROM patient_exercises pe
        JOIN exercises e ON e.id = pe.exercise_id
        JOIN users u ON u.id = pe.patient_id
@@ -1313,7 +1446,12 @@ export async function completeManualOccurrence(
         AND eo.due_date <= $3::date
         AND COALESCE(eo.makeup_until, eo.due_date) >= $3::date
       RETURNING e.name AS exercise_name, u.therapist_id`,
-    [occurrenceId, patientId, todayKeyPH()],
+    [
+      occurrenceId,
+      patientId,
+      effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }),
+      effectiveAt.toISOString(),
+    ],
   );
   if (result.rows.length === 0) throw new ManualOccurrenceNotCompletableError();
   return {
@@ -1341,7 +1479,8 @@ export async function createSession(data: {
   // actionable occurrence today — due today, or earlier with its make-up window
   // still open. Future, missed, or unscheduled starts are refused. Occurrence
   // windows are disjoint and contiguous, so at most one can match.
-  const today = todayKeyPH();
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const definition = getExerciseDefinition(data.exerciseId);
   if (!definition) throw new SessionNotScheduledError("This exercise cannot be camera monitored.");
 
@@ -1387,7 +1526,7 @@ export async function createSession(data: {
     const existingSnapshot = occurrence.prescription_snapshot as
       | PrescriptionSnapshot
       | null;
-    const capturedAt = new Date().toISOString();
+    const capturedAt = effectiveAt.toISOString();
     const prescription: PrescriptionSnapshotV2 =
       existingSnapshot?.version === PRESCRIPTION_SNAPSHOT_VERSION
         ? existingSnapshot
@@ -1472,16 +1611,16 @@ export async function createSession(data: {
 
     await client.query(
       `UPDATE sessions
-          SET ended_at = NOW(), end_reason = 'superseded'
+          SET ended_at = $2, end_reason = 'superseded'
         WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
-      [data.patientExerciseId],
+      [data.patientExerciseId, effectiveAt.toISOString()],
     );
     const result = await client.query(
       `INSERT INTO sessions
-         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id,
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id, started_at,
           context_snapshot, context_snapshot_version, context_captured_at,
           registry_version, exercise_config_version, app_revision)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, started_at`,
       [
         data.patientId,
@@ -1489,6 +1628,7 @@ export async function createSession(data: {
         data.exerciseId,
         data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
         occurrenceId,
+        effectiveAt.toISOString(),
         JSON.stringify(context),
         SESSION_CONTEXT_VERSION,
         capturedAt,
@@ -1596,6 +1736,7 @@ export async function endSession(
   // rewrite the occurrence outcome.
   const endReasonValue = data.completed ? "completed" : data.endReason ?? null;
   if (!endReasonValue) throw new Error("A terminal session reason is required.");
+  const effectiveAt = (await getEffectiveNow()).toISOString();
 
   const client = await pool.connect();
   let transitioned = false;
@@ -1613,7 +1754,7 @@ export async function endSession(
 
     await client.query(
       `UPDATE sessions
-          SET ended_at = NOW(),
+          SET ended_at = $5,
               capture_quality_summary = COALESCE($2, capture_quality_summary),
               notes = COALESCE($3, notes),
               end_reason = $4
@@ -1625,22 +1766,23 @@ export async function endSession(
           : null,
         data.notes ?? null,
         endReasonValue,
+        effectiveAt,
       ],
     );
     const occurrenceId = session.rows[0].occurrence_id as number | null;
     if (occurrenceId !== null && data.completed) {
       await client.query(
         `UPDATE exercise_occurrences
-            SET status = 'completed', completed_at = NOW()
+            SET status = 'completed', completed_at = $2
           WHERE id = $1 AND status IN ('pending', 'in_progress')`,
-        [occurrenceId],
+        [occurrenceId, effectiveAt],
       );
     } else if (occurrenceId !== null && endReasonValue === "pain") {
       await client.query(
         `UPDATE exercise_occurrences
-            SET status = 'pain_stopped', pain_stopped_at = NOW()
+            SET status = 'pain_stopped', pain_stopped_at = $2
           WHERE id = $1 AND status IN ('pending', 'in_progress')`,
-        [occurrenceId],
+        [occurrenceId, effectiveAt],
       );
     }
     transitioned = true;
@@ -2416,6 +2558,8 @@ export async function getSessionsForPatient(patientId: string) {
  * inflate activity — consistent with the patient consistency calendar.
  */
 export async function getTherapistRoster(therapistId: string) {
+  const now = await getEffectiveNow();
+  const today = await todayKeyPH();
   const result = await pool.query(
     `SELECT
         u.id,
@@ -2432,7 +2576,8 @@ export async function getTherapistRoster(therapistId: string) {
      LEFT JOIN (
         SELECT s.patient_id,
                COUNT(*)                                                         AS total_sessions,
-               COUNT(*) FILTER (WHERE s.started_at >= NOW() - INTERVAL '7 days') AS sessions_this_week,
+               COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz - INTERVAL '7 days'
+                                  AND s.started_at < $2::timestamptz) AS sessions_this_week,
                MAX(s.started_at)                                                 AS last_session_at
         FROM sessions s
         WHERE EXISTS (SELECT 1 FROM set_events se WHERE se.session_id = s.id
@@ -2447,11 +2592,11 @@ export async function getTherapistRoster(therapistId: string) {
         SELECT pe.patient_id,
                COUNT(DISTINCT pe.id) FILTER (WHERE pe.archived_at IS NULL)         AS assigned_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
-                                      AND eo.due_date <= $2::date
+                                      AND eo.due_date <= $3::date
                                       AND eo.status <> 'pain_stopped')              AS due_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
                                       AND eo.status = 'completed')                  AS completed_count,
-               COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $2::date
+               COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $3::date
                                       AND eo.status <> 'completed'
                                       AND eo.status <> 'pain_stopped'
                                       AND eo.cancelled_at IS NULL)                  AS missed_count,
@@ -2463,7 +2608,7 @@ export async function getTherapistRoster(therapistId: string) {
      ) ex ON ex.patient_id = u.id
      WHERE u.role = 'patient' AND u.therapist_id = $1
      ORDER BY u.name`,
-    [therapistId, todayKeyPH()],
+    [therapistId, now.toISOString(), today],
   );
   return result.rows.map((row) => ({
     id:               row.id as string,
@@ -2653,10 +2798,10 @@ export async function markAllNotificationsAsRead(userId: string): Promise<void> 
 }
 
 export async function syncTimeNotifications(patientId: string): Promise<void> {
-  const today = todayKeyPH();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const now = await getEffectiveNow();
+  const today = manilaDayKey(now.getTime());
+  // Tomorrow by the same clock as today, so a demo date never mixes with the real one.
+  const tomorrowStr = manilaDayKey(now.getTime() + DAY_MS);
 
   // 1. Fetch missed occurrences. Pain-stopped attempts are closed for therapist
   // review and are neither completed nor missed.

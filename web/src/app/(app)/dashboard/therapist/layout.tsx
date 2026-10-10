@@ -138,15 +138,6 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
           </ul>
         </nav>
 
-        <div className="mt-auto pt-6 mb-4">
-          <button
-            onClick={async () => { await logout(); router.push("/"); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
-          >
-            <LogoutIcon />
-            Log Out
-          </button>
-        </div>
       </aside>
 
       <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0 print:p-0 print:overflow-visible">
@@ -158,8 +149,16 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
             ☰ Menu
           </button>
           <div className="md:hidden flex-1" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
             <NotificationBell />
+            <button
+              type="button"
+              onClick={async () => { await logout(); router.push("/"); }}
+              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+            >
+              <LogoutIcon />
+              Log Out
+            </button>
           </div>
         </div>
         {children}

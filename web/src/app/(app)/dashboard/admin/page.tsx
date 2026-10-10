@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
+import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments";
 
@@ -36,6 +37,20 @@ interface Exercise {
   name: string;
   description: string;
   is_custom: boolean;
+}
+
+async function uploadPatientAttachments(patientId: string, files: File[]) {
+  if (files.length === 0) return;
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  const response = await fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, {
+    method: "POST",
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "File upload failed.");
+  }
 }
 
 export default function AdminDashboard() {
@@ -155,6 +170,8 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [newPatientImages, setNewPatientImages] = useState<File[]>([]);
+  const [editPatientImages, setEditPatientImages] = useState<File[]>([]);
   const [showStatusModal,  setShowStatusModal]  = useState(false);
   const [statusModalMsg,   setStatusModalMsg]   = useState("");
   const [statusModalType,  setStatusModalType]  = useState<"success" | "error">("success");
@@ -244,12 +261,20 @@ export default function AdminDashboard() {
       if (res.ok) {
         setUsers([...users, data.user]);
         const fullName = [newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ");
-        setStatusModalType("success");
-        setStatusModalMsg(
-          newUser.email
+        let imageUploadError = "";
+        if (newUser.role === "patient" && newPatientImages.length > 0) {
+          try {
+            await uploadPatientAttachments(data.user.id, newPatientImages);
+          } catch (error) {
+            imageUploadError = error instanceof Error ? error.message : "File upload failed.";
+          }
+        }
+        setStatusModalType(imageUploadError ? "error" : "success");
+        setStatusModalMsg(imageUploadError
+          ? `${fullName} was added, but the files could not be saved: ${imageUploadError} Edit the patient to try again.`
+          : newUser.email
             ? `${fullName} successfully added. An activation email with login credentials has been sent to ${newUser.email}.`
-            : `${fullName} successfully added.`
-        );
+            : `${fullName} successfully added.`);
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -264,6 +289,7 @@ export default function AdminDashboard() {
     }
 
     setShowAddPreview(false);
+    setNewPatientImages([]);
     setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "", diagnosis: "", prescription: "", condition: "" });
     setEmailError(null);
     setSelectedRole(null);
@@ -412,6 +438,7 @@ export default function AdminDashboard() {
   const handleEditUser = (user: User) => {
     setEditingUser({ ...user });
     setEditingUserId(user.id);
+    setEditPatientImages([]);
     setShowUserForm(false);
   };
 
@@ -436,12 +463,20 @@ export default function AdminDashboard() {
         const fullName = [editingUser.firstName, editingUser.middleName, editingUser.lastName].filter(Boolean).join(" ");
         const originalEmail = users.find((u) => u.id === editingUserId)?.email;
         const emailChanged = editingUser.email && originalEmail && editingUser.email !== originalEmail;
-        setStatusModalType("success");
-        setStatusModalMsg(
-          emailChanged
+        let imageUploadError = "";
+        if (editingUser.role === "patient" && editPatientImages.length > 0) {
+          try {
+            await uploadPatientAttachments(editingUser.id, editPatientImages);
+          } catch (error) {
+            imageUploadError = error instanceof Error ? error.message : "File upload failed.";
+          }
+        }
+        setStatusModalType(imageUploadError ? "error" : "success");
+        setStatusModalMsg(imageUploadError
+          ? `${fullName} was updated, but the files could not be saved: ${imageUploadError} Edit the patient to try again.`
+          : emailChanged
             ? `${fullName} successfully updated. Email notifications have been sent to ${originalEmail} and ${editingUser.email} about the email address change.`
-            : `${fullName} successfully updated.`
-        );
+            : `${fullName} successfully updated.`);
         setShowStatusModal(true);
       } else {
         setStatusModalType("error");
@@ -455,6 +490,7 @@ export default function AdminDashboard() {
       setShowStatusModal(true);
     }
     setShowEditPreview(false);
+    setEditPatientImages([]);
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -462,6 +498,7 @@ export default function AdminDashboard() {
   const handleCancelEdit = () => {
     setEditingUserId(null);
     setEditingUser(null);
+    setEditPatientImages([]);
     setEditEmailError(null);
   };
 
@@ -710,15 +747,6 @@ export default function AdminDashboard() {
           </ul>
         </nav>
 
-        <div className="mt-auto pt-6 mb-4">
-          <button
-            onClick={async () => { await logout(); router.push("/"); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
-          >
-            <AdminLogoutIcon />
-            Log Out
-          </button>
-        </div>
       </aside>
 
       {/* Main Content */}
@@ -731,8 +759,16 @@ export default function AdminDashboard() {
             ☰ Menu
           </button>
           <div className="md:hidden flex-1" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
             <NotificationBell />
+            <button
+              type="button"
+              onClick={async () => { await logout(); router.push("/"); }}
+              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+            >
+              <AdminLogoutIcon />
+              Log Out
+            </button>
           </div>
         </div>
         {/* Dashboard Tab */}
@@ -1148,6 +1184,7 @@ export default function AdminDashboard() {
                               />
                             </div>
                           </div>
+                          <PatientImagePicker files={newPatientImages} onChange={setNewPatientImages} />
                         </>
                       )}
 
@@ -1353,6 +1390,7 @@ export default function AdminDashboard() {
                           />
                         </div>
                       </div>
+                      <PatientImagePicker files={editPatientImages} onChange={setEditPatientImages} />
                     </>
                   )}
 
@@ -1459,6 +1497,12 @@ export default function AdminDashboard() {
                           <span className="w-32 shrink-0 text-gray-500">Prescription</span>
                           <span className="font-medium text-gray-900">{newUser.prescription || "—"}</span>
                         </div>
+                        {newPatientImages.length > 0 && (
+                          <div className="flex gap-2">
+                            <span className="w-32 shrink-0 text-gray-500">Files</span>
+                            <span className="font-medium text-gray-900">{newPatientImages.map((file) => file.name).join(", ")}</span>
+                          </div>
+                        )}
                       </>
                     )}
                     {newUser.role === "therapist" && (
@@ -1503,6 +1547,7 @@ export default function AdminDashboard() {
                   { label: "Diagnosis", oldVal: original?.diagnosis ?? undefined, newVal: editingUser.diagnosis ?? undefined },
                   { label: "Condition", oldVal: original?.condition ?? undefined, newVal: editingUser.condition ?? undefined },
                   { label: "Prescription", oldVal: original?.prescription ?? undefined, newVal: editingUser.prescription ?? undefined },
+                  ...(editPatientImages.length > 0 ? [{ label: "Files to attach", oldVal: undefined, newVal: `${editPatientImages.length} file${editPatientImages.length === 1 ? "" : "s"}` }] : []),
                 ] : []),
                 ...(editingUser.role === "therapist" ? [
                   { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
@@ -2366,6 +2411,67 @@ function AdminExerciseRow({
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function PatientImagePicker({
+  files,
+  onChange,
+}: {
+  files: File[];
+  onChange: (files: File[]) => void;
+}) {
+  const [error, setError] = useState("");
+
+  const selectFiles = (selected: File[]) => {
+    if (selected.length > 5) {
+      setError("Choose up to 5 files.");
+      return;
+    }
+    const invalid = selected.find((file) =>
+      !patientAttachmentMimeType(file) || file.size > 5 * 1024 * 1024 || file.size === 0,
+    );
+    if (invalid) {
+      setError("Choose a supported image or document up to 5 MB each.");
+      return;
+    }
+    setError("");
+    onChange(selected);
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <label className="block text-sm font-medium text-gray-700 mb-1">Attached files</label>
+      <p className="text-xs text-gray-500 mb-3">Optional · Images, PDF, Word, Excel, PowerPoint, RTF, or TXT · Up to 5 files, 5 MB each</p>
+      <input
+        type="file"
+        accept={PATIENT_ATTACHMENT_ACCEPT}
+        multiple
+        onChange={(event) => {
+          selectFiles(Array.from(event.currentTarget.files ?? []));
+          event.currentTarget.value = "";
+        }}
+        className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-green-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-green-800 hover:file:bg-green-100"
+      />
+      {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
+      {files.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {files.map((file, index) => (
+            <li key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center justify-between gap-3 text-xs text-gray-700">
+              <span className="truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => onChange(files.filter((_, fileIndex) => fileIndex !== index))}
+                className="shrink-0 text-red-700 hover:underline"
+                aria-label={`Remove ${file.name}`}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
+import { isPatientImageMimeType } from "@/lib/patientAttachments";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
@@ -41,6 +43,14 @@ interface Patient {
   condition?: string;
   therapistId?: string;
   therapistName?: string;
+}
+
+interface PatientAttachment {
+  id: number;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
 }
 
 interface PatientExercise {
@@ -251,6 +261,13 @@ export default function PatientDetailPage() {
   const patientId = params?.id as string;
 
   const [patient, setPatient] = useState<Patient | null>(null);
+  const [patientImages, setPatientImages] = useState<PatientAttachment[]>([]);
+  const [patientImagesError, setPatientImagesError] = useState(false);
+  const [imageToView, setImageToView] = useState<PatientAttachment | null>(null);
+  const [imagePassword, setImagePassword] = useState("");
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [imagePasswordError, setImagePasswordError] = useState("");
+  const [verifyingImagePassword, setVerifyingImagePassword] = useState(false);
   const [exercises, setExercises] = useState<PatientExercise[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
@@ -263,14 +280,20 @@ export default function PatientDetailPage() {
   const sessionsCardRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (!imagePreviewUrl) return;
+    return () => URL.revokeObjectURL(imagePreviewUrl);
+  }, [imagePreviewUrl]);
+
+  useEffect(() => {
     if (!patientId) return;
 
     const loadData = async () => {
       try {
-        const [patientRes, exercisesRes, sessionsRes] = await Promise.all([
+        const [patientRes, exercisesRes, sessionsRes, imagesRes] = await Promise.all([
           fetch(`/api/users/${patientId}`),
           fetch(`/api/patient-exercises?patientId=${patientId}&includeArchived=true`),
           fetch(`/api/sessions?patientId=${patientId}`),
+          fetch(`/api/users/${patientId}/attachments`),
         ]);
 
         if (patientRes.ok) {
@@ -288,9 +311,17 @@ export default function PatientDetailPage() {
         } else {
           setSessionsError(true);
         }
+        if (imagesRes.ok) {
+          const d = await imagesRes.json();
+          setPatientImages(d.attachments ?? []);
+          setPatientImagesError(false);
+        } else {
+          setPatientImagesError(true);
+        }
       } catch (err) {
         console.error("Error loading patient data:", err);
         setSessionsError(true);
+        setPatientImagesError(true);
       } finally {
         setLoading(false);
       }
@@ -328,6 +359,42 @@ export default function PatientDetailPage() {
 
   const scrollToSessions = () => {
     sessionsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const closeImageViewer = () => {
+    setImageToView(null);
+    setImagePassword("");
+    setImagePreviewUrl(null);
+    setImagePasswordError("");
+    setVerifyingImagePassword(false);
+  };
+
+  const verifyPasswordAndViewImage = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!imageToView || !imagePassword) return;
+    setVerifyingImagePassword(true);
+    setImagePasswordError("");
+    try {
+      const response = await fetch(
+        `/api/users/${encodeURIComponent(patientId)}/attachments/${imageToView.id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: imagePassword }),
+        },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setImagePasswordError(data.error || "Unable to open this file.");
+        return;
+      }
+      setImagePreviewUrl(URL.createObjectURL(await response.blob()));
+      setImagePassword("");
+    } catch {
+      setImagePasswordError("Unable to open this image. Please try again.");
+    } finally {
+      setVerifyingImagePassword(false);
+    }
   };
 
   const currentPrescriptions = exercises.filter(
@@ -418,6 +485,12 @@ export default function PatientDetailPage() {
           <p className="text-gray-500 mt-1 mb-8">{patient.name}</p>
         </div>
         <div className="shrink-0 flex flex-wrap items-start justify-end gap-2">
+          <Link
+            href={`/dashboard/therapist/assign?patientId=${encodeURIComponent(patientId)}`}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition"
+          >
+            Assign Exercise
+          </Link>
           <ReportButton
             label="Progress report (PDF)"
             onDownload={async () => {
@@ -495,6 +568,173 @@ export default function PatientDetailPage() {
 
         </div>
       </div>
+
+      {/* Clinical information */}
+      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+        <h2 className="text-green-700 font-semibold text-lg mb-5">Clinical Information</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Diagnosis</p>
+            <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">
+              {patient.diagnosis?.trim() || "Not recorded"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Condition</p>
+            <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">
+              {patient.condition?.trim() || "Not recorded"}
+            </p>
+          </div>
+          <div className="md:col-span-2">
+            <p className="text-xs text-gray-500 mb-1">Prescription</p>
+            <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">
+              {patient.prescription?.trim() || "Not recorded"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Patient attachments */}
+      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+        <div className="flex items-center justify-between gap-3 mb-5">
+          <h2 className="text-green-700 font-semibold text-lg">Attached Files</h2>
+          {patientImages.length > 0 && (
+            <span className="text-xs text-gray-500">{patientImages.length} file{patientImages.length === 1 ? "" : "s"}</span>
+          )}
+        </div>
+        {patientImagesError ? (
+          <p className="text-sm text-red-600">Unable to load attached files.</p>
+        ) : patientImages.length === 0 ? (
+          <p className="text-sm text-gray-400">No files attached to this patient.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {patientImages.map((attachment) => {
+              return (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => {
+                    setImageToView(attachment);
+                    setImagePassword("");
+                    setImagePasswordError("");
+                    setImagePreviewUrl(null);
+                  }}
+                  className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 text-left transition hover:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-600"
+                >
+                  <div className="grid aspect-[4/3] place-items-center bg-green-50 p-3 text-center text-sm font-medium text-green-800">
+                    <span>
+                      <span className="mb-2 block text-xs uppercase text-green-700">
+                        {attachment.mimeType.split("/").at(-1)?.replace("vnd.", "") ?? "file"}
+                      </span>
+                      Verify password to open
+                    </span>
+                  </div>
+                  <span className="block truncate px-2 py-2 text-xs text-gray-600" title={attachment.fileName}>
+                    {attachment.fileName}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {imageToView && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="patient-image-dialog-title"
+            className="w-full max-w-3xl rounded-xl bg-white p-5 shadow-2xl sm:p-6"
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 id="patient-image-dialog-title" className="text-lg font-semibold text-gray-900">
+                  Confidential patient file
+                </h2>
+                <p className="mt-1 truncate text-sm text-gray-500">{imageToView.fileName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeImageViewer}
+                className="shrink-0 rounded px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100"
+              >
+                Close
+              </button>
+            </div>
+            {imagePreviewUrl ? (
+              <div className="space-y-4">
+                {isPatientImageMimeType(imageToView.mimeType) ? (
+                  <Image
+                    src={imagePreviewUrl}
+                    alt={imageToView.fileName}
+                    width={1200}
+                    height={900}
+                    unoptimized
+                    className="mx-auto max-h-[70vh] w-auto max-w-full rounded-lg object-contain"
+                  />
+                ) : imageToView.mimeType === "application/pdf" ? (
+                  <iframe
+                    src={imagePreviewUrl}
+                    title={imageToView.fileName}
+                    className="h-[70vh] w-full rounded-lg border border-gray-200"
+                  />
+                ) : (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center">
+                    <p className="mb-4 text-sm text-gray-700">This document is ready to download.</p>
+                    <a
+                      href={imagePreviewUrl}
+                      download={imageToView.fileName}
+                      className="inline-flex rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800"
+                    >
+                      Download file
+                    </a>
+                  </div>
+                )}
+                <p className="text-center text-xs text-gray-500">Close this window to lock the file again.</p>
+              </div>
+            ) : (
+              <form onSubmit={verifyPasswordAndViewImage} className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Enter your account password to open this file.
+                </p>
+                <label className="block text-sm font-medium text-gray-700" htmlFor="patient-image-password">
+                  Password
+                  <input
+                    id="patient-image-password"
+                    type="password"
+                    autoComplete="current-password"
+                    autoFocus
+                    required
+                    value={imagePassword}
+                    onChange={(event) => setImagePassword(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+                  />
+                </label>
+                {imagePasswordError && (
+                  <p role="alert" className="text-sm text-red-700">{imagePasswordError}</p>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeImageViewer}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={verifyingImagePassword || !imagePassword}
+                    className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {verifyingImagePassword ? "Verifying…" : "Verify & View"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        </div>
+      )}
 
       {/* Current prescription lifecycle */}
       <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">

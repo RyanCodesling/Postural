@@ -317,7 +317,15 @@ export default function AssignExercisePage() {
       fetch("/api/programs").then((r) => r.json()),
     ])
       .then(([patientsData, overviewData, exercisesData, programsData]) => {
-        setPatients(Array.isArray(patientsData?.users) ? patientsData.users : []);
+        const loadedPatients: PatientData[] = Array.isArray(patientsData?.users)
+          ? patientsData.users
+          : [];
+        setPatients(loadedPatients);
+        const requestedPatientId = new URLSearchParams(window.location.search).get("patientId");
+        if (requestedPatientId && loadedPatients.some((patient) => patient.id === requestedPatientId)) {
+          setAssignPatientIds([requestedPatientId]);
+          setExpandedPatientId(requestedPatientId);
+        }
         const rosterMap = Object.fromEntries(
           Array.isArray(overviewData?.patients)
             ? overviewData.patients.map((patient: PatientRosterSummary) => [patient.id, patient])
@@ -451,6 +459,7 @@ export default function AssignExercisePage() {
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
     const payload: AssignmentPayload[] = [];
+    const today = todayStr();
     for (const exId of assignSelected) {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
@@ -495,6 +504,15 @@ export default function AssignExercisePage() {
       }
       if (!p.endDate) {
         setAssignErrorMsg(`Please select an end date for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      const existingSchedule = existingAssignments.find((item) => item.exercise_id === exId);
+      const scheduleUnchanged = existingSchedule &&
+        p.scheduledDate === (existingSchedule.start_date ?? existingSchedule.assigned_date) &&
+        p.endDate === (existingSchedule.end_date ?? existingSchedule.assigned_date);
+      if (!scheduleUnchanged && (p.scheduledDate < today || p.endDate < today)) {
+        setAssignErrorMsg(`Start and end dates for "${ex?.name ?? exId}" must be today or later.`);
         setShowAssignError(true);
         return;
       }
@@ -1546,7 +1564,7 @@ function AssignRow({
                 </label>
                 <input
                   type="date"
-                  min={params.scheduledDate || minDate}
+                    min={params.scheduledDate && params.scheduledDate > minDate ? params.scheduledDate : minDate}
                   value={params.endDate ?? ""}
                   onChange={(e) => onSchedule({ endDate: e.target.value })}
                   disabled={locked}

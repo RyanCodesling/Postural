@@ -248,11 +248,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Every schedule needs a start + an end within the span cap. Interval mode
+    const today = new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Manila",
+    });
+    const existingAssignments = await getPatientExercises(patientId);
+
+    // Every schedule needs a current/future start + end within the span cap. Interval mode
     // needs a valid N (1..cap); weekly mode needs ≥1 weekday.
     const invalidSchedule = normalizedExercises.find((exercise) => {
       if (!exercise.scheduledDate) return true;
       if (!exercise.endDate) return true;
+      const existing = existingAssignments.find(
+        (assignment) => assignment.exercise_id === exercise.exerciseId,
+      );
+      const scheduleUnchanged = existing &&
+        exercise.scheduledDate === (existing.start_date ?? existing.assigned_date) &&
+        exercise.endDate === (existing.end_date ?? existing.assigned_date);
+      if (!scheduleUnchanged && (exercise.scheduledDate < today || exercise.endDate < today)) {
+        return true;
+      }
       const span = spanDays(exercise.scheduledDate, exercise.endDate);
       if (span === null || span > MAX_RECURRENCE_SPAN_DAYS) return true;
       if (exercise.recurrence === "weekly") {
@@ -269,7 +283,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
+            `Each schedule needs start and end dates on or after today (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
             `Choose a repeat interval (1–${MAX_INTERVAL_DAYS} days) or at least one weekday.`,
         },
         { status: 400 },

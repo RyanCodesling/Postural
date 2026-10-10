@@ -268,6 +268,59 @@ export async function updateUser(id: string, data: Partial<{
   return result.rows.length > 0 ? mapUser(result.rows[0]) : null;
 }
 
+export interface PatientAttachment {
+  fileName: string;
+  mimeType: string;
+  data: Buffer;
+}
+
+export async function listPatientAttachments(patientId: string) {
+  const result = await pool.query(
+    `SELECT id, file_name AS "fileName", mime_type AS "mimeType",
+            octet_length(data)::integer AS size, created_at AS "createdAt"
+       FROM patient_image_attachments
+      WHERE patient_id = $1
+      ORDER BY created_at DESC, id DESC`,
+    [patientId],
+  );
+  return result.rows;
+}
+
+export async function createPatientAttachments(
+  patientId: string,
+  attachments: PatientAttachment[],
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const attachment of attachments) {
+      await client.query(
+        `INSERT INTO patient_image_attachments
+           (patient_id, file_name, mime_type, data)
+         VALUES ($1, $2, $3, $4)`,
+        [patientId, attachment.fileName, attachment.mimeType, attachment.data],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getPatientAttachment(attachmentId: number) {
+  const result = await pool.query(
+    `SELECT id, patient_id AS "patientId", file_name AS "fileName",
+            mime_type AS "mimeType", data, created_at AS "createdAt"
+       FROM patient_image_attachments
+      WHERE id = $1`,
+    [attachmentId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export type PermanentUserDeletionBlocker =
   | "patient_prescriptions"
   | "patient_sessions"

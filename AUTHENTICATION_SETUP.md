@@ -209,14 +209,15 @@ The `password_reset_otps` table includes:
 To bring an existing PostgreSQL database up to the current application schema, run these scripts as the database owner/superuser (for example, `postgres`):
 
 1. `scripts/user_credentials_pg.sql`
-2. `scripts/exercises_pg.sql`
-3. `scripts/patient_exercises_pg.sql`
-4. `scripts/exercise_programs_pg.sql`
-5. `scripts/sessions_pg.sql`
-6. `scripts/exercise_occurrences_pg.sql`
-7. `scripts/email_features.sql`
-8. `scripts/reset_token_migration.sql`
-9. `scripts/notifications_pg.sql`
+2. `scripts/patient_image_attachments_pg.sql` (rerun to upgrade existing image-only attachments to documents)
+3. `scripts/exercises_pg.sql`
+4. `scripts/patient_exercises_pg.sql`
+5. `scripts/exercise_programs_pg.sql`
+6. `scripts/sessions_pg.sql`
+7. `scripts/exercise_occurrences_pg.sql`
+8. `scripts/email_features.sql`
+9. `scripts/reset_token_migration.sql`
+10. `scripts/notifications_pg.sql`
 
 Keep the exercise and clinical-context scripts in the order shown. Exercises must exist before prescriptions and reusable programs, sessions depend on prescriptions, and the occurrence script adds the occurrence link to the existing sessions table. Rerun all five scripts when deploying prescribed side/load, immutable session context, pain-stop reporting, and clinician-review support. Run notifications last because its optional occurrence foreign key depends on `exercise_occurrences`.
 

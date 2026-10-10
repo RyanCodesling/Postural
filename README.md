@@ -1,9 +1,10 @@
 # Sprint Updates 
-📌 Update-10-9-26 | Ron
+
+📌 Update-10-10-26 | Ron
 ### web admin navigation
 Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
 
-### web therapist patient profiles and exercise assignment
+### Web therapist patient profiles and exercise assignment
 Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
 Added diagnosis, condition, and prescription to the therapist’s Patient Profile
 Prevented new or changed exercise schedules from using past dates; unchanged existing schedules remain editable
@@ -18,6 +19,30 @@ Added PostgreSQL storage and an idempotent migration that expands the existing i
 Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
 Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
 Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
+
+### Therapist dashboard analytics
+Added a 14-day activity graph for sessions, patient sign-ins, and new patient assignments
+Added total and recently active patient metrics; “active” means a recorded sign-in or completed exercise session in the last 7 days, not currently online
+Added database event tracking for patient sign-ins/sign-outs and therapist assignments
+Kept the roster dashboard available if the analytics migration hasn’t been installed; missing metrics show as unavailable
+
+### Development Demo Clock
+Added an admin-only Demo Clock control to set or reset the app’s simulated date and time without changing the computer clock
+Applied simulated time to schedule validation, patient calendars, camera schedule selection, session timestamps, and dashboard activity windows
+Kept authentication and password-expiry timers on real time; scheduling days continue to use Manila time
+Disabled the clock controls in production
+
+Database setup
+Run these scripts as the PostgreSQL database owner before using the new features:
+
+demo_clock_settings_pg.sql
+patient_activity_events_pg.sql
+The setup order is documented in AUTHENTICATION_SETUP.md.
+
+Validation
+TypeScript, ESLint, git diff --check, and npm run build pass
+The app is already running at http://localhost:3000; a second dev-server launch was blocked because that port is occupied
+
 
 ## 📌 Update-10-1-26 | *Ron*
 

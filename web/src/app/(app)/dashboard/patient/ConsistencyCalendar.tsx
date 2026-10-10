@@ -105,7 +105,8 @@ export default function ConsistencyCalendar({
   sessions: CalendarSession[];
   occurrences: CalendarOccurrence[];
 }) {
-  const { effectiveNow } = useDemoClock();
+  // Today's Manila day by the demo clock (the real day outside demo mode).
+  const { todayKey } = useDemoClock();
   // Only "outcome-bearing" sessions count as a routine day — a session row is
   // created the moment Start is pressed, so accidental or immediately-abandoned
   // starts (no set, no rep) must not inflate the streak / totals / "did a routine".
@@ -130,7 +131,6 @@ export default function ConsistencyCalendar({
     occByDay.set(o.due_date, list);
   }
 
-  const todayKey = effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const today = parseKey(todayKey);
 
   // Which month the grid shows (defaults to the current month). Stats below are

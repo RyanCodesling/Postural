@@ -92,7 +92,8 @@ test("pain stop is terminal and excluded from missed reminder candidates", () =>
     "../app/api/sessions/[id]/set-events/route.ts",
   );
   assert(
-    db.includes("status = 'pain_stopped', pain_stopped_at = NOW()"),
+    // The time comes from the app's clock (real outside demo mode), passed as $2.
+    db.includes("status = 'pain_stopped', pain_stopped_at = $2"),
     "pain stop must mark its occurrence",
   );
   assert(

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPatientAttachment, getUserById, getUserRawById } from "@/lib/db";
+import { deletePatientAttachment, getPatientAttachment, getUserById, getUserRawById } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { comparePassword } from "@/lib/crypto";
 import { isPatientImageMimeType } from "@/lib/patientAttachments";
@@ -50,5 +50,27 @@ export async function POST(
   } catch (error) {
     console.error("GET /api/users/[id]/attachments/[attachmentId] error:", error);
     return NextResponse.json({ error: "Failed to fetch patient image" }, { status: 500 });
+  }
+}
+
+/** Admin only: deletes one of the patient's attached files, permanently. */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string; attachmentId: string }> },
+) {
+  try {
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const { id, attachmentId: rawAttachmentId } = await params;
+    const attachmentId = Number(rawAttachmentId);
+    if (!Number.isInteger(attachmentId) || attachmentId < 1 || !(await deletePatientAttachment(id, attachmentId))) {
+      return NextResponse.json({ error: "File not found" }, { status: 404 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /api/users/[id]/attachments/[attachmentId] error:", error);
+    return NextResponse.json({ error: "Failed to delete the file" }, { status: 500 });
   }
 }

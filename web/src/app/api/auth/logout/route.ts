@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminNotification, getUserById, recordPatientActivityEvent } from "@/lib/db";
+import { createAdminNotification } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   AUTH_COOKIE_NAME,
@@ -17,17 +17,6 @@ export async function POST(request: NextRequest) {
   }
 
   // Log logout event for admins if the user is a patient or therapist
-  if (user?.role === "patient") {
-    try {
-      const patient = await getUserById(user.id);
-      if (typeof patient?.therapistId === "string") {
-        await recordPatientActivityEvent(user.id, patient.therapistId, "logout");
-      }
-    } catch (error) {
-      console.error("Failed to record patient logout activity:", error);
-    }
-  }
-
   if (user && (user.role === "patient" || user.role === "therapist")) {
     try {
       await createAdminNotification(

@@ -13,6 +13,7 @@ import {
   getEffectiveNow,
 } from "@/lib/db";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
   MAX_RECURRENCE_SPAN_DAYS,
   MAX_INTERVAL_DAYS,
@@ -254,7 +255,8 @@ export async function POST(request: NextRequest) {
     });
     const existingAssignments = await getPatientExercises(patientId);
 
-    // Every schedule needs a current/future start + end within the span cap. Interval mode
+    // Every schedule needs a start + end within the span cap, and a new or changed date
+    // may not be in the past (a running prescription keeps its start). Interval mode
     // needs a valid N (1..cap); weekly mode needs ≥1 weekday.
     const invalidSchedule = normalizedExercises.find((exercise) => {
       if (!exercise.scheduledDate) return true;
@@ -262,10 +264,11 @@ export async function POST(request: NextRequest) {
       const existing = existingAssignments.find(
         (assignment) => assignment.exercise_id === exercise.exerciseId,
       );
-      const scheduleUnchanged = existing &&
-        exercise.scheduledDate === (existing.start_date ?? existing.assigned_date) &&
-        exercise.endDate === (existing.end_date ?? existing.assigned_date);
-      if (!scheduleUnchanged && (exercise.scheduledDate < today || exercise.endDate < today)) {
+      if (pastScheduleDate(
+        { startDate: exercise.scheduledDate, endDate: exercise.endDate },
+        existing ? storedScheduleDates(existing) : null,
+        today,
+      )) {
         return true;
       }
       const span = spanDays(exercise.scheduledDate, exercise.endDate);
@@ -284,7 +287,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            `Each schedule needs start and end dates on or after today (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
+            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days), and a new or changed date can't be in the past. ` +
             `Choose a repeat interval (1–${MAX_INTERVAL_DAYS} days) or at least one weekday.`,
         },
         { status: 400 },

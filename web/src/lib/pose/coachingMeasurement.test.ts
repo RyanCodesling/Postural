@@ -139,8 +139,9 @@ async function run() {
     if (sql.includes("FROM exercise_occurrences eo")) return { rows: [{ id: 1, due_date: "2026-09-23", makeup_until: "2026-09-23", status: "pending", prescription_snapshot: null,
       patient_exercise_id: 1, exercise_id: "ex_001", sets: 1, reps: 1, rest_seconds: 0, hold_seconds: 0, sequence_index: 1, prescribed_side: "left", resistance_type: "none", name: definition.name }] };
     if (sql.includes("INSERT INTO sessions")) {
-      storedSession = { id: 71, patient_id: "fixture", exercise_id: "ex_001", context_snapshot: JSON.parse(values[5]),
-        registry_version: values[8], exercise_config_version: values[9], app_revision: values[10] };
+      // started_at is the sixth value: it comes from the app's clock (the demo clock in demo mode).
+      storedSession = { id: 71, patient_id: "fixture", exercise_id: "ex_001", started_at: values[5], context_snapshot: JSON.parse(values[6]),
+        registry_version: values[9], exercise_config_version: values[10], app_revision: values[11] };
       return { rows: [{ id: 71, started_at: "2026-09-23T00:00:00Z" }], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO set_events")) {
@@ -162,9 +163,11 @@ async function run() {
   assert.equal(dbFunctions.length, 3);
   const dbContext: any = vm.createContext({ exports: {}, pool, ...versioning, ...contextContract, ...readModels, ...hold,
     POSE_METRIC_ALGORITHM_VERSION, getExerciseDefinition, coachingConfiguration: config.coachingConfiguration,
-    getUserById: async () => null, todayKeyPH: () => "2026-09-23", console });
+    getUserById: async () => null, todayKeyPH: () => "2026-09-23",
+    getEffectiveNow: async () => new Date("2026-09-23T04:00:00.000Z"), console });
   vm.runInContext(transpile(dbFunctions.map(n => n.getText(dbAst)).join("\n")), dbContext);
   await dbContext.exports.createSession({ patientId: "fixture", patientExerciseId: 1, occurrenceId: 1, exerciseId: "ex_001" });
+  assert.equal(storedSession.started_at, "2026-09-23T04:00:00.000Z", "the session starts at the app's time");
   assert.equal(storedSession.context_snapshot.coaching.source, "server-default-unverified", "legacy client provenance is not fabricated");
   assert(!("preSessionPain" in storedSession.context_snapshot), "a start without the survey stores no answer");
   const jsonResponse = (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200 });

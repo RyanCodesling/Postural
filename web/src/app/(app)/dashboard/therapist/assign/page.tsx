@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
 import { useDemoClock } from "@/lib/DemoClockContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import {
   WEEKDAY_SHORT,
@@ -193,10 +194,6 @@ interface PatientRosterSummary {
   painStoppedCount: number;
 }
 
-function todayStr(now: Date): string {
-  return now.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
-}
-
 function fmtDate(d: string) {
   if (!d) return "—";
   const value = d.length === 10 ? `${d}T00:00:00` : d;
@@ -274,7 +271,8 @@ function PrescriptionDetails({
 export default function AssignExercisePage() {
   const { user } = useAuth();
   const { showToast } = useToast();
-  const { effectiveNow } = useDemoClock();
+  // Today's Manila day, by the demo clock in demo mode.
+  const { todayKey } = useDemoClock();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [patientRoster, setPatientRoster] = useState<Record<string, PatientRosterSummary>>({});
@@ -461,7 +459,6 @@ export default function AssignExercisePage() {
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
     const payload: AssignmentPayload[] = [];
-    const today = todayStr(effectiveNow);
     for (const exId of assignSelected) {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
@@ -509,12 +506,15 @@ export default function AssignExercisePage() {
         setShowAssignError(true);
         return;
       }
+      // A new or changed date may not be in the past; a running prescription keeps its start.
       const existingSchedule = existingAssignments.find((item) => item.exercise_id === exId);
-      const scheduleUnchanged = existingSchedule &&
-        p.scheduledDate === (existingSchedule.start_date ?? existingSchedule.assigned_date) &&
-        p.endDate === (existingSchedule.end_date ?? existingSchedule.assigned_date);
-      if (!scheduleUnchanged && (p.scheduledDate < today || p.endDate < today)) {
-        setAssignErrorMsg(`Start and end dates for "${ex?.name ?? exId}" must be today or later.`);
+      const pastDate = pastScheduleDate(
+        { startDate: p.scheduledDate, endDate: p.endDate },
+        existingSchedule ? storedScheduleDates(existingSchedule) : null,
+        todayKey,
+      );
+      if (pastDate) {
+        setAssignErrorMsg(`The ${pastDate} date for "${ex?.name ?? exId}" must be today or later.`);
         setShowAssignError(true);
         return;
       }
@@ -767,7 +767,7 @@ export default function AssignExercisePage() {
   const selectedPatients = assignPatientIds
     .map((patientId) => patients.find((patient) => patient.id === patientId))
     .filter((patient): patient is PatientData => Boolean(patient));
-  const minDate = todayStr(effectiveNow);
+  const minDate = todayKey;
 
   // True when at least one selected exercise is new or has been edited and differs from existing
   const hasAssignChanges = (() => {

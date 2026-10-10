@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import {
-  getTherapistDashboardAnalytics,
-  getTherapistRoster,
-  getPrograms,
-} from "@/lib/db";
+import { getTherapistRoster, getPrograms } from "@/lib/db";
 
 // GET /api/therapist/overview — home-dashboard rollup for the signed-in
 // therapist: a per-patient activity roster + the therapist's program count.
@@ -22,14 +18,7 @@ export async function GET(request: NextRequest) {
       getPrograms(user.id),
     ]);
 
-    let analytics = null;
-    try {
-      analytics = await getTherapistDashboardAnalytics(user.id);
-    } catch (error) {
-      console.error("GET /api/therapist/overview analytics unavailable:", error);
-    }
-
-    return NextResponse.json({ patients, programCount: programs.length, analytics });
+    return NextResponse.json({ patients, programCount: programs.length });
   } catch (error) {
     console.error("GET /api/therapist/overview error:", error);
     return NextResponse.json({ error: "Failed to load overview" }, { status: 500 });

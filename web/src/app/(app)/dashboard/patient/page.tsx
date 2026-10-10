@@ -158,7 +158,7 @@ function SessionVideoList({
 
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
-  const { effectiveNow } = useDemoClock();
+  const { todayKey } = useDemoClock();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -271,7 +271,8 @@ export default function PatientDashboardPage() {
   }
   const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
 
-  const today = sessionTodayPH(effectiveNow);
+  // Today's Manila day (YYYY-MM-DD), by the demo clock in demo mode.
+  const today = todayKey;
   const actionableOccurrences = occurrences
     .filter((occurrence) =>
       isOccurrenceActionable(
@@ -849,10 +850,6 @@ export default function PatientDashboardPage() {
 }
 
 // ── Session helpers ────────────────────────────────────────────────────────
-
-function sessionTodayPH(now: Date): string {
-  return now.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
-}
 
 interface ScheduleDateGroup {
   date: string;

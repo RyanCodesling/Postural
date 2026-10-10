@@ -19,29 +19,12 @@ interface RosterPatient {
   painStoppedCount: number; // occurrences paused after a pain stop
 }
 
-interface TherapistAnalytics {
-  totals: {
-    totalPatients: number;
-    activePatients: number;
-    patientLogins14Days: number;
-    newAssignments14Days: number;
-    sessions14Days: number;
-  };
-  daily: {
-    date: string;
-    sessions: number;
-    patientLogins: number;
-    newAssignments: number;
-  }[];
-}
-
 export default function TherapistDashboardPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
 
   const [patients, setPatients] = useState<RosterPatient[]>([]);
   const [programCount, setProgramCount] = useState(0);
-  const [analytics, setAnalytics] = useState<TherapistAnalytics | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -61,7 +44,6 @@ export default function TherapistDashboardPage() {
         if (cancelled) return;
         setPatients(d.patients ?? []);
         setProgramCount(d.programCount ?? 0);
-        setAnalytics(d.analytics ?? null);
         setError(false);
       } catch (err) {
         if (cancelled) return;
@@ -87,6 +69,7 @@ export default function TherapistDashboardPage() {
     );
   }
 
+  const sessionsThisWeek = patients.reduce((sum, p) => sum + p.sessionsThisWeek, 0);
   const noExercises = patients.filter((p) => p.assignedCount === 0).length;
   // Flag a patient when they have prescriptions but either no activity this week
   // or scheduled days that slipped past uncompleted.
@@ -105,17 +88,14 @@ export default function TherapistDashboardPage() {
 
       {error && (
         <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-          Couldn&apos;t load the dashboard rollup. Check that the required database scripts have been run, then refresh.
+          Couldn&apos;t load the dashboard rollup. Check that the session tables exist and refresh.
         </div>
       )}
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
-        <KpiCard label="Patients" value={analytics?.totals.totalPatients ?? patients.length} />
-        <KpiCard label="Active (7 days)" value={analytics?.totals.activePatients ?? "—"} />
-        <KpiCard label="Sessions (14 days)" value={analytics?.totals.sessions14Days ?? "—"} />
-        <KpiCard label="Patient sign-ins (14 days)" value={analytics?.totals.patientLogins14Days ?? "—"} accent="blue" />
-        <KpiCard label="New assignments (14 days)" value={analytics?.totals.newAssignments14Days ?? "—"} accent="blue" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+        <KpiCard label="Patients" value={patients.length} />
+        <KpiCard label="Sessions this week" value={sessionsThisWeek} />
         <KpiCard label="Programs" value={programCount} />
         <KpiCard
           label="No exercises yet"
@@ -128,13 +108,6 @@ export default function TherapistDashboardPage() {
           accent={needsAttention > 0 ? "amber" : "green"}
         />
       </div>
-
-      {analytics && <ActivityChart daily={analytics.daily} />}
-      {!analytics && !error && (
-        <p className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Activity metrics are unavailable until the database owner runs patient_activity_events_pg.sql.
-        </p>
-      )}
 
       {/* Patient roster */}
       <div className="bg-white rounded-2xl border border-green-100 p-6">
@@ -251,7 +224,7 @@ function KpiCard({
   accent = "green",
 }: {
   label: string;
-  value: number | string;
+  value: number;
   accent?: "green" | "amber" | "blue";
 }) {
   const valueColor =
@@ -264,72 +237,4 @@ function KpiCard({
       <p className="text-xs text-gray-500 mt-1">{label}</p>
     </div>
   );
-}
-
-function ActivityChart({ daily }: { daily: TherapistAnalytics["daily"] }) {
-  const maxValue = Math.max(
-    1,
-    ...daily.flatMap((day) => [day.sessions, day.patientLogins, day.newAssignments]),
-  );
-  const series = [
-    { key: "sessions" as const, label: "Sessions", color: "bg-green-600" },
-    { key: "patientLogins" as const, label: "Patient sign-ins", color: "bg-blue-600" },
-    { key: "newAssignments" as const, label: "New assignments", color: "bg-amber-500" },
-  ];
-
-  return (
-    <section className="mb-6 rounded-xl border border-green-100 bg-white p-5 sm:p-6" aria-labelledby="therapist-activity-title">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id="therapist-activity-title" className="text-lg font-semibold text-green-800">Patient Activity</h2>
-          <p className="mt-1 text-xs text-gray-500">Daily totals for the last 14 days · Manila time</p>
-        </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-600">
-          {series.map((item) => (
-            <span key={item.key} className="inline-flex items-center gap-1.5">
-              <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-sm ${item.color}`} />
-              {item.label}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-5 overflow-x-auto">
-        <div className="flex h-48 min-w-[760px] items-end gap-2 border-b border-gray-200 px-1">
-          {daily.map((day) => (
-            <div key={day.date} className="flex h-full min-w-0 flex-1 flex-col justify-end">
-              <div
-                className="flex h-[calc(100%-1.5rem)] items-end justify-center gap-1"
-                role="img"
-                aria-label={`${formatDay(day.date)}: ${day.sessions} sessions, ${day.patientLogins} patient sign-ins, ${day.newAssignments} new assignments`}
-              >
-                {series.map((item) => {
-                  const value = day[item.key];
-                  return (
-                    <div
-                      key={item.key}
-                      title={`${item.label}: ${value}`}
-                      className={`w-2.5 rounded-t-sm ${item.color} ${value === 0 ? "opacity-20" : ""}`}
-                      style={{ height: `${Math.max(value > 0 ? 4 : 0, (value / maxValue) * 100)}%` }}
-                    />
-                  );
-                })}
-              </div>
-              <span className="h-6 pt-1 text-center text-[10px] text-gray-500">{formatDay(day.date)}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <p className="mt-3 text-xs text-gray-500">
-        Active patients have a recorded sign-in or completed exercise session within the last 7 days. Sign-in and assignment trends begin when activity tracking is installed.
-      </p>
-    </section>
-  );
-}
-
-function formatDay(date: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
-    month: "numeric",
-    day: "numeric",
-  });
 }

@@ -1769,11 +1769,10 @@ type CardSpec = {
 };
 
 export default function CameraClient() {
-  const { user, logout } = useAuth();
-  const { effectiveNow } = useDemoClock();
-  const effectiveTodayPH = effectiveNow.toLocaleDateString("en-CA", {
-    timeZone: "Asia/Manila",
-  });
+  const { user } = useAuth();
+  // The day by the demo clock (the real day outside demo mode). It changes once
+  // a day, so the camera page does not redraw for the clock.
+  const { todayKey: effectiveTodayPH } = useDemoClock();
   const { showToast } = useToast();
   const dashboardHref =
     user?.role === "admin" ? "/dashboard/admin"
@@ -8147,18 +8146,6 @@ export default function CameraClient() {
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               How to Use
-            </button>
-            <button
-              type="button"
-              onClick={async () => { await logout(); router.push("/"); }}
-              style={{
-                padding: "9px 14px", borderRadius: 8,
-                border: "1px solid oklch(0.70 0.18 25)", background: "white",
-                fontFamily: "var(--sans)", fontSize: 14, fontWeight: 600,
-                color: "oklch(0.48 0.16 25)", cursor: "pointer",
-              }}
-            >
-              Log Out
             </button>
           </div>
         </header>

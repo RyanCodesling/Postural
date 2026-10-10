@@ -1,5 +1,6 @@
 import { Pool, PoolClient, types } from "pg";
 import { hashPassword } from "./crypto";
+import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
 import {
   deriveAssignmentStatus,
   generateSchedule,
@@ -61,38 +62,28 @@ export interface DemoClockState {
   effectiveAt: string;
 }
 
-async function readDemoClockOffsetMs(): Promise<number> {
+/** The saved demo offset, or null when the demo-clock table has not been installed. */
+async function readDemoClockOffsetMs(): Promise<number | null> {
   try {
     const result = await pool.query(
       "SELECT offset_ms FROM demo_clock_settings WHERE id = 1",
     );
     return Number(result.rows[0]?.offset_ms ?? 0);
   } catch (error) {
-    if ((error as { code?: string }).code === "42P01") return 0;
+    if ((error as { code?: string }).code === "42P01") return null;
     throw error;
   }
 }
 
+/** For the demo-clock controls, which exist only in demo mode (`demoClockEnabled`). */
 export async function getDemoClockState(): Promise<DemoClockState> {
-  try {
-    const offsetMs = await readDemoClockOffsetMs();
-    return {
-      available: true,
-      isOverridden: offsetMs !== 0,
-      offsetMs,
-      effectiveAt: new Date(Date.now() + offsetMs).toISOString(),
-    };
-  } catch (error) {
-    if ((error as { code?: string }).code === "42P01") {
-      return {
-        available: false,
-        isOverridden: false,
-        offsetMs: 0,
-        effectiveAt: new Date().toISOString(),
-      };
-    }
-    throw error;
-  }
+  const offsetMs = await readDemoClockOffsetMs();
+  return {
+    available: offsetMs !== null,
+    isOverridden: offsetMs !== null && offsetMs !== 0,
+    offsetMs: offsetMs ?? 0,
+    effectiveAt: new Date(Date.now() + (offsetMs ?? 0)).toISOString(),
+  };
 }
 
 export async function setDemoClock(targetAt: string, updatedBy: string): Promise<void> {
@@ -125,13 +116,19 @@ export async function resetDemoClock(updatedBy: string): Promise<void> {
   );
 }
 
+/**
+ * The app's current time. Outside demo mode (`npm run dev:demo`) this is the
+ * real time whatever demo date the database still holds, so sessions,
+ * completions and pain stops are never stamped with a forgotten demo date.
+ */
 export async function getEffectiveNow(): Promise<Date> {
-  return new Date(Date.now() + await readDemoClockOffsetMs());
+  if (!demoClockEnabled(process.env)) return new Date();
+  return new Date(Date.now() + ((await readDemoClockOffsetMs()) ?? 0));
 }
 
-// Scheduling uses Manila calendar days, but the demo clock supplies the instant.
+// Scheduling uses Manila calendar days; in demo mode the demo clock supplies the instant.
 async function todayKeyPH(): Promise<string> {
-  return (await getEffectiveNow()).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  return manilaDayKey((await getEffectiveNow()).getTime());
 }
 
 // Maps snake_case DB columns to camelCase for the app
@@ -391,6 +388,15 @@ export async function getPatientAttachment(attachmentId: number) {
     [attachmentId],
   );
   return result.rows[0] ?? null;
+}
+
+/** Deletes one of a patient's attached files; false when it is not theirs or is already gone. */
+export async function deletePatientAttachment(patientId: string, attachmentId: number): Promise<boolean> {
+  const result = await pool.query(
+    "DELETE FROM patient_image_attachments WHERE id = $1 AND patient_id = $2",
+    [attachmentId, patientId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export type PermanentUserDeletionBlocker =
@@ -2423,131 +2429,6 @@ export async function getTherapistRoster(therapistId: string) {
   }));
 }
 
-export type PatientActivityEventType = "login" | "logout" | "assigned" | "unassigned";
-
-export async function recordPatientActivityEvent(
-  patientId: string,
-  therapistId: string,
-  eventType: PatientActivityEventType,
-): Promise<void> {
-  const effectiveAt = await getEffectiveNow();
-  await pool.query(
-    `INSERT INTO patient_activity_events (patient_id, therapist_id, event_type, created_at)
-     VALUES ($1, $2, $3, $4)`,
-    [patientId, therapistId, eventType, effectiveAt.toISOString()],
-  );
-}
-
-export async function getTherapistDashboardAnalytics(therapistId: string) {
-  const result = await pool.query(
-    `WITH days AS (
-       SELECT generate_series(
-         ($2::date - 13)::timestamp,
-         $2::date::timestamp,
-         INTERVAL '1 day'
-       )::date AS day
-     ),
-     scoped_patients AS (
-       SELECT id
-         FROM users
-        WHERE role = 'patient'
-          AND therapist_id = $1
-          AND (is_archived IS NULL OR is_archived = FALSE)
-     ),
-     sessions_by_day AS (
-       SELECT (s.started_at AT TIME ZONE 'Asia/Manila')::date AS day,
-              COUNT(DISTINCT s.id)::integer AS sessions
-         FROM sessions s
-         JOIN scoped_patients p ON p.id = s.patient_id
-        WHERE s.started_at >= (($2::date - 13)::timestamp AT TIME ZONE 'Asia/Manila')
-          AND s.started_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
-          AND (
-            EXISTS (
-              SELECT 1 FROM set_events se
-               WHERE se.session_id = s.id
-                 AND (se.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
-            )
-            OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
-          )
-        GROUP BY 1
-     ),
-     activity_by_day AS (
-       SELECT (event.created_at AT TIME ZONE 'Asia/Manila')::date AS day,
-              COUNT(*) FILTER (WHERE event.event_type = 'login')::integer AS patient_logins,
-              COUNT(*) FILTER (WHERE event.event_type = 'assigned')::integer AS new_assignments
-         FROM patient_activity_events event
-         JOIN scoped_patients p ON p.id = event.patient_id
-        WHERE event.therapist_id = $1
-          AND event.created_at >= (($2::date - 13)::timestamp AT TIME ZONE 'Asia/Manila')
-          AND event.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
-        GROUP BY 1
-     ),
-     active_patients AS (
-       SELECT p.id
-         FROM scoped_patients p
-        WHERE EXISTS (
-          SELECT 1 FROM patient_activity_events event
-           WHERE event.patient_id = p.id
-             AND event.therapist_id = $1
-             AND event.event_type = 'login'
-             AND event.created_at >= (($2::date - 6)::timestamp AT TIME ZONE 'Asia/Manila')
-        )
-        OR EXISTS (
-          SELECT 1 FROM sessions s
-           WHERE s.patient_id = p.id
-             AND s.started_at >= (($2::date - 6)::timestamp AT TIME ZONE 'Asia/Manila')
-             AND (
-               EXISTS (
-                 SELECT 1 FROM set_events se
-                  WHERE se.session_id = s.id
-                    AND (se.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
-               )
-               OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
-             )
-        )
-     ),
-     summary AS (
-       SELECT (SELECT COUNT(*)::integer FROM scoped_patients) AS total_patients,
-              (SELECT COUNT(*)::integer FROM active_patients) AS active_patients,
-              (SELECT COALESCE(SUM(patient_logins), 0)::integer FROM activity_by_day) AS patient_logins,
-              (SELECT COALESCE(SUM(new_assignments), 0)::integer FROM activity_by_day) AS new_assignments,
-              (SELECT COALESCE(SUM(sessions), 0)::integer FROM sessions_by_day) AS sessions
-     )
-     SELECT TO_CHAR(days.day, 'YYYY-MM-DD') AS date,
-            COALESCE(sessions_by_day.sessions, 0)::integer AS sessions,
-            COALESCE(activity_by_day.patient_logins, 0)::integer AS "patientLogins",
-            COALESCE(activity_by_day.new_assignments, 0)::integer AS "newAssignments",
-            summary.total_patients AS "totalPatients",
-            summary.active_patients AS "activePatients",
-            summary.patient_logins AS "patientLogins14Days",
-            summary.new_assignments AS "newAssignments14Days",
-            summary.sessions AS "sessions14Days"
-       FROM days
-       LEFT JOIN sessions_by_day ON sessions_by_day.day = days.day
-       LEFT JOIN activity_by_day ON activity_by_day.day = days.day
-       CROSS JOIN summary
-      ORDER BY days.day`,
-    [therapistId, await todayKeyPH()],
-  );
-
-  const first = result.rows[0];
-  return {
-    totals: {
-      totalPatients: Number(first?.totalPatients ?? 0),
-      activePatients: Number(first?.activePatients ?? 0),
-      patientLogins14Days: Number(first?.patientLogins14Days ?? 0),
-      newAssignments14Days: Number(first?.newAssignments14Days ?? 0),
-      sessions14Days: Number(first?.sessions14Days ?? 0),
-    },
-    daily: result.rows.map((row) => ({
-      date: row.date as string,
-      sessions: Number(row.sessions),
-      patientLogins: Number(row.patientLogins),
-      newAssignments: Number(row.newAssignments),
-    })),
-  };
-}
-
 /**
  * Full drill-down for one session: the session row plus its set_events (with
  * hold_quality) and rep_events, ordered. Returns null if the session is absent.
@@ -2625,7 +2506,6 @@ export async function getSessionDetail(sessionId: number) {
       holdQuality: r.hold_quality,
     })),
     sets: setsRes.rows.filter((r) => !isAuditOnlyMeasurement(r.hold_quality)).map((r) => ({
-
       setIndex:       r.set_index,
       exerciseKind:   r.exercise_kind,
       targetReps:     r.target_reps,
@@ -2723,10 +2603,10 @@ export async function markAllNotificationsAsRead(userId: string): Promise<void> 
 }
 
 export async function syncTimeNotifications(patientId: string): Promise<void> {
-  const today = await todayKeyPH();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const now = await getEffectiveNow();
+  const today = manilaDayKey(now.getTime());
+  // Tomorrow by the same clock as today, so a demo date never mixes with the real one.
+  const tomorrowStr = manilaDayKey(now.getTime() + DAY_MS);
 
   // 1. Fetch missed occurrences. Pain-stopped attempts are closed for therapist
   // review and are neither completed nor missed.

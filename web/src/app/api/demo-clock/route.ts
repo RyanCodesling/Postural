@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { getDemoClockState, resetDemoClock, setDemoClock } from "@/lib/db";
+import { demoClockEnabled } from "@/lib/demoClock";
 
+// Off unless the development server was started with `npm run dev:demo`;
+// production builds never offer it.
 function unavailable() {
-  return NextResponse.json({ error: "Demo clock controls are disabled in production." }, { status: 404 });
+  return NextResponse.json(
+    { error: "The demo clock is off. Start the app with npm run dev:demo to use it." },
+    { status: 404 },
+  );
 }
 
 export async function GET(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") return unavailable();
+  if (!demoClockEnabled(process.env)) return unavailable();
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,7 +27,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") return unavailable();
+  if (!demoClockEnabled(process.env)) return unavailable();
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -50,7 +56,7 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") return unavailable();
+  if (!demoClockEnabled(process.env)) return unavailable();
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
-import { useDemoClock } from "@/lib/DemoClockContext";
+import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
@@ -57,7 +57,8 @@ async function uploadPatientAttachments(patientId: string, files: File[]) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
-  const { effectiveNow } = useDemoClock();
+  // Today's Manila day by the demo clock; the clock's tab exists only in demo mode.
+  const { todayKey, enabled: demoClockOn } = useDemoClock();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -635,7 +636,7 @@ export default function AdminDashboard() {
 
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
-    const phToday = effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const phToday = todayKey;
     const [ty, tm, td] = phToday.split("-").map(Number);
     const [by, bm, bd] = dob.split("-").map(Number);
     let age = ty - by;
@@ -736,7 +737,7 @@ export default function AdminDashboard() {
                 Assign Patients
               </button>
             </li>
-            {process.env.NODE_ENV !== "production" && (
+            {demoClockOn && (
               <li>
                 <button
                   onClick={() => { setActiveTab("demo-clock"); setSidebarOpen(false); }}
@@ -787,7 +788,7 @@ export default function AdminDashboard() {
             </button>
           </div>
         </div>
-        {activeTab === "demo-clock" && process.env.NODE_ENV !== "production" && (
+        {activeTab === "demo-clock" && demoClockOn && (
           <DemoClockPanel />
         )}
         {/* Dashboard Tab */}
@@ -1119,7 +1120,7 @@ export default function AdminDashboard() {
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
-                            max={effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                            max={todayKey}
                             min="1900-01-01"
                             required
                           />
@@ -1326,7 +1327,7 @@ export default function AdminDashboard() {
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
-                        max={effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                        max={todayKey}
                         min="1900-01-01"
                       />
                     </div>
@@ -1409,6 +1410,7 @@ export default function AdminDashboard() {
                           />
                         </div>
                       </div>
+                      <PatientAttachmentList patientId={editingUser.id} />
                       <PatientImagePicker files={editPatientImages} onChange={setEditPatientImages} />
                     </>
                   )}
@@ -2435,6 +2437,112 @@ function AdminExerciseRow({
   );
 }
 
+interface StoredAttachment {
+  id: number;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+/**
+ * The patient's attached files, each with a Delete, in the edit form: a file
+ * put on the wrong patient, or one the patient asks to remove, is deleted here.
+ * Deleting is permanent, so it asks first.
+ */
+function PatientAttachmentList({ patientId }: { patientId: string }) {
+  const [files, setFiles] = useState<StoredAttachment[] | null>(null);
+  const [error, setError] = useState("");
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load the attached files.");
+        if (!cancelled) {
+          setFiles(Array.isArray(data.attachments) ? data.attachments : []);
+          setError("");
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load the attached files.");
+      });
+    return () => { cancelled = true; };
+  }, [patientId, reload]);
+
+  const remove = async (file: StoredAttachment) => {
+    setDeletingId(file.id);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/users/${encodeURIComponent(patientId)}/attachments/${file.id}`,
+        { method: "DELETE" },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "The file could not be deleted.");
+      setConfirmId(null);
+      setReload((n) => n + 1);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "The file could not be deleted.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <p className="text-sm font-medium text-gray-700 mb-2">Files already attached</p>
+      {error && <p role="alert" className="mb-2 text-xs text-red-600">{error}</p>}
+      {files === null ? (
+        !error && <p className="text-xs text-gray-500">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="text-xs text-gray-500">No files attached.</p>
+      ) : (
+        <ul className="space-y-2">
+          {files.map((file) => (
+            <li key={file.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-700">
+              <span className="min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
+              {confirmId === file.id ? (
+                <span className="flex items-center gap-2">
+                  <span className="text-red-700">Delete for good?</span>
+                  <button
+                    type="button"
+                    onClick={() => void remove(file)}
+                    disabled={deletingId === file.id}
+                    className="rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {deletingId === file.id ? "Deleting…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmId(null)}
+                    className="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmId(file.id)}
+                  className="shrink-0 text-red-700 hover:underline"
+                  aria-label={`Delete ${file.fileName}`}
+                >
+                  Delete
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function PatientImagePicker({
   files,
   onChange,
@@ -2463,7 +2571,8 @@ function PatientImagePicker({
   return (
     <div className="rounded-lg border border-gray-200 p-4">
       <label className="block text-sm font-medium text-gray-700 mb-1">Attached files</label>
-      <p className="text-xs text-gray-500 mb-3">Optional · Images, PDF, Word, Excel, PowerPoint, RTF, or TXT · Up to 5 files, 5 MB each</p>
+      <p className="text-xs text-gray-500 mb-1">Optional · Images, PDF, Word, Excel, PowerPoint, RTF, or TXT · Up to 5 files, 5 MB each</p>
+      <p className="text-xs font-medium text-amber-800 mb-3">Upload a patient&apos;s documents only with their permission.</p>
       <input
         type="file"
         accept={PATIENT_ATTACHMENT_ACCEPT}
@@ -2497,7 +2606,10 @@ function PatientImagePicker({
 }
 
 function DemoClockPanel() {
-  const { effectiveNow, overrideActive, settingsAvailable } = useDemoClock();
+  const { now, overrideActive, settingsAvailable } = useDemoClock();
+  // Only this panel and the badge tick every second; the pages read the date.
+  const appTime = useTickingLabel(now);
+  const computerTime = useTickingLabel(realTime);
   const [targetAt, setTargetAt] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -2565,16 +2677,17 @@ function DemoClockPanel() {
       <h1 className="text-2xl font-bold text-green-800">Demo Clock</h1>
       <p className="mt-1 text-sm text-gray-600">
         Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.
+        Sessions recorded while a demo date is set are saved with that date, so use a demo account.
       </p>
       <dl className="mt-5 grid gap-3 border-y border-gray-100 py-4 sm:grid-cols-2">
         <div>
           <dt className="text-xs text-gray-500">Computer time</dt>
-          <dd className="mt-1 text-sm font-medium text-gray-900">{new Date().toLocaleString()}</dd>
+          <dd className="mt-1 text-sm font-medium text-gray-900">{computerTime}</dd>
         </div>
         <div>
           <dt className="text-xs text-gray-500">App time</dt>
           <dd className="mt-1 text-sm font-medium text-gray-900">
-            {effectiveNow.toLocaleString()} {overrideActive ? "(demo)" : "(system)"}
+            {appTime} {overrideActive ? "(demo)" : "(system)"}
           </dd>
         </div>
       </dl>
@@ -2617,11 +2730,14 @@ function DemoClockPanel() {
       {message && <p role="status" className="mt-4 text-sm text-green-800">{message}</p>}
       {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
       <p className="mt-5 text-xs text-gray-500">
-        Demo clock is available only outside production. Authentication and password-expiry timers always use real time.
+        The demo clock works only while the app runs with npm run dev:demo. A normal start uses the real date and
+        ignores the demo date. Sign-in and password-expiry timers always use the real time.
       </p>
     </section>
   );
 }
+
+const realTime = () => new Date();
 
 function toDateTimeLocalValue(value: string): string {
   const date = new Date(value);

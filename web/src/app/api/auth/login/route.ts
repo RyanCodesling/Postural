@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserByEmailWithArchived, createAdminNotification, recordPatientActivityEvent } from "@/lib/db";
+import { getUserByEmailWithArchived, createAdminNotification } from "@/lib/db";
 import { comparePassword } from "@/lib/crypto";
 import {
   AUTH_COOKIE_NAME,
@@ -57,14 +57,6 @@ export async function POST(request: NextRequest) {
       role: user.role,
       mustChangePassword,
     });
-
-    if (user.role === "patient" && user.therapist_id) {
-      try {
-        await recordPatientActivityEvent(user.id, user.therapist_id, "login");
-      } catch (error) {
-        console.error("Failed to record patient login activity:", error);
-      }
-    }
 
     // Log admin notification on login (for therapists and patients)
     if (user.role !== "admin") {

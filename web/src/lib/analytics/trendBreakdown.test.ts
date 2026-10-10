@@ -59,6 +59,18 @@ const repsSummary: TrendModelSession = {
   avgLeftLoweringMs: 1100, avgLeftRaisingMs: 900,
   sdLeftPeakValue: Math.sqrt(56 / 3 / 2),
   exposure: { trunkLean: { left: 0.2, right: null, leftN: 3, rightN: 0 }, shoulderSymmetry: { left: 0.5, right: null, leftN: 1, rightN: 0 } },
+  // The same repetitions under the trend data rules: timing leaves out each
+  // set's first repetition (left: repetitions 1 and 4), so lowering averages
+  // repetitions 3 and 6 (1400, 800) and raising the same two (1000, 900).
+  trend: {
+    rulesVersion: "trend_rules_v1",
+    leftReps: 4, rightReps: 2, completeLeftReps: 2, completeRightReps: 0,
+    avgLeftPeakValue: 274 / 3, avgRightPeakValue: 72.5,
+    sdLeftPeakValue: Math.sqrt(56 / 3 / 2), sdRightPeakValue: Math.sqrt(12.5),
+    avgLeftFormScore: 85, avgRightFormScore: null, leftFormReps: 2, rightFormReps: 0,
+    avgLeftLoweringMs: 1100, avgRightLoweringMs: null, avgLeftRaisingMs: 950, avgRightRaisingMs: null,
+    leftTimingReps: 2, rightTimingReps: 0, trackedReps: 0, poorlyTrackedReps: 0,
+  },
 };
 
 console.log("\nTrend point breakdown\n");

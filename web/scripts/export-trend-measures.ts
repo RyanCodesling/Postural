@@ -8,11 +8,17 @@
  * Each session lists the unit values (repetitions, or sets for holds) behind each
  * measure, so the evaluation can compute session means, unit counts and pooled
  * within-session variation itself.
+ *
+ * Repetitions follow the trend data rules the app's charts use
+ * (src/lib/analytics/trendRules.ts): timing skips each set's first repetition per
+ * side, a poorly tracked repetition is left out, and a poorly tracked session is
+ * not exported.
  */
 import { Client } from "pg";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TREND_RULES_VERSION, repPoorlyTracked, repTrackingShare, sessionPoorlyTracked } from "../src/lib/analytics/trendRules";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -71,7 +77,7 @@ async function main() {
        WHERE s.device_info IS NOT NULL
        ORDER BY s.started_at, s.id`)).rows;
     const reps = (await client.query(`
-      SELECT session_id, side, peak_value, classification, time_to_peak_ms, descent_ms,
+      SELECT session_id, set_index, side, peak_value, classification, time_to_peak_ms, descent_ms,
              total_ms, compensations
         FROM rep_events
        ORDER BY session_id, set_index, rep_index`)).rows;
@@ -105,23 +111,42 @@ async function main() {
       return created;
     };
 
+    // Trend data rule 3: a session with at least half its tracked repetitions
+    // poorly tracked is not exported.
+    const tracking = new Map<number, { tracked: number; poor: number }>();
+    for (const rep of reps) {
+      const t = tracking.get(rep.session_id) ?? { tracked: 0, poor: 0 };
+      if (repTrackingShare(rep.compensations) !== null) t.tracked += 1;
+      if (repPoorlyTracked(rep.compensations)) t.poor += 1;
+      tracking.set(rep.session_id, t);
+    }
+    const heldOut = new Set([...tracking].filter(([, t]) => sessionPoorlyTracked(t.tracked, t.poor)).map(([id]) => id));
+    // Trend data rule 1: each set's first repetition per side skips the timing measures.
+    const seenSetSide = new Set<string>();
+
     for (const rep of reps) {
       const session = bySession.get(rep.session_id);
       if (!session || (rep.side !== "left" && rep.side !== "right")) continue;
+      const firstOfSet = !seenSetSide.has(`${rep.session_id}:${rep.set_index}:${rep.side}`);
+      seenSetSide.add(`${rep.session_id}:${rep.set_index}:${rep.side}`);
+      // Trend data rule 2: a poorly tracked repetition counts in no measure.
+      if (heldOut.has(rep.session_id) || repPoorlyTracked(rep.compensations)) continue;
       session.kind = "dynamic";
       const side = rep.side as Side;
       if (finite(rep.peak_value)) sideUnits(session, "peak")[side].push(rep.peak_value);
       sideUnits(session, "complete")[side].push(rep.classification === "complete" ? 1 : 0);
-      if (finite(rep.total_ms)) sideUnits(session, "repDurationS")[side].push(rep.total_ms / 1000);
-      if (finite(rep.descent_ms)) sideUnits(session, "loweringS")[side].push(rep.descent_ms / 1000);
-      if (finite(rep.time_to_peak_ms)) sideUnits(session, "raisingS")[side].push(rep.time_to_peak_ms / 1000);
+      if (!firstOfSet) {
+        if (finite(rep.total_ms)) sideUnits(session, "repDurationS")[side].push(rep.total_ms / 1000);
+        if (finite(rep.descent_ms)) sideUnits(session, "loweringS")[side].push(rep.descent_ms / 1000);
+        if (finite(rep.time_to_peak_ms)) sideUnits(session, "raisingS")[side].push(rep.time_to_peak_ms / 1000);
+      }
       const exposures = rep.compensations?.rawFeatures?.compensations;
       if (exposures && typeof exposures === "object") {
         for (const [metric, value] of Object.entries(exposures as Record<string, { overThresholdFrac?: unknown }>)) {
           if (finite(value?.overThresholdFrac)) sideUnits(session, `exposure:${metric}`)[side].push(value.overThresholdFrac);
         }
       }
-      if (finite(rep.time_to_peak_ms) && finite(rep.descent_ms) && rep.descent_ms > 0) {
+      if (!firstOfSet && finite(rep.time_to_peak_ms) && finite(rep.descent_ms) && rep.descent_ms > 0) {
         sideUnits(session, "raiseLowerRatio")[side].push(rep.time_to_peak_ms / rep.descent_ms);
       }
       const rawRule = rep.compensations?.rawRule;
@@ -157,7 +182,12 @@ async function main() {
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(
       out,
-      JSON.stringify({ exportedAt: new Date().toISOString(), source: "app-recorded sessions (device info present)", sessions: withOutcome }, null, 1),
+      JSON.stringify({
+        exportedAt: new Date().toISOString(),
+        source: "app-recorded sessions (device info present)",
+        trendRules: TREND_RULES_VERSION,
+        sessions: withOutcome,
+      }, null, 1),
     );
     console.log(`exported ${withOutcome.length} sessions to ${out}`);
   } finally {

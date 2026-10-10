@@ -67,6 +67,27 @@ test("capture summary saves and reads back why frames were rejected", () => {
     "more rejected frames than frames not OK drops only the detail");
 });
 
+test("capture summary saves and reads back the unsteady frames", () => {
+  const saved = buildCaptureQualitySummary({
+    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, unsteady: 40,
+  });
+  const parsed = parseCaptureQualitySummary(JSON.parse(JSON.stringify(saved)));
+  assert(parsed?.unsteadyFrames === 40, "expected the unsteady frames");
+  const older = parseCaptureQualitySummary({ framesTotal: 300, framesOk: 276, pctOk: 92 });
+  assert(older !== null && older.unsteadyFrames === undefined, "older summaries have none");
+  const tooMany = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, unsteadyFrames: 9 });
+  assert(tooMany?.pctOk === 80 && tooMany.unsteadyFrames === undefined,
+    "more unsteady frames than tracked frames drops only the count");
+  const checked = parseCaptureQualitySummary(buildCaptureQualitySummary({
+    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, unsteady: 40, checked: 250,
+  }));
+  assert(checked?.checkedFrames === 250 && checked.unsteadyFrames === 40, "the checked frames are saved and read back");
+  assert(older?.checkedFrames === undefined, "older summaries have no checked count");
+  const tooManyChecked = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, checkedFrames: 9 });
+  assert(tooManyChecked?.pctOk === 80 && tooManyChecked.checkedFrames === undefined,
+    "more checked frames than tracked frames drops only the count");
+});
+
 test("capture summary rejects inconsistent frame counts", () => {
   assert(
     parseCaptureQualitySummary({ framesTotal: 10, framesOk: 12, pctOk: 100 }) === null,

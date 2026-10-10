@@ -119,7 +119,11 @@ async function main() {
       }
       const set = replay.close();
       if (baselineReplay) {
-        assert.deepEqual(replay.emitted, baselineReplay.emitted, `${entry.id}: raw/live/features or rep events changed`);
+        // A repetition's tracking record (the display-only tracking check) is
+        // newer than any preserved camera source, so it is left out here.
+        const withoutTracking = (events: any[]) => events.map((e) => e?.compensations?.tracking === undefined ? e
+          : { ...e, compensations: Object.fromEntries(Object.entries(e.compensations).filter(([key]) => key !== "tracking")) });
+        assert.deepEqual(withoutTracking(replay.emitted), withoutTracking(baselineReplay.emitted), `${entry.id}: raw/live/features or rep events changed`);
         const before = baselineReplay.close();
         if (before.holdQuality) for (const [key, value] of Object.entries(before.holdQuality)) {
           assert.deepEqual(JSON.parse(JSON.stringify(set.holdQuality[key])), JSON.parse(JSON.stringify(value)), `${entry.id}: hold field ${key} changed`);

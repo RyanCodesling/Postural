@@ -13,6 +13,17 @@ export interface CaptureQualityContext {
    * the movement in progress was discarded. Absent before 2026-10-02.
    */
   sustainedDropoutResets?: number;
+  /**
+   * Frames that passed capture readiness but on which the tracking check found
+   * a part the exercise depends on unsteady. Absent before the tracking check.
+   */
+  unsteadyFrames?: number;
+  /**
+   * Frames that passed capture readiness and on which the tracking check could
+   * judge a part the exercise depends on: too few frames a second, or too
+   * uneven, leave it unable to. Absent before 2026-10-10.
+   */
+  checkedFrames?: number;
 }
 
 /** The capture tallies the camera keeps for one session. */
@@ -21,6 +32,8 @@ export type CaptureTallies = {
   ok: number;
   rejectedByStatus: Record<string, number>;
   dropoutResets: number;
+  unsteady?: number;
+  checked?: number;
 };
 
 /**
@@ -35,6 +48,8 @@ export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQual
     pctOk: Math.round((tallies.ok / tallies.total) * 100),
     rejectedFramesByStatus: { ...tallies.rejectedByStatus },
     sustainedDropoutResets: tallies.dropoutResets,
+    ...(tallies.unsteady === undefined ? {} : { unsteadyFrames: tallies.unsteady }),
+    ...(tallies.checked === undefined ? {} : { checkedFrames: tallies.checked }),
   };
 }
 
@@ -80,6 +95,10 @@ export function parseCaptureQualitySummary(value: unknown): CaptureQualityContex
   }
   const resets = finiteNonnegative(record.sustainedDropoutResets);
   if (resets !== null) summary.sustainedDropoutResets = Math.round(resets);
+  const unsteady = finiteNonnegative(record.unsteadyFrames);
+  if (unsteady !== null && unsteady <= summary.framesOk) summary.unsteadyFrames = Math.round(unsteady);
+  const checked = finiteNonnegative(record.checkedFrames);
+  if (checked !== null && checked <= summary.framesOk) summary.checkedFrames = Math.round(checked);
   return summary;
 }
 

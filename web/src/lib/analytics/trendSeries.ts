@@ -9,13 +9,18 @@
  *  - holds use each set's time in the target band as a percentage of its own
  *    prescribed hold, so a change of hold length is not read as a trend; a
  *    hold measure counts only the sets that recorded it (see
- *    `measureFromDetail`, which the breakdown shares).
+ *    `measureFromDetail`, which the breakdown shares);
+ *  - repetitions and sessions follow the trend data rules (`trendRules.ts`):
+ *    timing skips each set's first repetition, a poorly tracked repetition
+ *    counts nowhere, and a poorly tracked session is drawn but left out of the
+ *    trend line.
  */
 import type { MetricName } from "@/lib/exercises/registry";
 import { OVERLAY_LABELS } from "@/lib/pose/drawCompensationOverlay";
 import type { PrescribedSide } from "@/lib/prescriptionContext";
 import { prescribedOutcomeSides } from "@/lib/sessionOutcomePresentation";
 import { measureFromDetail, type SessionRepsDetail } from "./trendBreakdown";
+import { sessionPoorlyTracked } from "./trendRules";
 import {
   fitTrend,
   TREND_MODEL,
@@ -61,7 +66,89 @@ export interface TrendModelSession {
   avgRightRaisingMs?: number | null;
   sdLeftPeakValue?: number | null;
   sdRightPeakValue?: number | null;
+  /** Time over each threshold; the session list already leaves poorly tracked repetitions out. */
   exposure?: Record<string, CompensationExposure> | null;
+  /**
+   * The session's repetitions under the trend data rules. Without it (data
+   * read before the rules) the fields above are used and every repetition counts.
+   */
+  trend?: TrendRepSummary | null;
+}
+
+/** A session's repetition summary under the trend data rules (`trendRules.ts`). */
+export interface TrendRepSummary {
+  rulesVersion: string;
+  leftReps: number;
+  rightReps: number;
+  completeLeftReps: number;
+  completeRightReps: number;
+  avgLeftPeakValue: number | null;
+  avgRightPeakValue: number | null;
+  sdLeftPeakValue: number | null;
+  sdRightPeakValue: number | null;
+  avgLeftFormScore: number | null;
+  avgRightFormScore: number | null;
+  leftFormReps: number;
+  rightFormReps: number;
+  avgLeftLoweringMs: number | null;
+  avgRightLoweringMs: number | null;
+  avgLeftRaisingMs: number | null;
+  avgRightRaisingMs: number | null;
+  /** Repetitions behind the timing measures: each set's first is left out. */
+  leftTimingReps: number;
+  rightTimingReps: number;
+  /** Repetitions with a tracking record, and the poorly tracked ones among them. */
+  trackedReps: number;
+  poorlyTrackedReps: number;
+}
+
+type RepValues = Omit<TrendRepSummary, "rulesVersion" | "trackedReps" | "poorlyTrackedReps">;
+
+/** The repetition values a session's trend points use: its rule summary, or the plain fields before it. */
+function repValues(session: TrendModelSession): RepValues {
+  if (session.trend) return session.trend;
+  return {
+    leftReps: session.leftReps ?? 0,
+    rightReps: session.rightReps ?? 0,
+    completeLeftReps: session.completeLeftReps ?? 0,
+    completeRightReps: session.completeRightReps ?? 0,
+    avgLeftPeakValue: session.avgLeftPeakValue ?? null,
+    avgRightPeakValue: session.avgRightPeakValue ?? null,
+    sdLeftPeakValue: session.sdLeftPeakValue ?? null,
+    sdRightPeakValue: session.sdRightPeakValue ?? null,
+    avgLeftFormScore: session.avgLeftFormScore ?? null,
+    avgRightFormScore: session.avgRightFormScore ?? null,
+    leftFormReps: session.leftFormReps ?? 0,
+    rightFormReps: session.rightFormReps ?? 0,
+    avgLeftLoweringMs: session.avgLeftLoweringMs ?? null,
+    avgRightLoweringMs: session.avgRightLoweringMs ?? null,
+    avgLeftRaisingMs: session.avgLeftRaisingMs ?? null,
+    avgRightRaisingMs: session.avgRightRaisingMs ?? null,
+    leftTimingReps: session.leftReps ?? 0,
+    rightTimingReps: session.rightReps ?? 0,
+  };
+}
+
+/** Why a session is drawn but left out of the trend line (rule 3), or null. */
+export function sessionHeldOutReason(session: TrendModelSession): string | null {
+  const t = session.trend;
+  if (!t || !sessionPoorlyTracked(t.trackedReps, t.poorlyTrackedReps)) return null;
+  return `camera tracking was poor in ${t.poorlyTrackedReps} of ${t.trackedReps} repetitions`;
+}
+
+/**
+ * Sessions rule 3 leaves out of the trend lines, counted per session: a chart
+ * draws a left-out session hollow only where enough well-tracked repetitions
+ * remain to plot, so the worst-tracked sessions may have no point at all.
+ * Holds carry no tracking record, so rule 3 never applies to them.
+ */
+export function heldOutSessionCount(sessions: readonly TrendModelSession[]): number {
+  return sessions.filter((s) => s.exerciseKind !== "isometric" && sessionHeldOutReason(s) !== null).length;
+}
+
+/** Whether a chart of the series has anything to draw: counted points or hollow ones. */
+export function hasChartPoints(series: Pick<ModelSeries, "counted" | "heldOut">): boolean {
+  return series.counted > 0 || series.heldOut.some((held) => held !== null);
 }
 
 export interface ModelSeries {
@@ -71,6 +158,8 @@ export interface ModelSeries {
   /** One entry per session of the group, oldest → newest; null where the session does not count. */
   values: (number | null)[];
   units: (number | null)[];
+  /** Sessions drawn but left out of the trend line (trend data rule 3), with the measured value and why. */
+  heldOut: ({ value: number; reason: string } | null)[];
   counted: number;
   fit: TrendFit | null;
   label: TrendLabel | null;
@@ -91,7 +180,8 @@ export function sessionMeasure(
     return measureFromDetail({ reps: [], sets: session.holdSets ?? [] }, measure, side);
   }
   const left = side === "left";
-  const reps = (left ? session.leftReps : session.rightReps) ?? 0;
+  const r = repValues(session);
+  const reps = left ? r.leftReps : r.rightReps;
   if (measure.startsWith("exposure:")) {
     const exposure = session.exposure?.[measure.slice("exposure:".length)];
     const share = left ? exposure?.left : exposure?.right;
@@ -99,29 +189,29 @@ export function sessionMeasure(
   }
   switch (measure) {
     case "loweringS": {
-      const ms = left ? session.avgLeftLoweringMs : session.avgRightLoweringMs;
-      return { value: finite(ms) ? ms / 1000 : null, units: reps };
+      const ms = left ? r.avgLeftLoweringMs : r.avgRightLoweringMs;
+      return { value: finite(ms) ? ms / 1000 : null, units: left ? r.leftTimingReps : r.rightTimingReps };
     }
     case "raisingS": {
-      const ms = left ? session.avgLeftRaisingMs : session.avgRightRaisingMs;
-      return { value: finite(ms) ? ms / 1000 : null, units: reps };
+      const ms = left ? r.avgLeftRaisingMs : r.avgRightRaisingMs;
+      return { value: finite(ms) ? ms / 1000 : null, units: left ? r.leftTimingReps : r.rightTimingReps };
     }
     case "completionPct": {
-      const complete = left ? session.completeLeftReps : session.completeRightReps;
+      const complete = left ? r.completeLeftReps : r.completeRightReps;
       return { value: reps > 0 && finite(complete) ? (100 * complete) / reps : null, units: reps };
     }
     case "peakSpread":
-      return { value: (left ? session.sdLeftPeakValue : session.sdRightPeakValue) ?? null, units: reps };
+      return { value: (left ? r.sdLeftPeakValue : r.sdRightPeakValue) ?? null, units: reps };
   }
   switch (measure) {
     case "peak":
       return side === "left"
-        ? { value: session.avgLeftPeakValue ?? null, units: session.leftReps ?? 0 }
-        : { value: session.avgRightPeakValue ?? null, units: session.rightReps ?? 0 };
+        ? { value: r.avgLeftPeakValue, units: r.leftReps }
+        : { value: r.avgRightPeakValue, units: r.rightReps };
     case "formScore":
       return side === "left"
-        ? { value: session.avgLeftFormScore ?? null, units: session.leftFormReps ?? 0 }
-        : { value: session.avgRightFormScore ?? null, units: session.rightFormReps ?? 0 };
+        ? { value: r.avgLeftFormScore, units: r.leftFormReps }
+        : { value: r.avgRightFormScore, units: r.rightFormReps };
     default:
       return { value: null, units: 0 };
   }
@@ -211,16 +301,20 @@ export function prepareModelSeries(
   const minUnits = minUnitsFor(exerciseId, measure, config);
   const values: (number | null)[] = [];
   const units: (number | null)[] = [];
+  const heldOut: ModelSeries["heldOut"] = [];
   for (const session of sessions) {
     const { value, units: count } = sessionMeasure(session, measure, side);
     const counts = finite(value) && count >= minUnits;
-    values.push(counts ? value : null);
-    units.push(counts ? count : null);
+    // Rule 3: a poorly tracked session is drawn, hollow, but not fitted.
+    const reason = counts && !HOLD_UNIT_MEASURES.has(measure) ? sessionHeldOutReason(session) : null;
+    values.push(counts && reason === null ? value : null);
+    units.push(counts && reason === null ? count : null);
+    heldOut.push(reason === null ? null : { value: value as number, reason });
   }
   const countedIndex = values.flatMap((v, i) => (v === null ? [] : [i]));
   const empty = () => values.map(() => null as number | null);
   return {
-    measure, side, spec, values, units, counted: countedIndex.length,
+    measure, side, spec, values, units, heldOut, counted: countedIndex.length,
     fit: null, label: spec?.labelled ? "collecting" : null,
     bandMean: empty(), bandLow: empty(), bandHigh: empty(),
   };
@@ -228,7 +322,7 @@ export function prepareModelSeries(
 
 /** Same fitted values and display bounds for synchronous callers and the worker. */
 export function fitModelSeries(series: ModelSeries, config: TrendModelConfig = TREND_MODEL): ModelSeries {
-  const { measure, side, spec, values, units } = series;
+  const { measure, side, spec, values, units, heldOut } = series;
   const countedIndex = values.flatMap((v, i) => (v === null ? [] : [i]));
   const empty = () => values.map(() => null as number | null);
   const bandMean = empty();
@@ -256,7 +350,7 @@ export function fitModelSeries(series: ModelSeries, config: TrendModelConfig = T
   if (spec?.labelled) {
     label = fit ? fit.label : "collecting";
   }
-  return { measure, side, spec, values, units, counted: countedIndex.length, fit, label, bandMean, bandLow, bandHigh };
+  return { measure, side, spec, values, units, heldOut, counted: countedIndex.length, fit, label, bandMean, bandLow, bandHigh };
 }
 
 export function modelSeries(
@@ -343,7 +437,7 @@ export function extraTrendMeasures(
     { measure: "peakSpread", title: "Rep-to-rep spread of the peak (lower is more consistent)", unit: "", changeUnit: "", format: one },
     ...exposureMetrics(exerciseId, config).map(({ metric, label }): ExtraMeasureDefinition => ({
       measure: `exposure:${metric}`,
-      title: `Time over threshold: ${label}`,
+      title: `${label}: share of repetition time above the app's threshold`,
       unit: "%",
       changeUnit: " points",
       format: whole,
@@ -359,7 +453,8 @@ export const TREND_LABEL_TEXT: Record<TrendLabel, string> = {
 };
 
 /** "+8.2 (95 % range +2.1 to +14.0)" in the measure's own display format. */
-export function changeText(fit: TrendFit, format: (value: number) => string): string {
+/** The signed change estimate and its 95 % range; `between` goes after the estimate (the PDF's "since the first counted session"). */
+export function changeText(fit: TrendFit, format: (value: number) => string, between = ""): string {
   const signed = (v: number) => `${v >= 0 ? "+" : "−"}${format(Math.abs(v))}`;
-  return `${signed(fit.meanChange)} (95 % range ${signed(fit.changeLow)} to ${signed(fit.changeHigh)})`;
+  return `${signed(fit.meanChange)}${between} (95 % range ${signed(fit.changeLow)} to ${signed(fit.changeHigh)})`;
 }

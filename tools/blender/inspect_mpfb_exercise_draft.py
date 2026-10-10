@@ -1,8 +1,11 @@
 """Inspect saved exercise drafts without calling the motion builder or saving.
 
 Checks the visible silhouette, feet, wrist alignment, motion continuity, phase
-text, loop closure and movement endpoints. Samples garment/skin clearance at
-eleven poses; this does not prove continuous surface collision avoidance.
+text, loop closure and movement endpoints. For the neck side bends it also
+checks a continuous frontal-plane head swing on its declared beat, a
+forward-facing head, still trunk, shoulder and arm bones, and a level rendered
+shoulder outline. Samples garment/skin clearance at eleven
+poses; this does not prove continuous surface collision avoidance.
 """
 import argparse
 import hashlib
@@ -23,11 +26,66 @@ from inspect_ex001_mpfb_clothing import topology, signed_clearance
 
 
 MESHES = ["Figure_Body", "Figure_Top", "Figure_Shorts"]
-EXERCISES = ["ex_005", "ex_006", "ex_007", "ex_008"]
+EXERCISES = ["ex_004", "ex_005", "ex_006", "ex_007", "ex_008"]
+NECK_BONES = ("neck_01", "head")
 
 
 def bone_points(rig):
     return np.array([list(p) for pb in rig.pose.bones for p in [pb.head, pb.tail]])
+
+
+def still_points(rig):
+    """Head and tail of every bone below the neck, which the neck side bends never move."""
+    return np.array([list(p) for pb in rig.pose.bones if pb.name not in NECK_BONES for p in [pb.head, pb.tail]])
+
+
+def body_skin(scene):
+    """World positions of the evaluated body, masked as it renders."""
+    body = scene.objects["Figure_Body"].evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = body.to_mesh()
+    try:
+        co = np.empty(len(mesh.vertices)*3, dtype=np.float64)
+        mesh.vertices.foreach_get("co", co)
+        world = np.array(body.matrix_world)
+        return co.reshape(-1, 3) @ world[:3, :3].T + world[:3, 3]
+    finally:
+        body.to_mesh_clear()
+
+
+def shoulder_tops(skin):
+    """Per side, the skin forming the top 2 cm of the shoulder's front-view outline,
+    8-17 cm from the midline, chosen in the neutral pose. Skin bones that never move
+    keep it still, so only skin weighted to a moving bone, such as the neck, can lift it."""
+    tops = {}
+    for side, sign in [("l", 1), ("r", -1)]:
+        ids = []
+        for b in np.arange(.08, .17, .005):
+            band = np.nonzero((skin[:, 0]*sign >= b) & (skin[:, 0]*sign < b + .005) & (skin[:, 2] > 1.2) & (skin[:, 2] < 1.5))[0]
+            if len(band):
+                ids += band[skin[band, 2] >= skin[band, 2].max() - .02].tolist()
+        tops[side] = np.array(ids)
+    return tops
+
+
+def world_rotation(rig, name):
+    return (rig.matrix_world @ rig.pose.bones[name].matrix).to_quaternion()
+
+
+def frontal_tilt(rotation, first):
+    """A bone's tilt in the frontal plane since the first frame, and any other rotation.
+
+    The tilt turns about the camera's axis (world Y), positive toward the
+    figure's left. The residual is the angle of whatever rotation is left once
+    the tilt is taken out (a turn or a nod), which a pure side bend keeps at zero.
+    """
+    relative = rotation @ first.inverted()
+    m = relative.to_matrix()
+    tilt = math.atan2(m[0][2], m[2][2])
+    # atan2 of the vector part stays exact for tiny angles, where 2*acos(w)
+    # rounds anything under about 0.04 degrees to zero.
+    residual = Quaternion((0, 1, 0), -tilt) @ relative
+    vector = math.sqrt(residual.x**2 + residual.y**2 + residual.z**2)
+    return math.degrees(tilt), math.degrees(2*math.atan2(vector, abs(residual.w)))
 
 
 def shoulder_points(rig):
@@ -256,6 +314,7 @@ def inspect(args):
     min_margin, min_y, max_y = 1., 1., 0.
     first_feet, hold_pose, first_head_relative = None, None, None
     max_head_relative_change = 0.
+    neck_samples, first_neck, first_still, tops, neutral_skin = [], None, None, None, None
     for frame in range(1, scene.frame_end + 1):
         scene.frame_set(frame)
         boxes = [bounds(scene, scene.objects[n]) for n in MESHES]
@@ -285,6 +344,22 @@ def inspect(args):
         if exercise == "ex_005":
             max_head_relative_change = max(max_head_relative_change, math.degrees(
                 first_head_relative.rotation_difference(head_relative_rotation(rig)).angle))
+        if exercise == "ex_004":
+            rotations = {name: world_rotation(rig, name) for name in NECK_BONES}
+            if first_neck is None:
+                first_neck, first_still = rotations, still_points(rig)
+            tilts = {name: frontal_tilt(rotations[name], first_neck[name]) for name in NECK_BONES}
+            # The rendered shoulders' outline, not just their bones: neck weights
+            # spread over the shoulders would lift the far side's skin.
+            skin = body_skin(scene)
+            if tops is None:
+                tops, neutral_skin = shoulder_tops(skin), skin
+            outline = {s: [float((skin[ids, 2] - neutral_skin[ids, 2]).min())*1000,
+                           float((skin[ids, 2] - neutral_skin[ids, 2]).max())*1000] for s, ids in tops.items()}
+            neck_samples.append({"frame": frame, "head_tilt_deg": tilts["head"][0], "neck_tilt_deg": tilts["neck_01"][0],
+                                 "turn_or_nod_deg": max(tilts["head"][1], tilts["neck_01"][1]),
+                                 "still_drift_mm": float(np.linalg.norm(still_points(rig)-first_still, axis=1).max())*1000,
+                                 "shoulder_top_change_mm": outline})
         if previous is not None:
             max_step = max(max_step, float(np.linalg.norm(points-previous, axis=1).max()))
         max_feet = max(max_feet, float(np.linalg.norm(feet-first_feet, axis=1).max()))
@@ -352,7 +427,9 @@ def inspect(args):
     closure = float(np.linalg.norm(previous-first, axis=1).max())
     if max_step > .025:
         failures.append("A joint jumps more than 25 mm between adjacent frames")
-    if max_feet > .00001 or closure > .00001 or max_wrist > .05:
+    # The continuous neck swing loops without a held frame, so its seam is an
+    # ordinary step, checked below; every other clip ends where it starts.
+    if max_feet > .00001 or (closure > .00001 and exercise != "ex_004") or max_wrist > .05:
         failures.append("Feet/pelvis drift, loop seam, or bent wrist")
     endpoints = {}
     if exercise == "ex_005":
@@ -387,6 +464,73 @@ def inspect(args):
             endpoints.update({"hip_hand_skin_gap_mm": [min(gaps), max(gaps)],
                               "maximum_hip_wrist_bend_deg": max(h["hip_wrist_bend_deg"] for h in hand_samples)})
         endpoints["peak_arm_poses"] = samples[79]["movement"]
+    elif exercise == "ex_004":
+        tilt = np.array([s["head_tilt_deg"] for s in neck_samples])
+        declared = draft.get("neck_tilt", {})
+        peak, period = declared.get("peak_deg", 0.0), declared.get("period_frames", 0)
+        hold, bpm = declared.get("hold_frames", 0), declared.get("bpm", 0)
+        # The swing, as a loop: it starts at the centre heading to the figure's
+        # left, holds exactly `hold` frames at each side, alternating left first,
+        # and arrives at a side once per beat. Between holds the head never
+        # stops, so it passes the centre without pausing.
+        held = [1 if abs(v - peak) <= .01 else -1 if abs(v + peak) <= .01 else 0 for v in tilt]
+        holds, f = [], 0
+        while f < len(tilt):
+            if held[f]:
+                start = f
+                while f < len(tilt) and held[f] == held[start]:
+                    f += 1
+                holds.append((start + 1, f - start, held[start]))
+            else:
+                f += 1
+        arrivals = [start for start, _, _ in holds]
+        steps = np.diff(np.append(tilt, tilt[0]))
+        moving = np.abs(steps) >= 1e-6
+        turns = int(np.sum(np.sign(steps[moving]) != np.roll(np.sign(steps[moving]), 1)))
+        swing_ok = (period > 0 and len(tilt) % period == 0 and period * bpm == 2 * 60 * 30
+                    and abs(tilt[0]) < 1e-4 and tilt[1] > tilt[0]
+                    and len(holds) == 2 * len(tilt) // period
+                    and all(length == hold for _, length, _ in holds)
+                    and all(side == (1 if i % 2 == 0 else -1) for i, (_, _, side) in enumerate(holds))
+                    and all(b - a == period // 2 for a, b in zip(arrivals, arrivals[1:]))
+                    and int(np.sum(~moving)) == (hold - 1) * len(holds) and turns == len(holds))
+        if not swing_ok:
+            failures.append("The neck does not swing side to side on the declared beat, holding only at each side")
+        # The loop seam, from the last frame back to the first, must be the same
+        # step as the one from the first cycle into the second.
+        seam = float(np.linalg.norm(bone_frames[0] - bone_frames[-1], axis=1).max())
+        inner = (float(np.linalg.norm(bone_frames[period] - bone_frames[period - 1], axis=1).max())
+                 if 0 < period < len(tilt) else math.inf)
+        if abs(seam - inner) > 1e-6:
+            failures.append("The loop seam is not an ordinary step of the swing")
+        peaks = [int(tilt.argmax()) + 1, int(tilt.argmin()) + 1]
+        shares = [neck_samples[f - 1]["neck_tilt_deg"] / neck_samples[f - 1]["head_tilt_deg"] for f in peaks]
+        endpoints = {"peak_tilt_left_deg": float(tilt.max()), "peak_tilt_right_deg": float(-tilt.min()),
+                     "peak_frames": peaks, "neck_share_at_peaks": shares,
+                     "bpm": bpm, "period_frames": period, "hold_frames_declared": hold,
+                     "holds_start_length_side": holds,
+                     "beat_interval_s": float(np.diff(arrivals).mean()) / 30 if len(arrivals) > 1 else None,
+                     "direction_changes": turns, "frames_without_movement": int(np.sum(~moving)),
+                     "fastest_swing_deg_per_s": float(np.abs(steps).max()) * 30,
+                     "loop_seam_step_mm": seam*1000, "first_cycle_to_second_step_mm": inner*1000,
+                     "maximum_turn_or_nod_deg": max(s["turn_or_nod_deg"] for s in neck_samples),
+                     "maximum_still_bone_drift_mm": max(s["still_drift_mm"] for s in neck_samples),
+                     "shoulder_top_vertices": {s: len(ids) for s, ids in tops.items()},
+                     "shoulder_top_change_mm": {s: [min(n["shoulder_top_change_mm"][s][0] for n in neck_samples),
+                                                    max(n["shoulder_top_change_mm"][s][1] for n in neck_samples)]
+                                                for s in tops}}
+        if max(abs(v) for pair in endpoints["shoulder_top_change_mm"].values() for v in pair) > 2:
+            failures.append("A shoulder's rendered outline rises or drops more than 2 mm while the neck tilts")
+        if tilt.max() < 30 or -tilt.min() < 30 or abs(tilt.max() + tilt.min()) > .01 or peaks[0] > peaks[1]:
+            failures.append("Missing, asymmetric or right-first neck tilt")
+        if any(abs(s - declared.get("neck_share", -1)) > .001 for s in shares):
+            failures.append("The tilt is not shared between the neck and head as declared")
+        # A pure side bend: the face keeps looking forward, and nothing below the
+        # neck moves, so the shoulders stay level and still.
+        if endpoints["maximum_turn_or_nod_deg"] > .05:
+            failures.append("The head turns or nods during the neck side bends")
+        if endpoints["maximum_still_bone_drift_mm"] > .01:
+            failures.append("The trunk, shoulders or arms move during the neck side bends")
     else:
         peak = samples[peak_frame-1]["movement"]
         endpoints = {"start": samples[0]["movement"], "peak": peak}
@@ -521,6 +665,37 @@ def inspect(args):
         negatives["extra_head_rotation_rejected"] = math.degrees(
             first_head_relative.rotation_difference(head_relative_rotation(rig)).angle) > .05
         head.rotation_quaternion = saved_head
+    if exercise == "ex_004":
+        # At the peak tilt: a 10-degree head turn must fail the face-forward
+        # check, and a 5-degree shrug of one shoulder or a 3-degree trunk lean
+        # must fail the still-shoulders check.
+        for name, axis, degrees, control in [("head", (0, 0, 1), 10, "head_turn_rejected"),
+                                             ("clavicle_l", (0, 1, 0), -5, "shoulder_shrug_rejected"),
+                                             ("spine_01", (0, 1, 0), 3, "trunk_lean_rejected")]:
+            pb = rig.pose.bones[name]
+            saved_matrix = pb.matrix.copy()
+            turned = (Quaternion(axis, math.radians(degrees)).to_matrix() @ saved_matrix.to_3x3()).to_4x4()
+            turned.translation = saved_matrix.translation
+            pb.matrix = turned
+            bpy.context.view_layer.update()
+            if name == "head":
+                negatives[control] = frontal_tilt(world_rotation(rig, "head"), first_neck["head"])[1] > .05
+            else:
+                negatives[control] = float(np.linalg.norm(still_points(rig)-first_still, axis=1).max()) > 1e-5
+            pb.matrix = saved_matrix
+            bpy.context.view_layer.update()
+        # The peak frame tilts toward the figure's left, so its right shoulder is
+        # the far one: raising it 5 degrees must fail the skin-outline check.
+        pb = rig.pose.bones["clavicle_r"]
+        saved_matrix = pb.matrix.copy()
+        raised = (Quaternion((0, 1, 0), math.radians(5)).to_matrix() @ saved_matrix.to_3x3()).to_4x4()
+        raised.translation = saved_matrix.translation
+        pb.matrix = raised
+        bpy.context.view_layer.update()
+        skin = body_skin(scene)
+        negatives["far_shoulder_outline_rise_rejected"] = float((skin[tops["r"], 2] - neutral_skin[tops["r"], 2]).max())*1000 > 2
+        pb.matrix = saved_matrix
+        bpy.context.view_layer.update()
     if exercise == "ex_008":
         wall = scene.objects["Exercise_Wall"]
         wall.location.y -= .02
@@ -594,6 +769,8 @@ def inspect(args):
         report["wall_samples"] = wall_samples
     if exercise == "ex_005":
         report["hand_samples"] = hand_samples
+    if exercise == "ex_004":
+        report["neck_samples"] = neck_samples
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     for path, expected_hash in [(args.source, source_hash), (args.baseline, baseline_hash)]:

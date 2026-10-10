@@ -161,7 +161,7 @@ test("the side-bend completion share shows measured values only; its frozen sett
 test("compensation charts use the app's own labels", () => {
   const titles = extraTrendMeasures("ex_001", "dynamic").map((d) => d.title);
   assert(titles.includes("Lowering time (descent control)"), "descent control listed");
-  assert(titles.includes("Time over threshold: Shoulder / head position"), "the region label, not a movement");
+  assert(titles.includes("Shoulder / head position: share of repetition time above the app's threshold"), "the region label, not a movement");
   assert(extraTrendMeasures("ex_006", "isometric").map((d) => d.measure).join(",") === "holdSteadiness,holdError,holdDroop", "hold measures");
 });
 

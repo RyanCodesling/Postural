@@ -15,6 +15,8 @@ import {
   BAND_WITHHELD,
   changeText,
   extraTrendMeasures,
+  hasChartPoints,
+  heldOutSessionCount,
   prepareGroupModelSeries,
   TREND_LABEL_TEXT,
   trendMeasures,
@@ -321,9 +323,14 @@ export function modelChartSeries(
     label: seriesName(s),
     color: SIDE_COLOR[s.side],
     values: s.values,
+    // A session left out of the trend (trend data rules) is drawn hollow.
+    heldOut: s.heldOut?.map((held) => held?.value ?? null),
     band: s.fit ? { mean: s.bandMean, low: s.bandLow, high: s.bandHigh } : undefined,
     pointDetails: s.values.map((v, i) => {
-      if (v === null) return null;
+      const held = s.heldOut?.[i];
+      if (v === null) {
+        return held ? `${seriesName(s)}: ${format(held.value)}${unit} · not in the trend: ${held.reason}` : null;
+      }
       const mean = s.bandMean[i];
       const low = s.bandLow[i];
       const high = s.bandHigh[i];
@@ -340,7 +347,7 @@ export function modelChartSeries(
 /** One line per side: the model's change estimate, or why there is none. */
 export function extraMeasureSummary(series: ModelSeries[], def: ExtraMeasureDefinition): string {
   return series
-    .filter((s) => s.counted > 0)
+    .filter(hasChartPoints)
     .map((s) => {
       const side = s.side === "card" ? "" : `${sideLabel(s.side)}: `;
       if (s.spec && BAND_WITHHELD.has(`${s.spec.exercise}:${s.spec.measure}`)) {
@@ -403,7 +410,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       form: prepareGroupModelSeries(exerciseId, prescribedSide, sessions, measures.form, measures.formPerSide),
       extras: extraTrendMeasures(exerciseId, exerciseKind)
         .map(def => ({ def, series: prepareGroupModelSeries(exerciseId, prescribedSide, sessions, def.measure, true) }))
-        .filter(({ series }) => series.some(s => s.counted > 0)),
+        .filter(({ series }) => series.some(hasChartPoints)),
     };
   }, [exerciseId, exerciseKind, prescribedSide, sessions]);
   const requested = useMemo(() => [
@@ -419,8 +426,10 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
   const pending = entries.some(entry => entry.status === "loading");
   const failed = entries.some(entry => entry.status === "error");
   const titles = sessions.map((session) => fmtTrendDate(session.startedAt));
-  const hasPrimary = primarySeries.some((s) => s.counted > 0);
-  const hasForm = formSeries.some((s) => s.counted > 0);
+  // A chart is drawn when it has counted points or hollow (left-out) ones.
+  const hasPrimary = primarySeries.some(hasChartPoints);
+  const hasForm = formSeries.some(hasChartPoints);
+  const leftOut = heldOutSessionCount(sessions);
   const extras = prepared.extras.map(({ def, series }) => {
     const fitted = entries.filter(entry => entry.series.measure === def.measure);
     return { def, series: extrasOpen ? fitted.map(entry => entry.series) : series,
@@ -533,7 +542,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
               </>
             ) : (
               <p className="text-xs text-gray-400 py-4 text-center">
-                No {meta.label.toLowerCase()} recorded.
+                No {meta.label.toLowerCase()} {leftOut > 0 ? "to plot" : "recorded"}.
               </p>
             )}
           </div>
@@ -570,6 +579,14 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
         </div>
       )}
 
+      {sessions.length >= 2 && leftOut > 0 && (
+        <p className="text-[11px] leading-4 text-amber-700 mt-2" data-held-out-note="">
+          {leftOut} session{leftOut === 1 ? " is" : "s are"} left out of the trend lines because the camera tracked half or
+          more of {leftOut === 1 ? "its" : "their"} repetitions poorly. {leftOut === 1 ? "It shows" : "They show"} as hollow
+          points where enough well-tracked repetitions remain to plot.
+        </p>
+      )}
+
       {sessions.length >= 2 && !openedFromExtras && breakdown}
 
       {sessions.length >= 2 && extras.length > 0 && (
@@ -599,7 +616,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
             Where a measure has no band, its range did not pass the model&apos;s check, it has no learned
             variation yet, or its band is withheld (the line under that chart says so), so only the measured
             values are shown.
-            {!isIso && " Compensation threshold shares describe raw signals, not time a cue was shown or time in incorrect form."}
+            {!isIso && " Compensation shares (repetition time above the app's threshold) describe raw signals, not time a cue was shown or time in incorrect form."}
           </p>
         </details>
       )}

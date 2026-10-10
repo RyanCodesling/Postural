@@ -4,6 +4,12 @@
  * and how well the camera tracked. Built from the stored session detail, so a
  * download reflects what the server saved. Kind, metric and targets come from
  * the session's own record, never today's registry when history has them.
+ *
+ * The layout follows official lab and imaging reports: a patient block and a
+ * session block first, then results against the prescribed targets with a
+ * flag where a result is below target, then the limitations. It leaves out
+ * what such reports have and this app cannot back: no normal ranges (the
+ * angles are camera estimates), no impression or diagnosis, no sign-off.
  */
 import { getDisplayHoldSeconds } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition, type MetricName } from "@/lib/exercises/registry";
@@ -20,20 +26,22 @@ import {
   type SessionContextSnapshot,
   type SessionEndReason,
 } from "@/lib/prescriptionContext";
+import type { DeviceContext } from "@/lib/sessionReadModels";
 import {
   ANGLE_ESTIMATE_LABEL,
-  fullRomOutcomeText,
   prescribedOutcomeSides,
   sideLabel,
 } from "@/lib/sessionOutcomePresentation";
 import { downloadPdf, reportFileName } from "./download";
-import { COLORS, ReportLayout, type TableColumn } from "./pdfWriter";
+import { COLORS, ReportLayout, type TableCell, type TableColumn } from "./pdfWriter";
+import { fetchReportPatient, patientCells, reportFooter, type ReportPatient } from "./reportPatient";
 
 type StoredAttempt = { setIndex: number; holdQuality: unknown };
 
 /** The fields of `GET /api/sessions/[id]` the report reads. */
 export type SessionReportInput = {
   id: number;
+  patientId?: string;
   exerciseId: string;
   exerciseName: string;
   startedAt: string;
@@ -47,6 +55,8 @@ export type SessionReportInput = {
     bodyArea: string | null;
   };
   captureQuality: { framesTotal: number; framesOk: number; pctOk: number } | null;
+  /** The browser and system the session was recorded on. */
+  deviceContext?: DeviceContext | null;
   sets: Array<StoredAttempt & {
     exerciseKind: string;
     leftReps: number | null;
@@ -67,12 +77,27 @@ export type SessionReportInput = {
   auditAttempts?: StoredAttempt[];
 };
 
-export type ReportOptions = { patientName: string; generatedAt: Date; timeZone?: string };
+export type ReportOptions = {
+  patientName: string;
+  generatedAt: Date;
+  timeZone?: string;
+  /** The patient's record; null when it could not be loaded, and the report then says so. */
+  patient?: ReportPatient | null;
+};
 
-export const REPORT_NOTES = [
-  `Angles are labelled "${ANGLE_ESTIMATE_LABEL}": they are pipeline units measured from a 2D camera, not anatomical degrees.`,
-  "Descriptive record of the session for review with a physical therapist. It is not a diagnosis.",
-];
+/**
+ * Where this session falls among the patient's sessions of the same exercise
+ * that recorded a set or repetition: `index` is null when this one recorded
+ * none, so it is not counted.
+ */
+export type SessionNumber = { index: number | null; total: number };
+
+export type SessionReportOptions = ReportOptions & { sessionNumber?: SessionNumber | null };
+
+export const ANGLE_NOTE =
+  `Angles labelled "${ANGLE_ESTIMATE_LABEL}" are estimated from a single camera image. They are not anatomical degrees or ` +
+  "goniometer measurements, so compare them with this patient's earlier sessions recorded with the same camera setup, " +
+  "not with clinical norms.";
 
 const SET_ENDINGS: Record<string, string> = {
   min_reached: "Target reached",
@@ -163,11 +188,18 @@ export function cueSummary(sets: StoredAttempt[], attempts: StoredAttempt[] = []
   return { auditedSets, auditedAttempts, dropped, cues: [...byMetric.values()].sort((a, b) => b.times - a.times) };
 }
 
-export function sessionReportPdf(input: SessionReportInput, options: ReportOptions): Uint8Array<ArrayBuffer> {
+function sessionNumberText(number: SessionNumber | null): string {
+  if (!number) return "not available";
+  if (number.index === null) return "not counted (no set recorded)";
+  return `${number.index} of ${number.total} so far`;
+}
+
+export function sessionReportPdf(input: SessionReportInput, options: SessionReportOptions): Uint8Array<ArrayBuffer> {
   const date = reportDateFormatter(options.timeZone);
+  const patient = options.patient ?? null;
   const layout = new ReportLayout(
     `Session report: ${input.exerciseName}`,
-    `Postural session report · ${options.patientName} · generated ${date(options.generatedAt)}`,
+    reportFooter("session", patient?.name ?? options.patientName, patient?.id ?? null, date(options.generatedAt)),
     options.generatedAt,
   );
   const prescription = input.context?.prescription ?? null;
@@ -182,30 +214,41 @@ export function sessionReportPdf(input: SessionReportInput, options: ReportOptio
   const startedMs = new Date(input.startedAt).getTime();
   const durationMs = input.endedAt ? new Date(input.endedAt).getTime() - startedMs : null;
 
-  layout.title("Session report", `${input.exerciseName} · ${options.patientName}`);
-  layout.keyValues([
-    ["Started", date(input.startedAt)],
-    ["Ended", input.endedAt ? `${date(input.endedAt)} · ${formatDuration(durationMs)} long` : "not ended"],
-    ["Outcome", input.endReason ? SESSION_ENDINGS[input.endReason] : "Not ended"],
-    ["Prescription", prescription
-      ? [
-          `${prescription.sets} set${prescription.sets === 1 ? "" : "s"} of ${isIso ? `${holdPerSet}s hold` : `${prescription.reps} reps`}`,
-          `${prescription.restSeconds}s rest`,
-          prescribedSide === "both" ? "both sides" : `${prescribedSide} side`,
-          formatResistanceContext(prescription.resistance),
-        ].join(" · ")
-      : "not recorded for this older session"],
-    ["Sets done", prescription ? `${input.sets.length} of ${prescription.sets}` : String(input.sets.length)],
-    ["Pain before the session", formatPreSessionPain(preSessionPainFromContext(input.context))],
-    ["Pain after the attempt", formatPainAfter(input.painReport)],
-    ["Camera tracking", input.captureQuality
-      ? `${input.captureQuality.pctOk}% of frames tracked (${input.captureQuality.framesOk} of ${input.captureQuality.framesTotal})`
-      : "not recorded"],
+  layout.title("Session report", `${input.exerciseName} · report generated ${date(options.generatedAt)}`);
+  layout.detailsBox("Patient", patientCells(patient, options.patientName, options.generatedAt, options.timeZone));
+  layout.detailsBox("Session", [
+    { label: "Exercise", value: input.exerciseName },
+    { label: "Session no. (this exercise)", value: sessionNumberText(options.sessionNumber ?? null) },
+    { label: "Recorded with", value: input.deviceContext ? `${input.deviceContext.browser} on ${input.deviceContext.platform}` : "not recorded" },
+    { label: "Started", value: date(input.startedAt) },
+    { label: "Ended", value: input.endedAt ? `${date(input.endedAt)} · ${formatDuration(durationMs)} long` : "not ended" },
+    { label: "Outcome", value: input.endReason ? SESSION_ENDINGS[input.endReason] : "Not ended" },
+    {
+      label: "Prescription",
+      value: prescription
+        ? [
+            `${prescription.sets} set${prescription.sets === 1 ? "" : "s"} of ${isIso ? `${holdPerSet}s hold` : `${prescription.reps} reps`}`,
+            `${prescription.restSeconds}s rest`,
+            prescribedSide === "both" ? "both sides" : `${prescribedSide} side`,
+            formatResistanceContext(prescription.resistance),
+          ].join(" · ")
+        : "not recorded for this older session",
+      wide: true,
+    },
   ]);
 
-  layout.heading("Results by side");
+  // Results against their targets. The angle target is the exercise's
+  // full-range target, never a clinical norm (the angles are camera estimates).
+  layout.heading("Results");
   const repsOn = (side: string) => input.reps.filter((r) => r.side === side);
   const average = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+  const flag = (below: boolean): TableCell => (below ? { text: "Below target", color: COLORS.amber, bold: true } : "");
+  const results: TableCell[][] = [[
+    "Sets done",
+    String(input.sets.length),
+    prescription ? String(prescription.sets) : "not recorded",
+    flag(prescription !== null && input.sets.length < prescription.sets),
+  ]];
   if (isIso) {
     const heldMs = (side: "left" | "right") => input.sets.reduce((sum, set) => {
       const quality = set.holdQuality as { leftInBandMs?: unknown; rightInBandMs?: unknown } | null;
@@ -216,15 +259,23 @@ export function sessionReportPdf(input: SessionReportInput, options: ReportOptio
     // prescription: after an early stop they differ.
     const recordedTargetMs = input.sets.reduce((sum, set) => sum + (set.targetHoldMs ?? 0), 0);
     const recordedSets = `${input.sets.length} recorded set${input.sets.length === 1 ? "" : "s"}`;
-    layout.keyValues(sides.map((side) => [
-      `${sideLabel(side)} time in position`,
-      [
-        `${(heldMs(side) / 1000).toFixed(1)}s held${recordedTargetMs ? ` of ${(recordedTargetMs / 1000).toFixed(0)}s targeted in ${recordedSets}` : ` in ${recordedSets}`}`,
-        prescription ? `prescribed ${prescription.sets} x ${holdPerSet}s` : "prescription not recorded",
-      ].join(" · "),
-    ] as const), 190);
+    for (const side of sides) {
+      // Compared as printed, so a result shown equal to its target is not flagged.
+      const held = (heldMs(side) / 1000).toFixed(1);
+      const targeted = (recordedTargetMs / 1000).toFixed(0);
+      results.push([
+        `${sideLabel(side)} time in position`,
+        `${held}s held in ${recordedSets}`,
+        [
+          ...(recordedTargetMs ? [`${targeted}s in the recorded sets`] : []),
+          prescription ? `prescribed ${prescription.sets} x ${holdPerSet}s` : "prescription not recorded",
+        ].join(" · "),
+        flag(recordedTargetMs > 0 && Number(held) < Number(targeted)),
+      ]);
+    }
   } else {
-    layout.keyValues(sides.flatMap((side) => {
+    const prescribedReps = prescription ? prescription.sets * prescription.reps : null;
+    for (const side of sides) {
       const reps = repsOn(side);
       const attempted = input.sets.reduce((sum, set) => sum + ((side === "left" ? set.leftReps : set.rightReps) ?? 0), 0);
       const complete = reps.filter((r) => r.classification === "complete").length;
@@ -232,14 +283,36 @@ export function sessionReportPdf(input: SessionReportInput, options: ReportOptio
       // The target saved with the repetitions, else the one in the start context.
       const target = reps.find((r) => typeof r.targetRom === "number" && Number.isFinite(r.targetRom))?.targetRom ??
         exercise.recordedTarget;
-      return [
-        [`${sideLabel(side)} repetitions`, fullRomOutcomeText(complete, attempted)],
-        [`${sideLabel(side)} average ${peakLabel}`, peak === null
-          ? "—"
-          : `${fmtPeak(peak)} · ${target !== null ? `target ${fmtPeak(target)}` : "target not recorded"}`],
-      ] as const;
-    }), 230);
+      results.push(
+        [
+          `${sideLabel(side)} repetitions done`,
+          String(attempted),
+          prescription && prescribedReps !== null ? `${prescribedReps} (${prescription.sets} x ${prescription.reps})` : "not recorded",
+          flag(prescribedReps !== null && attempted < prescribedReps),
+        ],
+        [`${sideLabel(side)} repetitions that met the full-range target`, `${complete} of ${attempted}`, "every repetition", flag(complete < attempted)],
+        [
+          `${sideLabel(side)} average ${peakLabel}`,
+          peak === null ? "—" : fmtPeak(peak),
+          target !== null ? fmtPeak(target) : "not recorded",
+          flag(peak !== null && target !== null && Number(fmtPeak(peak)) < Number(fmtPeak(target))),
+        ],
+      );
+    }
   }
+  results.push(
+    ["Pain before the session (patient-reported)", formatPreSessionPain(preSessionPainFromContext(input.context)), "—", ""],
+    ["Pain after the attempt (patient-reported)", formatPainAfter(input.painReport), "—", ""],
+  );
+  layout.table(
+    [
+      { header: "Measure", width: 2.8 },
+      { header: "Result", width: 1.7 },
+      { header: "Target", width: 1.9 },
+      { header: "Flag", width: 1 },
+    ],
+    results,
+  );
 
   layout.heading("Sets");
   if (input.sets.length === 0) {
@@ -285,7 +358,7 @@ export function sessionReportPdf(input: SessionReportInput, options: ReportOptio
   if (cues.auditedSets + cues.auditedAttempts === 0) {
     layout.paragraph("No coaching record is stored for this session. Sessions recorded before the coaching record existed have none.");
   } else if (cues.cues.length === 0) {
-    layout.paragraph("No coaching cue was drawn during the observed part of the recorded attempts.");
+    layout.paragraph("No coaching cue was shown in the recorded sets (counted only while the app was processing camera frames).");
   } else {
     layout.table(
       [
@@ -306,37 +379,89 @@ export function sessionReportPdf(input: SessionReportInput, options: ReportOptio
   }
   if (cues.auditedSets + cues.auditedAttempts > 0) {
     const attempts = cues.auditedAttempts;
+    const counted = [
+      ...(input.sets.length > 0
+        ? [`the ${cues.auditedSets} of ${input.sets.length} set${input.sets.length === 1 ? "" : "s"} with a coaching record`]
+        : []),
+      ...(attempts > 0
+        ? [`${attempts} attempt${attempts === 1 ? "" : "s"} in which no movement was counted (marked "uncredited"; not part of the results above)`]
+        : []),
+    ];
     layout.paragraph(
-      `Counted from the observed part of ${cues.auditedSets} of ${input.sets.length} set${input.sets.length === 1 ? "" : "s"}` +
-        (attempts > 0
-          ? ` and ${attempts} attempt${attempts === 1 ? "" : "s"} that credited no movement (marked "uncredited"; they are not in the results above)`
-          : "") +
-        "; unobserved gaps are not counted." +
-        (cues.dropped > 0 ? " Some early records of a long set were not kept." : ""),
+      `Counted in ${counted.join(" and in ")}, only while the app was processing camera frames; pauses in the camera feed are not counted.` +
+        (cues.dropped > 0 ? " The earliest part of a long set's coaching record was not kept." : ""),
       { size: 8.5, color: COLORS.muted },
     );
   }
 
+  layout.heading("Limitations");
+  const note = (text: string) => layout.paragraph(text, { size: 8.5, color: COLORS.muted });
+  note(input.captureQuality
+    ? `Camera tracking: ${input.captureQuality.pctOk}% of frames tracked (${input.captureQuality.framesOk} of ${input.captureQuality.framesTotal}).`
+    : "Camera tracking: not recorded for this session.");
+  note(ANGLE_NOTE);
+
   layout.heading("Notes");
-  for (const note of REPORT_NOTES) layout.paragraph(note, { size: 8.5, color: COLORS.muted });
+  note("Descriptive record of the session for review with a physical therapist. It is not a diagnosis.");
   if (input.context?.version === 3) {
     layout.paragraph(
-      `Recorded configuration: registry ${input.context.versions.registry.slice(0, 12)} · exercise ${input.context.versions.exerciseConfig.slice(0, 19)} · session ${input.id}.`,
+      `For the app's developers: configuration registry ${input.context.versions.registry.slice(0, 12)}, exercise ${input.context.versions.exerciseConfig.slice(0, 19)}, session ${input.id}.`,
       { size: 8, color: COLORS.muted },
     );
   }
   return layout.finish();
 }
 
-/** Loads the stored session and saves its report. Throws when it cannot. */
+type ListedSession = { id: number; exerciseId: string; startedAt: string; setCount?: number; totalReps?: number };
+
+const isListedSession = (value: unknown): value is ListedSession => {
+  const s = value as Partial<ListedSession> | null;
+  return !!s && typeof s.id === "number" && typeof s.exerciseId === "string" && typeof s.startedAt === "string";
+};
+
+/**
+ * Where the session falls among the patient's sessions of the same exercise
+ * that recorded a set or repetition (the sessions the progress report counts),
+ * or null when the list cannot be loaded. The list route reads the patient
+ * from the sign-in for a patient and from `patientId` for their therapist.
+ */
+export async function fetchSessionNumber(
+  session: Pick<SessionReportInput, "id" | "patientId" | "exerciseId">,
+): Promise<SessionNumber | null> {
+  if (!session.patientId) return null;
+  try {
+    const response = await fetch(`/api/sessions?patientId=${encodeURIComponent(session.patientId)}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { sessions?: unknown };
+    if (!Array.isArray(body.sessions)) return null;
+    const withResults = body.sessions
+      .filter(isListedSession)
+      .filter((s) => s.exerciseId === session.exerciseId && ((s.setCount ?? 0) > 0 || (s.totalReps ?? 0) > 0))
+      .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime() || a.id - b.id);
+    const at = withResults.findIndex((s) => s.id === session.id);
+    return { index: at >= 0 ? at + 1 : null, total: withResults.length };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Loads the stored session and saves its report. Throws when the session
+ * cannot be loaded; the patient's record and the session number are added
+ * when they load, and the report says so where they did not.
+ */
 export async function downloadSessionReport(sessionId: number, patientName: string): Promise<void> {
   const response = await fetch(`/api/sessions/${sessionId}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`session ${sessionId} returned ${response.status}`);
   const { session } = (await response.json()) as { session: SessionReportInput | null };
   if (!session) throw new Error(`session ${sessionId} is missing`);
+  const [patient, sessionNumber] = await Promise.all([
+    session.patientId ? fetchReportPatient(session.patientId) : Promise.resolve(null),
+    fetchSessionNumber(session),
+  ]);
   const generatedAt = new Date();
   downloadPdf(
-    sessionReportPdf(session, { patientName, generatedAt }),
+    sessionReportPdf(session, { patientName, generatedAt, patient, sessionNumber }),
     reportFileName("session", session.exerciseName, generatedAt),
   );
 }

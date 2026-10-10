@@ -18,6 +18,7 @@ import * as hold from "../src/lib/pose/holdQuality";
 import * as versioning from "../src/lib/exercises/versioning";
 import * as context from "../src/lib/prescriptionContext";
 import * as readModels from "../src/lib/sessionReadModels";
+import * as trendRules from "../src/lib/analytics/trendRules";
 import { EventOutbox } from "../src/lib/pose/eventOutbox";
 import { groupSessionsByExercise } from "../src/app/(app)/dashboard/_components/ExerciseTrends";
 import ConsistencyCalendar from "../src/app/(app)/dashboard/patient/ConsistencyCalendar";
@@ -63,8 +64,10 @@ async function main() {
     return client.query(sql, values);
   };
   const pool = { query, connect: async () => ({ query, release() {} }) };
-  const db: any = vm.createContext({ exports: {}, pool, console, ...hold, ...context, ...readModels,
-    todayKeyPH: () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }) });
+  const db: any = vm.createContext({ exports: {}, pool, console, ...hold, ...context, ...readModels, ...trendRules,
+    todayKeyPH: () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }),
+    // The demo clock is off here, so the app time is the real time.
+    getEffectiveNow: async () => new Date() });
   const functions = ["insertSetEvents", "getSessionsForPatient", "getSessionDetail", "getTherapistRoster", "appendSessionReview", "SessionReviewUnavailableError"];
   vm.runInContext(transpile(extract(readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf8"), functions)), db);
   const route: any = vm.createContext({ exports: {}, console, require: (name: string) => {

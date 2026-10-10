@@ -227,3 +227,22 @@ external asset.
 
 This is an instructional demonstration. It is not clinically validated, no
 clinician has reviewed it, and it makes no claim of medical accuracy.
+
+### Brown eyes in the 2026-10-09 presentation candidates
+
+`tools/blender/polish_mpfb_presentation.py` adds MakeHuman's `high-poly` eyes
+and `brown` eye material from the installed MPFB system assets. The `.mhclo`,
+`.obj` and `.mhmat` headers explicitly release the mesh/material asset as CC0
+(September 2020). The texture is named by that CC0 material. The eye texture
+is packed into each candidate `.blend`; MPFB is not needed to open it.
+
+| Source path within the installed `eyes` directory | SHA-256 |
+| --- | --- |
+| `high-poly/high-poly.mhclo` | `b183cfe37120ab726f9b3f2ea6cd3a64c44ce7b4bd91a77c841cf70c04f83a0d` |
+| `high-poly/high-poly.obj` | `da2493215b708a344c33dc72f2a9a5b8fa985dcc5a70ad3b208995cf871da8e1` |
+| `materials/brown.mhmat` | `4abad93ce50541c08127721e77bce035640c9f16bed16cd0f5524b1cd5908465` |
+| `materials/brown_eye.png` | `4659691c7295ad6206c78b003e5fd0e5f91dcd53032fa914a229bb48cabe424b` |
+
+Rest-space skin colour variation and wall-light adjustments introduce no
+additional external assets. See [MPFB_PRESENTATION.md](MPFB_PRESENTATION.md)
+for the candidate workflow and its acceptance boundary.

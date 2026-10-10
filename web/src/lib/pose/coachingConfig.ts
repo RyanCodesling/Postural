@@ -2,9 +2,10 @@ import { coachingWarningSpecs, type ExerciseDefinition } from "@/lib/exercises/r
 import { resolveCoachingCue, resolveCoachingCueTiming } from "./coachingCue";
 import { COMPENSATION_WARNING_DEBOUNCE_MS } from "./compensationWarningState";
 import { OVERLAY_LABELS, OVERLAY_DIRECTION_LABELS } from "./drawCompensationOverlay";
+import { TRACKING_CHECK_VERSION, trackingCheckConfiguration } from "./trackingSteadiness";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v10_elbow_bend_check";
+export const COACHING_ALGORITHM_VERSION = "coaching_v11_tracking_steadiness_check";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {
@@ -29,6 +30,8 @@ export function coachingConfiguration(definition: ExerciseDefinition) {
       compareDirection: "compareDirection" in check ? check.compareDirection : "above",
       ...check.check,
     })),
+    // The unsteady-tracking message: display only, its settings fingerprinted here.
+    tracking: trackingCheckConfiguration(definition),
   };
 }
 
@@ -63,7 +66,18 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
         // Absent from configurations recorded before the elbow check.
         (k.compareDirection === undefined || k.compareDirection === "above" || k.compareDirection === "below") &&
         (k.hold === undefined || k.hold === "repetition" || k.hold === "live");
-    }));
+    })) &&
+    // Absent from configurations recorded before the tracking check.
+    (c.tracking === undefined || validTrackingConfiguration(c.tracking));
+}
+
+function validTrackingConfiguration(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const t = value as Record<string, unknown>;
+  const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0;
+  return t.check === TRACKING_CHECK_VERSION && (t.region === "arms" || t.region === "head") &&
+    [t.windowMs, t.minJumps, t.maxGapMs, t.wristLimit, t.otherLimit, t.messageHoldMs, t.markHorizonMs].every(positive) &&
+    !!t.parts && typeof t.parts === "object";
 }
 
 /** Same canonical serialization as the server's measurement fingerprint. */

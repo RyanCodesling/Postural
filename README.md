@@ -1,5 +1,27 @@
 # Sprint Updates 
 
+## Update-10-11-26 | Tracking check, trend rules, reports and guide player
+
+- Added a display-only message when the camera's tracking of a prescribed body part becomes unsteady, and a
+  tracking record for every repetition (coaching version 11). At 5 frames a second or fewer it cannot judge,
+  and the record says the repetition was not checked.
+- Trend data rules: each set's first repetition is left out of the raising and lowering times. Repetitions the
+  camera tracked poorly, and sessions where half or more were, are left out of the trend lines and drawn as
+  hollow points; the trend card and the session breakdown say how many and why.
+- Added an end-of-set gauge to the session breakdown and "worth checking" markers on the session video
+  (poorly tracked repetitions, and repetitions at least twice or at most half their side's usual duration).
+  Both are display only.
+- PDF reports: plainer wording for physical therapists and doctors; a patient block (name, ID, date of birth
+  and age, gender, assigned therapist, and the diagnosis and condition the clinic entered) and a session
+  block; results against their targets with a "Below target" flag; a Limitations section; the patient's ID
+  on every page; and, in the progress report, the current home exercise program with the days done so far.
+- Reference Guide player: phase and Front/Side labels in step with the video, an upper-body close-up, pause,
+  half speed and full screen. The guide's clips are unchanged.
+- Blender scripts and notes for polishing the demo figures and refining arm and hand form, and the neck side
+  bends draft, which stays out of the guide. Rendered previews are not part of the repository.
+- `deploy/server`: setup scripts and runbook for the evaluation server (base system, app and database,
+  backups, HTTPS, and a tool to set the admin password). Secrets are generated on the server.
+
 ## Update-10-4-26 | Integration corrections
 
 - Cancel and invalidate pending single-patient assignment requests when selection

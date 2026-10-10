@@ -9,10 +9,13 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  endOfSetRows,
   holdRows,
   measureFromDetail,
   repRows,
+  sessionTracking,
   setTimings,
+  type EndOfSetRow,
   type RepRow,
   type SessionRepsDetail,
 } from "@/lib/analytics/trendBreakdown";
@@ -336,10 +339,34 @@ function RepSide({
   const lowering = point("loweringS");
   const form = point("formScore");
   const completeCount = rows.filter((r) => r.complete).length;
+  const tracking = sessionTracking(detail);
+  // Timing of each set's first repetition is left out of the trend (trend data rule 1).
+  const timing = (r: RepRow, value: number | null) =>
+    r.leftOut === "first-of-set" && value !== null ? (
+      <span className="text-gray-400" title="First repetition of the set: its timing includes getting into position, so it is left out of the timing trend">
+        {fixed(value, 2)}†
+      </span>
+    ) : (
+      fixed(value, 2)
+    );
 
   const columns: Column<RepRow>[] = [
     { key: "rep", header: "Rep", focus: [], cell: (_, i) => i + 1, total: "Chart point" },
     { key: "set", header: "Set", focus: [], cell: (r) => r.setIndex, total: "" },
+    {
+      key: "counted",
+      header: "In the trends",
+      focus: [],
+      cell: (r) =>
+        r.leftOut === "tracking" ? (
+          <span className="text-amber-700" title="The camera tracked this repetition poorly, so it counts in no trend">No: camera tracking</span>
+        ) : r.leftOut === "first-of-set" ? (
+          "Yes, timing left out"
+        ) : (
+          "Yes"
+        ),
+      total: "",
+    },
     {
       key: "peak",
       header: main.label,
@@ -370,7 +397,7 @@ function RepSide({
       key: "raising",
       header: "Raising (s)",
       focus: ["raisingS"],
-      cell: (r) => fixed(r.raisingS, 2),
+      cell: (r) => timing(r, r.raisingS),
       total: <Point text={fixed(raising.value, 2)} counted={raising.counted} />,
     },
     {
@@ -384,7 +411,7 @@ function RepSide({
       key: "lowering",
       header: "Lowering (s)",
       focus: ["loweringS"],
-      cell: (r) => fixed(r.loweringS, 2),
+      cell: (r) => timing(r, r.loweringS),
       total: <Point text={fixed(lowering.value, 2)} counted={lowering.counted} />,
     },
     {
@@ -464,6 +491,19 @@ function RepSide({
           </span>
         )}
       </p>
+      {tracking.heldOut && (
+        <p className="text-[11px] text-amber-700 mt-1">
+          This session is left out of the trend lines, drawn hollow where enough well-tracked repetitions remain to plot: the
+          camera tracked {tracking.poorReps} of its {tracking.trackedReps} repetitions poorly.
+        </p>
+      )}
+      {tracking.uncheckedReps > 0 && (
+        <p className="text-[11px] text-gray-500 mt-1" data-tracking-unchecked="">
+          The tracking check could not judge {tracking.uncheckedReps} of this session&apos;s {tracking.trackedReps} repetitions,
+          usually because the computer was processing too few frames a second, so their tracking is unknown. They still
+          count in the trends.
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="text-[11px] text-gray-400 mt-1">No repetitions on this side.</p>
       ) : (
@@ -478,6 +518,7 @@ function RepSide({
             onPick={setActiveRep}
             caption={[
               "Lowering ÷ raising above 1 means the repetition came down more slowly than it went up.",
+              "† Each set's first repetition is left out of the raising and lowering trends, because its timing includes getting into position.",
               metrics.length > 0
                 ? "Compensation columns summarize raw signals: the share of observed repetition time above the configured threshold, and " +
                   "below it the raw peak as a multiple of that threshold (1.00× is at the threshold; hover for the average). " +
@@ -485,8 +526,40 @@ function RepSide({
                 : "",
             ].join(" ")}
           />
+          <EndOfSet rows={endOfSetRows(detail, side)} main={main} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Each set's last repetition against its middle ones, for the therapist to read
+ * across sessions. Information only, never a judgement of readiness.
+ */
+function EndOfSet({ rows, main }: { rows: EndOfSetRow[]; main: MainMeasure }) {
+  const compared = rows.filter((r) => r.durationRatio !== null || r.peakChange !== null);
+  if (compared.length === 0) return null;
+  const exact = main.precise ?? main.format;
+  const change = (v: number) => `${v >= 0 ? "+" : "−"}${exact(Math.abs(v))}${main.unit}`;
+  return (
+    <div className="mt-2 text-[11px] text-gray-700" data-end-of-set="">
+      <p>
+        <span className="font-medium">End of set:</span>{" "}
+        {compared.map((r, i) => (
+          <span key={r.setIndex}>
+            {i > 0 && " · "}
+            set {r.setIndex}, the last repetition took{" "}
+            {r.durationRatio === null ? "—" : `${r.durationRatio.toFixed(2)}×`} as long as the middle ones
+            {r.peakChange !== null && <>, {main.label.charAt(0).toLowerCase() + main.label.slice(1)} {change(r.peakChange)}</>}
+          </span>
+        ))}
+      </p>
+      <p className="text-gray-400 mt-0.5">
+        Each set&apos;s last repetition against the ones between its first and last (sets with at least 4 repetitions on this
+        side; poorly tracked repetitions left out). Information only, not a judgement of readiness: repetitions are paced, so a
+        slower last repetition can be the patient&apos;s own choice, and repetitions vary, so compare it across sessions.
+      </p>
     </div>
   );
 }

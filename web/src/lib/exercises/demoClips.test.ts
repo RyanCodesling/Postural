@@ -6,7 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { DEMO_CLIPS, demoClipFor } from "./demoClips";
+import { DEMO_CLIPS, demoClipFor, demoStatusAtTime } from "./demoClips";
 import { EXERCISE_REGISTRY } from "./registry";
 
 let testsPassed = 0;
@@ -81,8 +81,8 @@ test("every clip belongs to an exercise in the registry", () => {
   }
 });
 
-test("exercises without a finished animation have no clip", () => {
-  assert(demoClipFor("ex_004") === null, "ex_004's active neck-tilt animation is not made yet");
+test("exercises without an accepted guide animation have no clip", () => {
+  assert(demoClipFor("ex_004") === null, "ex_004's active neck-tilt draft is not accepted for the guide");
   assert(demoClipFor("ex_005") === DEMO_CLIPS.ex_005, "ex_005's side-bend animation is back");
   assert(demoClipFor("ex_008") === DEMO_CLIPS.ex_008, "ex_008's wall-angels animation is published");
 });
@@ -103,6 +103,46 @@ test("the camera page takes its clip from this module, not a hard-coded exercise
   );
   assert(camera.includes("demoClipFor("), "CameraClient must look clips up with demoClipFor");
   assert(!camera.includes('exerciseId === "ex_001"'), "the single-exercise clip check must be gone");
+});
+
+test("hold labels follow exact video boundaries and a loop back to zero", () => {
+  const clip = DEMO_CLIPS.ex_006;
+  assert(demoStatusAtTime(clip, 94 / 30).phase === "Raise", "frame 95 still raises");
+  assert(demoStatusAtTime(clip, 95 / 30).phase === "Hold", "frame 96 begins hold");
+  assert(demoStatusAtTime(clip, 203 / 30).phase === "Hold", "frame 204 still holds");
+  assert(demoStatusAtTime(clip, 204 / 30).phase === "Lower", "frame 205 begins lowering");
+  assert(demoStatusAtTime(clip, 10).phase === "Ready", "end-of-file stays at final pose");
+  assert(demoStatusAtTime(clip, 0).phase === "Ready", "loop starts at Ready");
+});
+
+test("wall view changes at 7.8 seconds even while the phase stays Ready", () => {
+  const clip = DEMO_CLIPS.ex_008;
+  assert(demoStatusAtTime(clip, 233 / 30).view === "Front view", "frame 234 is front");
+  const cut = demoStatusAtTime(clip, 7.8);
+  assert(cut.view === "Side view" && cut.phase === "Ready", "frame 235 side cut");
+  assert(demoStatusAtTime(clip, 8.2).phase === "Slide up", "second repetition begins");
+  assert(demoStatusAtTime(clip, 0).view === "Front view", "loop restores front label");
+});
+
+test("seeking backward and invalid media time cannot leave a stale phase", () => {
+  const clip = DEMO_CLIPS.ex_007;
+  assert(demoStatusAtTime(clip, 6).phase === "Lower", "later seek");
+  assert(demoStatusAtTime(clip, 2).phase === "Press", "backward seek");
+  assert(demoStatusAtTime(clip, NaN).phase === "Ready", "metadata not yet loaded");
+  assert(demoStatusAtTime(clip, -1).phase === "Ready", "negative time");
+});
+
+test("detail crops stay within the source and timelines remain ordered", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    const { x, y, w, h } = clip.detail.crop;
+    assert(x >= 0 && y >= 108 && w > 0 && h > 0 && x + w <= clip.width && y + h <= clip.height, `${id}: detail bounds`);
+    for (const list of [clip.phases, clip.views ?? [{ start: 1, label: "Front view" }]]) {
+      assert(list[0].start === 1, `${id}: labels must start on the first frame`);
+      list.forEach((item, i) => {
+        assert(item.start <= clip.frames && (i === 0 || item.start > list[i - 1].start), `${id}: ordered label boundaries`);
+      });
+    }
+  }
 });
 
 console.log(`\n${testsPassed} passed, ${testsFailed} failed`);

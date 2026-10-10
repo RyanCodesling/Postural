@@ -1,18 +1,20 @@
 # Additional exercise animation drafts
 
-Four editable animations reuse the clothed MPFB figure. These are presentation
+Five editable animations reuse the clothed MPFB figure. These are presentation
 drafts for review; timing and ranges are authored display choices, not patient
 prescriptions or scoring calibration. The side-bend, arm-hold, overhead-press and
 wall-angels MP4s play in the camera page's Reference Guide as low-priority,
 illustrative guides: each is copied unmodified into the gitignored
 `web/public/demos/` folder and shown through the same crop as the lateral-raise
 guide, set in `web/src/lib/exercises/demoClips.ts`. The neck exercise (`ex_004`)
-is now active alternating neck tilts rather than the assisted stretch, and its
-animation will follow that version. Deprecated exercises `ex_002` and `ex_003`
+is now active alternating neck tilts rather than the assisted stretch. Its
+animation, the neck side bends, follows that version; it is a draft for review
+and is not in the Reference Guide. Deprecated exercises `ex_002` and `ex_003`
 are not included.
 
 | Exercise | Editable source | Preview | Timeline |
 | --- | --- | --- | --- |
+| Neck Side Bends | [Blender source](previews/neck_side_bends_2026_10_07/swing_40bpm_v2/ex_004_figure_mpfb.blend) | [MP4](previews/neck_side_bends_2026_10_07/swing_40bpm_v2/ex_004_mpfb/ex_004_figure_motion.mp4) | 270 frames / 9 s: three cycles of a 40 BPM swing |
 | Standing Side Bends | [Blender source](ex_005_figure_mpfb.blend) | [MP4](previews/ex_005_mpfb/ex_005_figure_motion.mp4) | 360 frames / 12 s |
 | Arm Abduction at 90 degrees | [Blender source](ex_006_figure_mpfb.blend) | [MP4](previews/ex_006_mpfb/ex_006_figure_motion.mp4) | 300 frames / 10 s |
 | Overhead Shoulder Press | [Blender source](ex_007_figure_mpfb.blend) | [MP4](previews/ex_007_mpfb/ex_007_figure_motion.mp4) | 300 frames / 10 s |
@@ -27,7 +29,12 @@ angels play in the Reference Guide as full-size re-renders in the upgraded look
 The side bend plays a one-sided version at the same size and look, rebuilt by
 this builder from the upgraded figure into `previews/side_bend_one_side_2026_09_25/`:
 180 frames (6 s), one bend per loop. The table's 360-frame alternating side bend
-remains the archived earlier draft. The whole figure, including overhead
+remains the archived earlier draft. The neck side bends were built by this
+builder from the upgraded figure and rendered at full size, as a 40 BPM swing
+in `previews/neck_side_bends_2026_10_07/swing_40bpm_v2/`. Three earlier neck
+drafts remain beside it: the first, with pauses at each side and at the centre;
+a faster 50 BPM swing in `continuous_50bpm/`; and the 40 BPM swing in
+`swing_40bpm/`, whose far shoulder visibly rose with the tilt (see below). The whole figure, including overhead
 fingertips, stays below the title area. The body and garments retain their
 original mesh coordinates and topology. The original lateral-raise scene and
 video remain unchanged. Source provenance is in [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md).
@@ -36,6 +43,30 @@ video remain unchanged. Source provenance is in [THIRD_PARTY_ASSETS.md](THIRD_PA
 
 The active exercise definitions remain in [registry.ts](../../web/src/lib/exercises/registry.ts).
 
+- Neck side bends swing the head ear toward shoulder from side to side, by user
+  direction at 40 beats per minute, like a metronome's pendulum. The head
+  arrives at one side on each beat (every 1.5 s), first the figure's left, and
+  holds there for 8 frames (0.27 s). It then eases across to the other side in
+  the rest of the beat, fastest through the centre, and never stops there. The
+  user asked for a hold of about 0.3 s; at 45 frames per beat a 9-frame hold
+  would put the centre between two frames. Each arrival at a side is one bend,
+  as the app counts this exercise (one count per side). The clip holds three
+  whole cycles (9 s) and starts at the centre, so its loop is seamless. Each
+  side is 35 degrees of head tilt relative to the
+  trunk, a display choice rather than a measured or prescribed range. Of that, 0.65 turns at the base of
+  the neck and the rest at the head, both about the camera's axis, so the head
+  moves only in the frontal plane and the face keeps looking forward. The head's
+  skin weights reach down the neck, and a larger head share kinks the neck under
+  the jaw instead of bending it. The trunk, shoulders and arms hold the source's
+  first-frame pose throughout, so the shoulders stay level and still. The
+  figure's neck weights also reached across the top of the shoulders, so
+  bending the neck lifted the far shoulder's skin by about 12 mm and lowered
+  the near one's, although no shoulder bone moved; the user saw it as an
+  uncanny shoulder rise. The builder therefore fades the neck bone's weight
+  out between 5 and 8 cm from the midline, handing it to the upper-spine bone,
+  which does not move. This changes only the built scene's copy of the body and
+  top weights (584 and 126 vertices), keeps each vertex's weight sum, and leaves
+  the neutral pose's skin where it was.
 - Side bends distribute a 42-degree driver across three spine controls, with
   about 24% more measured excursion than the draft before them. The pelvis and
   feet stay planted, and the head keeps its neutral relation to the upper torso.
@@ -97,7 +128,10 @@ hip follows the user's direction rather than that reference), and the arm-extens
 [Gloucestershire Hospitals exercise guidance](https://www.gloshospitals.nhs.uk/your-visit/patient-information-leaflets/simple-exercises-encourage-weight-loss/)
 for a shoulder-to-overhead movement. The latter is a seated, weighted example;
 the existing registry supplies this draft's standing, bilateral bodyweight
-context. Reference loads, repetitions and durations were not imported.
+context. The CUH page also describes the neck side bend: the ear tilts toward
+the shoulder, sitting or standing. It presents that as a stretch; the neck
+draft's active repetitions to each side follow the registry instead. Reference
+loads, repetitions and durations were not imported.
 
 ## Rebuild and review
 
@@ -176,6 +210,28 @@ counts at its plain distance. Joints move at most 14.9 mm between frames. The
 resting wrist bends up to 80 degrees, as a hand on the hip needs. Bending the
 hanging wrist, narrowing the camera and adding head rotation must be rejected.
 
+The neck side bends passed all 270 frame checks. The inspector measures the
+tilt as the head's rotation about the camera's axis since the first frame,
+which is level. The head reaches 35.00 degrees to each side and holds there for
+exactly 8 frames, six times, alternating and starting with the figure's left.
+The holds begin every 45 frames (1.5 s, 40 beats per minute). Between holds the
+head never stops: the only frames without movement are the 42 inside the holds,
+and it changes direction only at them. The swing is fastest through the centre,
+about 87 degrees per second. The clip holds whole cycles, and the loop's seam
+(10.8 mm at the fastest joint) equals the step from the first cycle into the
+second. At both sides 0.65 of the tilt is at the base of the neck, as declared.
+What remains of the head's rotation once the tilt is taken out (a turn or a
+nod) is at most 0.00002 degrees, and no bone below the neck moves at all.
+Still bones do not guarantee still skin, so the inspector also follows the
+rendered skin that forms the top 2 cm of each shoulder's outline at rest, 8 to
+17 cm from the midline (34 vertices a side). It allows 2 mm of movement either
+way. It measures -0.2 to +0.4 mm on each side; on the earlier 40 BPM draft,
+before the neck weights were faded, it measured -11.0 to +12.1 mm and failed.
+Joints move at most 10.8 mm between frames; the feet and pelvis do not move,
+and both wrists stay neutral. A 10-degree head turn, a 5-degree shrug of one
+shoulder, a 3-degree trunk lean and a 5-degree rise of the far shoulder at the
+held tilt must each be rejected, as must a narrowed camera and a bent wrist.
+
 The saved wall-angel scene passed all 468 frame checks. The W measures 60.0 degrees
 with 90.0-degree elbows and the Y 140.0 degrees with straight elbows; once the upper
 arm passes 120 degrees the elbows stay at or above 162.4 degrees. No body or garment
@@ -231,6 +287,36 @@ top, the lowest elbow reading is 161.6 against the 150 warning, trunk lean stays
 at or under 0.3 against 5, and no warning latches. The side repetition is a
 demonstration angle only; a patient's front camera does not measure it.
 
+The neck swing's 270 full-size frames were replayed through the current camera
+loop itself: its metrics, filters, per-side counters, cue checks and cue
+drawing, with capture readiness assumed to pass. The pose model found the
+figure in every frame. The swing never rests, so the frozen camera tilt came
+from the first neck draft's still Ready frames (the same figure and camera), as
+the camera's neutral calibration takes it. It read 1.9 degrees although the
+render camera is level. The clip was played three times in a row, plus the next
+loop's first 18 frames, at each of the four 150 ms coaching-tick alignments. It
+counts 9 bends to each side, all complete: one per side per cycle. A bend is
+counted as the head comes back past the centre, so the tail is needed to close
+the last right bend. The peaks read 41.8-42.1 to the left and 49.8-50.1 to the
+right in the pipeline's units, against the 30 target. The tilt estimate
+explains about half of that difference: with the level camera's true tilt of
+zero, the raw peaks read 45.0 and 48.5. No cue is drawn. Trunk lean reads
+1.8-2.6 throughout, under the cue's switch-on level of 6. The shoulder-level
+reading is 0.0-1.2 near the centre and reaches 4.5 while the head is tilted,
+under its switch-on level of 7. The skin's outline stays level, so that rise
+comes from the pose model, whose shoulder points shift as the head tilts.
+Before the neck weights were faded, the same replay read up to 5.7: the rising
+skin had added about 1.2. The earlier neck drafts, replayed the same way, also
+counted one complete bend per side per cycle and drew no cue. This uses a
+rendered avatar and synthetic 30 fps timestamps; it is not a live or clinical
+validation.
+
+The neck swing was also checked against the Reference Guide's shared crop in
+the same way as the other clips, in three 90-frame segments. Every frame fits
+the crop with at least 40 px above the hair, 54 px below the feet and 254 px at
+the sides. The only changed pixels outside the crop are the baked caption's
+descenders above the crop's top edge.
+
 Each garment remains one connected surface, with four intended openings in the
 top and three in the shorts. Every evaluated garment vertex is checked against
 the body at eleven standard poses per animation. The alternating side-bend draft
@@ -239,6 +325,7 @@ nineteen sampled poses in total. Minimum sampled clearances:
 
 | Exercise | Top | Shorts |
 | --- | ---: | ---: |
+| Neck side bends | 1.973 mm | 3.036 mm |
 | Side bends, alternating draft | 1.360 mm | 1.556 mm |
 | Side bend, one-sided | 1.623 mm | 2.227 mm |
 | Arm hold | 1.116 mm | 3.036 mm |

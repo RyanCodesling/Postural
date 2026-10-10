@@ -22,12 +22,24 @@ def main():
     parser.add_argument("--frames", nargs="+", type=int)
     parser.add_argument("--samples", type=int, default=24)
     parser.add_argument("--scale", type=float, default=.6)
+    parser.add_argument("--hide-phase-labels", action="store_true",
+                        help="Omit baked phase text when the player supplies synchronized labels")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
     if not 0 < args.scale <= 1 or args.samples < 1:
         parser.error("Scale must be in (0,1], and samples must be positive")
     source_hash = hashlib.sha256(args.source.read_bytes()).hexdigest()
     bpy.ops.wm.open_mainfile(filepath=str(args.source.resolve()))
     scene = bpy.context.scene
+    hidden_phase_labels = []
+    if args.hide_phase_labels:
+        # Delete only the in-memory phase text; hide_render is keyframed and
+        # setting it once would be undone by frame_set. Never save the source.
+        for obj in list(scene.objects):
+            if obj.type == "FONT" and "phase " in obj.name.lower():
+                hidden_phase_labels.append(obj.name)
+                bpy.data.objects.remove(obj, do_unlink=True)
+        if not hidden_phase_labels:
+            parser.error("The scene has no recognized phase labels")
     frames = args.frames or list(range(scene.frame_start, scene.frame_end + 1))
     if len(set(frames)) != len(frames) or any(f < scene.frame_start or f > scene.frame_end for f in frames):
         parser.error("Requested frames must be unique and within the saved timeline")
@@ -81,6 +93,7 @@ def main():
                 "frames": frames, "fps": scene.render.fps / scene.render.fps_base,
                 "resolution": [scene.render.resolution_x, scene.render.resolution_y],
                 "samples": args.samples, "view_transform": scene.view_settings.view_transform,
+                "hidden_phase_labels": sorted(hidden_phase_labels),
                 "rendered_frames": rendered, "reused_frames": reused,
                 "reuse_method": "Bit-identical rig pose matrices and visible text; no simulation or temporal effects."}
     (args.output_dir / "render_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

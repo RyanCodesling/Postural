@@ -87,12 +87,24 @@ export function textWidth(text: string, font: PdfFont, size: number): number {
   return (units * size) / 1000;
 }
 
-/** Greedy word wrap; a word wider than the line is split across lines. */
+/** The text cut to `maxWidth`, ending in an ellipsis when it had to be cut. */
+export function fitText(text: string, font: PdfFont, size: number, maxWidth: number): string {
+  const clean = pdfText(text);
+  if (textWidth(clean, font, size) <= maxWidth) return clean;
+  let cut = clean.length;
+  while (cut > 0 && textWidth(`${clean.slice(0, cut).trimEnd()}…`, font, size) > maxWidth) cut--;
+  return `${clean.slice(0, cut).trimEnd()}…`;
+}
+
+/**
+ * Greedy word wrap; a word wider than the line is split across lines. Lines
+ * break at ordinary spaces only, so a no-break space keeps "95 %" together.
+ */
 export function wrapText(text: string, font: PdfFont, size: number, maxWidth: number): string[] {
   const lines: string[] = [];
   for (const paragraph of text.split("\n")) {
     let line = "";
-    for (const word of pdfText(paragraph).split(" ")) {
+    for (const word of paragraph.replace(/[\r\t]+/g, " ").split(" ").map(pdfText)) {
       if (word === "") continue;
       const candidate = line ? `${line} ${word}` : word;
       if (textWidth(candidate, font, size) <= maxWidth) {
@@ -209,6 +221,10 @@ export class PdfDocument {
 }
 
 export type TableColumn = { header: string; width: number; align?: "left" | "right" };
+/** A table cell: plain text, or text with its own colour or weight (a flag, say). */
+export type TableCell = string | { text: string; color?: Rgb; bold?: boolean };
+/** One labelled detail of a details block; a wide one takes a whole row. */
+export type DetailCell = { label: string; value: string; wide?: boolean; strong?: boolean };
 export type ChartSeries = { label: string; color: Rgb; values: Array<number | null> };
 
 const MARGIN = 50;
@@ -216,8 +232,9 @@ const FOOTER_SPACE = 30;
 
 /**
  * Top-to-bottom report layout on A4 pages: headings, wrapped paragraphs,
- * label/value rows, tables whose header repeats after a page break, and small
- * line charts. `finish` adds the running footer with page numbers.
+ * label/value rows, shaded details blocks, tables whose header repeats after a
+ * page break, and small line charts. `finish` adds the running footer with
+ * page numbers.
  */
 export class ReportLayout {
   readonly doc: PdfDocument;
@@ -290,51 +307,126 @@ export class ReportLayout {
     this.y += 3;
   }
 
-  table(columns: TableColumn[], rows: string[][]) {
+  /**
+   * A shaded block of labelled details under a small title, three to a row
+   * (a wide cell takes the whole row), like the patient block at the top of a
+   * lab or imaging report. A block too long for the page continues on the next.
+   */
+  detailsBox(title: string, cells: DetailCell[]) {
+    const pad = 9;
+    const gap = 14;
+    const labelSize = 7;
+    const labelStep = labelSize + 4;
+    const valueSize = 9.5;
+    const lineHeight = valueSize * 1.3;
+    const rowGap = 7;
+    const inner = this.contentWidth - 2 * pad;
+    const narrow = (inner - 2 * gap) / 3;
+    const rows: DetailCell[][] = [];
+    for (const cell of cells) {
+      const last = rows[rows.length - 1];
+      if (cell.wide || !last || last.length === 3 || last[0].wide) rows.push([cell]);
+      else last.push(cell);
+    }
+    const laidRows = rows.map((row) => row.map((cell) => ({
+      cell,
+      font: (cell.strong ? "bold" : "regular") as PdfFont,
+      lines: wrapText(cell.value.trim() || "—", cell.strong ? "bold" : "regular", valueSize, cell.wide ? inner : narrow),
+    })));
+    const band = (height: number) => this.page.rect(MARGIN, this.y, this.contentWidth, height, COLORS.fill);
+    const room = () => PAGE.height - MARGIN - FOOTER_SPACE - this.y;
+
+    // The title stays with the start of the first row.
+    const titleHeight = 22;
+    const firstLines = Math.min(3, Math.max(1, ...(laidRows[0] ?? []).map((laid) => laid.lines.length)));
+    this.ensure(titleHeight + labelStep + firstLines * lineHeight + rowGap + pad);
+    band(titleHeight);
+    this.page.text(MARGIN + pad, this.y + 15, title.toUpperCase(), { font: "bold", size: 7.5, color: COLORS.green });
+    this.y += titleHeight;
+
+    for (const laid of laidRows) {
+      const lineCount = Math.max(...laid.map((l) => l.lines.length));
+      let from = 0;
+      while (from < lineCount) {
+        const head = from === 0 ? labelStep : 0;
+        const fits = Math.floor((room() - head - rowGap) / lineHeight);
+        if (fits < 1) {
+          this.newPage();
+          continue;
+        }
+        const take = Math.min(fits, lineCount - from);
+        const height = head + take * lineHeight + rowGap;
+        band(height);
+        laid.forEach(({ cell, font, lines }, i) => {
+          const x = MARGIN + pad + i * (narrow + gap);
+          const width = cell.wide ? inner : narrow;
+          if (head) this.page.text(x, this.y + labelSize, fitText(cell.label.toUpperCase(), "regular", labelSize, width), { size: labelSize, color: COLORS.muted });
+          lines.slice(from, from + take).forEach((line, j) =>
+            this.page.text(x, this.y + head + valueSize + j * lineHeight, line, { size: valueSize, font }));
+        });
+        this.y += height;
+        from += take;
+      }
+    }
+    band(pad - rowGap + 4);
+    this.y += pad - rowGap + 4 + 10;
+  }
+
+  table(columns: TableColumn[], rows: TableCell[][]) {
     const size = 8.5;
     const lineHeight = size * 1.3;
     const pad = 4;
     const total = columns.reduce((sum, c) => sum + c.width, 0);
     const widths = columns.map((c) => (c.width / total) * this.contentWidth);
-    const cellLines = (cells: string[], font: PdfFont) =>
-      cells.map((cell, i) => wrapText(cell, font, size, widths[i] - 2 * pad));
-    const drawRow = (cells: string[][], font: PdfFont, fill?: Rgb) => {
-      const height = Math.max(...cells.map((lines) => lines.length)) * lineHeight + 2 * pad;
+    type LaidCell = { lines: string[]; font: PdfFont; color?: Rgb };
+    const layCells = (cells: TableCell[], font: PdfFont): LaidCell[] =>
+      cells.map((cell, i) => {
+        const styled = typeof cell === "string" ? { text: cell } : cell;
+        const cellFont: PdfFont = styled.bold ? "bold" : font;
+        return { lines: wrapText(styled.text, cellFont, size, widths[i] - 2 * pad), font: cellFont, color: styled.color };
+      });
+    const rowHeight = (cells: LaidCell[]) => Math.max(...cells.map((c) => c.lines.length)) * lineHeight + 2 * pad;
+    const drawRow = (cells: LaidCell[], fill?: Rgb) => {
+      const height = rowHeight(cells);
       if (fill) this.page.rect(MARGIN, this.y, this.contentWidth, height, fill);
       let x = MARGIN;
-      cells.forEach((lines, i) => {
+      cells.forEach(({ lines, font, color }, i) => {
         lines.forEach((line, j) => {
           const right = columns[i].align === "right";
           const lineX = right ? x + widths[i] - pad - textWidth(line, font, size) : x + pad;
-          this.page.text(lineX, this.y + pad + size + j * lineHeight, line, { size, font, color: font === "bold" ? COLORS.text : undefined });
+          this.page.text(lineX, this.y + pad + size + j * lineHeight, line, { size, font, color: color ?? COLORS.text });
         });
         x += widths[i];
       });
       this.y += height;
       this.page.line(MARGIN, this.y, MARGIN + this.contentWidth, this.y, { width: 0.5 });
     };
-    const header = cellLines(columns.map((c) => c.header), "bold");
-    const headerHeight = Math.max(...header.map((l) => l.length)) * lineHeight + 2 * pad;
-    this.ensure(headerHeight + lineHeight + 2 * pad);
-    drawRow(header, "bold", COLORS.fill);
+    const header = layCells(columns.map((c) => c.header), "bold");
+    this.ensure(rowHeight(header) + lineHeight + 2 * pad);
+    drawRow(header, COLORS.fill);
     for (const row of rows) {
-      const cells = cellLines(row, "regular");
-      const height = Math.max(...cells.map((l) => l.length)) * lineHeight + 2 * pad;
-      if (this.y + height > PAGE.height - MARGIN - FOOTER_SPACE) {
+      const cells = layCells(row, "regular");
+      if (this.y + rowHeight(cells) > PAGE.height - MARGIN - FOOTER_SPACE) {
         this.newPage();
-        drawRow(header, "bold", COLORS.fill);
+        drawRow(header, COLORS.fill);
       }
-      drawRow(cells, "regular");
+      drawRow(cells);
     }
     this.y += 8;
   }
 
-  /** A line chart over evenly spaced sessions; null values leave a gap. */
-  chart(series: ChartSeries[], xLabels: { first: string; last: string }, format: (value: number) => string) {
+  /** A line chart over evenly spaced sessions, under its title when given; null values leave a gap. */
+  chart(series: ChartSeries[], xLabels: { first: string; last: string }, format: (value: number) => string, title?: string) {
     const values = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
     if (values.length === 0) return;
     const height = 120;
-    this.ensure(height + 40);
+    const titleLines = title ? wrapText(title, "bold", 9, this.contentWidth) : [];
+    // The title moves to a new page with its chart, never apart from it.
+    this.ensure(titleLines.length * 12.5 + height + 40);
+    for (const line of titleLines) {
+      this.page.text(MARGIN, this.y + 9, line, { font: "bold", size: 9 });
+      this.y += 12.5;
+    }
     const left = MARGIN + 44;
     const right = MARGIN + this.contentWidth - 6;
     const top = this.y + 6;
@@ -385,9 +477,11 @@ export class ReportLayout {
     this.doc.pages.forEach((page, i) => {
       const baseline = PAGE.height - MARGIN + 14;
       page.line(MARGIN, baseline - 12, MARGIN + this.contentWidth, baseline - 12, { width: 0.5 });
-      page.text(MARGIN, baseline, this.footer, { size: 7.5, color: COLORS.muted });
       const number = `Page ${i + 1} of ${total}`;
-      page.text(MARGIN + this.contentWidth - textWidth(number, "regular", 7.5), baseline, number, { size: 7.5, color: COLORS.muted });
+      const numberWidth = textWidth(number, "regular", 7.5);
+      // A long name is cut rather than run into the page number.
+      page.text(MARGIN, baseline, fitText(this.footer, "regular", 7.5, this.contentWidth - numberWidth - 12), { size: 7.5, color: COLORS.muted });
+      page.text(MARGIN + this.contentWidth - numberWidth, baseline, number, { size: 7.5, color: COLORS.muted });
     });
     return this.doc.toBytes();
   }

@@ -4,6 +4,7 @@ import type {
 } from "@/lib/exercises/registry";
 import type { RepEvent } from "./repCounter";
 import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
+import { isRepTracking, type RepTracking } from "./trackingSteadiness";
 
 /**
  * Versioned dynamic-repetition quality payload persisted in
@@ -85,6 +86,8 @@ export type RawRepFeaturesV2 = Omit<NonNullable<DynamicRepQualityV1["rawFeatures
 export type DynamicRepQualityV3 = Omit<DynamicRepQualityV2, "version" | "rawFeatures"> & {
   version: 3;
   rawFeatures: RawRepFeaturesV2 | null;
+  /** How well the camera tracked the repetition; absent before the tracking check. */
+  tracking?: RepTracking;
 };
 
 export type DynamicRepQuality =
@@ -634,5 +637,6 @@ export function isDynamicRepQuality(
 
 export function isDynamicRepQualityV3(value: unknown): value is DynamicRepQualityV3 {
   return isRecord(value) && value.version === 3 &&
-    value.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION && isDynamicRepQualityBody(value);
+    value.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION && isDynamicRepQualityBody(value) &&
+    (value.tracking === undefined || isRepTracking(value.tracking));
 }

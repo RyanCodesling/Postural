@@ -11,6 +11,12 @@ that one machine; nothing here moves them to a separate storage service.
 project's cloud server, so on any other deployment, answer No when the camera
 page asks to record.
 
+The server's setup, updates, backups and logs are described in
+[`../../deploy/server/README.md`](../../deploy/server/README.md). Its seeded demo
+accounts are locked at setup and its admin password is set with the server's
+password tool, so step 1 below applies to other deployments. Steps 2 to 4 and
+the session-day steps apply to both.
+
 ## Once, before the first session
 
 1. **Passwords.** Every account whose password is written in this repository

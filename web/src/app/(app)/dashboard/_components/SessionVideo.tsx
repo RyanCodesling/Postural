@@ -404,9 +404,10 @@ export function VideoTimelineBar({
       {timeline.reps.map((rep) => (
         <div
           key={`rep-${rep.setIndex}-${rep.side}-${rep.number}`}
-          className={`absolute top-6 h-3 w-0.5 ${rep.complete ? "bg-green-700" : "bg-gray-400"}`}
+          data-rep-check={rep.check ? "" : undefined}
+          className={`absolute ${rep.check ? "top-5 h-5 w-1 bg-red-600" : `top-6 h-3 w-0.5 ${rep.complete ? "bg-green-700" : "bg-gray-400"}`}`}
           style={{ left: pct(rep.startMs) }}
-          title={`Set ${rep.setIndex} · ${rep.side} rep ${rep.number}${rep.complete ? "" : " (partial)"}`}
+          title={`Set ${rep.setIndex} · ${rep.side} rep ${rep.number}${rep.complete ? "" : " (partial)"}${rep.check ? ` · check: ${rep.check}` : ""}`}
         />
       ))}
       {timeline.cues.map((cue, i) => (
@@ -445,15 +446,30 @@ export function VideoChapters({ timeline, onSeek }: { timeline: VideoTimeline; o
                 key={`${rep.side}-${rep.number}`}
                 type="button"
                 onClick={() => onSeek(Math.max(0, rep.startMs - 500))}
-                title={`Set ${setIndex}, ${rep.side} repetition ${rep.number} at ${formatVideoTime(rep.startMs)}${rep.complete ? "" : " (partial)"}`}
-                className={`px-1.5 py-0.5 text-[11px] rounded border ${rep.complete ? "border-green-300 text-green-800" : "border-gray-300 text-gray-500"}`}
+                title={`Set ${setIndex}, ${rep.side} repetition ${rep.number} at ${formatVideoTime(rep.startMs)}${rep.complete ? "" : " (partial)"}${rep.check ? `. Check: ${rep.check}.` : ""}`}
+                className={`px-1.5 py-0.5 text-[11px] rounded border ${rep.check ? "border-red-400 text-red-700 font-semibold" : rep.complete ? "border-green-300 text-green-800" : "border-gray-300 text-gray-500"}`}
               >
-                {rep.side === "left" ? "L" : rep.side === "right" ? "R" : ""}{rep.number}
+                {rep.side === "left" ? "L" : rep.side === "right" ? "R" : ""}{rep.number}{rep.check ? " !" : ""}
               </button>
             ))}
           </div>
         );
       })}
+      {timeline.reps.some((rep) => rep.check) && (
+        <div className="flex flex-wrap items-center gap-1" data-rep-checks="">
+          <span className="text-xs text-gray-500 mr-1">Worth checking:</span>
+          {timeline.reps.filter((rep) => rep.check).map((rep) => (
+            <button
+              key={`check-${rep.setIndex}-${rep.side}-${rep.number}`}
+              type="button"
+              onClick={() => onSeek(Math.max(0, rep.startMs - 1000))}
+              className="px-1.5 py-0.5 text-[11px] rounded bg-red-50 text-red-800 hover:bg-red-100"
+            >
+              Set {rep.setIndex} {rep.side === "left" ? "L" : rep.side === "right" ? "R" : ""}{rep.number} · {formatVideoTime(rep.startMs)}: {rep.check}
+            </button>
+          ))}
+        </div>
+      )}
       {timeline.cues.length > 0 && (
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-xs text-gray-500 mr-1">Cues:</span>

@@ -42,8 +42,42 @@ phase gating, thresholds, aspect correction, or model inference.
   Provenance validates `messageRendered` as a boolean; the current configuration
   remains false. Accepting a future snapshot does not enable message rendering.
 
-## Cue display policy (coaching_v10_elbow_bend_check)
+## Cue display policy (coaching_v11_tracking_steadiness_check)
 
+- **v11: a display-only unsteady-tracking message (2026-10-09).** It is not a
+  cue: it never enters the selector, never takes or blocks the cue slot and
+  never changes a count, a measurement or the coaching audit.
+  - `trackingSteadiness.ts` measures each body point's jump: its distance from
+    the straight line through its positions in the frames just before and
+    after, in pixels over the shoulder width. Movement at constant speed gives
+    zero. A point is unsteady when the median of its jumps over the last second
+    is above its limit (0.25 for the wrists, 0.15 for the other points), so one
+    glitch or one fast turn does not count. Only frames that pass capture
+    readiness are fed, and a jump needs neighbouring frames at most 250 ms away
+    (120 ms until a 2026-10-10 review fix, before any session was recorded with
+    v11). A median needs five jumps in the second, so the check cannot judge
+    below about six frames a second.
+  - Side bends and neck bends are judged on the head and trunk points; every
+    other exercise on the arms and trunk, the prescribed arms only.
+  - While a part is unsteady, and for 2 s after, the camera shows "The camera
+    keeps losing track of your arms (head, or shoulders and hips). More light,
+    a plainer background or clothes that stand out from the background may
+    help." in the banner area, below the camera-tilt banner.
+  - Each repetition saves `tracking` in `rep_events.compensations` (version 1:
+    its frames, the frames that failed capture readiness, the frames on which
+    the check could judge one of its parts, `checkedFrames`, and the frames on
+    which one of them was unsteady). A repetition the check never judged shows
+    `checkedFrames` 0, so it is not mistaken for a steady one; the session
+    breakdown says so. The frame marks reach back 180 s; a repetition that began
+    before the oldest mark is saved without a `tracking` record rather than with
+    a partial one. The session's capture-quality summary adds `unsteadyFrames`
+    and `checkedFrames`. The trends use the repetition record to leave poorly
+    tracked repetitions out (`src/lib/analytics/trendRules.ts`).
+  - The limits sit above the largest one-second levels in one subject's
+    ordinary recorded sessions, also with only every 2nd to 5th frame kept under
+    the 250 ms gap rule; they are engineering values, and detection of real
+    flicker is untested. The settings are fingerprinted in the coaching
+    configuration (`tracking`).
 - **v10: a display-only elbow check on lateral arm raises and the arm hold
   (2026-10-04).** Label "Straighten arms", drawn as a box around both elbows.
   - `elbowBendWarning.ts` reads each arm's elbow angle on the image
@@ -347,7 +381,8 @@ and `labels` paths relative to the manifest. Snapshots contain `sessions`, `rows
 (intent joined to stored event windows, not exact physical boundaries), or
 `windows` (explicit `startMs`, `endMs`, `intent`, with the original label source).
 Optional `expectedRepCounts` pins independent side counts. Optional `baselineCamera`
-compares against a preserved prior CameraClient source.
+compares against a preserved prior CameraClient source; a repetition's `tracking`
+record is newer than any preserved source, so that comparison leaves it out.
 
 Replay executes the current camera loop and actual metric, filter, counter,
 warning, selector, quality writer and overlay modules. Browser delivery, UI sinks,

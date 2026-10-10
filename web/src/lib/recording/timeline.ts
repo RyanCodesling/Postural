@@ -6,14 +6,29 @@
  * to another part of a resumed session are left out; ones crossing the part's
  * edges are clipped.
  */
+import { firstRepsOfSets, repPoorlyTracked } from "@/lib/analytics/trendRules";
 import type { MetricName } from "@/lib/exercises/registry";
 import { cueEpisodes, setCoachingAudit } from "@/lib/pose/coachingAudit";
 import { OVERLAY_LABELS } from "@/lib/pose/drawCompensationOverlay";
 
+/**
+ * A repetition gets a "check" marker when the camera tracked it poorly, or when,
+ * other than a set's first (whose timing includes getting into position), it
+ * took at least this many times as long as its side's typical repetition, or at
+ * most the inverse. In the stored pilot sessions no repetition other than a
+ * set's first was that far from its side's median, so the marker stays rare. It
+ * points the therapist to the video; it changes nothing that is counted.
+ */
+export const REP_CHECK_RATIO = 2;
+
 type Stamped = { startTs?: string | null; endTs?: string | null };
 export type TimelineSource = {
   sets: Array<Stamped & { setIndex: number; holdQuality: unknown }>;
-  reps: Array<Stamped & { setIndex: number; repIndex: number; side: string; classification: string }>;
+  reps: Array<Stamped & {
+    setIndex: number; repIndex: number; side: string; classification: string;
+    /** Raise + top + lower, and the quality payload with its tracking record, when the detail has them. */
+    totalMs?: number | null; compensations?: unknown;
+  }>;
   /** Attempts that credited no movement: their cues were still on screen. */
   auditAttempts?: Array<{ setIndex: number; holdQuality: unknown }>;
 };
@@ -21,7 +36,11 @@ export type TimelineSource = {
 export type VideoTimeline = {
   durationMs: number;
   sets: Array<{ setIndex: number; startMs: number; endMs: number }>;
-  reps: Array<{ setIndex: number; side: string; number: number; startMs: number; endMs: number; complete: boolean }>;
+  reps: Array<{
+    setIndex: number; side: string; number: number; startMs: number; endMs: number; complete: boolean;
+    /** Why the repetition is worth checking on the video, or null. */
+    check: string | null;
+  }>;
   cues: Array<{ metric: MetricName; label: string; text: string; startMs: number; endMs: number; uncredited: boolean }>;
   /** Sets whose coaching record reached its cap and dropped its earliest entries. */
   cappedSets: number[];
@@ -32,6 +51,38 @@ const wallMs = (iso: string | null | undefined): number | null => {
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : null;
 };
+
+const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/** Each repetition's reason to check it on the video (see REP_CHECK_RATIO), by repetition index. */
+export function repChecks(reps: TimelineSource["reps"]): Map<number, string> {
+  const firsts = firstRepsOfSets(reps);
+  const typical = new Map<string, number>();
+  for (const side of new Set(reps.map((r) => r.side))) {
+    const durations = reps
+      .filter((r) => r.side === side && !firsts.has(r.repIndex) && !repPoorlyTracked(r.compensations))
+      .map((r) => r.totalMs)
+      .filter(finite)
+      .sort((a, b) => a - b);
+    if (durations.length < 3) continue;
+    const mid = durations.length >> 1;
+    typical.set(side, durations.length % 2 ? durations[mid] : (durations[mid - 1] + durations[mid]) / 2);
+  }
+  const checks = new Map<number, string>();
+  for (const rep of reps) {
+    if (repPoorlyTracked(rep.compensations)) {
+      checks.set(rep.repIndex, "the camera tracked this repetition poorly, so it counts in no trend");
+      continue;
+    }
+    const median = typical.get(rep.side);
+    if (firsts.has(rep.repIndex) || median === undefined || median <= 0 || !finite(rep.totalMs)) continue;
+    const ratio = rep.totalMs / median;
+    if (ratio >= REP_CHECK_RATIO || ratio <= 1 / REP_CHECK_RATIO) {
+      checks.set(rep.repIndex, `it took ${ratio.toFixed(1)}× as long as this side's typical repetition`);
+    }
+  }
+  return checks;
+}
 
 export function buildVideoTimeline(
   part: { startWallMs: number },
@@ -54,6 +105,7 @@ export function buildVideoTimeline(
   // Repetitions are numbered per set and side across the whole session, so a
   // set split by a reload keeps counting in the next part.
   const counts = new Map<string, number>();
+  const checks = repChecks(source.reps);
   const reps = [...source.reps]
     .sort((a, b) => (wallMs(a.startTs) ?? 0) - (wallMs(b.startTs) ?? 0) || a.repIndex - b.repIndex)
     .flatMap((rep) => {
@@ -61,7 +113,10 @@ export function buildVideoTimeline(
       const number = (counts.get(key) ?? 0) + 1;
       counts.set(key, number);
       const at = place(wallMs(rep.startTs), wallMs(rep.endTs));
-      return at ? [{ setIndex: rep.setIndex, side: rep.side, number, ...at, complete: rep.classification === "complete" }] : [];
+      return at ? [{
+        setIndex: rep.setIndex, side: rep.side, number, ...at, complete: rep.classification === "complete",
+        check: checks.get(rep.repIndex) ?? null,
+      }] : [];
     });
 
   const cues: VideoTimeline["cues"] = [];

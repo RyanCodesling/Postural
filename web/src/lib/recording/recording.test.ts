@@ -19,7 +19,7 @@ import { CoachingAuditBuffer } from "../pose/coachingAudit";
 import { parseRange } from "./http";
 import { pickRecordingMimeType, SessionRecorder } from "./sessionRecorder";
 import * as storage from "./storage";
-import { buildVideoTimeline, formatVideoTime } from "./timeline";
+import { REP_CHECK_RATIO, buildVideoTimeline, formatVideoTime, repChecks } from "./timeline";
 import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "./videoChoice";
 import { drawCompensationOverlay } from "../pose/drawCompensationOverlay";
 import {
@@ -288,6 +288,29 @@ async function run() {
     assert.deepEqual(timeline.cues.map((c) => [c.label, c.text, c.startMs, c.endMs]), [["Trunk lean", "STRAIGHTEN", 3000, 3500]],
       "the cue sits where the coaching record's clock puts it");
     assert.equal(formatVideoTime(65_400), "1:05");
+  });
+
+  await test("a repetition worth checking gets a marker: poor tracking, or twice or half its side's typical time", async () => {
+    const t0 = Date.parse("2026-09-26T03:00:00.000Z");
+    const iso = (ms: number) => new Date(t0 + ms).toISOString();
+    const tracking = (unsteadyFrames: number) => ({
+      tracking: { version: 1, check: "tracking_steadiness_v1", frames: 30, rejectedFrames: 0, checkedFrames: 30, unsteadyFrames },
+    });
+    const rep = (repIndex: number, totalMs: number, unsteady = 0) =>
+      ({ setIndex: 1, repIndex, side: "left", classification: "complete", startTs: iso(repIndex * 10_000), endTs: iso(repIndex * 10_000 + totalMs),
+        totalMs, compensations: tracking(unsteady) });
+    // Repetition 1 is the set's first (its slow timing is expected); 4 took about 2.9 times the typical 1050 ms; 6 was tracked poorly.
+    const reps = [rep(1, 9000), rep(2, 1000), rep(3, 1100), rep(4, 3000), rep(5, 1000), rep(6, 1000, 20)];
+    const checks = repChecks(reps);
+    assert.deepEqual([...checks.keys()].sort(), [4, 6], "only the long and the poorly tracked repetition");
+    assert.equal(checks.get(4), "it took 2.9× as long as this side's typical repetition");
+    assert.equal(checks.get(6), "the camera tracked this repetition poorly, so it counts in no trend");
+    const timeline = buildVideoTimeline({ startWallMs: t0 }, 70_000, { sets: [], reps });
+    assert.deepEqual(timeline.reps.map((r) => r.check !== null), [false, false, false, true, false, true], "carried onto the video's repetitions");
+    assert.equal(REP_CHECK_RATIO, 2);
+    // Without durations or tracking records (older details), nothing is marked.
+    const older = reps.map((r) => ({ setIndex: r.setIndex, repIndex: r.repIndex, side: r.side, classification: r.classification }));
+    assert.equal(repChecks(older).size, 0);
   });
 
   await test("the recorder uploads chunks in order, retries, and closes the part", async () => {

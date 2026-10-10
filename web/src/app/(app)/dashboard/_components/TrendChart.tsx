@@ -26,6 +26,11 @@ export interface TrendSeries {
   pointDetails?: (string | null)[];
   /** Optional model band, same order as `values`. */
   band?: TrendBand;
+  /**
+   * Optional sessions drawn hollow, not joined by the line: measured but left
+   * out of the trend (same order as `values`; the reason goes in `pointDetails`).
+   */
+  heldOut?: (number | null)[];
 }
 
 function fmtNum(v: number): string {
@@ -85,7 +90,7 @@ export default function TrendChart({
   const plotW = VBW - M.left - M.right;
   const plotH = VBH - M.top - M.bottom;
 
-  const allValues = series.flatMap((s) => s.values.filter(isNum));
+  const allValues = series.flatMap((s) => [...s.values, ...(s.heldOut ?? [])].filter(isNum));
   const bandValues = series.flatMap((s) => (s.band ? [...s.band.low, ...s.band.high].filter(isNum) : []));
   const n = Math.max(0, ...series.map((s) => s.values.length));
 
@@ -115,19 +120,23 @@ export default function TrendChart({
   const detailsAt = (i: number) => ({
     title: pointTitles?.[i],
     lines: series.flatMap((s) => {
-      const v = s.values[i];
+      const v = isNum(s.values[i]) ? s.values[i] : s.heldOut?.[i];
       return isNum(v)
         ? [{ color: s.color, text: s.pointDetails?.[i] ?? `${s.label}: ${fmtNum(v)}${unitSuffix}` }]
         : [];
     }),
   });
+  const valueAt = (s: TrendSeries, i: number) => (isNum(s.values[i]) ? s.values[i] : s.heldOut?.[i]);
   // Each index owns the band halfway to its neighbours, so hovering anywhere
   // near a session selects it — the dots alone are too small to aim at.
   const bandLeft = (i: number) => (i === 0 ? M.left : (xAt(i - 1) + xAt(i)) / 2);
   const bandRight = (i: number) => (i === n - 1 ? VBW - M.right : (xAt(i) + xAt(i + 1)) / 2);
 
   const shown = active === null ? null : detailsAt(active);
-  const activeYs = active === null ? [] : series.flatMap((s) => (isNum(s.values[active]) ? [yAt(s.values[active] as number)] : []));
+  const activeYs = active === null ? [] : series.flatMap((s) => {
+    const v = valueAt(s, active);
+    return isNum(v) ? [yAt(v)] : [];
+  });
   const shownTop = activeYs.length ? Math.min(...activeYs) : M.top + plotH / 2;
 
   const points = (values: (number | null)[]) =>
@@ -219,6 +228,12 @@ export default function TrendChart({
               )}
               {s.values.map((v, i) =>
                 isNum(v) ? <circle key={i} cx={xAt(i)} cy={yAt(v)} r={i === active || i === selected ? 4.5 : 2.5} fill={s.color} /> : null,
+              )}
+              {s.heldOut?.map((v, i) =>
+                isNum(v) ? (
+                  <circle key={`held-${i}`} data-held-out={i} cx={xAt(i)} cy={yAt(v)} r={i === active || i === selected ? 4.5 : 2.8}
+                    fill="white" stroke={s.color} strokeWidth={1.5} />
+                ) : null,
               )}
             </g>
           ))}

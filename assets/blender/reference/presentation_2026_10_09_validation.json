@@ -1,0 +1,285 @@
+{
+  "date": "2026-10-10",
+  "status": "rendered and automated-checked candidates; no public media replacement",
+  "total_frames": 1728,
+  "total_seconds": 57.6,
+  "original_public_media_unchanged": true,
+  "default_crop": [
+    43,
+    108,
+    784,
+    847
+  ],
+  "candidates": [
+    {
+      "exercise": "ex_001",
+      "status": "candidate; awaiting visual acceptance",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_001_mpfb/ex_001_figure_motion.mp4",
+      "sha256": "ef50f6ba6e6af2759ebe0f7cc84d320567f392c56519d86207e6d5b6a22e7aeb",
+      "source_blend_sha256": "948b7198a73315f2ce3800eae6c4f3d96065a90af3b5d0baf293a8c7342088fa",
+      "frames": 210,
+      "seconds": 7.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 210,
+      "reused_frames": 0,
+      "crop_margins_px": {
+        "left": 14,
+        "right": 14,
+        "top": 6,
+        "bottom": 14
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.8316701853155055,
+      "max_absolute_readback_rgb_drift": 0.3437086558761422,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    },
+    {
+      "exercise": "ex_004",
+      "status": "draft; separate counting and acceptance gates remain",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_004_mpfb/ex_004_figure_motion.mp4",
+      "sha256": "659ea87aad4510d1a9fa6ecab346b268a63d85448e250320f8d8c3d7338d668d",
+      "source_blend_sha256": "1dd098d02ad56684e788adf799413d02514b314c47e3a2c880de5b81ef5cacda",
+      "frames": 270,
+      "seconds": 9.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 39,
+      "reused_frames": 231,
+      "crop_margins_px": {
+        "left": 255,
+        "right": 232,
+        "top": 40,
+        "bottom": 54
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.7864625850340136,
+      "max_absolute_readback_rgb_drift": 0.30657049026507366,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    },
+    {
+      "exercise": "ex_005",
+      "status": "candidate; awaiting visual acceptance",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_005_mpfb/ex_005_figure_motion.mp4",
+      "sha256": "a1e65bc4a025030e8708503881df212e15f718a8256a36403c216da87a2e49bb",
+      "source_blend_sha256": "9d42c96e262667ddd9b5f27f272e1eba277893764085701507ee63581fcb76c3",
+      "frames": 180,
+      "seconds": 6.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 61,
+      "reused_frames": 119,
+      "crop_margins_px": {
+        "left": 212,
+        "right": 205,
+        "top": 32,
+        "bottom": 44
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.8293150363593713,
+      "max_absolute_readback_rgb_drift": 0.3450574712643544,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    },
+    {
+      "exercise": "ex_006",
+      "status": "candidate; awaiting visual acceptance",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_006_mpfb/ex_006_figure_motion.mp4",
+      "sha256": "03498cb58637ebd5562a0527a186524ab94d82939e45a575f1f97f1cb673863e",
+      "source_blend_sha256": "832e7bd3befc925f9703e2309e7317edf8dcea42e4c69f11eca22e7dcf5f72ce",
+      "frames": 300,
+      "seconds": 10.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 73,
+      "reused_frames": 227,
+      "crop_margins_px": {
+        "left": 41,
+        "right": 42,
+        "top": 53,
+        "bottom": 66
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.8114813511611542,
+      "max_absolute_readback_rgb_drift": 0.32940769411212045,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    },
+    {
+      "exercise": "ex_007",
+      "status": "candidate; awaiting visual acceptance",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_007_mpfb/ex_007_figure_motion.mp4",
+      "sha256": "df97d620b56f19a7baa4c423e2cf6866fa8f19b880fc44bfc20639155972a83a",
+      "source_blend_sha256": "3bc2b2e9a6190883770d122db24258a827bb7045416102a7ea16a44627d33a38",
+      "frames": 300,
+      "seconds": 10.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 97,
+      "reused_frames": 203,
+      "crop_margins_px": {
+        "left": 258,
+        "right": 258,
+        "top": 32,
+        "bottom": 47
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92,
+        93
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.7978395496129487,
+      "max_absolute_readback_rgb_drift": 0.3152076002814894,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    },
+    {
+      "exercise": "ex_008",
+      "status": "candidate; awaiting visual acceptance",
+      "video": "assets/blender/previews/presentation_2026_10_09/ex_008_mpfb/ex_008_figure_motion.mp4",
+      "sha256": "a94fa59177bedb95eb0fd99de8eb945f6239e92aee0614526f8195783562c461",
+      "source_blend_sha256": "486e6286c3102c9512e93a5e81d07ed70423e4708f39276f5e72fa6795d7f964",
+      "frames": 468,
+      "seconds": 15.6,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "samples": 32,
+      "rendered_frames": 194,
+      "reused_frames": 274,
+      "crop_margins_px": {
+        "left": 125,
+        "right": 118,
+        "top": 29,
+        "bottom": 44
+      },
+      "all_frame_crop_passed": true,
+      "crop_method": "Established 16-level threshold, 3x3 opening, 20-pixel components, outer-column row median; clean plate for wall side",
+      "excluded_caption_rows": [
+        91,
+        92
+      ],
+      "max_readback_mean_absolute_rgb_error": 0.7429040581749942,
+      "max_absolute_readback_rgb_drift": 0.10659394792399723,
+      "unchanged_scene_properties": [
+        "original mesh coordinates",
+        "original weights",
+        "object transforms",
+        "camera parameters",
+        "camera markers",
+        "all-frame bone matrices",
+        "timeline"
+      ],
+      "eyes_follow_head": true
+    }
+  ],
+  "guide_tests": "12 passed",
+  "typecheck": "passed",
+  "lint": "passed with zero warnings",
+  "browser_controls": [
+    "Hold boundary from actual media time",
+    "Single video and retained playback time across detail/fullscreen",
+    "Half speed retained across fullscreen",
+    "Fullscreen fallback keyboard trap, Escape and restored focus",
+    "Play/pause works",
+    "Wall cut at 7.8 seconds",
+    "Front label after rewind",
+    "No narrow-screen horizontal overflow",
+    "All five actual MP4s load",
+    "Clip changes reset speed",
+    "No browser page errors"
+  ],
+  "candidate_playback": "all six videos loaded at 870 x 980 and advanced in a real headless browser",
+  "visual_review": "sampled decoded sequences, before/after detail comparisons, browser screenshots; not a continuous human or clinical review",
+  "limitations": [
+    "No new pose-model replay was performed. Original geometry, weights, bone motion, cameras and timelines are unchanged.",
+    "No signed-in Start/Resume/End lifecycle test, clinical validation or deployment.",
+    "Neck remains outside the Reference Guide pending its separate counting gate."
+  ]
+}

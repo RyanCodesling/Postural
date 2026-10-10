@@ -8,7 +8,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import TrendChart, { axisTicks } from "./TrendChart";
-import { primaryPointDetail, repPointDetail, type TrendSession } from "./ExerciseTrends";
+import { modelChartSeries, primaryPointDetail, repPointDetail, type TrendSession } from "./ExerciseTrends";
+import { prepareModelSeries } from "@/lib/analytics/trendSeries";
 
 let passed = 0;
 let failed = 0;
@@ -103,6 +104,27 @@ test("primary-point details: angle, normalized and hold metrics", () => {
     === "Peak: 0.87 · 2 sets · 1 rep", "normalized keeps 2 decimals");
   assert(primaryPointDetail(session({ setCount: 2 }), 29.96, { label: "Hold time", unit: "s", isAngle: false }, true)
     === "Hold time: 30.0s · 2 sets", "hold seconds");
+});
+
+test("a session left out of the trend is drawn hollow, off the line, with its reason on hover", () => {
+  const prepared = prepareModelSeries("ex_001", [
+    { exerciseKind: "dynamic", setCount: 1, leftReps: 8, avgLeftPeakValue: 90 },
+    { exerciseKind: "dynamic", setCount: 1, leftReps: 8, avgLeftPeakValue: 60,
+      trend: { rulesVersion: "trend_rules_v1", leftReps: 8, rightReps: 0, completeLeftReps: 8, completeRightReps: 0,
+        avgLeftPeakValue: 60, avgRightPeakValue: null, sdLeftPeakValue: 0, sdRightPeakValue: null,
+        avgLeftFormScore: null, avgRightFormScore: null, leftFormReps: 0, rightFormReps: 0,
+        avgLeftLoweringMs: null, avgRightLoweringMs: null, avgLeftRaisingMs: null, avgRightRaisingMs: null,
+        leftTimingReps: 6, rightTimingReps: 0, trackedReps: 8, poorlyTrackedReps: 5 } },
+    { exerciseKind: "dynamic", setCount: 1, leftReps: 8, avgLeftPeakValue: 92 },
+  ], "peak", "left");
+  const [chartSeries] = modelChartSeries([prepared], (v) => String(Math.round(v)), "", "reps");
+  assert(chartSeries.values[1] === null && chartSeries.heldOut?.[1] === 60, "measured value kept as a hollow point");
+  assert(chartSeries.pointDetails?.[1] === "Left: 60 · not in the trend: camera tracking was poor in 5 of 8 repetitions",
+    chartSeries.pointDetails?.[1] ?? "no detail");
+  const html = renderToStaticMarkup(createElement(TrendChart, { series: [chartSeries], onSelect: () => {} }));
+  assert((html.match(/data-held-out="/g) ?? []).length === 1, "one hollow point");
+  assert(html.includes("not in the trend: camera tracking was poor"), "its reason in the hover target");
+  assert((html.match(/<polyline/g) ?? []).length === 1, "the line joins the counted sessions only");
 });
 
 test("rep-point details use the app's full-ROM wording, with or without per-side totals", () => {

@@ -2,7 +2,7 @@
 
 Preserves the source file and mesh data. Choreography values describe authored
 display poses, not clinical targets, scoring thresholds or prescribed timing.
-This draft batch covers ex_005, ex_006, ex_007 and ex_008.
+This draft batch covers ex_004, ex_005, ex_006, ex_007 and ex_008.
 """
 from __future__ import annotations
 
@@ -41,6 +41,33 @@ SIDE_BEND_HIP = {
 }
 SIDE_BEND_DANGLE_DEG = (12.0, 3.0)  # hanging arm's outward angle from vertical: upright, full bend
 
+# Neck side bends, by user direction 2026-10-07 ("no stop at the middle and
+# continuous", "a very small pause when its in the farthest though, about .3
+# seconds") and 2026-10-09 ("make it slower, about 40BPM"): the head swings ear
+# toward shoulder from side to side like a metronome's pendulum, arriving at one
+# side on each beat, first the figure's left. Each swing eases out of one side
+# and into the other, fastest through the centre and never stopping there, then
+# holds briefly at the far side. At 45 frames per beat a 9-frame (0.3 s) hold
+# would put the centre between two frames, so the hold is 8 frames (0.27 s).
+# The clip holds whole cycles so its loop is seamless. The tilt is shared
+# between the base of the neck and the head. The head's skin weights reach down
+# the neck to about 1.44 m, so a larger head share kinks the neck under the jaw
+# instead of bending it.
+NECK_TILT_PEAK_DEG = 35.0
+NECK_TILT_NECK_SHARE = 0.65
+NECK_TILT_BPM = 40
+NECK_TILT_PERIOD_FRAMES = round(2 * 60 * 30 / NECK_TILT_BPM)  # two beats per cycle at 30 fps
+NECK_TILT_HOLD_FRAMES = 8                                     # about 0.3 s at each side
+NECK_TILT_CYCLES = 3
+assert NECK_TILT_PERIOD_FRAMES * NECK_TILT_BPM == 2 * 60 * 30, "a cycle must be a whole number of frames"
+assert (NECK_TILT_PERIOD_FRAMES // 2 - NECK_TILT_HOLD_FRAMES + 1) % 2 == 0, "the swing must cross the centre on a frame"
+# MakeHuman's neck weights reach across the top of the shoulders, so the tilt
+# lifted the far shoulder's skin about 12 mm (and lowered the near one's) though
+# no shoulder bone moves; the user saw it as an uncanny shoulder rise. In the
+# built scene, neck_01's influence fades out between these distances from the
+# midline (rest space), handed to spine_03.
+NECK_TILT_WEIGHT_FADE_M = (0.05, 0.08)
+
 # Wall angels: frontal-plane upper-arm angles from straight down and interior
 # elbow angles (180 = straight) at the W rest and the Y top. They were chosen so
 # that, replayed through the app's own metric on a 16:9 frame, the W stays well
@@ -63,6 +90,27 @@ WALL_POSTURE_GAP_M = 0.005         # upper back and back of the head, as physiot
 WALL_RGBA = (0.200, 0.190, 0.175, 1.0)
 
 SPECS = {
+    "ex_004": {
+        # Active alternating neck tilts, as the app counts them (one counter
+        # per side): a continuous side-to-side swing, one side per beat.
+        "title": "Neck side bends", "frames": NECK_TILT_CYCLES * NECK_TILT_PERIOD_FRAMES,
+        # Frame 1 is the centre; the left hold is frames 20-27 and the right
+        # hold 65-72 of each 90-frame cycle.
+        "peak_frame": 23,
+        "phases": [(1, NECK_TILT_CYCLES * NECK_TILT_PERIOD_FRAMES, "Swing")],
+        "checkpoints": [1, 10, 20, 27, 36, 46, 56, 65, 72, 81, 181],
+        "guides": f"Draft preview | {NECK_TILT_BPM} beats per minute",
+        "pose_note": "Head swings ear toward shoulder in the frontal plane from side to side, "
+                     f"arriving at one side on each beat at {NECK_TILT_BPM} beats per minute, "
+                     "starting at the centre toward the figure's left. Each swing eases out of "
+                     "one side and into the other without stopping at the centre, then holds "
+                     f"{NECK_TILT_HOLD_FRAMES} frames at the far side. "
+                     f"{NECK_TILT_PEAK_DEG:g} degrees of head tilt relative to the trunk at each "
+                     f"peak, {NECK_TILT_NECK_SHARE:g} of it at the base of the neck and the rest at "
+                     "the head; the face keeps looking forward. The trunk, shoulders and arms "
+                     "hold the source's neutral pose, and the feet and pelvis are fixed. "
+                     "The tilt is a display choice, not a measured or prescribed range.",
+    },
     "ex_005": {
         "title": "Standing side bends", "frames": 180,
         "phases": [(1, 20, "Ready"), (21, 79, "Bend"), (80, 100, "Pause"),
@@ -324,6 +372,80 @@ def side_bend_trunk(rig, lean):
     # bend lets the trunk curve while the neck follows the torso.
     for name, weight in [("spine_01", .40), ("spine_02", .35), ("spine_03", .25)]:
         rotate_world(rig.pose.bones[name], Vector((0, 1, 0)), math.radians(lean * weight))
+        bpy.context.view_layer.update()
+
+
+def neck_swing_deg(frame):
+    """The swing's head tilt at a frame; positive tilts toward the figure's left.
+
+    Each beat the head eases from one side to the other over the frames left
+    after the hold, fastest through the centre, then holds NECK_TILT_HOLD_FRAMES
+    frames at the far side. The beat's first held frame is its arrival. Frame 1
+    is the centre on the way to the figure's left. The position is taken modulo
+    the cycle, so repeated poses are bit-identical and render once.
+    """
+    beat = NECK_TILT_PERIOD_FRAMES // 2
+    travel = beat - NECK_TILT_HOLD_FRAMES + 1      # frame steps from the last held frame to the next arrival
+    t = (frame - 1 + travel // 2) % NECK_TILT_PERIOD_FRAMES
+    toward = 1                                     # the first half-cycle swings toward the figure's left
+    if t >= beat:
+        t, toward = t - beat, -1
+    if t < travel:
+        return -toward * NECK_TILT_PEAK_DEG * math.cos(math.pi * t / travel)
+    return toward * NECK_TILT_PEAK_DEG
+
+
+def fade_neck_weights(obj):
+    """Hand neck_01's weight on skin beside the neck to spine_03, which the neck side bends never move.
+
+    The fade runs across NECK_TILT_WEIGHT_FADE_M from the midline, measured on the
+    rest mesh, and keeps each vertex's weight sum. Only this scene's copy changes;
+    the source file and the mesh coordinates do not.
+    """
+    inner, outer = NECK_TILT_WEIGHT_FADE_M
+    names = {g.index: g.name for g in obj.vertex_groups}
+    neck, spine = obj.vertex_groups["neck_01"], obj.vertex_groups["spine_03"]
+    moved = 0
+    for vertex in obj.data.vertices:
+        weights = {names[g.group]: g.weight for g in vertex.groups}
+        amount = weights.get("neck_01", 0.0)
+        keep = 1.0 - smoothstep((abs((obj.matrix_world @ vertex.co).x) - inner) / (outer - inner))
+        if amount <= 0 or keep >= 1.0:
+            continue
+        neck.add([vertex.index], amount * keep, "REPLACE")
+        spine.add([vertex.index], weights.get("spine_03", 0.0) + amount * (1 - keep), "REPLACE")
+        moved += 1
+    return moved
+
+
+def settle_neck_weights(scene):
+    """Fade the neck's weights off the shoulders on the body and the top, and confirm
+    the neutral pose's skin does not move (neck_01 and spine_03 are at rest there)."""
+    body = scene.objects["Figure_Body"]
+    saved = [(m, m.show_viewport) for m in body.modifiers]
+    for modifier, _ in saved:
+        modifier.show_viewport = True
+    try:
+        scene.frame_set(1)
+        before = evaluated_points(body)
+        moved = {name: fade_neck_weights(scene.objects[name]) for name in ["Figure_Body", "Figure_Top"]}
+        after = evaluated_points(body)
+    finally:
+        for modifier, value in saved:
+            modifier.show_viewport = value
+    return {"fade_from_midline_m": list(NECK_TILT_WEIGHT_FADE_M), "from": "neck_01", "to": "spine_03",
+            "vertices_reweighted": moved, "neutral_skin_change_mm": float(np.abs(after - before).max()) * 1000}
+
+
+def neck_tilt(rig, tilt):
+    """Tilt the head toward a shoulder; positive tilts toward the figure's left.
+
+    Both rotations turn about the camera's axis, so the head moves only in the
+    frontal plane and the face keeps looking forward. Nothing below the neck
+    moves: the shoulders stay level and still.
+    """
+    for name, share in [("neck_01", NECK_TILT_NECK_SHARE), ("head", 1 - NECK_TILT_NECK_SHARE)]:
+        rotate_world(rig.pose.bones[name], Vector((0, 1, 0)), math.radians(tilt * share))
         bpy.context.view_layer.update()
 
 
@@ -811,6 +933,8 @@ def make_animation(scene, rig, exercise, source_poses, wall_fit=None, posture=No
                 bpy.context.view_layer.update()
                 aim_bone(rig.pose.bones["hand_" + side], direction)
                 bpy.context.view_layer.update()
+        elif exercise == "ex_004":
+            neck_tilt(rig, neck_swing_deg(frame))
         elif exercise == "ex_005":
             # One bend per loop, away from the hip hand.
             away = 1 if SIDE_BEND_HIP_SIDE == "r" else -1
@@ -844,8 +968,9 @@ def make_animation(scene, rig, exercise, source_poses, wall_fit=None, posture=No
                 wall_posture(rig, *posture)
             progress = wall_angel_progress(frame)
             pose_wall_angel(rig, progress, wall_lean_at(wall_fit, progress))
-        # Only the wall-angel posture moves the neck and head, so only it keys them.
-        extra = ["neck_01", "head"] if exercise == "ex_008" and posture else []
+        # Only the neck side bends and the wall-angel posture move the neck and
+        # head, so only they key them.
+        extra = ["neck_01", "head"] if exercise == "ex_004" or (exercise == "ex_008" and posture) else []
         for name in KEY_BONES + extra + list(fingers):
             pb = rig.pose.bones[name]
             q = pb.rotation_quaternion.copy()
@@ -1035,6 +1160,7 @@ def main():
             rig.animation_data_clear()
             hip, hip_record = calibrate_side_bend_hands(scene, rig, source_poses[1],
                                                         hand_profile(rig, source_poses[1], False))
+        neck_weights = settle_neck_weights(scene) if exercise == "ex_004" else None
         make_animation(scene, rig, exercise, source_poses, wall_fit, posture, hip)
         for modifier, value in states:
             modifier.show_viewport = value
@@ -1046,7 +1172,7 @@ def main():
         camera_fit = fit_camera(scene)
         for modifier, value in garment_states:
             modifier.show_viewport = value
-        labels(scene, spec)
+        labels(scene, spec, **({"guides": spec["guides"]} if "guides" in spec else {}))
         if wall is not None:
             add_wall(scene, wall["surface_y_m"])
             wall["side_view"] = add_side_camera(scene, spec)
@@ -1055,7 +1181,8 @@ def main():
             raise RuntimeError("Source mesh coordinates changed")
         for key in [k for k in scene.keys() if k.startswith("figure_camera_fit")]:
             del scene[key]
-        revision = ("mpfb-side-bend-hands-2026-09-25" if exercise == "ex_005" else
+        revision = ("mpfb-neck-side-bends-40bpm-level-shoulders-2026-10-09" if exercise == "ex_004" else
+                    "mpfb-side-bend-hands-2026-09-25" if exercise == "ex_005" else
                     "mpfb-straight-press-2026-09-15" if exercise == "ex_007" else
                     "mpfb-wall-angels-2026-09-25" if exercise == "ex_008" else
                     "mpfb-exercise-feedback-2026-09-14")
@@ -1074,6 +1201,15 @@ def main():
             manifest["side_bend_hands"] = {"hip_side": SIDE_BEND_HIP_SIDE, "hip_rest": hip_record,
                                            **{k: list(v) if isinstance(v, tuple) else v for k, v in SIDE_BEND_HIP.items()},
                                            "dangle_spread_deg": list(SIDE_BEND_DANGLE_DEG)}
+        if exercise == "ex_004":
+            manifest["neck_tilt"] = {"peak_deg": NECK_TILT_PEAK_DEG, "neck_share": NECK_TILT_NECK_SHARE,
+                                     "axis": "camera axis (world Y); positive toward the figure's left",
+                                     "order": ["left", "right"], "bpm": NECK_TILT_BPM,
+                                     "period_frames": NECK_TILT_PERIOD_FRAMES, "cycles": NECK_TILT_CYCLES,
+                                     "hold_frames": NECK_TILT_HOLD_FRAMES,
+                                     "waveform": "half-cosine swing from side to side, arriving at one side per "
+                                                 "beat and holding there; frame 1 is the centre toward the figure's left"}
+            manifest["neck_weight_adjustment"] = neck_weights
         scene["exercise_draft"] = json.dumps(manifest)
         if exercise != "ex_006":
             scene["figure_source_girdle_scale"] = scene.get("figure_girdle_scale", .475)
@@ -1081,7 +1217,8 @@ def main():
                 del scene["figure_girdle_scale"]
             scene["figure_hand_pose"] = "neutral wrist; " + (
                 "closed fist" if exercise == "ex_007" else
-                "relaxed fingers, palms forward" if exercise == "ex_008" else "relaxed fingers")
+                "relaxed fingers, palms forward" if exercise == "ex_008" else
+                "hands as in the source's first frame" if exercise == "ex_004" else "relaxed fingers")
         scene.frame_set(1)
         bpy.context.view_layer.objects.active = rig
         bpy.ops.wm.save_as_mainfile(filepath=str(output.resolve()))

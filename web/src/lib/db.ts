@@ -13,6 +13,7 @@ import {
 } from "@/lib/exercises/prescriptionStatus";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { TREND_RULES_VERSION } from "@/lib/analytics/trendRules";
 import {
   parseCaptureQualitySummary,
   summarizeDeviceInfo,
@@ -2096,6 +2097,11 @@ export async function getSessionsForPatient(patientId: string) {
          st.avg_right_hold_droop,
          st.hold_sets,
          cx.exposure,
+         rt.trend_left_reps, rt.trend_right_reps, rt.trend_complete_left_reps, rt.trend_complete_right_reps,
+         rt.trend_avg_left_peak_value, rt.trend_avg_right_peak_value, rt.trend_sd_left_peak_value, rt.trend_sd_right_peak_value,
+         rt.trend_avg_left_form_score, rt.trend_avg_right_form_score, rt.trend_left_form_reps, rt.trend_right_form_reps,
+         rt.trend_avg_left_lowering_ms, rt.trend_avg_right_lowering_ms, rt.trend_avg_left_raising_ms, rt.trend_avg_right_raising_ms,
+         rt.trend_left_timing_reps, rt.trend_right_timing_reps, rt.tracked_reps, rt.poorly_tracked_reps,
         st.set_count,
         st.exercise_kind,
          st.total_paired_hold_ms,
@@ -2223,9 +2229,52 @@ export async function getSessionsForPatient(patientId: string) {
                CASE WHEN jsonb_typeof(re.compensations->'rawFeatures'->'compensations') = 'object'
                     THEN re.compensations->'rawFeatures'->'compensations' ELSE '{}'::jsonb END) AS c
             WHERE re.session_id = s.id
+              -- A poorly tracked repetition counts in no trend (trendRules.ts, rule 2).
+              AND NOT (CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN CASE WHEN (re.compensations->'tracking'->>'frames')::numeric > 0 THEN (re.compensations->'tracking'->>'rejectedFrames')::numeric + (re.compensations->'tracking'->>'unsteadyFrames')::numeric >= 0.25 * (re.compensations->'tracking'->>'frames')::numeric ELSE false END ELSE false END)
             GROUP BY c.key
          ) x
      ) cx ON TRUE
+     LEFT JOIN (
+       -- The same repetitions under the trend data rules (trendRules.ts): each
+       -- set's first repetition per side is left out of the timing measures,
+       -- and a poorly tracked repetition out of every measure. The columns
+       -- above stay as they were for the screens that show them.
+       SELECT t.session_id,
+              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_left_reps,
+              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_right_reps,
+              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor AND t.classification = 'complete') AS trend_complete_left_reps,
+              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor AND t.classification = 'complete') AS trend_complete_right_reps,
+              AVG(t.peak_value) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_avg_left_peak_value,
+              AVG(t.peak_value) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_avg_right_peak_value,
+              STDDEV_SAMP(t.peak_value) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_sd_left_peak_value,
+              STDDEV_SAMP(t.peak_value) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_sd_right_peak_value,
+              AVG(t.form_score) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_avg_left_form_score,
+              AVG(t.form_score) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_avg_right_form_score,
+              COUNT(t.form_score) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_left_form_reps,
+              COUNT(t.form_score) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_right_form_reps,
+              AVG(t.descent_ms) FILTER (WHERE t.side = 'left' AND NOT t.poor AND NOT t.first_of_set) AS trend_avg_left_lowering_ms,
+              AVG(t.descent_ms) FILTER (WHERE t.side = 'right' AND NOT t.poor AND NOT t.first_of_set) AS trend_avg_right_lowering_ms,
+              AVG(t.time_to_peak_ms) FILTER (WHERE t.side = 'left' AND NOT t.poor AND NOT t.first_of_set) AS trend_avg_left_raising_ms,
+              AVG(t.time_to_peak_ms) FILTER (WHERE t.side = 'right' AND NOT t.poor AND NOT t.first_of_set) AS trend_avg_right_raising_ms,
+              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor AND NOT t.first_of_set) AS trend_left_timing_reps,
+              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor AND NOT t.first_of_set) AS trend_right_timing_reps,
+              COUNT(*) FILTER (WHERE t.tracked) AS tracked_reps,
+              COUNT(*) FILTER (WHERE t.poor) AS poorly_tracked_reps
+         FROM (
+           SELECT re.session_id, re.side, re.peak_value, re.classification, re.descent_ms, re.time_to_peak_ms,
+                  ROW_NUMBER() OVER (PARTITION BY re.session_id, re.set_index, re.side ORDER BY re.rep_index) = 1 AS first_of_set,
+                  CASE WHEN jsonb_typeof(re.compensations->'rawRule'->'meanScore') = 'number'
+                        AND jsonb_typeof(re.compensations->'rawRule'->'coveragePct') = 'number'
+                       THEN CASE WHEN (re.compensations->'rawRule'->>'coveragePct')::numeric >= 80
+                                 THEN (re.compensations->'rawRule'->>'meanScore')::numeric END
+                  END AS form_score,
+                  CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN (re.compensations->'tracking'->>'frames')::numeric > 0 ELSE false END AS tracked,
+                  CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN CASE WHEN (re.compensations->'tracking'->>'frames')::numeric > 0 THEN (re.compensations->'tracking'->>'rejectedFrames')::numeric + (re.compensations->'tracking'->>'unsteadyFrames')::numeric >= 0.25 * (re.compensations->'tracking'->>'frames')::numeric ELSE false END ELSE false END AS poor
+             FROM rep_events re
+            WHERE re.session_id IN (SELECT id FROM sessions WHERE patient_id = $1)
+         ) t
+        GROUP BY t.session_id
+     ) rt ON rt.session_id = s.id
      WHERE s.patient_id = $1
      ORDER BY s.started_at DESC`,
     [patientId]
@@ -2305,6 +2354,30 @@ export async function getSessionsForPatient(patientId: string) {
       avgRightHoldDroop:  row.avg_right_hold_droop != null ? Number(row.avg_right_hold_droop) : null,
       holdSets:          Array.isArray(row.hold_sets) ? row.hold_sets : null,
       exposure: (row.exposure as Record<string, { left: number | null; right: number | null; leftN: number; rightN: number }> | null) ?? null,
+      // The same repetitions under the trend data rules, for the trend charts.
+      trend: {
+        rulesVersion: TREND_RULES_VERSION,
+        leftReps: Number(row.trend_left_reps ?? 0),
+        rightReps: Number(row.trend_right_reps ?? 0),
+        completeLeftReps: Number(row.trend_complete_left_reps ?? 0),
+        completeRightReps: Number(row.trend_complete_right_reps ?? 0),
+        avgLeftPeakValue: row.trend_avg_left_peak_value != null ? Number(row.trend_avg_left_peak_value) : null,
+        avgRightPeakValue: row.trend_avg_right_peak_value != null ? Number(row.trend_avg_right_peak_value) : null,
+        sdLeftPeakValue: row.trend_sd_left_peak_value != null ? Number(row.trend_sd_left_peak_value) : null,
+        sdRightPeakValue: row.trend_sd_right_peak_value != null ? Number(row.trend_sd_right_peak_value) : null,
+        avgLeftFormScore: row.trend_avg_left_form_score != null ? Number(row.trend_avg_left_form_score) : null,
+        avgRightFormScore: row.trend_avg_right_form_score != null ? Number(row.trend_avg_right_form_score) : null,
+        leftFormReps: Number(row.trend_left_form_reps ?? 0),
+        rightFormReps: Number(row.trend_right_form_reps ?? 0),
+        avgLeftLoweringMs: row.trend_avg_left_lowering_ms != null ? Number(row.trend_avg_left_lowering_ms) : null,
+        avgRightLoweringMs: row.trend_avg_right_lowering_ms != null ? Number(row.trend_avg_right_lowering_ms) : null,
+        avgLeftRaisingMs: row.trend_avg_left_raising_ms != null ? Number(row.trend_avg_left_raising_ms) : null,
+        avgRightRaisingMs: row.trend_avg_right_raising_ms != null ? Number(row.trend_avg_right_raising_ms) : null,
+        leftTimingReps: Number(row.trend_left_timing_reps ?? 0),
+        rightTimingReps: Number(row.trend_right_timing_reps ?? 0),
+        trackedReps: Number(row.tracked_reps ?? 0),
+        poorlyTrackedReps: Number(row.poorly_tracked_reps ?? 0),
+      },
       totalPairedHoldMs: row.total_paired_hold_ms != null ? Number(row.total_paired_hold_ms) : null,
       totalTargetHoldMs: row.total_target_hold_ms != null ? Number(row.total_target_hold_ms) : null,
       totalLeftHoldMs:   row.total_left_hold_ms != null ? Number(row.total_left_hold_ms) : null,

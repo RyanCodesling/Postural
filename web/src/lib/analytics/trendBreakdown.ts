@@ -6,6 +6,15 @@
  */
 import type { PainReportStatus, PainTiming } from "@/lib/prescriptionContext";
 import type { TrendMeasureName, TrendSide } from "./trendSeries";
+import {
+  firstRepsOfSets,
+  repLeftOut,
+  repPoorlyTracked,
+  repTrackingShare,
+  repTrackingUnchecked,
+  sessionPoorlyTracked,
+  type RepLeftOut,
+} from "./trendRules";
 
 /** The parts of a GET /api/sessions/[id] session the breakdown reads. */
 export interface SessionRepsDetail {
@@ -19,6 +28,8 @@ export interface SessionRepsDetail {
     timeToPeakMs?: number | null;
     holdMs?: number | null;
     descentMs?: number | null;
+    /** Raise + top + lower, as saved. */
+    totalMs?: number | null;
     compensations?: unknown;
   }[];
   sets: {
@@ -59,6 +70,11 @@ export interface RepRow {
    */
   peakOverThreshold: Record<string, number | null>;
   meanOverThreshold: Record<string, number | null>;
+  /**
+   * Trend data rules: "tracking" when the camera tracked the repetition poorly,
+   * so it counts in no trend; "first-of-set" when its timing is left out.
+   */
+  leftOut: RepLeftOut;
 }
 
 export interface HoldSetRow {
@@ -160,6 +176,7 @@ export function repRows(detail: SessionRepsDetail, side: "left" | "right", metri
     const threshold = thresholds[metric];
     return size === null || threshold === undefined ? null : size / threshold;
   };
+  const firsts = firstRepsOfSets(detail.reps);
   return sideReps(detail, side).map((r) => {
     const rule = ruleScore(r.compensations);
     return {
@@ -181,8 +198,79 @@ export function repRows(detail: SessionRepsDetail, side: "left" | "right", metri
       ),
       peakOverThreshold: Object.fromEntries(metrics.map((m) => [m, relative(r.compensations, m, "peakAbs")])),
       meanOverThreshold: Object.fromEntries(metrics.map((m) => [m, relative(r.compensations, m, "meanAbs")])),
+      leftOut: repLeftOut(r.compensations, firsts.has(r.repIndex)),
     };
   });
+}
+
+/** One set's last repetition against the repetitions between its first and its last. */
+export interface EndOfSetRow {
+  setIndex: number;
+  /** The middle repetitions compared, after poorly tracked ones are left out. */
+  middleReps: number;
+  /** The last repetition's duration (raise + top + lower) over the middle repetitions' median, or null. */
+  durationRatio: number | null;
+  /** The last repetition's peak minus the middle repetitions' median peak, or null. */
+  peakChange: number | null;
+}
+
+const medianOf = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+const repDurationMs = (r: SessionRepsDetail["reps"][number]): number | null =>
+  finite(r.totalMs) ? r.totalMs
+    : finite(r.timeToPeakMs) && finite(r.holdMs) && finite(r.descentMs) ? r.timeToPeakMs + r.holdMs + r.descentMs : null;
+
+/**
+ * End-of-set gauge, for the therapist: each set's last repetition against the
+ * repetitions between its first and its last, in sets with at least four
+ * repetitions on the side. The first is left out because its timing includes
+ * getting into position. A poorly tracked last repetition gives no comparison,
+ * and poorly tracked middle repetitions are left out of the median; at least two
+ * must remain. Information only, not a judgement of readiness: the repetitions
+ * are paced, so a slower last repetition can be the patient's own choice.
+ */
+export function endOfSetRows(detail: SessionRepsDetail, side: "left" | "right"): EndOfSetRow[] {
+  const bySet = new Map<number, SessionRepsDetail["reps"]>();
+  for (const r of sideReps(detail, side)) bySet.set(r.setIndex, [...(bySet.get(r.setIndex) ?? []), r]);
+  const rows: EndOfSetRow[] = [];
+  for (const [setIndex, reps] of [...bySet].sort((a, b) => a[0] - b[0])) {
+    if (reps.length < 4) continue;
+    const ordered = [...reps].sort((a, b) => a.repIndex - b.repIndex);
+    const last = ordered[ordered.length - 1];
+    const middle = ordered.slice(1, -1).filter((r) => !repPoorlyTracked(r.compensations));
+    const lastCounts = !repPoorlyTracked(last.compensations);
+    const durations = middle.map(repDurationMs).filter(finite);
+    const peaks = middle.map((r) => r.peakValue).filter(finite);
+    const lastDuration = lastCounts ? repDurationMs(last) : null;
+    const lastPeak = lastCounts && finite(last.peakValue) ? last.peakValue : null;
+    const middleDuration = durations.length >= 2 ? medianOf(durations) : null;
+    rows.push({
+      setIndex,
+      middleReps: middle.length,
+      durationRatio: lastDuration !== null && middleDuration !== null && middleDuration > 0 ? lastDuration / middleDuration : null,
+      peakChange: lastPeak !== null && peaks.length >= 2 ? lastPeak - medianOf(peaks) : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The session's repetitions with a tracking record, the poorly tracked ones
+ * among them, and whether that leaves the session out of the trend lines
+ * (trend data rule 3).
+ */
+export function sessionTracking(detail: SessionRepsDetail): {
+  trackedReps: number; poorReps: number; uncheckedReps: number; heldOut: boolean;
+} {
+  const trackedReps = detail.reps.filter((r) => repTrackingShare(r.compensations) !== null).length;
+  const poorReps = detail.reps.filter((r) => repPoorlyTracked(r.compensations)).length;
+  // Display only: repetitions the tracking check could not judge at all.
+  const uncheckedReps = detail.reps.filter((r) => repTrackingUnchecked(r.compensations)).length;
+  return { trackedReps, poorReps, uncheckedReps, heldOut: sessionPoorlyTracked(trackedReps, poorReps) };
 }
 
 /** A saved time as milliseconds: text through the API, a Date when read from the database directly. */
@@ -248,6 +336,9 @@ function contributing(values: (number | null)[]): { value: number | null; units:
  *
  * Repetitions: a repetition without a value still counts as a repetition, as
  * in the summary; time over a threshold counts the repetitions that recorded it.
+ * The trend data rules apply as in the summary: a poorly tracked repetition
+ * counts nowhere, and raising and lowering time skip each set's first
+ * repetition.
  */
 export function measureFromDetail(
   detail: SessionRepsDetail,
@@ -275,7 +366,9 @@ export function measureFromDetail(
     case "holdDroop":
       return hold("droopSlopeDegPerSec");
   }
-  const reps = sideReps(detail, side);
+  const reps = sideReps(detail, side).filter((r) => !repPoorlyTracked(r.compensations));
+  const firsts = firstRepsOfSets(detail.reps);
+  const timed = reps.filter((r) => !firsts.has(r.repIndex));
   if (measure.startsWith("exposure:")) {
     const metric = measure.slice("exposure:".length);
     const shares = reps.flatMap((r) => {
@@ -296,12 +389,12 @@ export function measureFromDetail(
       return { value: scores.length > 0 ? mean(scores) : null, units: scores.length };
     }
     case "loweringS": {
-      const ms = meanPresent(reps.map((r) => r.descentMs));
-      return { value: ms === null ? null : ms / 1000, units: reps.length };
+      const ms = meanPresent(timed.map((r) => r.descentMs));
+      return { value: ms === null ? null : ms / 1000, units: timed.length };
     }
     case "raisingS": {
-      const ms = meanPresent(reps.map((r) => r.timeToPeakMs));
-      return { value: ms === null ? null : ms / 1000, units: reps.length };
+      const ms = meanPresent(timed.map((r) => r.timeToPeakMs));
+      return { value: ms === null ? null : ms / 1000, units: timed.length };
     }
     case "completionPct":
       return {

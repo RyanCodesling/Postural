@@ -1,0 +1,110 @@
+{
+  "status": "rendered and checked; visual acceptance pending",
+  "clips": {
+    "ex_004": {
+      "scene": "assets/blender/previews/form_2026_10_10/ex_004_figure_mpfb.blend",
+      "video": "assets/blender/previews/form_2026_10_10/ex_004_mpfb/ex_004_figure_motion.mp4",
+      "scene_sha256": "342fc0e4ce3232113d66526e8a14fdf6d74022c8f9f0cd9f0f93c5ec2292b137",
+      "video_sha256": "c5cb47b1b0b018ec85e954141ca5c08003564658243c90216fdfc386a901427f",
+      "frames": 270,
+      "seconds": 9.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "crop_margins_px": {
+        "left": 239,
+        "right": 239,
+        "top": 40,
+        "bottom": 54
+      },
+      "rendered_frames": 39,
+      "reused_frames": 231,
+      "maximum_channel_mae_8bit": 0.7829685667370396,
+      "maximum_absolute_mean_channel_drift_8bit": 0.3054668074126141
+    },
+    "ex_007": {
+      "scene": "assets/blender/previews/form_2026_10_10/press_v4_straight/ex_007_figure_mpfb.blend",
+      "video": "assets/blender/previews/form_2026_10_10/press_v4_straight/ex_007_mpfb/ex_007_figure_motion.mp4",
+      "scene_sha256": "fb3bb3a1ba21734e75ef8cccaf9c67ca9d510f42d56458b93c9b16fb1a146e4c",
+      "video_sha256": "60d3997fd202dfc3c508e3327308e9b84e671f12e65e8bb54cfaf195a5aa48e3",
+      "frames": 300,
+      "seconds": 10.0,
+      "fps": 30.0,
+      "resolution": [
+        870,
+        980
+      ],
+      "crop_margins_px": {
+        "left": 225,
+        "right": 225,
+        "top": 43,
+        "bottom": 47
+      },
+      "rendered_frames": 97,
+      "reused_frames": 203,
+      "maximum_channel_mae_8bit": 0.7938763781374619,
+      "maximum_absolute_mean_channel_drift_8bit": 0.3000082101806214
+    }
+  },
+  "neck": {
+    "arm_motion_max_matrix_error": 0.0,
+    "maximum_shoulder_outline_change_mm": 0.4018545150756836,
+    "minimum_sampled_hand_garment_gap_mm": 2.0032687971252017
+  },
+  "press": {
+    "paths": {
+      "l": {
+        "horizontal_deviation_mm": 0.00033880818941412155,
+        "peak_elbow_flexion_deg": 1.3915217441870106e-05,
+        "top_hold_elbow_flexion_range_deg": [
+          1.3915217441870106e-05,
+          1.3915217441870106e-05
+        ],
+        "start_elbow_flexion_deg": 135.6371425225106,
+        "start_wrist_above_shoulder_mm": -0.0002384185791015625,
+        "before_start_forearm_sagittal_deg": 20.15514956156777,
+        "after_start_forearm_sagittal_deg": -0.00026411495417904033,
+        "after_forearm_sagittal_range_deg": [
+          -4.3881789053452955,
+          4.625996171174173
+        ]
+      },
+      "r": {
+        "horizontal_deviation_mm": 0.00039992687392204795,
+        "peak_elbow_flexion_deg": 1.3773303809026986e-05,
+        "top_hold_elbow_flexion_range_deg": [
+          1.3773303809026986e-05,
+          1.3773303809026986e-05
+        ],
+        "start_elbow_flexion_deg": 135.63718242148562,
+        "start_wrist_above_shoulder_mm": 0.0002384185791015625,
+        "before_start_forearm_sagittal_deg": 20.155046008397182,
+        "after_start_forearm_sagittal_deg": -0.00029881570642616135,
+        "after_forearm_sagittal_range_deg": [
+          -4.388185239426932,
+          4.625968517246045
+        ]
+      }
+    },
+    "clothing_raw_gate_passed": false,
+    "clothing_resolution": {
+      "method": "Ten directional first-intersection probes per flagged collar vertex; inward controls at actual skin hits.",
+      "instances_checked": 16,
+      "all_flagged_points_outside_skin": true,
+      "all_penetrating_controls_detected": true,
+      "raw_gate_preserved": true
+    }
+  },
+  "all_non_arm_motion_compared": true,
+  "meshes_weights_camera_timing_compared": true,
+  "browser_playback_and_previous_pose_switching": true,
+  "public_clips_unchanged": 5,
+  "limits": [
+    "Eleven sampled clothing poses and targeted collar probes, not continuous self-intersection proof.",
+    "No new MediaPipe/app-counter replay; no live or clinical acceptance.",
+    "Neck guide counting gate and user render acceptance remain pending."
+  ],
+  "source_guidance": "https://www.acefitness.org/continuing-education/certified/september-2025/8951/a-pro-s-guide-to-muscle-mechanics-the-shoulders/"
+}

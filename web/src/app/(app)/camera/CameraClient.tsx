@@ -79,7 +79,8 @@ import {
   type MetricName,
 } from "@/lib/exercises/registry";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
-import { demoClipFor, type DemoClip } from "@/lib/exercises/demoClips";
+import { demoClipFor } from "@/lib/exercises/demoClips";
+import DemoClipPlayer from "./DemoClipPlayer";
 import {
   compareActionableOccurrences,
   isOccurrenceActionable,
@@ -145,6 +146,21 @@ import {
   updateElbowBend,
   type ElbowBendState,
 } from "@/lib/pose/elbowBendWarning";
+import {
+  NO_TRACKING_MESSAGE,
+  addTrackingMark,
+  newSteadinessState,
+  repTracking,
+  trackingMessage,
+  trackingParts,
+  trackingRegion,
+  updateSteadiness,
+  updateTrackingMessage,
+  type SteadinessState,
+  type TrackingFrameMark,
+  type TrackingMessageState,
+  type TrackingPart,
+} from "@/lib/pose/trackingSteadiness";
 import {
   EventOutbox,
   persistedOutboxSessionIds,
@@ -355,7 +371,7 @@ type ResumeSnapshot = {
    */
   completedSetsLog?: CompletedSetRecord[];
   repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number };
+  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number; unsteady?: number; checked?: number };
   /** The patient opted in to video for this session and has not stopped it. */
   recordVideo?: boolean;
 };
@@ -396,7 +412,7 @@ function readResumeSnapshot(
 function restoredSessionProgress(snap: ResumeSnapshot): {
   setsLog: CompletedSetRecord[];
   repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number };
+  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number; unsteady: number; checked: number };
 } {
   const count = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -437,8 +453,10 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
           ok: frames.ok,
           rejectedByStatus,
           dropoutResets: count(frames.dropoutResets) ? frames.dropoutResets : 0,
+          unsteady: count(frames.unsteady) && frames.unsteady <= frames.ok ? frames.unsteady : 0,
+          checked: count(frames.checked) && frames.checked <= frames.ok ? frames.checked : 0,
         }
-      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0 };
+      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0 };
   return {
     setsLog,
     repOutcomes: {
@@ -3090,6 +3108,16 @@ export default function CameraClient() {
   // grace discarded the movement in progress. Saved with the summary.
   const captureRejectedByStatusRef = useRef<Record<string, number>>({});
   const captureDropoutResetsRef = useRef<number>(0);
+  // Unsteady-tracking check (display only): its state, the part its message
+  // names, each processed frame's marks for the repetitions' tracking records,
+  // and the session's unsteady frames (→ capture_quality_summary).
+  const steadinessRef = useRef<SteadinessState>(newSteadinessState());
+  const trackingMessageRef = useRef<TrackingMessageState>(NO_TRACKING_MESSAGE);
+  const trackingMarksRef = useRef<TrackingFrameMark[]>([]);
+  const captureUnsteadyFramesRef = useRef<number>(0);
+  const captureCheckedFramesRef = useRef<number>(0);
+  const trackingHintRef = useRef<string | null>(null);
+  const [trackingHint, setTrackingHint] = useState<string | null>(null);
 
   /**
    * Reset all in-memory session-persistence state (no DB call).
@@ -3446,11 +3474,21 @@ export default function CameraClient() {
       definition?.compensationMetrics.filter(
         (spec) => getCompensationScoring(spec).mode !== "off",
       ) ?? [];
-    const compensations = dynamicRepQualityBufferRef.current.finalize(
+    const quality = dynamicRepQualityBufferRef.current.finalize(
       qualityChannel,
       event,
       scoredCompensations,
     );
+    // How well the camera tracked this repetition's parts, from the frames
+    // marked between its start and end (display-only tracking check); none
+    // when the marks no longer reach back to its start.
+    const tracking = repTracking(
+      trackingMarksRef.current,
+      event.startTimeMs,
+      event.endTimeMs,
+      trackingParts(definition ? trackingRegion(definition) : "arms", side === "left" || side === "right" ? side : "both"),
+    );
+    const compensations = tracking ? { ...quality, tracking } : quality;
     eventOutboxRef.current.enqueue("rep", {
       repIndex: ++globalRepIndexRef.current,
       setIndex: completedSetsRef.current + 1,
@@ -3618,6 +3656,8 @@ export default function CameraClient() {
       ok: captureFramesOkRef.current,
       rejectedByStatus: captureRejectedByStatusRef.current,
       dropoutResets: captureDropoutResetsRef.current,
+      unsteady: captureUnsteadyFramesRef.current,
+      checked: captureCheckedFramesRef.current,
     });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
@@ -3856,6 +3896,8 @@ export default function CameraClient() {
         ok: captureFramesOkRef.current,
         rejectedByStatus: { ...captureRejectedByStatusRef.current },
         dropoutResets: captureDropoutResetsRef.current,
+        unsteady: captureUnsteadyFramesRef.current,
+        checked: captureCheckedFramesRef.current,
       },
     };
     try {
@@ -4333,6 +4375,9 @@ export default function CameraClient() {
     captureFramesOkRef.current = 0;
     captureRejectedByStatusRef.current = {};
     captureDropoutResetsRef.current = 0;
+    captureUnsteadyFramesRef.current = 0;
+    captureCheckedFramesRef.current = 0;
+    trackingMarksRef.current = [];
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
@@ -4397,6 +4442,9 @@ export default function CameraClient() {
     captureFramesOkRef.current = progress.captureFrames.ok;
     captureRejectedByStatusRef.current = { ...progress.captureFrames.rejectedByStatus };
     captureDropoutResetsRef.current = progress.captureFrames.dropoutResets;
+    captureUnsteadyFramesRef.current = progress.captureFrames.unsteady;
+    captureCheckedFramesRef.current = progress.captureFrames.checked;
+    trackingMarksRef.current = [];
 
     setCompletedSets(snap.completedSets);
     completedSetsLogRef.current = progress.setsLog;
@@ -6386,6 +6434,40 @@ export default function CameraClient() {
             }
           }
 
+          // Unsteady-tracking check (display only): fed only frames that pass
+          // capture readiness, so a dropout measures nothing. Every frame is
+          // marked for the repetitions' tracking records, with the parts the
+          // check could judge; the message and the session counts use the
+          // prescribed parts.
+          const checkedNow: TrackingPart[] = [];
+          const unsteadyNow: TrackingPart[] = [];
+          let checkedPrescribed = false;
+          let unsteadyPrescribed: TrackingPart[] = [];
+          if (r.ok && activeDefinition) {
+            const steady = updateSteadiness(steadinessRef.current, landmarks, frameStart, canvas.width, canvas.height);
+            steadinessRef.current = steady.state;
+            for (const [part, judged] of Object.entries(steady.result.checked)) if (judged) checkedNow.push(part as TrackingPart);
+            for (const [part, flagged] of Object.entries(steady.result.unsteady)) if (flagged) unsteadyNow.push(part as TrackingPart);
+            const prescribed = trackingParts(trackingRegion(activeDefinition), prescriptionRef.current.prescribedSide);
+            checkedPrescribed = prescribed.some((part) => checkedNow.includes(part));
+            unsteadyPrescribed = prescribed.filter((part) => unsteadyNow.includes(part));
+          }
+          trackingMarksRef.current = addTrackingMark(trackingMarksRef.current, {
+            t: frameStart, captureOk: r.ok, checked: checkedNow, unsteady: unsteadyNow,
+          });
+          if (sessionStateRef.current === "active" && r.ok && checkedPrescribed) {
+            captureCheckedFramesRef.current += 1;
+          }
+          if (sessionStateRef.current === "active" && r.ok && unsteadyPrescribed.length > 0) {
+            captureUnsteadyFramesRef.current += 1;
+          }
+          trackingMessageRef.current = updateTrackingMessage(trackingMessageRef.current, unsteadyPrescribed, frameStart);
+          const hint = trackingMessageRef.current.part ? trackingMessage(trackingMessageRef.current.part) : null;
+          if (hint !== trackingHintRef.current) {
+            trackingHintRef.current = hint;
+            setTrackingHint(hint);
+          }
+
           const now = performance.now();
           if (!r.ok) {
             lastBadCaptureAtRef.current = now;
@@ -7786,6 +7868,9 @@ export default function CameraClient() {
             const rejected = captureRejectedByStatusRef.current;
             rejected.NOT_VISIBLE = (rejected.NOT_VISIBLE ?? 0) + 1;
           }
+          trackingMarksRef.current = addTrackingMark(trackingMarksRef.current, {
+            t: performance.now(), captureOk: false, checked: [], unsteady: [],
+          });
         }
 
         ctx.restore();
@@ -9394,6 +9479,27 @@ export default function CameraClient() {
                     <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Tilt</span>
                     <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
                       Keep hips &amp; head visible
+                    </span>
+                  </div>
+                )}
+
+                {/* Unsteady-tracking message: display only, it never pauses the
+                    exercise or changes a measurement. */}
+                {trackingHint && captureOk && cameraFramesFlowing && (
+                  <div role="status" style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Tracking</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      {trackingHint}
                     </span>
                   </div>
                 )}
@@ -12395,233 +12501,23 @@ function CameraSetHud({
   );
 }
 
-/**
- * The cropped clip at the largest aspect-correct size its parent allows. The
- * parent must be a size container. Each clip's full-body crop, and how it was
- * measured, lives with the clip in demoClips.ts; the video file itself is the
- * unmodified render.
- */
-function DemoClipBox({ clip, onError }: { clip: DemoClip; onError: () => void }) {
-  const { src, width, height, crop, subject } = clip;
-  const ratio = crop.w / crop.h;
-  return (
-    <div style={{
-      position: "relative",
-      width: `min(100cqw, calc(100cqh * ${ratio}))`,
-      height: `min(100cqh, calc(100cqw / ${ratio}))`,
-      borderRadius: 10,
-      overflow: "hidden",
-      background: "oklch(0.47 0.006 80)",
-    }}>
-      <video
-        src={src}
-        autoPlay
-        loop
-        muted
-        playsInline
-        preload="auto"
-        aria-label={`Animated guide showing ${subject}`}
-        onError={onError}
-        style={{
-          position: "absolute",
-          left: `${(-crop.x / crop.w) * 100}%`,
-          top: `${(-crop.y / crop.h) * 100}%`,
-          width: `${(width / crop.w) * 100}%`,
-          height: `${(height / crop.h) * 100}%`,
-          // The global CSS reset caps video at max-width: 100%, which squashed
-          // the frame and pushed the figure off-centre inside the crop.
-          maxWidth: "none",
-          maxHeight: "none",
-          objectFit: "fill",
-        }}
-      />
-    </div>
-  );
-}
-
-/**
- * The "Reference Guide" card. An exercise with a published clip (demoClips.ts)
- * plays its looping figure animation, labelled as an illustrative guide rather
- * than a clinical demonstration, and can be opened full screen; any other
- * exercise, or a clip that fails to load, says that no video is published. The
- * card hugs the clip instead of stretching to the column, so it never frames a
- * small figure in empty space.
- */
+/** The guide keeps missing-media fallback local to the selected clip. */
 function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact: boolean }) {
-  // The card outlives exercise changes, so a load failure is remembered per
-  // clip: one missing file must not blank every other exercise's guide.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const [fullScreen, setFullScreen] = useState(false);
-  const fullScreenRef = useRef<HTMLDivElement | null>(null);
   const clip = demoClipFor(exerciseId);
   const shownClip = clip !== null && clip.src !== failedSrc ? clip : null;
-
-  useEffect(() => {
-    if (!fullScreen) return;
-    const overlay = fullScreenRef.current;
-    // Native full screen where the browser allows it; the fixed overlay already
-    // fills the window when it does not.
-    if (overlay && typeof overlay.requestFullscreen === "function" && !document.fullscreenElement) {
-      overlay.requestFullscreen().catch(() => {});
-    }
-    const onFullscreenChange = () => {
-      if (!document.fullscreenElement) setFullScreen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFullScreen(false);
-    };
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
-      window.removeEventListener("keydown", onKeyDown);
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    };
-  }, [fullScreen]);
-
   return (
-    <div id="cam-tour-demo" style={{
-      ...CARD_STYLE,
-      flex: "0 1 auto",
-      minHeight: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: 8,
-      padding: 12,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexShrink: 0 }}>
-        <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
-        {shownClip && (
-          <button
-            type="button"
-            onClick={() => setFullScreen(true)}
-            aria-label="View the demonstration full screen"
-            title="Full screen"
-            style={{ ...ICON_BUTTON_STYLE, width: 32, height: 32 }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
-              <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
-              <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
-              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
-            </svg>
-          </button>
-        )}
-      </div>
-
+    <div id="cam-tour-demo" style={{ ...CARD_STYLE, flex: "0 1 auto", minHeight: 0,
+      display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
+      <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
       {shownClip ? (
-        <>
-          <div style={{
-            width: "100%",
-            aspectRatio: `${shownClip.crop.w} / ${shownClip.crop.h}`,
-            maxHeight: compact ? 460 : undefined,
-            minHeight: 160,
-            flex: "0 1 auto",
-            containerType: "size",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}>
-            {fullScreen ? (
-              // One decoder at a time: the card's copy steps aside while the
-              // full-screen copy plays.
-              <div style={{ width: "100%", height: "100%", borderRadius: 10, background: "oklch(0.24 0.01 240)" }} />
-            ) : (
-              <DemoClipBox key={shownClip.src} clip={shownClip} onError={() => setFailedSrc(shownClip.src)} />
-            )}
-          </div>
-          <div style={{ flexShrink: 0, fontSize: 12, lineHeight: 1.4, color: "oklch(0.50 0.01 240)" }}>
-            Animated guide with illustrative timing. Your therapist&apos;s instructions come first.
-          </div>
-        </>
+        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
       ) : (
-        <div style={{
-          position: "relative",
-          height: compact ? 260 : 300,
-          minHeight: 150,
-          flex: "0 1 auto",
-          borderRadius: 10,
-          overflow: "hidden",
-          background: "oklch(0.24 0.01 240)",
-        }}>
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            backgroundImage: "repeating-linear-gradient(135deg, oklch(0.32 0.01 240 / 0.5) 0 1px, transparent 1px 9px)",
-          }} />
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 10,
-            padding: 18,
-            textAlign: "center",
-          }}>
-            <span style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.90 0.01 240)" }}>
-              No verified demonstration video is published for this exercise yet.
-              Follow the written exercise description and your therapist&apos;s instructions.
-            </span>
-          </div>
-        </div>
-      )}
-
-      {fullScreen && shownClip && (
-        <div
-          ref={fullScreenRef}
-          role="dialog"
-          aria-label="Demonstration, full screen"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 70,
-            display: "flex",
-            flexDirection: "column",
-            gap: 14,
-            padding: 24,
-            background: "oklch(0.14 0.01 240)",
-            color: "white",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
-            <span style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.85 0.01 240)" }}>Reference Guide</span>
-            <button
-              type="button"
-              onClick={() => setFullScreen(false)}
-              aria-label="Close full screen"
-              style={{
-                width: 44,
-                height: 44,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                borderRadius: 999,
-                border: "1px solid oklch(1 0 0 / 0.25)",
-                background: "oklch(1 0 0 / 0.10)",
-                color: "white",
-                cursor: "pointer",
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          </div>
-          <div style={{
-            flex: 1,
-            minHeight: 0,
-            containerType: "size",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}>
-            <DemoClipBox key={shownClip.src} clip={shownClip} onError={() => setFailedSrc(shownClip.src)} />
-          </div>
-          <div style={{ flexShrink: 0, textAlign: "center", fontSize: 14, lineHeight: 1.4, color: "oklch(0.80 0.01 240)" }}>
-            Animated guide with illustrative timing. Your therapist&apos;s instructions come first.
-          </div>
+        <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,
+          display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
+          background: "oklch(0.24 0.01 240)", color: "oklch(0.90 0.01 240)", fontSize: 13, lineHeight: 1.5 }}>
+          No verified demonstration video is published for this exercise yet.
+          Follow the written exercise description and your therapist&apos;s instructions.
         </div>
       )}
     </div>

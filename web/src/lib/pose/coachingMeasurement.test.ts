@@ -73,6 +73,14 @@ async function run() {
   assert(config.validCoachingProvenance({ version: versioning.sha256Version(futureConfiguration), configuration: futureConfiguration }),
     "provenance validates the recorded boolean, not today's rollout policy");
   assert(!config.validCoachingProvenance({ ...provenance, configuration: { ...futureConfiguration, messageRendered: "true" } }));
+  assert.equal(provenance.configuration.tracking.region, "arms", "the tracking check's settings are fingerprinted");
+  const beforeTracking: Record<string, unknown> = { ...provenance.configuration };
+  delete beforeTracking.tracking;
+  assert(config.validCoachingProvenance({ version: versioning.sha256Version(beforeTracking), configuration: beforeTracking as typeof provenance.configuration }),
+    "configurations recorded before the tracking check still validate");
+  assert(!config.validCoachingProvenance({ ...provenance,
+    configuration: { ...provenance.configuration, tracking: { ...provenance.configuration.tracking, wristLimit: -1 } } }),
+    "a malformed tracking block fails");
   const replay = createCameraReplay(definition, provenance, { prescribedSide: "left" });
   let now = 1000;
   const baseline = { scapLeft: 0.12 / 0.35, scapRight: 0.12 / 0.35 };

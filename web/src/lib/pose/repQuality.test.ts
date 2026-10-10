@@ -148,6 +148,20 @@ test("raw features use raw samples and match the versioned ML feature contract",
   );
   assert(isDynamicRepQualityV3(quality), "generated V3 payload should pass API validation");
   assert(isDynamicRepQuality(quality), "generated payload should pass compatibility validation");
+  const tracking = {
+    version: 1 as const, check: "tracking_steadiness_v1" as const, frames: 30, rejectedFrames: 2, checkedFrames: 26, unsteadyFrames: 5,
+  };
+  assert(isDynamicRepQualityV3({ ...quality, tracking }), "a V3 payload with its tracking record should pass");
+  assert(
+    !isDynamicRepQualityV3({ ...quality, tracking: { ...tracking, unsteadyFrames: 40 } }),
+    "a tracking record with more flagged frames than frames should fail",
+  );
+  const withoutChecked: Record<string, unknown> = { ...tracking };
+  delete withoutChecked.checkedFrames;
+  assert(
+    !isDynamicRepQualityV3({ ...quality, tracking: withoutChecked }),
+    "a tracking record that does not say how many frames were checked should fail",
+  );
 
   const legacyQuality = {
     ...quality,

@@ -2,7 +2,9 @@
  * PDF reports: the writer's file structure (xref offsets, stream lengths, page
  * count, ASCII-only output), text encoding and wrapping, cue episodes read from
  * a real coaching audit, and the session and progress reports' content,
- * including the "angle (camera estimate)" wording and the pain columns.
+ * including the "angle (camera estimate)" wording and the pain columns, the
+ * patient and session blocks, the results against their targets, the home
+ * exercise program, and the loaders behind them.
  *
  *   npx tsx src/lib/reports/reports.test.ts
  *
@@ -18,8 +20,10 @@ import { captureCoachingProvenance } from "../pose/coachingConfig";
 import { CoachingAuditBuffer, cueEpisodes, setCoachingAudit } from "../pose/coachingAudit";
 import type { SessionContextSnapshot } from "../prescriptionContext";
 import { reportFileName } from "./download";
-import { pdfText, ReportLayout, textWidth, wrapText } from "./pdfWriter";
-import { cueSummary, sessionReportPdf, type SessionReportInput } from "./sessionReport";
+import { fetchHomeProgram, homeProgramFromRows, homeProgramRow, type HomeProgramItem } from "./homeProgram";
+import { fitText, pdfText, ReportLayout, textWidth, wrapText } from "./pdfWriter";
+import { ageOn, fetchReportPatient, fetchSignedInUserId, formatDateKey, patientCells, type ReportPatient } from "./reportPatient";
+import { cueSummary, fetchSessionNumber, sessionReportPdf, type SessionReportInput } from "./sessionReport";
 import { fetchProgressSessions, progressReportPdf, type ProgressReportSession } from "../../app/(app)/dashboard/_components/progressReport";
 import { groupSessionsByExercise, primaryMetricMeta } from "../../app/(app)/dashboard/_components/ExerciseTrends";
 
@@ -108,6 +112,10 @@ async function run() {
     assert(lines.length > 3, "wraps");
     assert(lines.every((line) => textWidth(line, "regular", 10) <= 90), "no line is wider than the column");
     assert.equal(lines.join(" ").replace(/ /g, ""), "Afairlylongsentencethathastowrapacrossseveralshortlines,plusSupercalifragilisticexpialidocious.");
+    const width = textWidth("counted session (95", "regular", 10) + 1;
+    assert.deepEqual(wrapText("counted session (95 % range)", "regular", 10, width), ["counted session (95", "% range)"], "breaks at a space");
+    assert.deepEqual(wrapText("counted session (95 % range)", "regular", 10, width), ["counted session", "(95 % range)"],
+      "a no-break space keeps 95 % together");
   });
 
   await test("the file structure is valid across page breaks, and text is escaped", () => {
@@ -155,10 +163,11 @@ async function run() {
   const rep = (setIndex: number, side: string, peakValue: number, classification = "complete") =>
     ({ setIndex, side, peakValue, targetRom: 90 as number | null | undefined, classification });
   const detail: SessionReportInput = {
-    id: 218, exerciseId: "ex_001", exerciseName: "Lateral Arm Raises",
+    id: 218, patientId: "patient_007", exerciseId: "ex_001", exerciseName: "Lateral Arm Raises",
     startedAt: "2026-09-25T16:40:00.000Z", endedAt: "2026-09-25T16:48:07.898Z", endReason: "user", context,
     painReport: { status: "reported", score: 2, timing: "after", bodyArea: null },
     captureQuality: { framesTotal: 1000, framesOk: 950, pctOk: 95 },
+    deviceContext: { browser: "Chrome", platform: "Windows" },
     sets: [
       { setIndex: 1, exerciseKind: "dynamic", leftReps: 12, rightReps: 12, targetHoldMs: 0, pairedHoldMs: 0, durationMs: 35101,
         terminatedBy: "min_reached", holdQuality: { version: "coaching_set_v1", coaching: audit } },
@@ -172,35 +181,72 @@ async function run() {
     ],
   };
 
-  await test("session report: outcome, sides, sets, pain, cues and the angle label", () => {
-    const bytes = sessionReportPdf(detail, { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" });
+  // A fictional patient record, as `GET /api/users/[id]` returns it.
+  const samplePatient: ReportPatient = {
+    id: "patient_007", name: "Test Patient", dateOfBirth: "1990-03-04", age: 30, gender: "Female",
+    therapistName: "Sarah Therapist", diagnosis: "Left shoulder impingement (sample entry)", condition: "Sample condition text",
+  };
+  // What official results carry and this app cannot back.
+  const NOT_BACKED = /normal range|reference range|reference interval|impression|signature|signed by|sign-off|verified by/i;
+
+  await test("session report: patient and session blocks, results against targets, cues and the angle label", () => {
+    const bytes = sessionReportPdf(detail, {
+      patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila",
+      patient: samplePatient, sessionNumber: { index: 2, total: 3 },
+    });
     saveSample("sample-session-report.pdf", bytes);
     checkStructure(bytes);
     const text = drawnText(bytes);
     for (const expected of [
-      "Session report", "Lateral Arm Raises · Test Patient", "Sep 26, 2026, 12:40 AM", "Ended early by the patient",
-      "2 sets of 12 reps · 30s rest · both sides · No resistance", "Sets done 2 of 2",
-      "Pain before the session 3/10 · left shoulder", "Pain after the attempt 2/10 · after",
-      "95% of frames tracked (950 of 1000)", "Left repetitions 16/17 met full-ROM target",
-      "Right repetitions 17/17 met full-ROM target", "Left average peak angle (camera estimate)",
+      "Session report", "Lateral Arm Raises · report generated Sep 26, 2026, 9:00 AM",
+      "PATIENT NAME Test Patient PATIENT ID patient_007 DATE OF BIRTH (AGE) Mar 4, 1990 (36 years)",
+      "GENDER Female ASSIGNED THERAPIST Sarah Therapist",
+      "DIAGNOSIS (ENTERED BY THE CLINIC) Left shoulder impingement (sample entry)",
+      "CONDITION (ENTERED BY THE CLINIC) Sample condition text",
+      "SESSION EXERCISE Lateral Arm Raises SESSION NO. (THIS EXERCISE) 2 of 3 so far RECORDED WITH Chrome on Windows",
+      "STARTED Sep 26, 2026, 12:40 AM", "Ended early by the patient",
+      "PRESCRIPTION 2 sets of 12 reps · 30s rest · both sides · No resistance",
+      "Results Measure Result Target Flag", "Sets done 2 2",
+      "Left repetitions done 17 24 (2 x 12) Below target",
+      "Left repetitions that met the full-range target 16 of 17 every repetition Below target",
+      "Left average peak angle (camera estimate) 93 90",
+      "Right repetitions that met the full-range target 17 of 17 every repetition",
+      "Right average peak angle (camera estimate) 92 90",
+      "Pain before the session (patient-reported) 3/10 · left shoulder", "Pain after the attempt (patient-reported) 2/10 · after",
       "Target reached", "Ended by patient", "Trunk lean", "“STRAIGHTEN”".replace(/[“”]/g, '"'),
-      "Asymmetric shoulders", "Counted from the observed part of 1 of 2 sets", "not anatomical degrees",
-      "93 · target 90",
+      "Asymmetric shoulders", "Counted in the 1 of 2 sets with a coaching record",
+      "only while the app was processing camera frames",
+      "Limitations Camera tracking: 95% of frames tracked (950 of 1000).", "not anatomical degrees",
+      "compare them with this patient's earlier sessions", "Notes Descriptive record of the session", "It is not a diagnosis.",
+      "For the app's developers: configuration registry",
+      "Postural session report · Test Patient · ID patient_007 · generated Sep 26, 2026, 9:00 AM",
     ]) assert(text.includes(expected), `missing: ${expected}`);
+    assert(!/Right repetitions that met the full-range target 17 of 17 every repetition Below/.test(text), "a met target is not flagged");
+    assert(!/\(camera estimate\) 9[23] 90 Below/.test(text), "an average at or above its target is not flagged");
     assert(!text.includes("°"), "no degree sign for readings");
+    assert(!NOT_BACKED.test(text), "no normal range, impression or sign-off");
+    for (const jargon of ["pipeline units", "observed part", "unobserved gaps", "Recorded configuration"]) {
+      assert(!text.includes(jargon), `engineering wording left: ${jargon}`);
+    }
     const cues = cueSummary(detail.sets);
     assert.deepEqual(cues.cues.map((c) => [c.label, c.times]), [["Trunk lean", 2], ["Asymmetric shoulders", 1]]);
   });
 
   await test("session report: older session without context or coaching record", () => {
     const text = drawnText(sessionReportPdf({
-      ...detail, context: null, sets: detail.sets.map((s) => ({ ...s, holdQuality: null })),
+      ...detail, context: null, deviceContext: null, sets: detail.sets.map((s) => ({ ...s, holdQuality: null })),
       reps: detail.reps.map((r) => ({ ...r, targetRom: null })),
     }, { patientName: "Test Patient", generatedAt: new Date(), timeZone: "Asia/Manila" }));
     assert(text.includes("not recorded for this older session"), "prescription");
-    assert(text.includes("target not recorded") && !text.includes("target 90"), "no target is borrowed from today's registry");
-    assert(text.includes("Pain before the session not recorded"), "pain before");
+    assert(text.includes("Left average peak angle (camera estimate) 93 not recorded") && !text.includes("93 90"),
+      "no target is borrowed from today's registry");
+    assert(text.includes("Sets done 2 not recorded"), "sets without a prescription");
+    assert(text.includes("Pain before the session (patient-reported) not recorded"), "pain before");
     assert(text.includes("No coaching record is stored for this session"), "no audit");
+    assert(text.includes("RECORDED WITH not recorded"), "device");
+    assert(text.includes("SESSION NO. (THIS EXERCISE) not available"), "no session number");
+    assert(text.includes("NAME Test Patient OTHER DETAILS The patient's record could not be loaded"), "patient block without a record");
+    assert(!text.includes(" ID "), "no patient ID without a record");
   });
 
   const trend = (i: number, peak: number, extra: Partial<ProgressReportSession> = {}): ProgressReportSession => ({
@@ -214,6 +260,24 @@ async function run() {
     painReport: { status: "reported", score: 1, timing: null, bodyArea: null }, ...extra,
   });
   const iso = getExerciseDefinition("ex_006")!;
+  const opts = { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" };
+
+  // `GET /api/patient-exercises` rows: one running, one about to start, one ended.
+  const programRows = [
+    { exercise_id: "ex_001", name: "Lateral Arm Raises", monitoring_mode: "camera", sets: 2, reps: 12, rest_seconds: 30,
+      hold_seconds: 0, prescribed_side: "both", resistance_type: "none", resistance_value: null, resistance_unit: null,
+      resistance_label: null, recurrence: "interval", interval_days: 1, weekdays: null, start_date: "2026-09-20",
+      end_date: "2026-10-03", assigned_date: "2026-09-20", prescription_state: "active",
+      occurrence_summary: { scheduled: 14, completed: 5, missed: 1, inProgress: 0, remaining: 8, cancelled: 0, painStopped: 0 } },
+    { exercise_id: "custom_towel", name: "Towel stretch", monitoring_mode: "manual", sets: 1, reps: 10, rest_seconds: null,
+      hold_seconds: null, prescribed_side: "left", resistance_type: "resistance_band", resistance_value: null, resistance_unit: null,
+      resistance_label: "Resistance band", recurrence: "weekly", interval_days: null, weekdays: [5, 1, 3],
+      start_date: "2026-09-28", end_date: "2026-10-25", assigned_date: "2026-09-28", prescription_state: "upcoming",
+      occurrence_summary: { scheduled: 12, completed: 0, missed: 0, inProgress: 0, remaining: 12, cancelled: 0, painStopped: 0 } },
+    { exercise_id: "ex_006", name: "Ended programme", monitoring_mode: "camera", sets: 3, reps: 0, hold_seconds: 30,
+      prescribed_side: "both", resistance_type: "none", prescription_state: "ended", occurrence_summary: {} },
+  ];
+  const sampleProgram: HomeProgramItem[] = homeProgramFromRows(programRows);
 
   await test("progress report: trend, charts, pain columns and every group", () => {
     const sessions: ProgressReportSession[] = [
@@ -225,30 +289,61 @@ async function run() {
         avgLeftPeakValue: null, avgRightPeakValue: null, totalPairedHoldMs: 25000, setCount: 1, totalReps: 0 },
       { ...trend(4, 0), setCount: 0, totalReps: 0 },
     ];
-    const bytes = progressReportPdf(sessions, { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" });
+    const bytes = progressReportPdf(sessions, {
+      patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila",
+      patient: samplePatient, program: sampleProgram,
+    });
     saveSample("sample-progress-report.pdf", bytes);
     checkStructure(bytes);
     const text = drawnText(bytes);
     for (const expected of [
-      "Progress report", "Data as of Sep 26, 2026, 9:00 AM", "download it again to include later sessions",
-      "Sessions with results 5, from Sep 10, 2026 to Sep 13, 2026", "Exercises 2",
-      "Lateral Arm Raises", "Trend (left) Rising, change +", "Trend (right) Rising, change +",
-      "Form score (left)", "Peak angle (camera estimate) first 88 · latest 97",
+      "Progress report", "PATIENT NAME Test Patient PATIENT ID patient_007", "ASSIGNED THERAPIST Sarah Therapist",
+      "REPORT DATA AS OF Sep 26, 2026, 9:00 AM SESSIONS WITH RESULTS 5, from Sep 10, 2026 to Sep 13, 2026 EXERCISES 2",
+      "download it again to include later sessions",
+      "Current home exercise program Exercise Dose Side and load Schedule Dates Done so far",
+      "Lateral Arm Raises 2 sets of 12 reps · 30s rest Both sides · No resistance Every day Sep 20, 2026 to Oct 3, 2026 " +
+        "5 of 14 scheduled days done · 1 missed",
+      "Towel stretch (done without the camera) 1 set of 10 reps Left side · Resistance band",
+      "3x a week · Mon, Wed, Fri (not started yet) Sep 28, 2026 to Oct 25, 2026 0 of 12 scheduled days done",
+      "Lateral Arm Raises", "Measure Side Counted sessions Change since the first counted session (95 % range) Trend",
+      "Peak angle (camera estimate) Left 4 +", "Peak angle (camera estimate) Right 4 +", "(95 % range +", "Rising",
+      "Form score Left", "too few counted sessions so far (needs 3)",
+      "Peak angle (camera estimate) by counted session",
+      "Repetitions that met the full-range target, by session", "Counted sessions",
+      "Peak angle (camera estimate) first 88 · latest 97",
       "Left full-range reps", "7/10 · neck", "skipped", "declined", "1/10", "Ended early", "Completed",
-      iso.name, "Hold time", "25.0s", "needs at least 3 counted sessions", "machine-learning trend model",
+      iso.name, "Hold time", "25.0s", "machine-learning trend model",
       "Other measure", "Repetitions reaching the target range",
+      "Limitations Angles labelled", "Sessions that were started but recorded no set are left out.",
+      "How to read this report Reading the trends:", "Form score: the app's rule-based score from 0 to 100",
+      "Notes Supplementary information for review with a physical therapist. It is not a diagnosis.",
+      "For the app's developers: trend model",
+      "Postural progress report · Test Patient · ID patient_007 · generated Sep 26, 2026, 9:00 AM",
     ]) assert(text.includes(expected), `missing: ${expected}`);
+    assert(!text.includes("Ended programme"), "an ended prescription is not listed");
+    assert(!NOT_BACKED.test(text), "no normal range, impression or sign-off");
+    for (const jargon of ["pipeline units", "scoring configuration", "Model change", "Gaussian-process model of each side's session results that learned"]) {
+      assert(!text.includes(jargon), `engineering wording left: ${jargon}`);
+    }
     assert.equal((text.match(/Sep 14, 2026/g) ?? []).length, 0, "a session without a set is left out");
-  });
 
-  const opts = { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" };
+    const unloaded = drawnText(progressReportPdf(sessions.slice(0, 1), {
+      patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila", patient: null, program: null,
+    }));
+    assert(unloaded.includes("The patient's prescriptions could not be loaded"), "a program that failed to load says so");
+    assert(unloaded.includes("The patient's record could not be loaded"), "so does the patient's record");
+    const none = drawnText(progressReportPdf(sessions.slice(0, 1), { ...opts, program: [] }));
+    assert(none.includes("No exercise is prescribed at the moment."), "an empty program");
+    assert(!drawnText(progressReportPdf(sessions.slice(0, 1), opts)).includes("Current home exercise program"),
+      "the section is left out when no program was given");
+  });
 
   await test("progress report: a measure without a model band lists its measured values", () => {
     // Lateral-raise lowering time failed its band check, so the report gives values, not a model change.
     const sessions = [0, 1, 2].map((i) => trend(i, 90 + i, { avgLeftLoweringMs: 650 + 50 * i, avgRightLoweringMs: 600 }));
     const text = drawnText(progressReportPdf(sessions, opts));
     for (const expected of [
-      "Lowering time (descent control)", "no model band; measured",
+      "Lowering time (descent control)", "measured values only (the trend model has no range for this measure yet):",
       "Sep 10, 2026: 0.65 s", "Sep 11, 2026: 0.70 s", "Sep 12, 2026: 0.75 s",
     ]) assert(text.includes(expected), `missing: ${expected}`);
   });
@@ -259,9 +354,10 @@ async function run() {
     const withOldTarget = { ...(context as any), exercise: { id: "ex_001", kind: "dynamic", definition: oldDefinition } };
     const noSavedTargets = detail.reps.map((r) => ({ ...r, targetRom: undefined }));
     const fromContext = drawnText(sessionReportPdf({ ...detail, context: withOldTarget, reps: noSavedTargets }, opts));
-    assert(fromContext.includes("target 70") && !fromContext.includes("target 90"), "the start context's target");
+    assert(fromContext.includes("Left average peak angle (camera estimate) 93 70") && !fromContext.includes("93 90"),
+      "the start context's target");
     const fromReps = drawnText(sessionReportPdf({ ...detail, context: withOldTarget, reps: detail.reps.map((r) => ({ ...r, targetRom: 65 })) }, opts));
-    assert(fromReps.includes("target 65"), "the target saved with the repetitions comes first");
+    assert(fromReps.includes("Left average peak angle (camera estimate) 93 65"), "the target saved with the repetitions comes first");
 
     // ex_004 was a hold before it became repetitions; its old sessions stay holds.
     const oldHold: ProgressReportSession = {
@@ -297,7 +393,8 @@ async function run() {
     }, opts));
     assert(!onlyAttempt.includes("No coaching record is stored"), "an uncredited attempt's record counts");
     assert(onlyAttempt.includes("1 (uncredited)"), "marked uncredited");
-    assert(onlyAttempt.includes("0 of 0 sets and 1 attempt that credited no movement"), "coverage names the attempt");
+    assert(onlyAttempt.includes("Counted in 1 attempt in which no movement was counted"), "coverage names the attempt");
+    assert(!onlyAttempt.includes("0 of 0 sets"), "no empty set count");
     assert(!/shrug/i.test(onlyAttempt), "no movement the metric cannot identify");
   });
 
@@ -311,9 +408,97 @@ async function run() {
       sets: [{ setIndex: 1, exerciseKind: "isometric", leftReps: 0, rightReps: 0, targetHoldMs: 30000, pairedHoldMs: 30000,
         durationMs: 31000, terminatedBy: "user", holdQuality: { leftInBandMs: 30000, rightInBandMs: 28000 } }],
     }, opts));
-    assert(text.includes("Left time in position 30.0s held of 30s targeted in 1 recorded set · prescribed 3 x 30s"), "left");
-    assert(text.includes("Right time in position 28.0s held"), "right");
+    assert(text.includes("Left time in position 30.0s held in 1 recorded set 30s in the recorded sets · prescribed 3 x 30s"), "left");
+    assert(!text.includes("prescribed 3 x 30s Below target Right"), "a hold that met its recorded target is not flagged");
+    assert(text.includes("Right time in position 28.0s held in 1 recorded set 30s in the recorded sets · prescribed 3 x 30s Below target"), "right");
+    assert(text.includes("Sets done 1 3 Below target"), "sets short of the prescription");
     assert(text.includes("3 sets of 30s hold"), "prescription");
+  });
+
+  await test("patient block: the clinic's entries, the age on the report date, and the fallbacks", () => {
+    assert.equal(formatDateKey("1990-03-04"), "Mar 4, 1990");
+    // 2026-09-25 16:30 UTC is already Sep 26 in Manila: the birthday has come.
+    assert.equal(ageOn("1990-09-26", new Date("2026-09-25T16:30:00Z"), "Asia/Manila"), 36);
+    assert.equal(ageOn("1990-09-26", new Date("2026-09-25T16:30:00Z"), "UTC"), 35);
+    assert.equal(ageOn("not a date", new Date(), "UTC"), null);
+    const on = new Date("2026-09-26T01:00:00Z");
+    const cells = (patient: ReportPatient) => Object.fromEntries(patientCells(patient, "x", on, "Asia/Manila").map((c) => [c.label, c.value]));
+    assert.equal(cells({ ...samplePatient, dateOfBirth: null })["Date of birth (age)"], "not recorded (age 30 as entered)");
+    assert.equal(cells({ ...samplePatient, dateOfBirth: null, age: null })["Date of birth (age)"], "not recorded");
+    const blank = cells({ ...samplePatient, gender: " ", therapistName: null, diagnosis: "", condition: null });
+    assert.deepEqual([blank.Gender, blank["Assigned therapist"], blank["Diagnosis (entered by the clinic)"], blank["Condition (entered by the clinic)"]],
+      ["not recorded", "none assigned", "not recorded", "not recorded"]);
+
+    // A long clinic entry continues on the next page instead of running off this one.
+    const long = sessionReportPdf(detail, { ...opts, patient: { ...samplePatient, diagnosis: "Long clinic entry. ".repeat(400) } });
+    assert(checkStructure(long) >= 2, "the block continues on a second page");
+    assert(drawnText(long).includes("Long clinic entry. Long clinic entry."), "the entry is kept, not cut");
+
+    // A long name is cut in the footer rather than run into the page number.
+    const footer = fitText(`Postural session report · ${"Very Long Name ".repeat(20)}`, "regular", 7.5, 300);
+    assert(footer.endsWith("…") && textWidth(footer, "regular", 7.5) <= 300, "cut with an ellipsis");
+    const longName = drawnText(sessionReportPdf(detail, { ...opts, patient: { ...samplePatient, name: "Very Long Name ".repeat(20).trim() } }));
+    assert(longName.includes("…") && longName.includes("Page 1 of"), "the page number is still drawn");
+  });
+
+  await test("loaders: patient record, session number, home program and the signed-in id", async () => {
+    const realFetch = globalThis.fetch;
+    const calls: string[] = [];
+    const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+    const route = (handler: (url: string) => Response | Promise<Response>) => {
+      globalThis.fetch = (async (url: string, init?: RequestInit) => {
+        calls.push(`${url} ${init?.cache ?? ""}`);
+        return handler(url);
+      }) as typeof fetch;
+    };
+    try {
+      route(() => reply(200, { user: { ...samplePatient, email: "p@example.com", age: 30 } }));
+      assert.deepEqual(await fetchReportPatient("patient 7"), samplePatient, "the record's fields, nothing else");
+      assert.equal(calls.at(-1), "/api/users/patient%207 no-store");
+      route(() => reply(403, { error: "Forbidden" }));
+      assert.equal(await fetchReportPatient("patient_007"), null, "a refused record is null");
+      route(() => reply(200, { user: { id: 7 } }));
+      assert.equal(await fetchReportPatient("patient_007"), null, "a malformed record is null");
+      route(() => { throw new Error("offline"); });
+      assert.equal(await fetchReportPatient("patient_007"), null, "a network failure is null");
+
+      const listed = (id: number, exerciseId: string, day: number, setCount: number) =>
+        ({ id, exerciseId, startedAt: `2026-09-${String(day).padStart(2, "0")}T03:00:00.000Z`, setCount, totalReps: setCount * 10 });
+      route(() => reply(200, { sessions: [
+        listed(230, "ex_001", 24, 2), listed(218, "ex_001", 20, 2), listed(219, "ex_002", 21, 2),
+        listed(217, "ex_001", 19, 0), listed(210, "ex_001", 12, 1),
+      ] }));
+      assert.deepEqual(await fetchSessionNumber({ id: 218, patientId: "patient_007", exerciseId: "ex_001" }), { index: 2, total: 3 },
+        "ordered by start, same exercise, sessions with results only");
+      assert.equal(calls.at(-1), "/api/sessions?patientId=patient_007 no-store");
+      assert.deepEqual(await fetchSessionNumber({ id: 217, patientId: "patient_007", exerciseId: "ex_001" }), { index: null, total: 3 },
+        "a session without a set is not counted");
+      const before = calls.length;
+      assert.equal(await fetchSessionNumber({ id: 218, exerciseId: "ex_001" }), null, "no patient, no number");
+      assert.equal(calls.length, before, "and no request");
+      route(() => reply(500, {}));
+      assert.equal(await fetchSessionNumber({ id: 218, patientId: "patient_007", exerciseId: "ex_001" }), null);
+
+      route(() => reply(200, { exercises: programRows }));
+      const program = await fetchHomeProgram("patient_007");
+      assert.deepEqual(program?.map((item) => [item.name, item.state]), [["Lateral Arm Raises", "active"], ["Towel stretch", "upcoming"]],
+        "running and upcoming prescriptions only");
+      assert.equal(calls.at(-1), "/api/patient-exercises?patientId=patient_007 no-store");
+      assert.deepEqual(homeProgramRow(program![0]), [
+        "Lateral Arm Raises", "2 sets of 12 reps · 30s rest", "Both sides · No resistance", "Every day",
+        "Sep 20, 2026 to Oct 3, 2026", "5 of 14 scheduled days done · 1 missed",
+      ]);
+      route(() => reply(403, {}));
+      assert.equal(await fetchHomeProgram("patient_007"), null, "a refused program is null");
+
+      route(() => reply(200, { user: { id: "patient_007", role: "patient" } }));
+      assert.equal(await fetchSignedInUserId(), "patient_007");
+      assert.equal(calls.at(-1), "/api/auth/me no-store");
+      route(() => reply(401, {}));
+      assert.equal(await fetchSignedInUserId(), null);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   await test("the progress download fetches the saved sessions afresh", async () => {

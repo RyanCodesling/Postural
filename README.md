@@ -1,4 +1,23 @@
 # Sprint Updates 
+📌 Update-10-9-26 | Ron
+### web admin navigation
+Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
+
+### web therapist patient profiles and exercise assignment
+Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
+Added diagnosis, condition, and prescription to the therapist’s Patient Profile
+Prevented new or changed exercise schedules from using past dates; unchanged existing schedules remain editable
+
+### Patient attachments
+Renamed Patient Images to Attached Files and added image/document uploads during patient creation and editing
+Added support for JPEG, PNG, WebP, PDF, Word, Excel, PowerPoint, RTF, and TXT files, limited to 5 files at 5 MB each
+Added password verification before files can be opened; images and PDFs preview, while other documents download
+Added PostgreSQL storage and an idempotent migration that expands the existing image-only attachment constraint
+
+### ⚠️ *IMPORTANT* ⚠️ Before final setup
+Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
+Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
+Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
 
 ## 📌 Update-10-1-26 | *Ron*
 

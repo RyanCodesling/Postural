@@ -1,7 +1,7 @@
 # Sprint Updates 
 
 📌 Update-10-10-26 | Ron
-### web admin navigation
+### Web admin navigation
 Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
 
 ### Web therapist patient profiles and exercise assignment

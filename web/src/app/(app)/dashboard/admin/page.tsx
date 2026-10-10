@@ -7,8 +7,9 @@ import { useAuth } from "@/lib/AuthContext";
 import NotificationBell from "../_components/NotificationBell";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
+import { useDemoClock } from "@/lib/DemoClockContext";
 
-type Tab = "dashboard" | "users" | "exercises" | "assignments";
+type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
 interface User {
   id: string;
@@ -56,6 +57,7 @@ async function uploadPatientAttachments(patientId: string, files: File[]) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const { effectiveNow } = useDemoClock();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -633,7 +635,7 @@ export default function AdminDashboard() {
 
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
-    const phToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const phToday = effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
     const [ty, tm, td] = phToday.split("-").map(Number);
     const [by, bm, bd] = dob.split("-").map(Number);
     let age = ty - by;
@@ -734,6 +736,20 @@ export default function AdminDashboard() {
                 Assign Patients
               </button>
             </li>
+            {process.env.NODE_ENV !== "production" && (
+              <li>
+                <button
+                  onClick={() => { setActiveTab("demo-clock"); setSidebarOpen(false); }}
+                  className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
+                    activeTab === "demo-clock"
+                      ? "bg-green-700 text-white font-medium"
+                      : "text-green-200 hover:bg-green-800"
+                  }`}
+                >
+                  Demo Clock
+                </button>
+              </li>
+            )}
             <li>
               <Link
                 href="/camera"
@@ -771,6 +787,9 @@ export default function AdminDashboard() {
             </button>
           </div>
         </div>
+        {activeTab === "demo-clock" && process.env.NODE_ENV !== "production" && (
+          <DemoClockPanel />
+        )}
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
           <div>
@@ -1100,7 +1119,7 @@ export default function AdminDashboard() {
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
                             className="w-full border border-gray-300 rounded px-3 py-2"
-                            max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                            max={effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
                             min="1900-01-01"
                             required
                           />
@@ -1307,7 +1326,7 @@ export default function AdminDashboard() {
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
                         className="w-full border border-gray-300 rounded px-3 py-2"
-                        max={new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
+                        max={effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })}
                         min="1900-01-01"
                       />
                     </div>
@@ -2475,6 +2494,140 @@ function PatientImagePicker({
       )}
     </div>
   );
+}
+
+function DemoClockPanel() {
+  const { effectiveNow, overrideActive, settingsAvailable } = useDemoClock();
+  const [targetAt, setTargetAt] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/demo-clock", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load demo clock settings.");
+        if (!cancelled) setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load demo clock settings.");
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const target = new Date(targetAt);
+      if (!targetAt || Number.isNaN(target.getTime())) throw new Error("Choose a valid date and time.");
+      const response = await fetch("/api/demo-clock", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetAt: target.toISOString() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not set demo clock.");
+      setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      setMessage("Demo clock updated for all signed-in users.");
+      window.dispatchEvent(new Event("demo-clock-updated"));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not set demo clock.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/demo-clock", { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not reset demo clock.");
+      setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      setMessage("Demo clock reset to real system time.");
+      window.dispatchEvent(new Event("demo-clock-updated"));
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "Could not reset demo clock.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="max-w-2xl rounded-xl border border-green-100 bg-white p-6">
+      <h1 className="text-2xl font-bold text-green-800">Demo Clock</h1>
+      <p className="mt-1 text-sm text-gray-600">
+        Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.
+      </p>
+      <dl className="mt-5 grid gap-3 border-y border-gray-100 py-4 sm:grid-cols-2">
+        <div>
+          <dt className="text-xs text-gray-500">Computer time</dt>
+          <dd className="mt-1 text-sm font-medium text-gray-900">{new Date().toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-gray-500">App time</dt>
+          <dd className="mt-1 text-sm font-medium text-gray-900">
+            {effectiveNow.toLocaleString()} {overrideActive ? "(demo)" : "(system)"}
+          </dd>
+        </div>
+      </dl>
+      {!settingsAvailable ? (
+        <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          Run scripts/demo_clock_settings_pg.sql as the database owner to enable the demo clock.
+        </p>
+      ) : (
+        <form onSubmit={save} className="mt-5 space-y-4">
+          <label htmlFor="demo-clock-target" className="block text-sm font-medium text-gray-700">
+            Simulated date and time
+            <input
+              id="demo-clock-target"
+              type="datetime-local"
+              required
+              value={targetAt}
+              onChange={(event) => setTargetAt(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-600 focus:outline-none focus:ring-2 focus:ring-green-200"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={saving || !targetAt}
+              className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Set demo time"}
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              disabled={saving || !overrideActive}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Reset to system time
+            </button>
+          </div>
+        </form>
+      )}
+      {message && <p role="status" className="mt-4 text-sm text-green-800">{message}</p>}
+      {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
+      <p className="mt-5 text-xs text-gray-500">
+        Demo clock is available only outside production. Authentication and password-expiry timers always use real time.
+      </p>
+    </section>
+  );
+}
+
+function toDateTimeLocalValue(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // ── Sidebar icons ──────────────────────────────────────────────────────────

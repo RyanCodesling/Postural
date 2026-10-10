@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import {
@@ -192,8 +193,8 @@ interface PatientRosterSummary {
   painStoppedCount: number;
 }
 
-function todayStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+function todayStr(now: Date): string {
+  return now.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 }
 
 function fmtDate(d: string) {
@@ -273,6 +274,7 @@ function PrescriptionDetails({
 export default function AssignExercisePage() {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const { effectiveNow } = useDemoClock();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [patientRoster, setPatientRoster] = useState<Record<string, PatientRosterSummary>>({});
@@ -459,7 +461,7 @@ export default function AssignExercisePage() {
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
     const payload: AssignmentPayload[] = [];
-    const today = todayStr();
+    const today = todayStr(effectiveNow);
     for (const exId of assignSelected) {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
@@ -765,7 +767,7 @@ export default function AssignExercisePage() {
   const selectedPatients = assignPatientIds
     .map((patientId) => patients.find((patient) => patient.id === patientId))
     .filter((patient): patient is PatientData => Boolean(patient));
-  const minDate = todayStr();
+  const minDate = todayStr(effectiveNow);
 
   // True when at least one selected exercise is new or has been edited and differs from existing
   const hasAssignChanges = (() => {

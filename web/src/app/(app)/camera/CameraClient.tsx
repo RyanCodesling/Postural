@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import { useToast } from "@/lib/ToastContext";
 import {
   FaceLandmarker,
@@ -1769,6 +1770,10 @@ type CardSpec = {
 
 export default function CameraClient() {
   const { user, logout } = useAuth();
+  const { effectiveNow } = useDemoClock();
+  const effectiveTodayPH = effectiveNow.toLocaleDateString("en-CA", {
+    timeZone: "Asia/Manila",
+  });
   const { showToast } = useToast();
   const dashboardHref =
     user?.role === "admin" ? "/dashboard/admin"
@@ -5795,9 +5800,6 @@ export default function CameraClient() {
       fetch("/api/patient-exercises")
         .then((r) => r.json())
         .then((data: unknown) => {
-          const todayPH = new Date().toLocaleDateString("en-CA", {
-            timeZone: "Asia/Manila",
-          });
           const assigned: Exercise[] = recordsField(data, "occurrences").flatMap((row): Exercise[] => {
             const occurrenceId = integerField(row, "id");
             const id = stringField(row, "exercise_id");
@@ -5813,7 +5815,7 @@ export default function CameraClient() {
               stringField(row, "monitoring_mode") !== "camera" ||
               !isOccurrenceActionable(
                 { dueDate, makeupUntil, status },
-                todayPH,
+                effectiveTodayPH,
               )
             ) {
               return [];
@@ -6007,6 +6009,7 @@ export default function CameraClient() {
         .catch((err) => console.warn("Error loading session recaps:", err));
     }
   }, [
+    effectiveTodayPH,
     initialExerciseId,
     initialOccurrenceId,
     initialOccurrenceIdParam,

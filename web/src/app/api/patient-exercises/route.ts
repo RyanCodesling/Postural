@@ -10,6 +10,7 @@ import {
   getPatientOccurrences,
   getUsers,
   createNotification,
+  getEffectiveNow,
 } from "@/lib/db";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import {
@@ -248,7 +249,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const today = new Date().toLocaleDateString("en-CA", {
+    const today = (await getEffectiveNow()).toLocaleDateString("en-CA", {
       timeZone: "Asia/Manila",
     });
     const existingAssignments = await getPatientExercises(patientId);

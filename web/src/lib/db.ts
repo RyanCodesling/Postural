@@ -54,12 +54,84 @@ types.setTypeParser(1082, (val: string) => val);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// Local (Asia/Manila) YYYY-MM-DD day key. The whole app treats "a day" as a
-// Manila calendar day (calendar, session gating); scheduling math must agree, so
-// occurrence lookups compute today here rather than relying on the DB's
-// CURRENT_DATE (which follows the server/session timezone).
-function todayKeyPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+export interface DemoClockState {
+  available: boolean;
+  isOverridden: boolean;
+  offsetMs: number;
+  effectiveAt: string;
+}
+
+async function readDemoClockOffsetMs(): Promise<number> {
+  try {
+    const result = await pool.query(
+      "SELECT offset_ms FROM demo_clock_settings WHERE id = 1",
+    );
+    return Number(result.rows[0]?.offset_ms ?? 0);
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") return 0;
+    throw error;
+  }
+}
+
+export async function getDemoClockState(): Promise<DemoClockState> {
+  try {
+    const offsetMs = await readDemoClockOffsetMs();
+    return {
+      available: true,
+      isOverridden: offsetMs !== 0,
+      offsetMs,
+      effectiveAt: new Date(Date.now() + offsetMs).toISOString(),
+    };
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") {
+      return {
+        available: false,
+        isOverridden: false,
+        offsetMs: 0,
+        effectiveAt: new Date().toISOString(),
+      };
+    }
+    throw error;
+  }
+}
+
+export async function setDemoClock(targetAt: string, updatedBy: string): Promise<void> {
+  const targetMs = Date.parse(targetAt);
+  if (!Number.isFinite(targetMs)) throw new Error("Enter a valid demo date and time.");
+  const offsetMs = targetMs - Date.now();
+  if (Math.abs(offsetMs) > 10 * 366 * 24 * 60 * 60 * 1000) {
+    throw new Error("Demo time must be within 10 years of the real clock.");
+  }
+  await pool.query(
+    `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
+     VALUES (1, $1, $2, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET offset_ms = EXCLUDED.offset_ms,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()`,
+    [Math.trunc(offsetMs), updatedBy],
+  );
+}
+
+export async function resetDemoClock(updatedBy: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
+     VALUES (1, 0, $1, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET offset_ms = 0,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()`,
+    [updatedBy],
+  );
+}
+
+export async function getEffectiveNow(): Promise<Date> {
+  return new Date(Date.now() + await readDemoClockOffsetMs());
+}
+
+// Scheduling uses Manila calendar days, but the demo clock supplies the instant.
+async function todayKeyPH(): Promise<string> {
+  return (await getEffectiveNow()).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 }
 
 // Maps snake_case DB columns to camelCase for the app
@@ -638,7 +710,7 @@ export async function archiveExercise(id: string, archivedBy: string): Promise<b
             AND status = 'pending'
             AND cancelled_at IS NULL
             AND COALESCE(makeup_until, due_date) >= $3::date`,
-        [assignmentIds, archivedBy, todayKeyPH()],
+        [assignmentIds, archivedBy, await todayKeyPH()],
       );
     }
 
@@ -740,7 +812,7 @@ export async function assignExercisesToPatient(
       const startDate =
         ex.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(ex.scheduledDate)
           ? ex.scheduledDate
-          : todayKeyPH();
+          : await todayKeyPH();
       // Default to 'interval' (daily, single-day window) when unspecified so a
       // missing rule yields exactly one occurrence rather than zero.
       const recurrence: Recurrence = ex.recurrence === "weekly" ? "weekly" : "interval";
@@ -804,7 +876,7 @@ export async function assignExercisesToPatient(
             AND status = 'pending'
             AND due_date > $2::date
             AND cancelled_at IS NULL`,
-        [patientExerciseId, todayKeyPH(), therapistId]
+        [patientExerciseId, await todayKeyPH(), therapistId]
       );
       const schedule = generateSchedule({ recurrence, intervalDays, weekdays, startDate, endDate });
       for (const occ of schedule) {
@@ -888,7 +960,7 @@ export async function archivePatientExercises(
             AND status = 'pending'
             AND cancelled_at IS NULL
             AND COALESCE(makeup_until, due_date) >= $3::date`,
-        [assignmentIds, archivedBy, todayKeyPH()],
+        [assignmentIds, archivedBy, await todayKeyPH()],
       );
     }
     await client.query("COMMIT");
@@ -951,7 +1023,8 @@ export async function getPatientExercises(
     occurrencesByAssignment.set(patientExerciseId, occurrences);
   }
 
-  const today = todayKeyPH();
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   return exerciseResult.rows.map((row) => {
     const { stored_status: storedStatus, ...exercise } = row;
     const occurrences = occurrencesByAssignment.get(Number(row.id)) ?? [];
@@ -1313,9 +1386,10 @@ export async function completeManualOccurrence(
   occurrenceId: number,
   patientId: string,
 ): Promise<{ exerciseName: string; therapistId: string | null }> {
+  const effectiveAt = await getEffectiveNow();
   const result = await pool.query(
     `UPDATE exercise_occurrences eo
-        SET status = 'completed', completed_at = NOW()
+        SET status = 'completed', completed_at = $4
        FROM patient_exercises pe
        JOIN exercises e ON e.id = pe.exercise_id
        JOIN users u ON u.id = pe.patient_id
@@ -1330,7 +1404,12 @@ export async function completeManualOccurrence(
         AND eo.due_date <= $3::date
         AND COALESCE(eo.makeup_until, eo.due_date) >= $3::date
       RETURNING e.name AS exercise_name, u.therapist_id`,
-    [occurrenceId, patientId, todayKeyPH()],
+    [
+      occurrenceId,
+      patientId,
+      effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }),
+      effectiveAt.toISOString(),
+    ],
   );
   if (result.rows.length === 0) throw new ManualOccurrenceNotCompletableError();
   return {
@@ -1358,7 +1437,8 @@ export async function createSession(data: {
   // actionable occurrence today — due today, or earlier with its make-up window
   // still open. Future, missed, or unscheduled starts are refused. Occurrence
   // windows are disjoint and contiguous, so at most one can match.
-  const today = todayKeyPH();
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const definition = getExerciseDefinition(data.exerciseId);
   if (!definition) throw new SessionNotScheduledError("This exercise cannot be camera monitored.");
 
@@ -1404,7 +1484,7 @@ export async function createSession(data: {
     const existingSnapshot = occurrence.prescription_snapshot as
       | PrescriptionSnapshot
       | null;
-    const capturedAt = new Date().toISOString();
+    const capturedAt = effectiveAt.toISOString();
     const prescription: PrescriptionSnapshotV2 =
       existingSnapshot?.version === PRESCRIPTION_SNAPSHOT_VERSION
         ? existingSnapshot
@@ -1489,16 +1569,16 @@ export async function createSession(data: {
 
     await client.query(
       `UPDATE sessions
-          SET ended_at = NOW(), end_reason = 'superseded'
+          SET ended_at = $2, end_reason = 'superseded'
         WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
-      [data.patientExerciseId],
+      [data.patientExerciseId, effectiveAt.toISOString()],
     );
     const result = await client.query(
       `INSERT INTO sessions
-         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id,
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id, started_at,
           context_snapshot, context_snapshot_version, context_captured_at,
           registry_version, exercise_config_version, app_revision)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, started_at`,
       [
         data.patientId,
@@ -1506,6 +1586,7 @@ export async function createSession(data: {
         data.exerciseId,
         data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
         occurrenceId,
+        effectiveAt.toISOString(),
         JSON.stringify(context),
         SESSION_CONTEXT_VERSION,
         capturedAt,
@@ -1613,6 +1694,7 @@ export async function endSession(
   // rewrite the occurrence outcome.
   const endReasonValue = data.completed ? "completed" : data.endReason ?? null;
   if (!endReasonValue) throw new Error("A terminal session reason is required.");
+  const effectiveAt = (await getEffectiveNow()).toISOString();
 
   const client = await pool.connect();
   let transitioned = false;
@@ -1630,7 +1712,7 @@ export async function endSession(
 
     await client.query(
       `UPDATE sessions
-          SET ended_at = NOW(),
+          SET ended_at = $5,
               capture_quality_summary = COALESCE($2, capture_quality_summary),
               notes = COALESCE($3, notes),
               end_reason = $4
@@ -1642,22 +1724,23 @@ export async function endSession(
           : null,
         data.notes ?? null,
         endReasonValue,
+        effectiveAt,
       ],
     );
     const occurrenceId = session.rows[0].occurrence_id as number | null;
     if (occurrenceId !== null && data.completed) {
       await client.query(
         `UPDATE exercise_occurrences
-            SET status = 'completed', completed_at = NOW()
+            SET status = 'completed', completed_at = $2
           WHERE id = $1 AND status IN ('pending', 'in_progress')`,
-        [occurrenceId],
+        [occurrenceId, effectiveAt],
       );
     } else if (occurrenceId !== null && endReasonValue === "pain") {
       await client.query(
         `UPDATE exercise_occurrences
-            SET status = 'pain_stopped', pain_stopped_at = NOW()
+            SET status = 'pain_stopped', pain_stopped_at = $2
           WHERE id = $1 AND status IN ('pending', 'in_progress')`,
-        [occurrenceId],
+        [occurrenceId, effectiveAt],
       );
     }
     transitioned = true;
@@ -2274,6 +2357,8 @@ export async function getSessionsForPatient(patientId: string) {
  * inflate activity — consistent with the patient consistency calendar.
  */
 export async function getTherapistRoster(therapistId: string) {
+  const now = await getEffectiveNow();
+  const today = await todayKeyPH();
   const result = await pool.query(
     `SELECT
         u.id,
@@ -2290,7 +2375,8 @@ export async function getTherapistRoster(therapistId: string) {
      LEFT JOIN (
         SELECT s.patient_id,
                COUNT(*)                                                         AS total_sessions,
-               COUNT(*) FILTER (WHERE s.started_at >= NOW() - INTERVAL '7 days') AS sessions_this_week,
+               COUNT(*) FILTER (WHERE s.started_at >= $2::timestamptz - INTERVAL '7 days'
+                                  AND s.started_at < $2::timestamptz) AS sessions_this_week,
                MAX(s.started_at)                                                 AS last_session_at
         FROM sessions s
         WHERE EXISTS (SELECT 1 FROM set_events se WHERE se.session_id = s.id
@@ -2305,11 +2391,11 @@ export async function getTherapistRoster(therapistId: string) {
         SELECT pe.patient_id,
                COUNT(DISTINCT pe.id) FILTER (WHERE pe.archived_at IS NULL)         AS assigned_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
-                                      AND eo.due_date <= $2::date
+                                      AND eo.due_date <= $3::date
                                       AND eo.status <> 'pain_stopped')              AS due_count,
                COUNT(eo.id) FILTER (WHERE eo.cancelled_at IS NULL
                                       AND eo.status = 'completed')                  AS completed_count,
-               COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $2::date
+               COUNT(eo.id) FILTER (WHERE COALESCE(eo.makeup_until, eo.due_date) < $3::date
                                       AND eo.status <> 'completed'
                                       AND eo.status <> 'pain_stopped'
                                       AND eo.cancelled_at IS NULL)                  AS missed_count,
@@ -2321,7 +2407,7 @@ export async function getTherapistRoster(therapistId: string) {
      ) ex ON ex.patient_id = u.id
      WHERE u.role = 'patient' AND u.therapist_id = $1
      ORDER BY u.name`,
-    [therapistId, todayKeyPH()],
+    [therapistId, now.toISOString(), today],
   );
   return result.rows.map((row) => ({
     id:               row.id as string,
@@ -2335,6 +2421,131 @@ export async function getTherapistRoster(therapistId: string) {
     missedCount:      Number(row.missed_count),
     painStoppedCount: Number(row.pain_stopped_count),
   }));
+}
+
+export type PatientActivityEventType = "login" | "logout" | "assigned" | "unassigned";
+
+export async function recordPatientActivityEvent(
+  patientId: string,
+  therapistId: string,
+  eventType: PatientActivityEventType,
+): Promise<void> {
+  const effectiveAt = await getEffectiveNow();
+  await pool.query(
+    `INSERT INTO patient_activity_events (patient_id, therapist_id, event_type, created_at)
+     VALUES ($1, $2, $3, $4)`,
+    [patientId, therapistId, eventType, effectiveAt.toISOString()],
+  );
+}
+
+export async function getTherapistDashboardAnalytics(therapistId: string) {
+  const result = await pool.query(
+    `WITH days AS (
+       SELECT generate_series(
+         ($2::date - 13)::timestamp,
+         $2::date::timestamp,
+         INTERVAL '1 day'
+       )::date AS day
+     ),
+     scoped_patients AS (
+       SELECT id
+         FROM users
+        WHERE role = 'patient'
+          AND therapist_id = $1
+          AND (is_archived IS NULL OR is_archived = FALSE)
+     ),
+     sessions_by_day AS (
+       SELECT (s.started_at AT TIME ZONE 'Asia/Manila')::date AS day,
+              COUNT(DISTINCT s.id)::integer AS sessions
+         FROM sessions s
+         JOIN scoped_patients p ON p.id = s.patient_id
+        WHERE s.started_at >= (($2::date - 13)::timestamp AT TIME ZONE 'Asia/Manila')
+          AND s.started_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
+          AND (
+            EXISTS (
+              SELECT 1 FROM set_events se
+               WHERE se.session_id = s.id
+                 AND (se.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
+            )
+            OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
+          )
+        GROUP BY 1
+     ),
+     activity_by_day AS (
+       SELECT (event.created_at AT TIME ZONE 'Asia/Manila')::date AS day,
+              COUNT(*) FILTER (WHERE event.event_type = 'login')::integer AS patient_logins,
+              COUNT(*) FILTER (WHERE event.event_type = 'assigned')::integer AS new_assignments
+         FROM patient_activity_events event
+         JOIN scoped_patients p ON p.id = event.patient_id
+        WHERE event.therapist_id = $1
+          AND event.created_at >= (($2::date - 13)::timestamp AT TIME ZONE 'Asia/Manila')
+          AND event.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Manila')
+        GROUP BY 1
+     ),
+     active_patients AS (
+       SELECT p.id
+         FROM scoped_patients p
+        WHERE EXISTS (
+          SELECT 1 FROM patient_activity_events event
+           WHERE event.patient_id = p.id
+             AND event.therapist_id = $1
+             AND event.event_type = 'login'
+             AND event.created_at >= (($2::date - 6)::timestamp AT TIME ZONE 'Asia/Manila')
+        )
+        OR EXISTS (
+          SELECT 1 FROM sessions s
+           WHERE s.patient_id = p.id
+             AND s.started_at >= (($2::date - 6)::timestamp AT TIME ZONE 'Asia/Manila')
+             AND (
+               EXISTS (
+                 SELECT 1 FROM set_events se
+                  WHERE se.session_id = s.id
+                    AND (se.hold_quality->'auditOnly') IS DISTINCT FROM 'true'::jsonb
+               )
+               OR EXISTS (SELECT 1 FROM rep_events re WHERE re.session_id = s.id)
+             )
+        )
+     ),
+     summary AS (
+       SELECT (SELECT COUNT(*)::integer FROM scoped_patients) AS total_patients,
+              (SELECT COUNT(*)::integer FROM active_patients) AS active_patients,
+              (SELECT COALESCE(SUM(patient_logins), 0)::integer FROM activity_by_day) AS patient_logins,
+              (SELECT COALESCE(SUM(new_assignments), 0)::integer FROM activity_by_day) AS new_assignments,
+              (SELECT COALESCE(SUM(sessions), 0)::integer FROM sessions_by_day) AS sessions
+     )
+     SELECT TO_CHAR(days.day, 'YYYY-MM-DD') AS date,
+            COALESCE(sessions_by_day.sessions, 0)::integer AS sessions,
+            COALESCE(activity_by_day.patient_logins, 0)::integer AS "patientLogins",
+            COALESCE(activity_by_day.new_assignments, 0)::integer AS "newAssignments",
+            summary.total_patients AS "totalPatients",
+            summary.active_patients AS "activePatients",
+            summary.patient_logins AS "patientLogins14Days",
+            summary.new_assignments AS "newAssignments14Days",
+            summary.sessions AS "sessions14Days"
+       FROM days
+       LEFT JOIN sessions_by_day ON sessions_by_day.day = days.day
+       LEFT JOIN activity_by_day ON activity_by_day.day = days.day
+       CROSS JOIN summary
+      ORDER BY days.day`,
+    [therapistId, await todayKeyPH()],
+  );
+
+  const first = result.rows[0];
+  return {
+    totals: {
+      totalPatients: Number(first?.totalPatients ?? 0),
+      activePatients: Number(first?.activePatients ?? 0),
+      patientLogins14Days: Number(first?.patientLogins14Days ?? 0),
+      newAssignments14Days: Number(first?.newAssignments14Days ?? 0),
+      sessions14Days: Number(first?.sessions14Days ?? 0),
+    },
+    daily: result.rows.map((row) => ({
+      date: row.date as string,
+      sessions: Number(row.sessions),
+      patientLogins: Number(row.patientLogins),
+      newAssignments: Number(row.newAssignments),
+    })),
+  };
 }
 
 /**
@@ -2414,6 +2625,7 @@ export async function getSessionDetail(sessionId: number) {
       holdQuality: r.hold_quality,
     })),
     sets: setsRes.rows.filter((r) => !isAuditOnlyMeasurement(r.hold_quality)).map((r) => ({
+
       setIndex:       r.set_index,
       exerciseKind:   r.exercise_kind,
       targetReps:     r.target_reps,
@@ -2511,7 +2723,7 @@ export async function markAllNotificationsAsRead(userId: string): Promise<void> 
 }
 
 export async function syncTimeNotifications(patientId: string): Promise<void> {
-  const today = todayKeyPH();
+  const today = await todayKeyPH();
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });

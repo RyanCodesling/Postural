@@ -7,6 +7,7 @@ import {
   getUserById,
   isEmailTaken,
   restoreUser,
+  recordPatientActivityEvent,
   updateUser,
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
@@ -100,6 +101,19 @@ export async function PUT(
 
     if (!updated) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    if (updated.role === "patient" && oldUser?.therapistId !== updated.therapistId) {
+      try {
+        if (typeof oldUser?.therapistId === "string") {
+          await recordPatientActivityEvent(id, oldUser.therapistId, "unassigned");
+        }
+        if (typeof updated.therapistId === "string") {
+          await recordPatientActivityEvent(id, updated.therapistId, "assigned");
+        }
+      } catch (error) {
+        console.error("Failed to record patient assignment activity:", error);
+      }
     }
 
     // Check if therapist assignment changed and notify

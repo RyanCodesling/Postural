@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import {
   rollupDay,
   type DayState,
@@ -41,10 +42,6 @@ function dayKeyPH(iso: string): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
-}
-
-function todayKeyPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 }
 
 function pad2(n: number): string {
@@ -108,6 +105,7 @@ export default function ConsistencyCalendar({
   sessions: CalendarSession[];
   occurrences: CalendarOccurrence[];
 }) {
+  const { effectiveNow } = useDemoClock();
   // Only "outcome-bearing" sessions count as a routine day — a session row is
   // created the moment Start is pressed, so accidental or immediately-abandoned
   // starts (no set, no rep) must not inflate the streak / totals / "did a routine".
@@ -132,12 +130,13 @@ export default function ConsistencyCalendar({
     occByDay.set(o.due_date, list);
   }
 
-  const todayKey = todayKeyPH();
+  const todayKey = effectiveNow.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const today = parseKey(todayKey);
 
   // Which month the grid shows (defaults to the current month). Stats below are
   // anchored to today regardless of which month is being viewed.
-  const [view, setView] = useState<{ y: number; m: number }>({ y: today.y, m: today.m });
+  const [viewOverride, setViewOverride] = useState<{ y: number; m: number } | null>(null);
+  const view = viewOverride ?? today;
 
   // Summary stats (anchored to today).
   const streak = computeStreak(counts, todayKey);
@@ -161,9 +160,15 @@ export default function ConsistencyCalendar({
     view.y > today.y || (view.y === today.y && view.m >= today.m);
 
   const goPrev = () =>
-    setView((v) => (v.m === 1 ? { y: v.y - 1, m: 12 } : { y: v.y, m: v.m - 1 }));
+    setViewOverride((current) => {
+      const v = current ?? today;
+      return v.m === 1 ? { y: v.y - 1, m: 12 } : { y: v.y, m: v.m - 1 };
+    });
   const goNext = () =>
-    setView((v) => (v.m === 12 ? { y: v.y + 1, m: 1 } : { y: v.y, m: v.m + 1 }));
+    setViewOverride((current) => {
+      const v = current ?? today;
+      return v.m === 12 ? { y: v.y + 1, m: 1 } : { y: v.y, m: v.m + 1 };
+    });
 
   return (
     <div className="bg-white border border-green-200 rounded-2xl p-6">

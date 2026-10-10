@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import NotificationBell from "../_components/NotificationBell";
 import {
   prescriptionMetricLabel,
@@ -157,6 +158,7 @@ function SessionVideoList({
 
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
+  const { effectiveNow } = useDemoClock();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -269,7 +271,7 @@ export default function PatientDashboardPage() {
   }
   const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
 
-  const today = sessionTodayPH();
+  const today = sessionTodayPH(effectiveNow);
   const actionableOccurrences = occurrences
     .filter((occurrence) =>
       isOccurrenceActionable(
@@ -848,8 +850,8 @@ export default function PatientDashboardPage() {
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
-function sessionTodayPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
+function sessionTodayPH(now: Date): string {
+  return now.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
 }
 
 interface ScheduleDateGroup {

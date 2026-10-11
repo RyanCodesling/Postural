@@ -1,67 +1,77 @@
 # Sprint Updates 
 
-## Update-10-11-26 | Tracking check, trend rules, reports and guide player
+## Update-10-11-26 | Trend model, coaching checks, reports and guide player
 
-- Added a display-only message when the camera's tracking of a prescribed body part becomes unsteady, and a
-  tracking record for every repetition (coaching version 11). At 5 frames a second or fewer it cannot judge,
-  and the record says the repetition was not checked.
+Everything since Update-10-1-26 that had not been pushed: the 10-4 work, the 10-11 work, and the changes
+made to Ron's 10-10 update before it was merged.
+
+### Trends
+
+- Progress trends come from a Gaussian-process trend model, whose session-to-session variation was learned
+  offline from the app's own recorded sessions. Each side's main measure is labelled Rising, Falling or No
+  clear change, or Collecting data below three counted sessions; the form score and the other measures get
+  bands but no labels. The therapist trend cards, the patient progress view and the progress PDF use it. Fits
+  run in a background worker, and every chart point opens a breakdown of that session.
 - Trend data rules: each set's first repetition is left out of the raising and lowering times. Repetitions the
   camera tracked poorly, and sessions where half or more were, are left out of the trend lines and drawn as
   hollow points; the trend card and the session breakdown say how many and why.
-- Added an end-of-set gauge to the session breakdown and "worth checking" markers on the session video
-  (poorly tracked repetitions, and repetitions at least twice or at most half their side's usual duration).
-  Both are display only.
+- The standing side bend's share of repetitions reaching the target is shown as measured values only, with a
+  note saying why.
+
+### Coaching (display only)
+
+- Warnings that depend on another movement count only the movement beyond the expected amount, and are off
+  at rest. The shoulder-level cue (LOWER) switches on at 7 and off at 5, and a shown cue stays at least 0.7 s.
+- Cues that failed the pilot replay check are still logged but not drawn: LOWER on lateral arm raises, the
+  side bend's neck-tilt and shrug cues, the arm hold's shrug cue, and the elbow cue on the shoulder press and
+  wall angels.
+- The arm-raise shrug is judged once per repetition. Side bends gain a "Hips shifted" check. Neck side bends
+  judge trunk lean and LOWER once per bend, and the LOWER arrow moves when the other shoulder clearly rises.
+- Lateral arm raises and the arm hold gain a "Straighten arms" check when an arm is clearly bent.
+- A message appears when the camera's tracking of a prescribed body part becomes unsteady, and every
+  repetition saves a tracking record. At 5 frames a second or fewer it cannot judge, and the record says the
+  repetition was not checked.
+
+### Measurement and capture
+
+- The side bend's repetition target is 17 instead of 25; the minimum stays 15.
+- Normalized values keep three decimals, the saved smoothness value uses a corrected formula, and new
+  repetitions carry a version-3 record that marks gapped samples for offline analysis.
+- In side-on framing the camera check needs only the knees in frame and checks that the hips are visible.
+  The capture summary saves why frames were rejected, and a resumed video part keeps its real start time.
+
+### Sessions and reports
+
+- The session breakdown has an end-of-set gauge, and the session video marks repetitions worth checking
+  (poorly tracked ones, and ones at least twice or at most half their side's usual duration).
 - PDF reports: plainer wording for physical therapists and doctors; a patient block (name, ID, date of birth
   and age, gender, assigned therapist, and the diagnosis and condition the clinic entered) and a session
   block; results against their targets with a "Below target" flag; a Limitations section; the patient's ID
   on every page; and, in the progress report, the current home exercise program with the days done so far.
-- Reference Guide player: phase and Front/Side labels in step with the video, an upper-body close-up, pause,
-  half speed and full screen. The guide's clips are unchanged.
-- Blender scripts and notes for polishing the demo figures and refining arm and hand form, and the neck side
-  bends draft, which stays out of the guide. Rendered previews are not part of the repository.
+
+### Recording, backups and deployment
+
+- The recording notice is version 3, for videos stored on the project's cloud server. Choices made under the
+  earlier notice are asked again.
+- `npm run backup:local` backs up the database and the session videos; with `--verify` it restores a backup
+  into a separate empty database and checks it. `web/docs/evaluation-deployment.md` lists the deployment
+  steps.
 - `deploy/server`: setup scripts and runbook for the evaluation server (base system, app and database,
   backups, HTTPS, and a tool to set the admin password). Secrets are generated on the server.
 
-## 📌 Update-10-10-26 | Ron
-### Web admin navigation
-Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications.
+### Reference Guide and Blender
 
-### Web therapist patient profiles and exercise assignment
-Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
-Added diagnosis, condition, and prescription to the therapist’s Patient Profile
-Prevented new or changed exercise dates from being in the past; a running prescription keeps its start date, so it can still be extended
+- The guide's player shows phase and Front/Side labels in step with the video, with an upper-body close-up,
+  pause, half speed and full screen. The guide's clips are unchanged.
+- Blender scripts and notes for polishing the demo figures and refining arm and hand form, and the neck side
+  bends draft, which stays out of the guide. Rendered previews are not part of the repository.
 
-### Patient attachments
-Renamed Patient Images to Attached Files and added image/document uploads during patient creation and editing
-Added support for JPEG, PNG, WebP, PDF, Word, Excel, PowerPoint, RTF, and TXT files, limited to 5 files at 5 MB each
-Added password verification before files can be opened; images and PDFs preview, while other documents download
-Added PostgreSQL storage and an idempotent migration that expands the existing image-only attachment constraint
-Listed a patient's attached files in the admin's edit form, where each can be deleted after a confirmation
-Asked admins to upload a patient's documents only with the patient's permission
+### Offline ML tools
 
-### ⚠️ *IMPORTANT* ⚠️ Before final setup
-Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
-Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
-Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
+- `ml/analysis` prepares tuning-trace exports and scores frozen models on recorded sessions, using the
+  corrected feature definitions with subject-separated calibration.
 
-### Development Demo Clock
-Added an admin-only Demo Clock control to set or reset the app’s simulated date and time without changing the computer clock
-Applied simulated time to schedule validation, patient calendars, camera schedule selection, and session timestamps
-Kept authentication and password-expiry timers on real time; scheduling days continue to use Manila time
-Made the clock work only in a development server started with `npm run dev:demo`; a normal `npm run dev` and every production build use the real time and ignore a demo date left in the database
-Made pages read only the demo day, which changes once a day, so the camera page does not redraw for the clock; reminders take tomorrow from the same clock as today
-
-Database setup
-Run these scripts as the PostgreSQL database owner before using the new features:
-
-patient_image_attachments_pg.sql
-demo_clock_settings_pg.sql (only where the demo clock is used)
-The setup order is documented in AUTHENTICATION_SETUP.md.
-
-Validation
-TypeScript, ESLint, the web test suite, and npm run build pass
-
-## Update-10-4-26 | Integration corrections
+### Integration corrections (10-4)
 
 - Cancel and invalidate pending single-patient assignment requests when selection
   changes. A late reply cannot fill or lock a multi-patient form with one patient's
@@ -75,6 +85,68 @@ TypeScript, ESLint, the web test suite, and npm run build pass
   fields return a clear error before saving. The narrow, additive owner-run
   migration is [`scripts/user_clinical_fields_pg.sql`](scripts/user_clinical_fields_pg.sql);
   deployment guidance and temporary-table verification are in [`web/README.md`](web/README.md).
+
+### Changes to Ron's 10-10 update before the merge
+
+- Removed the patient sign-in, sign-out and assignment tracking and the therapist dashboard's 14-day activity
+  chart, with `scripts/patient_activity_events_pg.sql`.
+- Removed the Log Out button on the camera page. Log Out stays in the dashboards' top-right header.
+- The demo clock works only in a development server started with `npm run dev:demo`. A normal `npm run dev`
+  and every production build use the real time and ignore a demo date left in the database. Pages read only
+  the day, so the camera page does not redraw for the clock, and reminders take tomorrow from the same clock
+  as today. The admin's Demo Clock tab appears only in demo mode.
+- Attached files: the admin's edit form lists a patient's files with a Delete that asks first, and the upload
+  box asks admins to upload documents only with the patient's permission.
+- Prescription dates: only a new or changed date is checked against today, so a running prescription can
+  still be extended.
+- Fixed the two tests the update broke, and added tests for these changes.
+- Database setup: run `patient_image_attachments_pg.sql` on each database that holds attachments, and
+  `demo_clock_settings_pg.sql` only where `npm run dev:demo` is used. `AUTHENTICATION_SETUP.md` lists the
+  order.
+
+📌 Update-10-10-26 | Ron
+### Web admin navigation
+Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
+
+### Web therapist patient profiles and exercise assignment
+Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
+Added diagnosis, condition, and prescription to the therapist’s Patient Profile
+Prevented new or changed exercise schedules from using past dates; unchanged existing schedules remain editable
+
+### Patient attachments
+Renamed Patient Images to Attached Files and added image/document uploads during patient creation and editing
+Added support for JPEG, PNG, WebP, PDF, Word, Excel, PowerPoint, RTF, and TXT files, limited to 5 files at 5 MB each
+Added password verification before files can be opened; images and PDFs preview, while other documents download
+Added PostgreSQL storage and an idempotent migration that expands the existing image-only attachment constraint
+
+### ⚠️ *IMPORTANT* ⚠️ Before final setup
+Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
+Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
+Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
+
+### Therapist dashboard analytics
+Added a 14-day activity graph for sessions, patient sign-ins, and new patient assignments
+Added total and recently active patient metrics; “active” means a recorded sign-in or completed exercise session in the last 7 days, not currently online
+Added database event tracking for patient sign-ins/sign-outs and therapist assignments
+Kept the roster dashboard available if the analytics migration hasn’t been installed; missing metrics show as unavailable
+
+### Development Demo Clock
+Added an admin-only Demo Clock control to set or reset the app’s simulated date and time without changing the computer clock
+Applied simulated time to schedule validation, patient calendars, camera schedule selection, session timestamps, and dashboard activity windows
+Kept authentication and password-expiry timers on real time; scheduling days continue to use Manila time
+Disabled the clock controls in production
+
+Database setup
+Run these scripts as the PostgreSQL database owner before using the new features:
+
+demo_clock_settings_pg.sql
+patient_activity_events_pg.sql
+The setup order is documented in AUTHENTICATION_SETUP.md.
+
+Validation
+TypeScript, ESLint, git diff --check, and npm run build pass
+The app is already running at http://localhost:3000; a second dev-server launch was blocked because that port is occupied
+
 
 ## 📌 Update-10-1-26 | *Ron*
 

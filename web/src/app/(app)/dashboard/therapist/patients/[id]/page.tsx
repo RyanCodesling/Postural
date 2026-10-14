@@ -30,6 +30,8 @@ import {
 import { groupSessionsByExercise, ExerciseTrendCard } from "../../../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../../../_components/Skeleton";
 import ReportButton from "../../../_components/ReportButton";
+import PatientReports from "../../../_components/PatientReports";
+import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 import SessionVideo from "../../../_components/SessionVideo";
 
 interface Patient {
@@ -256,6 +258,26 @@ function adherenceSummaryText(exercise: PatientExercise): string {
   return parts.join(" · ");
 }
 
+type PatientTab = "overview" | "program" | "reports" | "sessions";
+
+const PATIENT_TABS: Array<{ key: PatientTab; label: string }> = [
+  { key: "overview", label: "Overview" },
+  { key: "program", label: "PT Program" },
+  { key: "reports", label: "Reports" },
+  { key: "sessions", label: "Sessions" },
+];
+
+interface ReportOccurrence {
+  due_date: string;
+  makeup_until: string;
+  status: OccurrenceStatus;
+}
+
+// A tab's panel; every panel stays visible when the page is printed.
+function TabPanel({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return <div className={active ? "" : "hidden print:block"}>{children}</div>;
+}
+
 export default function PatientDetailPage() {
   const params = useParams();
   const patientId = params?.id as string;
@@ -269,6 +291,8 @@ export default function PatientDetailPage() {
   const [imagePasswordError, setImagePasswordError] = useState("");
   const [verifyingImagePassword, setVerifyingImagePassword] = useState(false);
   const [exercises, setExercises] = useState<PatientExercise[]>([]);
+  const [occurrences, setOccurrences] = useState<ReportOccurrence[]>([]);
+  const [tab, setTab] = useState<PatientTab>("overview");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -303,6 +327,7 @@ export default function PatientDetailPage() {
         if (exercisesRes.ok) {
           const d = await exercisesRes.json();
           setExercises(d.exercises ?? []);
+          setOccurrences(d.occurrences ?? []);
         }
         if (sessionsRes.ok) {
           const d = await sessionsRes.json();
@@ -358,7 +383,8 @@ export default function PatientDetailPage() {
   };
 
   const scrollToSessions = () => {
-    sessionsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTab("reports");
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   };
 
   const closeImageViewer = () => {
@@ -461,57 +487,77 @@ export default function PatientDetailPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-8 print:px-0 print:py-0 print:max-w-none">
+    <div className="max-w-6xl mx-auto print:px-0 print:py-0 print:max-w-none">
 
       {/* Print-only report header */}
       <div className="hidden print:block mb-6 border-b border-gray-300 pb-4">
-        <h1 className="text-2xl font-bold text-green-800">Patient Progress Report</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Patient Progress Report</h1>
         <p className="text-sm text-gray-700 mt-1">{patient.name}</p>
         <p className="text-xs text-gray-500">Generated {fmtDateTime(new Date().toISOString())}</p>
       </div>
 
-      {/* Back link */}
-      <Link
-        href="/dashboard/therapist/patients"
-        className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-6 print:hidden"
-      >
-        ← Back to Manage Patients
-      </Link>
-
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 print:hidden">
-        <div>
-          <h1 className="text-4xl font-bold text-green-800">Patient Profile</h1>
-          <p className="text-gray-500 mt-1 mb-8">{patient.name}</p>
+      <div className="print:hidden">
+        <Link
+          href="/dashboard/therapist/patients"
+          className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-3"
+        >
+          ‹ Back
+        </Link>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Patient Profile</h1>
+            <p className="text-gray-500 mt-1">{patient.name}</p>
+          </div>
+          <div className="shrink-0 flex flex-wrap items-start justify-end gap-2">
+            <Link
+              href={`/dashboard/therapist/assign?patientId=${encodeURIComponent(patientId)}`}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition"
+            >
+              Assign Exercise
+            </Link>
+            <ReportButton
+              label="Progress report (PDF)"
+              onDownload={async () => {
+                const { downloadProgressReport } = await import("../../../_components/progressReport");
+                await downloadProgressReport({ patientId }, patient.name);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
+            />
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
+            >
+              <PrinterIcon />
+              Print / Save as PDF
+            </button>
+          </div>
         </div>
-        <div className="shrink-0 flex flex-wrap items-start justify-end gap-2">
-          <Link
-            href={`/dashboard/therapist/assign?patientId=${encodeURIComponent(patientId)}`}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition"
-          >
-            Assign Exercise
-          </Link>
-          <ReportButton
-            label="Progress report (PDF)"
-            onDownload={async () => {
-              const { downloadProgressReport } = await import("../../../_components/progressReport");
-              await downloadProgressReport({ patientId }, patient.name);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
-          />
-          <button
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
-          >
-            <PrinterIcon />
-            Print / Save as PDF
-          </button>
+
+        <div role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto border-b border-green-100">
+          {PATIENT_TABS.map(({ key, label }) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={tab === key}
+              type="button"
+              onClick={() => setTab(key)}
+              className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+                tab === key
+                  ? "border-green-600 text-green-700"
+                  : "border-transparent text-gray-500 hover:text-green-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
+      <TabPanel active={tab === "overview"}>
       {/* Personal Information */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">Personal Information</h2>
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h2 className="text-gray-900 font-semibold text-lg mb-6">Personal Information</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
           <div className="flex items-start gap-3">
@@ -570,8 +616,8 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Clinical information */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-5">Clinical Information</h2>
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h2 className="text-gray-900 font-semibold text-lg mb-5">Clinical Information</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             <p className="text-xs text-gray-500 mb-1">Diagnosis</p>
@@ -595,9 +641,9 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Patient attachments */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
         <div className="flex items-center justify-between gap-3 mb-5">
-          <h2 className="text-green-700 font-semibold text-lg">Attached Files</h2>
+          <h2 className="text-gray-900 font-semibold text-lg">Attached Files</h2>
           {patientImages.length > 0 && (
             <span className="text-xs text-gray-500">{patientImages.length} file{patientImages.length === 1 ? "" : "s"}</span>
           )}
@@ -736,10 +782,13 @@ export default function PatientDetailPage() {
         </div>
       )}
 
+      </TabPanel>
+
+      <TabPanel active={tab === "program"}>
       {/* Current prescription lifecycle */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-green-700 font-semibold text-lg">Current Prescriptions</h2>
+          <h2 className="text-gray-900 font-semibold text-lg">Current Prescriptions</h2>
           <button
             onClick={scrollToSessions}
             className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition print:hidden"
@@ -798,7 +847,7 @@ export default function PatientDetailPage() {
 
       {/* Ended prescription lifecycle */}
       {endedPrescriptions.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
           <h2 className="text-gray-800 font-semibold text-lg mb-2">Ended Prescriptions</h2>
           <p className="mb-5 text-xs text-gray-500">
             Prescription state is shown separately from the completed and missed occurrence outcomes below.
@@ -830,8 +879,8 @@ export default function PatientDetailPage() {
       )}
 
       {/* Completed occurrence outcomes */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-2">Completed Exercise Outcomes</h2>
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h2 className="text-gray-900 font-semibold text-lg mb-2">Completed Exercise Outcomes</h2>
         <p className="mb-5 text-xs text-gray-500">
           Populated from completed scheduled occurrences, even when the overall prescription later ended with missed work.
         </p>
@@ -860,9 +909,16 @@ export default function PatientDetailPage() {
         )}
       </div>
 
+      </TabPanel>
+
+      <TabPanel active={tab === "reports"}>
+      <div className="mb-6 print:hidden">
+        <PatientReports sessions={sessions} occurrences={occurrences} />
+      </div>
+
       {/* Form Quality */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg">Form Quality</h2>
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h2 className="text-gray-900 font-semibold text-lg">Form Quality</h2>
         <p className="text-xs text-gray-400 mt-1 mb-5">
           How cleanly the movement was performed (compensation patterns). Supplementary — not a diagnosis.
         </p>
@@ -911,8 +967,8 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Progress Trends */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mb-6">
-        <h2 className="text-green-700 font-semibold text-lg">Progress Trends</h2>
+      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <h2 className="text-gray-900 font-semibold text-lg">Progress Trends</h2>
         <p className="text-xs text-gray-400 mt-1 mb-6">
           Session-over-session trends per exercise. Descriptive statistics — not a diagnosis.
         </p>
@@ -932,9 +988,12 @@ export default function PatientDetailPage() {
         )}
       </div>
 
+      </TabPanel>
+
+      <TabPanel active={tab === "sessions"}>
       {/* Sessions Record */}
-      <div ref={sessionsCardRef} className="bg-white rounded-2xl border border-green-100 p-6 scroll-mt-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">Sessions Record</h2>
+      <div ref={sessionsCardRef} className="bg-white rounded-xl shadow-sm p-6 scroll-mt-6">
+        <h2 className="text-gray-900 font-semibold text-lg mb-6">Sessions Record</h2>
 
         {sessionsError ? (
           <p className="text-red-600 text-sm text-center py-6">
@@ -959,6 +1018,8 @@ export default function PatientDetailPage() {
           </div>
         )}
       </div>
+
+      </TabPanel>
 
       {/* Print-only disclaimer footer */}
       <p className="hidden print:block text-[10px] text-gray-500 mt-6 pt-3 border-t border-gray-300">

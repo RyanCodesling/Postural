@@ -1,5 +1,12 @@
 import { Pool, PoolClient, types } from "pg";
 import { hashPassword } from "./crypto";
+import {
+  describePausedProgress,
+  emailConfigured,
+  sendExerciseDigestEmail,
+  sendExercisePausedEmail,
+  type ExerciseDigestItem,
+} from "./email";
 import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
 import {
   deriveAssignmentStatus,
@@ -1805,6 +1812,18 @@ export async function endSession(
     );
     if (sessionResult.rows.length > 0) {
       const row = sessionResult.rows[0];
+      const pausedForPain = !data.completed && endReasonValue === "pain";
+      const paused = pausedForPain ? await getPausedProgress(sessionId) : null;
+      const pausedDetails = paused
+        ? { ...paused, patientName: row.patient_name as string, exerciseName: row.exercise_name as string }
+        : null;
+      if (pausedDetails) {
+        const patient = await pool.query("SELECT email, name FROM users WHERE id = $1", [row.patient_id]);
+        if (patient.rows[0]?.email) {
+          await sendExercisePausedEmail(patient.rows[0].email, patient.rows[0].name, pausedDetails, "patient")
+            .catch((err) => console.error("Failed to email pain pause to patient:", err));
+        }
+      }
       if (row.therapist_id) {
         if (data.completed) {
           await createNotification(
@@ -1822,13 +1841,19 @@ export async function endSession(
             row.occurrence_id
           );
         } else if (endReasonValue === "pain") {
+          const progress = pausedDetails ? ` (${describePausedProgress(pausedDetails)})` : "";
           await createNotification(
             row.therapist_id,
-            "Exercise stopped because of pain",
-            `${row.patient_name} stopped ${row.exercise_name} because of pain. Review before rescheduling.`,
+            "Exercise paused because of pain",
+            `${row.patient_name} paused ${row.exercise_name} because of pain${progress}. Review before rescheduling.`,
             "patient_pain_stopped",
             row.occurrence_id,
           );
+          const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [row.therapist_id]);
+          if (pausedDetails && therapist.rows[0]?.email) {
+            await sendExercisePausedEmail(therapist.rows[0].email, therapist.rows[0].name, pausedDetails, "therapist")
+              .catch((err) => console.error("Failed to email pain pause to therapist:", err));
+          }
         }
       }
     }
@@ -1836,6 +1861,128 @@ export async function endSession(
     console.error("Failed to create completion notification:", err);
   }
   return transitioned;
+}
+
+async function getPausedProgress(sessionId: number) {
+  const prescription = await pool.query(
+    `SELECT COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps
+       FROM sessions s
+       JOIN patient_exercises pe ON pe.id = s.patient_exercise_id
+       LEFT JOIN exercise_occurrences eo ON eo.id = s.occurrence_id
+      WHERE s.id = $1`,
+    [sessionId],
+  );
+  if (prescription.rows.length === 0) return null;
+  const p = prescription.rows[0];
+  const perSet = await pool.query(
+    "SELECT set_index, COUNT(*)::int AS reps FROM rep_events WHERE session_id = $1 GROUP BY set_index ORDER BY set_index",
+    [sessionId],
+  );
+  const last = perSet.rows[perSet.rows.length - 1];
+  return {
+    prescribedSets: Number(p.sets),
+    prescribedReps: Number(p.reps),
+    pausedSet: last ? Number(last.set_index) : null,
+    repsInPausedSet: last ? Number(last.reps) : 0,
+    completedSets: last ? Math.max(0, Number(last.set_index) - 1) : 0,
+  };
+}
+
+// Emails each therapist and patient one summary of the day's completed exercises and one of
+// the exercises whose make-up window ended yesterday (missed). Safe to call
+// repeatedly: notification_email_digests lets each (therapist, kind, day) send
+// at most once. Manual-monitoring exercises are not included.
+export const DIGEST_HOUR_MANILA = 20;
+
+export async function sendDailyTherapistDigests(): Promise<void> {
+  if (!emailConfigured()) return;
+  const now = await getEffectiveNow();
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", hour: "numeric", hourCycle: "h23" }).format(now),
+  );
+  if (hour < DIGEST_HOUR_MANILA) return;
+
+  const today = manilaDayKey(now.getTime());
+  const yesterday = manilaDayKey(now.getTime() - DAY_MS);
+  const label = (day: string) =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", {
+      month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+    });
+
+  const recipients = await pool.query(
+    `SELECT id, email, name, role FROM users
+      WHERE role IN ('therapist', 'patient') AND email IS NOT NULL
+        AND (is_archived IS NULL OR is_archived = FALSE)`,
+  );
+  const select = (ownerColumn: string) => `
+    SELECT u.name AS patient_name, e.name AS exercise_name, eo.due_date::text AS due_date,
+           COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+           COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps
+      FROM exercise_occurrences eo
+      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+      JOIN exercises e ON e.id = pe.exercise_id
+      JOIN users u ON u.id = pe.patient_id
+     WHERE ${ownerColumn} = $1
+       AND pe.archived_at IS NULL AND e.archived_at IS NULL
+       AND eo.cancelled_at IS NULL
+       AND e.monitoring_mode = 'camera'`;
+
+  for (const recipient of recipients.rows) {
+    // A therapist sees their patients' exercises; a patient sees only their own.
+    const base = select(recipient.role === "therapist" ? "u.therapist_id" : "pe.patient_id");
+    const kinds = [
+      {
+        kind: "completed" as const,
+        day: today,
+        rows: () => pool.query(
+          `${base} AND eo.status = 'completed'
+             AND (eo.completed_at AT TIME ZONE 'Asia/Manila')::date = $2::date
+           ORDER BY u.name, eo.completed_at`,
+          [recipient.id, today],
+        ),
+      },
+      {
+        kind: "missed" as const,
+        day: yesterday,
+        rows: () => pool.query(
+          `${base} AND eo.status NOT IN ('completed', 'pain_stopped')
+             AND eo.makeup_until = $2::date
+           ORDER BY u.name, eo.due_date`,
+          [recipient.id, yesterday],
+        ),
+      },
+    ];
+    for (const { kind, day, rows } of kinds) {
+      try {
+        const claim = await pool.query(
+          `INSERT INTO notification_email_digests (therapist_id, kind, day)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING day`,
+          [recipient.id, kind, today],
+        );
+        if (claim.rows.length === 0) continue;
+        const result = await rows();
+        const items: ExerciseDigestItem[] = result.rows.map((r) => ({
+          patientName: r.patient_name,
+          exerciseName: r.exercise_name,
+          sets: Number(r.sets),
+          reps: Number(r.reps),
+          dueDateLabel: label(r.due_date),
+        }));
+        const sent = items.length === 0
+          ? true
+          : await sendExerciseDigestEmail(recipient.email, recipient.name, kind, label(day), items, recipient.role);
+        if (!sent) {
+          await pool.query(
+            "DELETE FROM notification_email_digests WHERE therapist_id = $1 AND kind = $2 AND day = $3",
+            [recipient.id, kind, today],
+          );
+        }
+      } catch (err) {
+        console.error(`Failed to send ${kind} digest:`, err);
+      }
+    }
+  }
 }
 
 export class PainReportConflictError extends Error {

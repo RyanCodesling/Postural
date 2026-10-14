@@ -21,6 +21,8 @@ import {
   sendAccountRestoredAdminEmail,
   sendAccountDeletedUserEmail,
   sendAccountDeletedAdminEmail,
+  sendAssignedTherapistEmail,
+  sendAssignedPatientEmail,
 } from "@/lib/email";
 
 export async function GET(
@@ -122,6 +124,14 @@ export async function PUT(
             `${therapist.name} is now your assigned therapist.`,
             "assigned_therapist"
           );
+          if (therapist.email) {
+            sendAssignedPatientEmail(therapist.email as string, therapist.name as string, updated.name as string)
+              .catch(console.error);
+          }
+          if (updated.email) {
+            sendAssignedTherapistEmail(updated.email as string, updated.name as string, therapist.name as string)
+              .catch(console.error);
+          }
         }
       } catch (err) {
         console.error("Failed to create therapist assignment notifications:", err);

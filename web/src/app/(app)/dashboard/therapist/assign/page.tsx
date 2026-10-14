@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeading } from "../../_components/DashboardKit";
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
@@ -836,11 +837,12 @@ export default function AssignExercisePage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Assign Exercise</h1>
-      <p className="text-gray-500 mb-6">Assign exercises or a program to one of your patients.</p>
+      <div className="mb-4">
+        <PageHeading title="Assign Exercise" subtitle="Assign exercises or a program to one of your patients." />
+      </div>
 
-      <div className="grid gap-6 items-start lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6 max-w-2xl">
+      <div className={`grid items-start gap-4 ${selectedPatients.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
+        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
 
           {/* Step 1 — Select Patients */}
           <div>
@@ -850,7 +852,7 @@ export default function AssignExercisePage() {
             {patients.length === 0 ? (
               <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
             ) : (
-              <div className={`rounded-lg border ${assignPatientIds.length === 0 && showValidationErrors ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}>
+              <div className={`rounded-lg border ${assignPatientIds.length === 0 && showValidationErrors ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}>
                 <div className="max-h-52 overflow-y-auto divide-y divide-gray-100">
                   {patients.map((patient) => (
                     <label key={patient.id} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
@@ -941,7 +943,7 @@ export default function AssignExercisePage() {
                 <select
                   value={assignProgramId}
                   onChange={(e) => handleProgramSelect(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+                  className="w-full border border-green-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
                 >
                   <option value="">— None —</option>
                   {programs.map((t) => (
@@ -1073,8 +1075,8 @@ export default function AssignExercisePage() {
           ) : null}
         </div>
         {selectedPatients.length > 0 && (
-          <aside className="sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
+          <aside className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl bg-white shadow-sm">
+            <div className="border-b border-green-100 bg-[#f3f8f4] px-4 py-3">
               <h2 className="text-sm font-semibold text-gray-800">
                 Selected patients <span className="font-normal text-gray-400">({selectedPatients.length})</span>
               </h2>
@@ -1196,7 +1198,7 @@ export default function AssignExercisePage() {
               <div className="flex gap-3 justify-end">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
+                  className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
                 >
                   Cancel
                 </button>
@@ -1325,7 +1327,7 @@ export default function AssignExercisePage() {
               <div className="flex gap-3 justify-end pt-2">
                 <button
                   onClick={() => setShowAssignPreview(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
+                  className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
                 >
                   Back
                 </button>
@@ -1465,7 +1467,7 @@ function AssignRow({
                 placeholder="1"
                 disabled={locked}
                 aria-invalid={orderInvalid}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : orderInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : orderInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
               />
             </div>
             <div>
@@ -1476,7 +1478,7 @@ function AssignRow({
                 placeholder="e.g. 3"
                 disabled={locked}
                 aria-invalid={setsInvalid}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : setsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : setsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
               />
             </div>
             {isIsometric ? (
@@ -1487,7 +1489,7 @@ function AssignRow({
                   onChange={(e) => onParam("holdSeconds", e.target.value ? Number(e.target.value) : undefined)}
                   placeholder={`${DEFAULT_HOLD_SECONDS}`}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-green-200"}`}
                 />
               </div>
             ) : (
@@ -1499,7 +1501,7 @@ function AssignRow({
                   placeholder="e.g. 12"
                   disabled={locked}
                   aria-invalid={repsInvalid}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
             )}
@@ -1510,7 +1512,7 @@ function AssignRow({
                 onChange={(e) => onParam("restSeconds", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="60"
                 disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-green-200"}`}
               />
             </div>
           </div>
@@ -1529,7 +1531,7 @@ function AssignRow({
               onChange={(e) => applyPreset(e.target.value)}
               disabled={locked}
               aria-invalid={repeatInvalid}
-              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repeatInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repeatInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
             >
               {CADENCE_PRESETS.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
@@ -1550,7 +1552,7 @@ function AssignRow({
                       className={`w-9 h-8 rounded-md text-xs font-medium transition ${
                         on
                           ? "bg-green-700 text-white"
-                          : "border border-gray-300 text-gray-600 hover:bg-gray-50"
+                          : "border border-green-200 text-gray-600 hover:bg-gray-50"
                       } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
                     >
                       {lbl.slice(0, 2)}
@@ -1572,7 +1574,7 @@ function AssignRow({
                   onChange={(e) => onSchedule({ scheduledDate: e.target.value })}
                   disabled={locked}
                   aria-invalid={startDateInvalid}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : startDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : startDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
               <div>
@@ -1586,7 +1588,7 @@ function AssignRow({
                   onChange={(e) => onSchedule({ endDate: e.target.value })}
                   disabled={locked}
                   aria-invalid={endDateInvalid}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : endDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-gray-300"}`}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : endDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
             </div>

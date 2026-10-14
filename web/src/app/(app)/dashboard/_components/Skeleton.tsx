@@ -10,7 +10,7 @@ export function SkeletonBar({ className = "" }: { className?: string }) {
 /** A pulsing card container with the dashboard's rounded-card chrome. */
 export function SkeletonCard({ className = "" }: { className?: string }) {
   return (
-    <div className={`rounded-2xl border border-green-100 bg-white p-5 ${className}`}>
+    <div className={`rounded-xl bg-white shadow-sm p-5 ${className}`}>
       <SkeletonBar className="h-8 w-1/2" />
       <SkeletonBar className="mt-3 h-3 w-2/3" />
     </div>
@@ -31,7 +31,7 @@ export function SkeletonKpiRow({ count = 5 }: { count?: number }) {
 /** Placeholder table rows inside a card (roster / record lists). */
 export function SkeletonTable({ rows = 4 }: { rows?: number }) {
   return (
-    <div className="rounded-2xl border border-green-100 bg-white p-6">
+    <div className="rounded-xl bg-white shadow-sm p-6">
       <SkeletonBar className="h-5 w-32 mb-5" />
       <div className="space-y-3">
         {Array.from({ length: rows }).map((_, i) => (

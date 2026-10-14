@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import AuthFrame, { AUTH_INPUT, AUTH_LABEL, AUTH_BUTTON, AUTH_ERROR, AUTH_LINK } from "../AuthFrame";
 
 export default function FirstTimePasswordPage() {
   const [password, setPassword] = useState("");
@@ -26,65 +27,63 @@ export default function FirstTimePasswordPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="w-full max-w-md bg-white p-6 rounded shadow">
-        <h2 className="text-xl font-semibold mb-4">Set a new password</h2>
-
-        {!success ? (
-          <form onSubmit={handleSubmit}>
-            <p className="text-sm text-gray-600 mb-4">
-              As this is your first login, please set a new password for your
-              account.
+    <AuthFrame>
+      {!success ? (
+        <form onSubmit={handleSubmit} className="flex w-full flex-col gap-5">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Set a new password</h2>
+            <p className="text-sm text-gray-600">
+              As this is your first login, please set a new password for your account.
             </p>
+          </div>
 
-            <label className="block text-sm mb-1">New password</label>
+          <div className="relative">
             <input
               type="password"
+              id="password"
+              placeholder=" "
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border p-2 mb-3 rounded"
+              className={AUTH_INPUT}
             />
+            <label htmlFor="password" className={AUTH_LABEL}>New password</label>
+          </div>
 
-            <label className="block text-sm mb-1">Confirm password</label>
+          <div className="relative">
             <input
               type="password"
+              id="confirm"
+              placeholder=" "
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className="w-full border p-2 mb-3 rounded"
+              className={AUTH_INPUT}
             />
-
-            {error && <div className="text-red-600 mb-3">{error}</div>}
-
-            <div className="flex gap-3">
-              <button
-                type="submit"
-                className="flex-1 bg-black text-white py-2 rounded"
-              >
-                Save password
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push('/login')}
-                className="flex-1 border py-2 rounded"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          <div className="text-center">
-            <p className="mb-4 text-green-600">Password updated successfully.</p>
-            <div className="flex gap-3 justify-center">
-              <Link
-                href="/login"
-                className="px-4 py-2 bg-black text-white rounded"
-              >
-                Go to Login
-              </Link>
-            </div>
+            <label htmlFor="confirm" className={AUTH_LABEL}>Confirm password</label>
           </div>
-        )}
-      </div>
-    </main>
+
+          {error && <p className={AUTH_ERROR}>{error}</p>}
+
+          <button type="submit" className={AUTH_BUTTON}>
+            Save password
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/login")}
+            className={`${AUTH_LINK} self-start`}
+          >
+            ‹ Cancel
+          </button>
+        </form>
+      ) : (
+        <div className="flex flex-col gap-5">
+          <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+            Password updated successfully.
+          </p>
+          <Link href="/login" className={`${AUTH_BUTTON} block text-center`}>
+            Go to Login
+          </Link>
+        </div>
+      )}
+    </AuthFrame>
   );
 }

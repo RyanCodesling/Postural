@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../../_components/DashboardKit";
 import {
   DEFAULT_DISPLAY_HOLD_SECONDS,
   getDisplayHoldSeconds,
@@ -484,18 +485,19 @@ export default function ExerciseProgramsPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Exercise Program</h1>
-          <p className="text-gray-600 mt-1">Create and manage reusable exercise programs.</p>
-        </div>
+    <div className={showForm || showCustomForm ? "space-y-4" : FIT_SCREEN}>
+      <PageHeading title="Exercise Program" subtitle="Create and manage reusable exercise programs." />
+
+      <div className="grid shrink-0 grid-cols-3 gap-3">
+        <StatTile label="Programs" value={programs.length} icon={Glyph.list} tone="green" />
+        <StatTile label="Custom exercises" value={customExercises.length} icon={Glyph.dumbbell} tone="teal" />
+        <StatTile label="Exercises in programs" value={programs.reduce((n, pr) => n + pr.exercises.length, 0)} icon={Glyph.pulse} tone="lime" />
       </div>
 
       {/* Create / Edit form */}
       {showForm ? (
-        <div className="bg-white rounded-2xl border border-green-100 p-6 mb-8">
-          <h2 className="text-green-700 font-semibold text-lg mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <h2 className="text-gray-900 font-semibold text-lg mb-6">
             {editingId ? "Edit Program" : "Create New Program"}
           </h2>
 
@@ -844,16 +846,16 @@ export default function ExerciseProgramsPage() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-3 mb-8">
+        <div className="flex shrink-0 flex-wrap gap-3">
           <button
             onClick={() => { setShowForm(true); setShowCustomForm(false); }}
-            className="w-60 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
+            className="px-5 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
           >
             + Create New Program
           </button>
           <button
             onClick={() => setShowCustomForm((v) => !v)}
-            className="w-60 h-10 flex items-center justify-center border border-green-700 text-green-700 hover:bg-green-50 text-sm font-medium rounded-lg transition"
+            className="px-5 h-10 flex items-center justify-center border border-green-700 text-green-700 hover:bg-green-50 text-sm font-medium rounded-lg transition"
           >
             {showCustomForm ? "✕ Cancel" : "+ Add New Custom Exercise"}
           </button>
@@ -862,8 +864,8 @@ export default function ExerciseProgramsPage() {
 
       {/* Standalone custom exercise form */}
       {!showForm && showCustomForm && (
-        <div className="bg-white rounded-2xl border border-green-100 p-6 mb-8">
-          <h2 className="text-green-700 font-semibold text-lg mb-6">Add New Custom Exercise</h2>
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <h2 className="text-gray-900 font-semibold text-lg mb-6">Add New Custom Exercise</h2>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -911,8 +913,9 @@ export default function ExerciseProgramsPage() {
       )}
 
       {/* Programs list */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+      <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+        <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Programs ({programs.length})
         </h2>
 
@@ -921,9 +924,9 @@ export default function ExerciseProgramsPage() {
             No programs yet. Click &quot;Create New Program&quot; to get started.
           </p>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
             {programs.map((p) => (
-              <div key={p.id} className="rounded-xl border border-gray-100 p-4 transition hover:shadow-sm">
+              <div key={p.id} className="rounded-lg border border-green-50 bg-[#fafcfa] p-4 transition hover:bg-green-50/50">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
                     <h3 className="font-semibold text-green-700 text-base">{p.name}</h3>
@@ -993,8 +996,8 @@ export default function ExerciseProgramsPage() {
       </div>
 
       {/* Your Custom Exercises */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mt-8">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">
+      <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+        <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Custom Exercises ({customExercises.length})
         </h2>
         {customExercises.length === 0 ? (
@@ -1002,11 +1005,11 @@ export default function ExerciseProgramsPage() {
             No custom exercises yet. Click &quot;+ Add New Custom Exercise&quot; to create one.
           </p>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
             {customExercises.map((ex) => {
               const isEditingCustom = editingCustomId === ex.id;
               return (
-                <div key={ex.id} className="rounded-xl border border-gray-100 p-4 flex flex-col justify-between">
+                <div key={ex.id} className="flex flex-col justify-between rounded-lg border border-green-50 bg-[#fafcfa] p-4">
                   {isEditingCustom ? (
                     <div className="space-y-3 w-full">
                       <div className="font-semibold text-gray-900 text-sm">{ex.name}</div>
@@ -1063,6 +1066,7 @@ export default function ExerciseProgramsPage() {
             })}
           </div>
         )}
+      </div>
       </div>
 
       {/* ── Success Modal ─────────────────────────────────────────────────── */}

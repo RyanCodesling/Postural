@@ -50,14 +50,13 @@ test("new occurrence snapshots carry versioned sequence context", () => {
 });
 
 test("dashboard and session creation pass one exact occurrence id", () => {
-  const dashboard = source("../app/(app)/dashboard/patient/page.tsx");
+  const dashboard = source("../app/(app)/dashboard/patient/PatientProgramView.tsx");
   const camera = source("../app/(app)/camera/CameraClient.tsx");
   const route = source("../app/api/sessions/route.ts");
   const db = source("./db.ts");
   assert(dashboard.includes("/camera?occurrenceId="), "dashboard link must identify the occurrence");
   assert(
-    dashboard.includes("const actionableCameraOccurrences =") &&
-      dashboard.includes('occurrence.monitoring_mode === "camera"'),
+    dashboard.includes('o.monitoring_mode === "camera" ?') && dashboard.includes("/camera?occurrenceId="),
     "dashboard camera shortcut must exclude manual tasks",
   );
   assert(route.includes("const occurrenceId = Number(body?.occurrenceId)"), "session API must require occurrence id");

@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import NotificationBell from "../_components/NotificationBell";
+import AppShell from "../_components/AppShell";
+import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/DashboardKit";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
@@ -61,7 +61,6 @@ export default function AdminDashboard() {
   const { todayKey, enabled: demoClockOn } = useDemoClock();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Dashboard states
   const [dashboardData, setDashboardData] = useState<{
@@ -665,136 +664,28 @@ export default function AdminDashboard() {
   const customExercises = filteredExercises.filter((e) => e.is_custom);
 
   return (
-    <div className="min-h-screen flex bg-green-50">
-
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
-        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
-        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
-        <div className="mb-8">
-          <div className="text-lg font-semibold text-white">{user?.name}</div>
-        </div>
-
-        <nav>
-          <ul className="space-y-1">
-            <li>
-              <button
-                onClick={() => { setActiveTab("dashboard"); setSidebarOpen(false); }}
-                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                  activeTab === "dashboard"
-                    ? "bg-green-700 text-white font-medium"
-                    : "text-green-200 hover:bg-green-800"
-                }`}
-              >
-                <AdminHomeIcon />
-                Dashboard
-              </button>
-            </li>
-            <li>
-              <button
-                onClick={() => { setActiveTab("users"); setSidebarOpen(false); }}
-                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                  activeTab === "users"
-                    ? "bg-green-700 text-white font-medium"
-                    : "text-green-200 hover:bg-green-800"
-                }`}
-              >
-                <AdminUsersIcon />
-                Manage Users
-              </button>
-            </li>
-            <li>
-              <button
-                onClick={() => { setActiveTab("exercises"); setSidebarOpen(false); }}
-                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                  activeTab === "exercises"
-                    ? "bg-green-700 text-white font-medium"
-                    : "text-green-200 hover:bg-green-800"
-                }`}
-              >
-                <AdminDumbbellIcon />
-                Manage Exercises
-              </button>
-            </li>
-            <li>
-              <button
-                onClick={() => { setActiveTab("assignments"); setSidebarOpen(false); }}
-                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                  activeTab === "assignments"
-                    ? "bg-green-700 text-white font-medium"
-                    : "text-green-200 hover:bg-green-800"
-                }`}
-              >
-                <AdminAssignIcon />
-                Assign Patients
-              </button>
-            </li>
-            {demoClockOn && (
-              <li>
-                <button
-                  onClick={() => { setActiveTab("demo-clock"); setSidebarOpen(false); }}
-                  className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                    activeTab === "demo-clock"
-                      ? "bg-green-700 text-white font-medium"
-                      : "text-green-200 hover:bg-green-800"
-                  }`}
-                >
-                  Demo Clock
-                </button>
-              </li>
-            )}
-            <li>
-              <Link
-                href="/camera"
-                className="flex items-center gap-2 px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
-                onClick={() => setSidebarOpen(false)}
-              >
-                <AdminCameraIcon />
-                Camera
-              </Link>
-            </li>
-          </ul>
-        </nav>
-
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 p-4 sm:p-8 overflow-y-auto min-w-0">
-        <div className="flex justify-between items-center mb-6">
-          <button
-            className="md:hidden flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
-            onClick={() => setSidebarOpen(true)}
-          >
-            ☰ Menu
-          </button>
-          <div className="md:hidden flex-1" />
-          <div className="ml-auto flex items-center gap-3">
-            <NotificationBell />
-            <button
-              type="button"
-              onClick={async () => { await logout(); router.push("/"); }}
-              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
-            >
-              <AdminLogoutIcon />
-              Log Out
-            </button>
-          </div>
-        </div>
+    <AppShell
+      items={[
+        { key: "dashboard", label: "Dashboard", icon: <AdminHomeIcon />, active: activeTab === "dashboard", onSelect: () => setActiveTab("dashboard") },
+        { key: "users", label: "Manage Users", icon: <AdminUsersIcon />, active: activeTab === "users", onSelect: () => setActiveTab("users") },
+        { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
+        { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
+        ...(demoClockOn
+          ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }]
+          : []),
+        { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
+      ]}
+      userName={user?.name}
+      roleLabel="Admin"
+      onLogout={async () => { await logout(); router.push("/"); }}
+    >
         {activeTab === "demo-clock" && demoClockOn && (
           <DemoClockPanel />
         )}
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
-          <div>
-            <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
+          <div className={FIT_SCREEN}>
+            <PageHeading title="Dashboard" subtitle={`Welcome, ${user?.name ?? ""}.`} />
             <style>{`
               @keyframes logFadeIn {
                 from {
@@ -810,7 +701,6 @@ export default function AdminDashboard() {
                 animation: logFadeIn 0.3s ease-out forwards;
               }
             `}</style>
-            <p className="text-gray-500 mt-1 mb-6">Welcome, {user?.name}.</p>
 
             {dashboardLoading || !dashboardData ? (
               <div className="max-w-5xl">
@@ -825,23 +715,23 @@ export default function AdminDashboard() {
                 </div>
               </div>
             ) : (
-              <div className="max-w-5xl">
-                {/* KPI cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-                  <KpiCard label="Active Patients" value={dashboardData.stats.activePatients} />
-                  <KpiCard label="Active Therapists" value={dashboardData.stats.activeTherapists} />
-                  <KpiCard label="Active Assignments" value={dashboardData.stats.activeAssignments} />
-                  <KpiCard label="Total Sessions" value={dashboardData.stats.totalSessions} accent="blue" />
-                  <KpiCard label="Archived Users" value={dashboardData.stats.archivedUsers} accent="amber" />
-                  <KpiCard label="Total Exercises" value={dashboardData.stats.systemExercises + dashboardData.stats.customExercises} />
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
+                {/* KPI tiles */}
+                <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <StatTile label="Active patients" value={dashboardData.stats.activePatients} icon={Glyph.users} tone="green" />
+                  <StatTile label="Active therapists" value={dashboardData.stats.activeTherapists} icon={Glyph.user} tone="teal" />
+                  <StatTile label="Assignments" value={dashboardData.stats.activeAssignments} icon={Glyph.link} tone="lime" />
+                  <StatTile label="Total sessions" value={dashboardData.stats.totalSessions} icon={Glyph.pulse} tone="green" />
+                  <StatTile label="Archived users" value={dashboardData.stats.archivedUsers} icon={Glyph.archive} tone="amber" />
+                  <StatTile label="Total exercises" value={dashboardData.stats.systemExercises + dashboardData.stats.customExercises} icon={Glyph.dumbbell} tone="teal" />
                 </div>
 
                 {/* System Activity & Recent Sessions */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+                <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
                   {/* Activity Feed */}
-                  <div className="lg:col-span-7 bg-white rounded-2xl border border-green-100 p-6 flex flex-col min-h-[350px]">
+                  <div className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7 lg:min-h-0">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
-                      <h2 className="text-green-700 font-semibold text-lg flex items-center gap-2">
+                      <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
                         <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -857,7 +747,7 @@ export default function AdminDashboard() {
                       )}
                     </div>
 
-                    <div className="flex-1 overflow-y-auto max-h-[300px] divide-y divide-gray-50 pr-1">
+                    <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-gray-50 pr-1">
                       {dashboardData.activityLogs.length === 0 ? (
                         <p className="text-gray-400 text-sm text-center py-12">No recent system activity.</p>
                       ) : (
@@ -886,9 +776,9 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Recent Sessions */}
-                  <div className="lg:col-span-5 bg-white rounded-2xl border border-green-100 p-6 flex flex-col min-h-[350px]">
+                  <div className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5 lg:min-h-0">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
-                      <h2 className="text-green-700 font-semibold text-lg flex items-center gap-2">
+                      <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
                         <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -896,7 +786,7 @@ export default function AdminDashboard() {
                       </h2>
                     </div>
 
-                    <div className="flex-1 overflow-x-auto">
+                    <div className="min-h-0 flex-1 overflow-auto">
                       {dashboardData.recentSessions.length === 0 ? (
                         <p className="text-gray-400 text-sm text-center py-12">No patient sessions logged yet.</p>
                       ) : (
@@ -926,45 +816,24 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Quick Actions */}
-                <div className="bg-white rounded-2xl border border-green-100 p-6 animate-fade-in">
-                  <h2 className="text-green-700 font-semibold text-lg mb-4 flex items-center gap-2">
-                    <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    Quick Actions
-                  </h2>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                  {[
+                    { title: "Add New User", text: "Register a new patient or therapist", go: () => { setActiveTab("users"); setShowUserForm(true); } },
+                    { title: "Add Custom Exercise", text: "Create a custom rehabilitation exercise", go: () => { setActiveTab("exercises"); setShowExerciseForm(true); } },
+                    { title: "Assign Patients", text: "Link patients to therapists", go: () => setActiveTab("assignments") },
+                  ].map((action) => (
                     <button
-                      onClick={() => { setActiveTab("users"); setShowUserForm(true); }}
-                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
+                      key={action.title}
+                      onClick={action.go}
+                      className="flex cursor-pointer items-center justify-between rounded-xl bg-white px-4 py-3 text-left shadow-sm transition hover:bg-green-50"
                     >
-                      <div>
-                        <p className="font-semibold text-green-800 text-sm">Add New User</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Register a new patient or therapist</p>
-                      </div>
-                      <span className="text-green-700 font-bold">&rarr;</span>
+                      <span>
+                        <span className="block text-sm font-semibold text-green-800">{action.title}</span>
+                        <span className="block text-xs text-gray-500">{action.text}</span>
+                      </span>
+                      <span className="font-bold text-green-700">&rarr;</span>
                     </button>
-                    <button
-                      onClick={() => { setActiveTab("exercises"); setShowExerciseForm(true); }}
-                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
-                    >
-                      <div>
-                        <p className="font-semibold text-green-800 text-sm">Add Custom Exercise</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Create a custom rehabilitation exercise</p>
-                      </div>
-                      <span className="text-green-700 font-bold">&rarr;</span>
-                    </button>
-                    <button
-                      onClick={() => { setActiveTab("assignments"); }}
-                      className="flex items-center justify-between p-4 border border-green-100 rounded-xl hover:border-green-300 hover:bg-green-50/30 transition text-left cursor-pointer"
-                    >
-                      <div>
-                        <p className="font-semibold text-green-800 text-sm">Assign Patients</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Link patients to therapists</p>
-                      </div>
-                      <span className="text-green-700 font-bold">&rarr;</span>
-                    </button>
-                  </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -973,9 +842,9 @@ export default function AdminDashboard() {
 
         {/* Users Tab */}
         {activeTab === "users" && (
-          <div>
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-900">Manage Users</h2>
+          <div className={showUserForm || editingUserId ? "space-y-4" : FIT_SCREEN}>
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <PageHeading title="Manage Users" subtitle="Add, edit and archive patient and therapist accounts." />
               <button
                 onClick={() => {
                   if (editingUserId) {
@@ -1013,8 +882,15 @@ export default function AdminDashboard() {
               </button>
             </div>
 
+            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatTile label="Active users" value={activeUsers.length} icon={Glyph.users} tone="green" />
+              <StatTile label="Patients" value={activeUsers.filter((u) => u.role === "patient").length} icon={Glyph.user} tone="teal" />
+              <StatTile label="Therapists" value={activeUsers.filter((u) => u.role === "therapist").length} icon={Glyph.link} tone="lime" />
+              <StatTile label="Archived" value={archivedUsers.length} icon={Glyph.archive} tone="amber" />
+            </div>
+
             {showUserForm && !editingUserId && (
-              <div className="bg-white p-6 rounded shadow mb-6 text-black">
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-6 text-black">
                 <h3 className="text-xl font-semibold mb-4 text-black">Add New User</h3>
                 <form onSubmit={handleAddUser} className="space-y-4">
                   {!selectedRole ? (
@@ -1030,7 +906,7 @@ export default function AdminDashboard() {
                               setSelectedRole("patient");
                               setNewUser({ ...newUser, role: "patient" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
+                            className="w-full p-4 border-2 border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                             Patient
@@ -1041,7 +917,7 @@ export default function AdminDashboard() {
                               setSelectedRole("therapist");
                               setNewUser({ ...newUser, role: "therapist" });
                             }}
-                            className="w-full p-4 border-2 border-gray-300 rounded hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
+                            className="w-full p-4 border-2 border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition text-left font-medium text-black flex items-center gap-2"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4zm6 11h-3v3h-2v-3H8v-2h3v-3h2v3h3v2z"/></svg>
                             Therapist
@@ -1078,7 +954,7 @@ export default function AdminDashboard() {
                             type="text"
                             value={newUser.firstName || ""}
                             onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
                         </div>
@@ -1090,7 +966,7 @@ export default function AdminDashboard() {
                             type="text"
                             value={newUser.middleName || ""}
                             onChange={(e) => setNewUser({ ...newUser, middleName: e.target.value })}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
                         <div>
@@ -1101,7 +977,7 @@ export default function AdminDashboard() {
                             type="text"
                             value={newUser.lastName || ""}
                             onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
                         </div>
@@ -1119,7 +995,7 @@ export default function AdminDashboard() {
                               const dob = e.target.value;
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             max={todayKey}
                             min="1900-01-01"
                             required
@@ -1133,7 +1009,7 @@ export default function AdminDashboard() {
                             type="number"
                             value={newUser.age ?? ""}
                             readOnly
-                            className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 bg-gray-50 cursor-not-allowed"
                           />
                         </div>
                       </div>
@@ -1145,7 +1021,7 @@ export default function AdminDashboard() {
                         <select
                           value={newUser.gender || ""}
                           onChange={(e) => setNewUser({ ...newUser, gender: e.target.value })}
-                          className="w-full border border-gray-300 rounded px-3 py-2"
+                          className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           required
                         >
                           <option value="">-- Select Gender --</option>
@@ -1182,7 +1058,7 @@ export default function AdminDashboard() {
                                 value={newUser.diagnosis || ""}
                                 onChange={(e) => setNewUser({ ...newUser, diagnosis: e.target.value })}
                                 rows={2}
-                                className="w-full border border-gray-300 rounded px-3 py-2"
+                                className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                               />
                             </div>
                             <div>
@@ -1191,7 +1067,7 @@ export default function AdminDashboard() {
                                 value={newUser.condition || ""}
                                 onChange={(e) => setNewUser({ ...newUser, condition: e.target.value })}
                                 rows={2}
-                                className="w-full border border-gray-300 rounded px-3 py-2"
+                                className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                               />
                             </div>
                             <div className="sm:col-span-2">
@@ -1200,7 +1076,7 @@ export default function AdminDashboard() {
                                 value={newUser.prescription || ""}
                                 onChange={(e) => setNewUser({ ...newUser, prescription: e.target.value })}
                                 rows={3}
-                                className="w-full border border-gray-300 rounded px-3 py-2"
+                                className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                               />
                             </div>
                           </div>
@@ -1238,7 +1114,7 @@ export default function AdminDashboard() {
                               type="text"
                               value={newUser.specialty || ""}
                               onChange={(e) => setNewUser({ ...newUser, specialty: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-3 py-2"
+                              className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                               required
                             />
                           </div>
@@ -1260,7 +1136,7 @@ export default function AdminDashboard() {
 
             {/* Edit User Form */}
             {editingUserId && editingUser && (
-              <div className="bg-white p-6 rounded shadow mb-6 border-l-4 border-yellow-500 text-black">
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-6 border-l-4 border-yellow-500 text-black">
                 <h3 className="text-xl font-semibold mb-4">Edit User Details</h3>
                 <form onSubmit={handleSaveEditUser} className="space-y-4">
                   <h4 className="text-lg font-semibold flex items-center gap-2">
@@ -1283,7 +1159,7 @@ export default function AdminDashboard() {
                         onChange={(e) =>
                           setEditingUser({ ...editingUser, firstName: e.target.value })
                         }
-                        className="w-full border border-gray-300 rounded px-3 py-2"
+                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
                     </div>
                     <div>
@@ -1296,7 +1172,7 @@ export default function AdminDashboard() {
                         onChange={(e) =>
                           setEditingUser({ ...editingUser, middleName: e.target.value })
                         }
-                        className="w-full border border-gray-300 rounded px-3 py-2"
+                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
                     </div>
                     <div>
@@ -1309,7 +1185,7 @@ export default function AdminDashboard() {
                         onChange={(e) =>
                           setEditingUser({ ...editingUser, lastName: e.target.value })
                         }
-                        className="w-full border border-gray-300 rounded px-3 py-2"
+                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
                     </div>
                   </div>
@@ -1326,7 +1202,7 @@ export default function AdminDashboard() {
                           const dob = e.target.value;
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
-                        className="w-full border border-gray-300 rounded px-3 py-2"
+                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                         max={todayKey}
                         min="1900-01-01"
                       />
@@ -1339,7 +1215,7 @@ export default function AdminDashboard() {
                         type="number"
                         value={editingUser.age ?? ""}
                         readOnly
-                        className="w-full border border-gray-300 rounded px-3 py-2 bg-gray-50 cursor-not-allowed"
+                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 bg-gray-50 cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -1353,7 +1229,7 @@ export default function AdminDashboard() {
                       onChange={(e) =>
                         setEditingUser({ ...editingUser, gender: e.target.value })
                       }
-                      className="w-full border border-gray-300 rounded px-3 py-2"
+                      className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                     >
                       <option value="">-- Select Gender --</option>
                       <option value="male">Male</option>
@@ -1388,7 +1264,7 @@ export default function AdminDashboard() {
                             value={editingUser.diagnosis || ""}
                             onChange={(e) => setEditingUser({ ...editingUser, diagnosis: e.target.value })}
                             rows={2}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
                         <div>
@@ -1397,7 +1273,7 @@ export default function AdminDashboard() {
                             value={editingUser.condition || ""}
                             onChange={(e) => setEditingUser({ ...editingUser, condition: e.target.value })}
                             rows={2}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
                         <div className="sm:col-span-2">
@@ -1406,7 +1282,7 @@ export default function AdminDashboard() {
                             value={editingUser.prescription || ""}
                             onChange={(e) => setEditingUser({ ...editingUser, prescription: e.target.value })}
                             rows={3}
-                            className="w-full border border-gray-300 rounded px-3 py-2"
+                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
                       </div>
@@ -1446,7 +1322,7 @@ export default function AdminDashboard() {
                           onChange={(e) =>
                             setEditingUser({ ...editingUser, specialty: e.target.value })
                           }
-                          className="w-full border border-gray-300 rounded px-3 py-2"
+                          className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                         />
                       </div>
                     </>
@@ -1463,7 +1339,7 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={handleCancelEdit}
-                      className="flex-1 px-4 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded transition"
+                      className="flex-1 px-4 py-2 bg-gray-400 hover:bg-gray-500 text-white rounded-lg transition"
                     >
                       Cancel
                     </button>
@@ -1807,39 +1683,40 @@ export default function AdminDashboard() {
               </>
             )}
 
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]">
             {/* Users List — Active */}
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+            <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+              <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>
                 Active Users
                 <span className="ml-1 text-sm font-normal text-gray-500">({activeUsers.length})</span>
               </h3>
-              <div className="bg-white rounded shadow overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="w-full min-w-[600px]">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Name</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Role</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Email</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Role</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
+                  <tbody className="divide-y divide-gray-50">
                     {activeUsers.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">No active users.</td>
                       </tr>
                     ) : (
                       activeUsers.map((u) => (
-                        <tr key={u.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-sm text-gray-900">{u.name}</td>
-                          <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
-                          <td className="px-6 py-4 text-sm">
+                        <tr key={u.id} className="transition hover:bg-green-50/40">
+                          <td className="px-5 py-3 text-sm text-gray-900">{u.name}</td>
+                          <td className="px-5 py-3 text-sm text-gray-600">{u.email}</td>
+                          <td className="px-5 py-3 text-sm">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                               {u.role}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-5 py-3 text-sm">
                             <div className="flex gap-2">
                               <button
                                 onClick={() => handleEditUser(u)}
@@ -1864,24 +1741,24 @@ export default function AdminDashboard() {
             </div>
 
             {/* Users List — Archived */}
-            <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+            <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+              <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                 Archived Users
                 <span className="ml-1 text-sm font-normal text-gray-500">({archivedUsers.length})</span>
               </h3>
-              <div className="bg-white rounded shadow overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="w-full min-w-[600px]">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Name</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Role</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Archived On</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Email</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Role</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Archived On</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
+                  <tbody className="divide-y divide-gray-50">
                     {archivedUsers.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="px-6 py-6 text-center text-sm text-gray-500">No archived users.</td>
@@ -1889,17 +1766,17 @@ export default function AdminDashboard() {
                     ) : (
                       archivedUsers.map((u) => (
                         <tr key={u.id} className="hover:bg-amber-50 opacity-80">
-                          <td className="px-6 py-4 text-sm text-gray-700">{u.name}</td>
-                          <td className="px-6 py-4 text-sm text-gray-500">{u.email}</td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-5 py-3 text-sm text-gray-700">{u.name}</td>
+                          <td className="px-5 py-3 text-sm text-gray-500">{u.email}</td>
+                          <td className="px-5 py-3 text-sm">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
                               {u.role}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
+                          <td className="px-5 py-3 text-sm text-gray-500">
                             {u.archivedAt ? new Date(u.archivedAt).toLocaleDateString() : "—"}
                           </td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-5 py-3 text-sm">
                             <div className="flex gap-2">
                               <button
                                 onClick={() => handleRestoreUser(u)}
@@ -1922,26 +1799,33 @@ export default function AdminDashboard() {
                 </table>
               </div>
             </div>
+            </div>
           </div>
         )}
 
 
         {/* Exercises Tab */}
         {activeTab === "exercises" && (
-          <div>
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-900">Manage Exercises</h2>
+          <div className={showExerciseForm ? "space-y-4" : FIT_SCREEN}>
+            <div className="flex shrink-0 items-center justify-between gap-3">
+              <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage custom ones." />
               <button
                 onClick={() => setShowExerciseForm(!showExerciseForm)}
-                className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
+                className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg transition"
               >
                 {showExerciseForm ? "Cancel" : "+ Add Exercise"}
               </button>
             </div>
 
+            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-3">
+              <StatTile label="System exercises" value={exercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
+              <StatTile label="Custom exercises" value={exercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
+              <StatTile label="Total exercises" value={exercises.length} icon={Glyph.pulse} tone="lime" />
+            </div>
+
             {showExerciseForm && (
-              <div className="bg-white p-6 rounded shadow mb-6">
-                <h3 className="text-xl font-semibold text-gray-900 mb-4">Add New Exercise</h3>
+              <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Add New Exercise</h3>
                 <form onSubmit={handleAddExercise} className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1953,7 +1837,7 @@ export default function AdminDashboard() {
                       onChange={(e) =>
                         setNewExercise({ ...newExercise, name: e.target.value })
                       }
-                      className="w-full border border-gray-300 rounded px-3 py-2 bg-white text-black"
+                      className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 bg-white text-black"
                       required
                     />
                   </div>
@@ -1967,7 +1851,7 @@ export default function AdminDashboard() {
                       onChange={(e) =>
                         setNewExercise({ ...newExercise, description: e.target.value })
                       }
-                      className="w-full border border-gray-300 rounded px-3 py-2 bg-white text-black"
+                      className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 bg-white text-black"
                       rows={3}
                       required
                     />
@@ -1975,7 +1859,7 @@ export default function AdminDashboard() {
 
                   <button
                     type="submit"
-                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded transition"
+                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg transition"
                   >
                     Add Exercise
                   </button>
@@ -1984,7 +1868,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Search bar */}
-            <div className="mb-6">
+            <div className="shrink-0">
               <div className="relative w-full max-w-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
@@ -1993,94 +1877,90 @@ export default function AdminDashboard() {
                   value={exerciseQuery}
                   onChange={(e) => setExerciseQuery(e.target.value)}
                   placeholder="Search exercises"
-                  className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
+                  className="w-full rounded-lg border border-green-200 bg-white py-2 pl-10 pr-4 text-sm text-black outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
                 />
               </div>
             </div>
 
             {/* Exercises List */}
-            <div className="grid gap-6">
-              {exercises.length === 0 ? (
-                <div className="text-gray-500">No exercises found.</div>
-              ) : (
-                <>
-                  {systemExercises.length > 0 && (
-                    <section>
-                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                        System Exercises ({systemExercises.length})
-                      </h3>
-                      <div className="grid gap-4">
-                        {systemExercises.map((ex) => (
-                          <AdminExerciseRow
-                            key={ex.id}
-                            exercise={ex}
-                            isEditing={editingId === ex.id}
-                            editDesc={editDesc}
-                            saving={saving}
-                            onEdit={() => startEdit(ex)}
-                            onCancel={cancelEdit}
-                            onSave={() => saveExercise(ex.id)}
-                            onEditDesc={setEditDesc}
-                            onView={() => setViewingExercise(ex)}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {customExercises.length > 0 ? (
-                    <section className="mt-4">
-                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                        Custom Exercises ({customExercises.length})
-                      </h3>
-                      <div className="grid gap-4">
-                        {customExercises.map((ex) => (
-                          <AdminExerciseRow
-                            key={ex.id}
-                            exercise={ex}
-                            isEditing={editingId === ex.id}
-                            editDesc={editDesc}
-                            saving={saving}
-                            onEdit={() => startEdit(ex)}
-                            onCancel={cancelEdit}
-                            onSave={() => saveExercise(ex.id)}
-                            onEditDesc={setEditDesc}
-                            onView={() => setViewingExercise(ex)}
-                            onDelete={() => handleDeleteClick(ex.id, ex.name)}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ) : exerciseQuery === "" ? (
-                    <section className="mt-4">
-                      <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                        Custom Exercises (0)
-                      </h3>
-                      <p className="text-gray-400 text-sm">No custom exercises yet.</p>
-                    </section>
-                  ) : null}
-                </>
-              )}
-            </div>
+            {exercises.length === 0 ? (
+              <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">No exercises found.</div>
+            ) : (
+              <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+                <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+                  <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">System exercises ({systemExercises.length})</h3>
+                  <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
+                    {systemExercises.length === 0 && <p className="py-6 text-center text-sm text-gray-400">No system exercises match your search.</p>}
+                    {systemExercises.map((ex) => (
+                      <AdminExerciseRow
+                        key={ex.id}
+                        exercise={ex}
+                        isEditing={editingId === ex.id}
+                        editDesc={editDesc}
+                        saving={saving}
+                        onEdit={() => startEdit(ex)}
+                        onCancel={cancelEdit}
+                        onSave={() => saveExercise(ex.id)}
+                        onEditDesc={setEditDesc}
+                        onView={() => setViewingExercise(ex)}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+                  <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">Custom exercises ({customExercises.length})</h3>
+                  <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
+                    {customExercises.length === 0 && (
+                      <p className="py-6 text-center text-sm text-gray-400">
+                        {exerciseQuery === "" ? "No custom exercises yet." : "No custom exercises match your search."}
+                      </p>
+                    )}
+                    {customExercises.map((ex) => (
+                      <AdminExerciseRow
+                        key={ex.id}
+                        exercise={ex}
+                        isEditing={editingId === ex.id}
+                        editDesc={editDesc}
+                        saving={saving}
+                        onEdit={() => startEdit(ex)}
+                        onCancel={cancelEdit}
+                        onSave={() => saveExercise(ex.id)}
+                        onEditDesc={setEditDesc}
+                        onView={() => setViewingExercise(ex)}
+                        onDelete={() => handleDeleteClick(ex.id, ex.name)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Assignments Tab */}
         {activeTab === "assignments" && (
           <div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-6">Assign Patients to Therapists</h2>
+            <PageHeading title="Assign Patients to Therapists" subtitle="Link each patient to the therapist who will monitor them." />
+            <div className="h-4" />
+
+            <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatTile label="Patients" value={patients.length} icon={Glyph.user} tone="green" />
+              <StatTile label="Therapists" value={therapists.length} icon={Glyph.users} tone="teal" />
+              <StatTile label="Unassigned" value={unassignedPatients.length} icon={Glyph.alert} tone={unassignedPatients.length > 0 ? "amber" : "green"} />
+              <StatTile label="Assigned" value={assignedPatients.length} icon={Glyph.link} tone="lime" />
+            </div>
 
             {therapists.length === 0 ? (
-              <div className="bg-yellow-50 border border-yellow-200 p-4 rounded text-yellow-800 mb-6">
+              <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg text-yellow-800 mb-6">
                 No therapists available. Please add therapists first.
               </div>
             ) : null}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
               {/* Unassigned Patients */}
-              <div>
-                <h3 className="text-2xl font-semibold text-gray-900 mb-4">Unassigned Patients ({unassignedPatients.length})</h3>
-                <div className="bg-white rounded shadow p-6 space-y-3 max-h-96 overflow-y-auto">
+              <div className="lg:col-span-5">
+                <h3 className="text-base font-semibold text-gray-900 mb-3">Unassigned Patients ({unassignedPatients.length})</h3>
+                <div className="bg-white rounded-xl shadow-sm p-6 space-y-3 max-h-96 overflow-y-auto">
                   {unassignedPatients.length === 0 ? (
                     <p className="text-gray-500">All patients are assigned to therapists.</p>
                   ) : (
@@ -2090,7 +1970,7 @@ export default function AdminDashboard() {
                         onClick={() => setSelectedPatientId(patient.id)}
                         className={`p-3 rounded cursor-pointer border-2 transition ${
                           selectedPatientId === patient.id
-                            ? "border-blue-500 bg-blue-50"
+                            ? "border-green-500 bg-green-50"
                             : "border-gray-200 bg-gray-50 hover:bg-gray-100"
                         }`}
                       >
@@ -2103,12 +1983,12 @@ export default function AdminDashboard() {
               </div>
 
               {/* Therapist Selection and Assignment */}
-              <div>
-                <h3 className="text-2xl font-semibold text-gray-900 mb-4">Select Therapist</h3>
-                <div className="bg-white rounded shadow p-6 space-y-4">
+              <div className="lg:col-span-7">
+                <h3 className="text-base font-semibold text-gray-900 mb-3">Select Therapist</h3>
+                <div className="bg-white rounded-xl shadow-sm p-6 space-y-4">
                   {selectedPatientId ? (
                     <>
-                      <div className="p-3 bg-blue-50 border border-blue-200 rounded">
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                         <div className="text-sm text-gray-600">Selected Patient:</div>
                         <div className="font-semibold text-gray-900">
                           {patients.find((p) => p.id === selectedPatientId)?.name}
@@ -2121,7 +2001,7 @@ export default function AdminDashboard() {
                         <select
                           value={selectedTherapistId || ""}
                           onChange={(e) => setSelectedTherapistId(e.target.value || null)}
-                          className="w-full border border-gray-300 rounded px-3 py-2 mb-4 text-black bg-white"
+                          className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 mb-4 text-black bg-white"
                         >
                           <option value="">-- Select a Therapist --</option>
                           {therapists.map((therapist) => (
@@ -2133,7 +2013,7 @@ export default function AdminDashboard() {
                         <button
                           onClick={handleAssignPatient}
                           disabled={!selectedTherapistId}
-                          className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white rounded transition font-medium"
+                          className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white rounded-lg transition font-medium"
                         >
                           Assign Patient
                         </button>
@@ -2147,21 +2027,21 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assigned Patients */}
-            <div className="mt-8">
-              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+            <div className="mt-6">
+              <h3 className="text-base font-semibold text-gray-900 mb-3">
                 Currently Assigned Patients ({assignedPatients.length})
               </h3>
-              <div className="bg-white rounded shadow overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="w-full min-w-[600px]">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Email</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Assigned Therapist</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Patient</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Email</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Assigned Therapist</th>
+                      <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
+                  <tbody className="divide-y divide-gray-50">
                     {assignedPatients.length === 0 ? (
                       <tr>
                         <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">
@@ -2171,12 +2051,12 @@ export default function AdminDashboard() {
                     ) : (
                       assignedPatients.map((patient) => (
                         <tr key={patient.id}>
-                          <td className="px-6 py-4 text-sm font-medium text-gray-900">{patient.name}</td>
-                          <td className="px-6 py-4 text-sm text-gray-600">{patient.email}</td>
-                          <td className="px-6 py-4 text-sm text-gray-900">
+                          <td className="px-5 py-3 text-sm font-medium text-gray-900">{patient.name}</td>
+                          <td className="px-5 py-3 text-sm text-gray-600">{patient.email}</td>
+                          <td className="px-5 py-3 text-sm text-gray-900">
                             {patient.therapistId ? getTherapistName(patient.therapistId) : "Unassigned"}
                           </td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-5 py-3 text-sm">
                             <button
                               onClick={() => handleUnassignPatient(patient.id)}
                               className="text-red-600 hover:text-red-800 font-medium"
@@ -2193,28 +2073,28 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assignment History */}
-            <div className="mt-8">
-              <h3 className="text-2xl font-semibold text-gray-900 mb-4">
+            <div className="mt-6">
+              <h3 className="text-base font-semibold text-gray-900 mb-3">
                 Assignment History ({assignHistory.length})
               </h3>
-              <div className="bg-white rounded shadow overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 {assignHistory.length === 0 ? (
                   <p className="px-6 py-6 text-sm text-gray-500">No assignment actions yet this session.</p>
                 ) : (
                   <table className="w-full min-w-[520px]">
-                    <thead className="bg-gray-50 border-b">
+                    <thead className="sticky top-0 border-b border-gray-100 bg-white">
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Action</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Patient</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Therapist</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Date</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">Time</th>
+                        <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Action</th>
+                        <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Patient</th>
+                        <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Therapist</th>
+                        <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Date</th>
+                        <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Time</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
+                    <tbody className="divide-y divide-gray-50">
                       {assignHistory.map((entry) => (
                         <tr key={entry.id}>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-5 py-3 text-sm">
                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                               entry.action === "assigned"
                                 ? "bg-green-100 text-green-700"
@@ -2223,12 +2103,12 @@ export default function AdminDashboard() {
                               {entry.action === "assigned" ? "Assigned" : "Unassigned"}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-900">{entry.patientName}</td>
-                          <td className="px-6 py-4 text-sm text-gray-600">{entry.therapistName}</td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
+                          <td className="px-5 py-3 text-sm text-gray-900">{entry.patientName}</td>
+                          <td className="px-5 py-3 text-sm text-gray-600">{entry.therapistName}</td>
+                          <td className="px-5 py-3 text-sm text-gray-600">
                             {entry.timestamp.toLocaleDateString()}
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
+                          <td className="px-5 py-3 text-sm text-gray-600">
                             {entry.timestamp.toLocaleTimeString()}
                           </td>
                         </tr>
@@ -2240,7 +2120,6 @@ export default function AdminDashboard() {
             </div>
           </div>
         )}
-      </main>
 
       {/* Status Modal */}
       {showStatusModal && (
@@ -2356,7 +2235,7 @@ export default function AdminDashboard() {
           </div>
         </>
       )}
-    </div>
+    </AppShell>
   );
 }
 
@@ -2384,7 +2263,7 @@ function AdminExerciseRow({
             value={editDesc}
             onChange={(e) => onEditDesc(e.target.value)}
             placeholder="Description"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
+            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
             rows={3}
           />
           <div className="flex gap-2">
@@ -2513,14 +2392,14 @@ function PatientAttachmentList({ patientId }: { patientId: string }) {
                     type="button"
                     onClick={() => void remove(file)}
                     disabled={deletingId === file.id}
-                    className="rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                    className="rounded-lg bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
                   >
                     {deletingId === file.id ? "Deleting…" : "Delete"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmId(null)}
-                    className="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+                    className="rounded-lg border border-gray-300 px-2 py-1 hover:bg-gray-50"
                   >
                     Cancel
                   </button>
@@ -2673,8 +2552,8 @@ function DemoClockPanel() {
   };
 
   return (
-    <section className="max-w-2xl rounded-xl border border-green-100 bg-white p-6">
-      <h1 className="text-2xl font-bold text-green-800">Demo Clock</h1>
+    <section className="max-w-2xl rounded-xl bg-white p-6 shadow-sm">
+      <h1 className="text-2xl font-bold text-gray-900">Demo Clock</h1>
       <p className="mt-1 text-sm text-gray-600">
         Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.
         Sessions recorded while a demo date is set are saved with that date, so use a demo account.
@@ -2788,31 +2667,11 @@ function AdminCameraIcon() {
   );
 }
 
-function AdminLogoutIcon() {
+function AdminClockGlyph() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+      <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/>
     </svg>
   );
 }
 
-function KpiCard({
-  label,
-  value,
-  accent = "green",
-}: {
-  label: string;
-  value: number;
-  accent?: "green" | "amber" | "blue";
-}) {
-  const valueColor =
-    accent === "amber" ? "text-amber-600"
-    : accent === "blue" ? "text-blue-600"
-    : "text-green-700";
-  return (
-    <div className="bg-white rounded-2xl border border-green-100 p-5">
-      <p className={`text-3xl font-bold ${valueColor}`}>{value}</p>
-      <p className="text-xs text-gray-500 mt-1">{label}</p>
-    </div>
-  );
-}

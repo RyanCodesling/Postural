@@ -156,11 +156,11 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
       />
 
       {/* Frosted glass card */}
-      <div className="relative z-10 flex flex-col items-center gap-6 px-10 py-10 rounded-3xl bg-green-800/55 backdrop-blur-sm border border-green-700/50 shadow-2xl text-center max-w-md w-11/12">
+      <div className="relative z-10 flex flex-col items-center gap-6 px-10 py-10 rounded-2xl bg-white shadow-xl text-center max-w-md w-11/12">
         {/* Header */}
         <div className="space-y-1 w-full">
-          <h2 className="text-2xl font-bold text-white tracking-tight">Change Password</h2>
-          <p className="text-sm text-white/70">Verify your identity to set a new password</p>
+          <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Change Password</h2>
+          <p className="text-sm text-gray-600">Verify your identity to set a new password</p>
         </div>
 
         {/* Step indicator */}
@@ -170,10 +170,10 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition ${
                   step > s
-                    ? "bg-green-400 text-green-900"
+                    ? "bg-green-500 text-white"
                     : step === s
-                    ? "bg-white text-green-800"
-                    : "bg-white/20 text-white/50"
+                    ? "bg-green-600 text-white"
+                    : "bg-green-50 text-green-700"
                 }`}
               >
                 {step > s ? (
@@ -191,7 +191,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
               {i < 2 && (
                 <div
                   className={`w-12 h-0.5 ${
-                    step > s ? "bg-green-400" : "bg-white/20"
+                    step > s ? "bg-green-500" : "bg-green-100"
                   }`}
                 />
               )}
@@ -201,14 +201,14 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
 
         {/* Success message */}
         {success && (
-          <p className="w-full text-sm px-3 py-2 rounded-lg bg-green-500/20 border border-green-400/40 text-green-200">
+          <p className="w-full text-sm px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-800">
             {success}
           </p>
         )}
 
         {/* Error message */}
         {error && (
-          <p className="w-full text-sm px-3 py-2 rounded-lg bg-red-500/20 border border-red-400/40 text-red-200">
+          <p className="w-full text-sm px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700">
             {error}
           </p>
         )}
@@ -217,14 +217,14 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
         {step === 1 && !success && (
           <div className="w-full flex flex-col gap-4">
             <div className="text-left">
-              <label className="block text-xs text-white/80 mb-1">Email Address</label>
+              <label className="block text-xs text-gray-700 mb-1">Email Address</label>
               <input
                 type="email"
                 value={email}
                 readOnly
-                className="w-full bg-white/10 border border-green-600/50 text-white rounded-xl px-4 py-2.5 text-sm cursor-not-allowed opacity-80"
+                className="w-full bg-white border border-green-200 text-gray-900 rounded-xl px-4 py-2.5 text-sm cursor-not-allowed opacity-80"
               />
-              <p className="text-xs text-white/50 mt-1">
+              <p className="text-xs text-gray-500 mt-1">
                 An OTP will be sent to verify your identity.
               </p>
             </div>
@@ -233,7 +233,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-2.5 rounded-xl border border-white/30 text-white text-sm font-medium hover:bg-white/10 transition"
+                className="flex-1 py-2.5 rounded-xl border border-green-200 text-green-800 text-sm font-medium hover:bg-green-50 transition"
               >
                 Cancel
               </button>
@@ -241,7 +241,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
                 type="button"
                 onClick={handleSendOTP}
                 disabled={loading}
-                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-60 text-white text-sm font-semibold shadow-lg transition"
+                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-semibold shadow-lg transition"
               >
                 {loading ? "Sending..." : "Send OTP"}
               </button>
@@ -252,8 +252,8 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
         {/* Step 2: OTP */}
         {step === 2 && !success && (
           <div className="w-full flex flex-col gap-4">
-            <p className="text-sm text-white/80 text-left">
-              We&apos;ve sent a 6-digit code to <strong className="text-white">{email}</strong>
+            <p className="text-sm text-gray-700 text-left">
+              We&apos;ve sent a 6-digit code to <strong className="text-gray-900">{email}</strong>
             </p>
 
             <div className="flex justify-center gap-2" onPaste={handleOtpPaste}>
@@ -267,23 +267,23 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
                   value={digit}
                   onChange={(e) => handleOtpChange(i, e.target.value)}
                   onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                  className="w-11 h-13 text-center text-xl font-bold bg-white/10 border border-green-600/50 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
+                  className="w-11 h-13 text-center text-xl font-bold bg-white border border-green-200 text-gray-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
                 />
               ))}
             </div>
 
             <div className="text-center text-sm">
               {countdown > 0 ? (
-                <span className="text-white/60">
+                <span className="text-gray-600">
                   Code expires in{" "}
-                  <span className="font-semibold text-green-300">{formatTime(countdown)}</span>
+                  <span className="font-semibold text-green-700">{formatTime(countdown)}</span>
                 </span>
               ) : (
                 <button
                   type="button"
                   onClick={handleResendOTP}
                   disabled={loading}
-                  className="text-green-300 hover:text-white font-medium underline underline-offset-2 transition"
+                  className="text-green-700 hover:text-green-900 font-medium underline underline-offset-2 transition"
                 >
                   Resend OTP
                 </button>
@@ -294,7 +294,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-2.5 rounded-xl border border-white/30 text-white text-sm font-medium hover:bg-white/10 transition"
+                className="flex-1 py-2.5 rounded-xl border border-green-200 text-green-800 text-sm font-medium hover:bg-green-50 transition"
               >
                 Cancel
               </button>
@@ -302,7 +302,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
                 type="button"
                 onClick={handleVerifyOTP}
                 disabled={loading}
-                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-60 text-white text-sm font-semibold shadow-lg transition"
+                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-semibold shadow-lg transition"
               >
                 {loading ? "Verifying..." : "Verify OTP"}
               </button>
@@ -314,36 +314,36 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
         {step === 3 && !success && (
           <div className="w-full flex flex-col gap-4">
             <div className="relative text-left">
-              <label className="block text-xs text-white/80 mb-1">New Password</label>
+              <label className="block text-xs text-gray-700 mb-1">New Password</label>
               <input
                 type={showNewPassword ? "text" : "password"}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full bg-white/10 border border-green-600/50 text-white rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
+                className="w-full bg-white border border-green-200 text-gray-900 rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowNewPassword(!showNewPassword)}
-                className="absolute right-3 top-7 text-white/70 hover:text-white transition"
+                className="absolute right-3 top-7 text-gray-500 hover:text-green-700 transition"
               >
                 {showNewPassword ? "👁️" : "👁️‍🗨️"}
               </button>
             </div>
 
             <div className="relative text-left">
-              <label className="block text-xs text-white/80 mb-1">Confirm Password</label>
+              <label className="block text-xs text-gray-700 mb-1">Confirm Password</label>
               <input
                 type={showConfirmPassword ? "text" : "password"}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full bg-white/10 border border-green-600/50 text-white rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
+                className="w-full bg-white border border-green-200 text-gray-900 rounded-xl px-4 py-2.5 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute right-3 top-7 text-white/70 hover:text-white transition"
+                className="absolute right-3 top-7 text-gray-500 hover:text-green-700 transition"
               >
                 {showConfirmPassword ? "👁️" : "👁️‍🗨️"}
               </button>
@@ -353,7 +353,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-2.5 rounded-xl border border-white/30 text-white text-sm font-medium hover:bg-white/10 transition"
+                className="flex-1 py-2.5 rounded-xl border border-green-200 text-green-800 text-sm font-medium hover:bg-green-50 transition"
               >
                 Cancel
               </button>
@@ -361,7 +361,7 @@ export default function ChangePasswordModal({ email, onClose }: ChangePasswordMo
                 type="button"
                 onClick={handleResetPassword}
                 disabled={loading}
-                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-60 text-white text-sm font-semibold shadow-lg transition"
+                className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-semibold shadow-lg transition"
               >
                 {loading ? "Resetting..." : "Change Password"}
               </button>

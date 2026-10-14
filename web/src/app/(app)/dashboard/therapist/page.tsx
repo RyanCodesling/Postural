@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { SkeletonBar, SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
+import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../_components/DashboardKit";
 
 interface RosterPatient {
   id: string;
@@ -81,59 +82,52 @@ export default function TherapistDashboardPage() {
         p.painStoppedCount > 0),
   ).length;
 
+  const attention = patients.filter((p) => {
+    const label = rosterStatus(p).label;
+    return label === "Needs attention" || label === "Pain follow-up";
+  });
+
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
-      <p className="text-gray-500 mt-1 mb-6">Welcome, {user?.name}.</p>
+    <div className={FIT_SCREEN}>
+      <PageHeading title="Dashboard" subtitle={`Welcome, ${user?.name ?? ""}.`} />
 
       {error && (
-        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+        <div className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
           Couldn&apos;t load the dashboard rollup. Check that the session tables exist and refresh.
         </div>
       )}
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-        <KpiCard label="Patients" value={patients.length} />
-        <KpiCard label="Sessions this week" value={sessionsThisWeek} />
-        <KpiCard label="Programs" value={programCount} />
-        <KpiCard
-          label="No exercises yet"
-          value={noExercises}
-          accent={noExercises > 0 ? "blue" : "green"}
-        />
-        <KpiCard
-          label="Needs attention"
-          value={needsAttention}
-          accent={needsAttention > 0 ? "amber" : "green"}
-        />
+      <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <StatTile label="Patients" value={patients.length} icon={Glyph.users} tone="green" />
+        <StatTile label="Sessions this week" value={sessionsThisWeek} icon={Glyph.pulse} tone="teal" />
+        <StatTile label="Programs" value={programCount} icon={Glyph.list} tone="lime" />
+        <StatTile label="No exercises yet" value={noExercises} icon={Glyph.dumbbell} tone={noExercises > 0 ? "teal" : "green"} />
+        <StatTile label="Needs attention" value={needsAttention} icon={Glyph.alert} tone={needsAttention > 0 ? "amber" : "green"} />
       </div>
 
-      {/* Patient roster */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-green-700 font-semibold text-lg">Patients</h2>
-          <Link
-            href="/dashboard/therapist/patients"
-            className="text-sm text-green-700 hover:underline"
-          >
-            Manage patients →
-          </Link>
-        </div>
-
-        {patients.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-8">
-            No patients assigned yet. The admin assigns patients to you.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+        <Panel
+          className="lg:col-span-8"
+          title="Patients"
+          right={
+            <Link href="/dashboard/therapist/patients" className="text-sm text-green-700 hover:underline">
+              Manage patients →
+            </Link>
+          }
+          scroll
+        >
+          {patients.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-400">
+              No patients assigned yet. The admin assigns patients to you.
+            </p>
+          ) : (
             <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+              <thead className="sticky top-0 bg-white">
+                <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
                   <th className="py-2 pr-4 font-medium">Patient</th>
-                  <th className="py-2 px-4 font-medium">Last active</th>
-                  <th className="py-2 px-4 font-medium">This week</th>
-                  <th className="py-2 px-4 font-medium">Progress</th>
+                  <th className="px-4 py-2 font-medium">Last active</th>
+                  <th className="px-4 py-2 font-medium">This week</th>
+                  <th className="px-4 py-2 font-medium">Progress</th>
                   <th className="py-2 pl-4 font-medium">Status</th>
                 </tr>
               </thead>
@@ -141,39 +135,21 @@ export default function TherapistDashboardPage() {
                 {patients.map((p) => {
                   const status = rosterStatus(p);
                   return (
-                    <tr
-                      key={p.id}
-                      className="border-b border-gray-50 hover:bg-green-50/40 transition"
-                    >
-                      <td className="py-3 pr-4">
-                        <Link
-                          href={`/dashboard/therapist/patients/${p.id}`}
-                          className="font-semibold text-green-700 hover:underline"
-                        >
+                    <tr key={p.id} className="border-b border-gray-50 transition hover:bg-green-50/40">
+                      <td className="py-2.5 pr-4">
+                        <Link href={`/dashboard/therapist/patients/${p.id}`} className="font-semibold text-green-700 hover:underline">
                           {p.name}
                         </Link>
                       </td>
-                      <td className="py-3 px-4 text-gray-600 whitespace-nowrap">
-                        {fmtLastActive(p.lastSessionAt)}
-                      </td>
-                      <td className="py-3 px-4 text-gray-600">{p.sessionsThisWeek}</td>
-                      <td className="py-3 px-4 text-gray-600">
+                      <td className="whitespace-nowrap px-4 py-2.5 text-gray-600">{fmtLastActive(p.lastSessionAt)}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{p.sessionsThisWeek}</td>
+                      <td className="px-4 py-2.5 text-gray-600">
                         {p.dueCount > 0 ? `${p.completedCount}/${p.dueCount}` : "—"}
-                        {p.missedCount > 0 && (
-                          <span className="ml-2 text-xs text-amber-600">
-                            {p.missedCount} missed
-                          </span>
-                        )}
-                        {p.painStoppedCount > 0 && (
-                          <span className="ml-2 text-xs font-medium text-red-600">
-                            {p.painStoppedCount} pain stop
-                          </span>
-                        )}
+                        {p.missedCount > 0 && <span className="ml-2 text-xs text-amber-600">{p.missedCount} missed</span>}
+                        {p.painStoppedCount > 0 && <span className="ml-2 text-xs font-medium text-red-600">{p.painStoppedCount} pain stop</span>}
                       </td>
-                      <td className="py-3 pl-4">
-                        <span
-                          className={`inline-block text-xs px-3 py-1 rounded-full font-medium whitespace-nowrap ${status.classes}`}
-                        >
+                      <td className="py-2.5 pl-4">
+                        <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${status.classes}`}>
                           {status.label}
                         </span>
                       </td>
@@ -182,8 +158,60 @@ export default function TherapistDashboardPage() {
                 })}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </Panel>
+
+        <div className="flex min-h-0 flex-col gap-4 lg:col-span-4">
+          <Panel className="flex-1" title="Needs attention" scroll>
+            {attention.length === 0 ? (
+              <p className="py-6 text-center text-sm text-gray-400">Everyone is on track.</p>
+            ) : (
+              <ul className="divide-y divide-gray-50">
+                {attention.map((p) => {
+                  const reason =
+                    p.painStoppedCount > 0
+                      ? `${p.painStoppedCount} pain stop${p.painStoppedCount === 1 ? "" : "s"} to review`
+                      : p.missedCount > 0
+                        ? `${p.missedCount} missed exercise${p.missedCount === 1 ? "" : "s"}`
+                        : "No session this week";
+                  return (
+                    <li key={p.id}>
+                      <Link
+                        href={`/dashboard/therapist/patients/${p.id}`}
+                        className="flex items-center justify-between gap-3 py-2.5 hover:bg-green-50/40"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-gray-900">{p.name}</span>
+                          <span className="block truncate text-xs text-gray-500">{reason}</span>
+                        </span>
+                        <span className="text-green-700">›</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Panel>
+
+          <Panel className="shrink-0" title="Quick actions">
+            <div className="grid gap-2">
+              {[
+                { href: "/dashboard/therapist/assign", label: "Assign exercise" },
+                { href: "/dashboard/therapist/exercises", label: "Manage exercises" },
+                { href: "/dashboard/therapist/programs", label: "Exercise programs" },
+              ].map((action) => (
+                <Link
+                  key={action.href}
+                  href={action.href}
+                  className="flex items-center justify-between rounded-lg border border-green-100 px-3 py-2 text-sm font-medium text-green-800 transition hover:bg-green-50"
+                >
+                  {action.label}
+                  <span>→</span>
+                </Link>
+              ))}
+            </div>
+          </Panel>
+        </div>
       </div>
     </div>
   );
@@ -216,25 +244,4 @@ function fmtLastActive(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function KpiCard({
-  label,
-  value,
-  accent = "green",
-}: {
-  label: string;
-  value: number;
-  accent?: "green" | "amber" | "blue";
-}) {
-  const valueColor =
-    accent === "amber" ? "text-amber-600"
-    : accent === "blue" ? "text-blue-600"
-    : "text-green-700";
-  return (
-    <div className="bg-white rounded-2xl border border-green-100 p-5">
-      <p className={`text-3xl font-bold ${valueColor}`}>{value}</p>
-      <p className="text-xs text-gray-500 mt-1">{label}</p>
-    </div>
-  );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../../_components/DashboardKit";
 
 interface Exercise {
   id: string;
@@ -131,54 +132,54 @@ export default function ManageExercisesPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Manage Exercises</h1>
-          <p className="text-gray-600 mt-1">View built-in exercises and manage your manual custom tasks.</p>
+    <div className={FIT_SCREEN}>
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+        <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage your manual custom tasks." />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-64">
+            <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+            </svg>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search exercises"
+              className="w-full rounded-lg border border-green-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+            />
+          </div>
+          <button
+            onClick={loadData}
+            className="flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800"
+          >
+            <RefreshIcon />
+            Refresh
+          </button>
         </div>
-        <button
-          onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded text-sm font-medium transition"
-        >
-          <RefreshIcon />
-          Refresh
-        </button>
       </div>
 
       {actionError && (
-        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="shrink-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {actionError}
         </div>
       )}
 
-      <div className="mb-6">
-        <div className="relative w-full max-w-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-          </svg>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search exercises"
-            className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
-          />
-        </div>
+      <div className="grid shrink-0 grid-cols-3 gap-3">
+        <StatTile label="System exercises" value={exercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
+        <StatTile label="Custom exercises" value={exercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
+        <StatTile label="Total" value={exercises.length} icon={Glyph.pulse} tone="lime" />
       </div>
 
-      <div className="grid gap-6">
-        {exercises.length === 0 ? (
-          <div className="text-gray-500">No exercises found.</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-gray-500">No exercises found matching your search.</div>
-        ) : (
-          <>
-            {systemExercises.length > 0 && (
-              <section>
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  System Exercises ({systemExercises.length})
-                </h2>
-                <div className="grid gap-4">
+      {exercises.length === 0 ? (
+        <Panel className="flex-1" title="Exercises">
+          <p className="py-8 text-center text-sm text-gray-500">No exercises found.</p>
+        </Panel>
+      ) : (
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+          <Panel className="lg:col-span-7" title={`System exercises (${systemExercises.length})`} scroll>
+            {systemExercises.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-400">No system exercises match your search.</p>
+            ) : (
+              <div className="grid gap-3">
                   {systemExercises.map((ex) => (
                     <ExerciseRow
                       key={ex.id}
@@ -193,16 +194,17 @@ export default function ManageExercisesPage() {
                       onView={() => setViewingExercise(ex)}
                     />
                   ))}
-                </div>
-              </section>
+              </div>
             )}
+          </Panel>
 
-            {customExercises.length > 0 ? (
-              <section className="mt-4">
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  Custom Exercises ({customExercises.length})
-                </h2>
-                <div className="grid gap-4">
+          <Panel className="lg:col-span-5" title={`Custom exercises (${customExercises.length})`} scroll>
+            {customExercises.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-400">
+                {query === "" ? "No custom exercises yet. Add them in Exercise Program." : "No custom exercises match your search."}
+              </p>
+            ) : (
+              <div className="grid gap-3">
                   {customExercises.map((ex) => (
                     <ExerciseRow
                       key={ex.id}
@@ -218,19 +220,11 @@ export default function ManageExercisesPage() {
                       onDelete={() => handleDeleteClick(ex.id, ex.name)}
                     />
                   ))}
-                </div>
-              </section>
-            ) : query === "" ? (
-              <section className="mt-4">
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  Custom Exercises (0)
-                </h2>
-                <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Program.</p>
-              </section>
-            ) : null}
-          </>
-        )}
-      </div>
+              </div>
+            )}
+          </Panel>
+        </div>
+      )}
 
       {/* View Exercise Details Modal */}
       {viewingExercise && (
@@ -333,7 +327,7 @@ function ExerciseRow({
   onDelete?: () => void;
 }) {
   return (
-    <div className="border border-gray-200 rounded-xl p-4 transition hover:shadow-sm">
+    <div className="rounded-lg border border-green-50 bg-[#fafcfa] p-4 transition hover:bg-green-50/50">
       {isEditing ? (
         <div className="space-y-3">
           <div className="font-semibold text-gray-900 text-sm">{exercise.name}</div>

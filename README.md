@@ -1,5 +1,122 @@
 # Sprint Updates 
 
+## 📌 Update-10-15-26 | *Enah*
+
+- Sent each therapist and patient one email a day for the exercises completed and one for the exercises missed, listing each exercise's sets and reps, and left manual-monitoring exercises out
+- Sent an email to the patient and the therapist when a patient pauses an exercise because of pain, with the prescribed sets and reps and how far the patient got
+- Sent separate patient and therapist emails when a therapist is assigned to a patient, and when exercises are assigned, changed, or removed, each exercise listed with its sets, reps, rest, order, side, resistance, repeat, and dates
+- Removed the role from the archived and restored account emails sent to the user
+- Gave the patient, therapist, and administrator screens a new shared frame: a light icon sidebar with the ACC Bacoor logo and Log Out at the bottom, and a top bar with a page search, the notification bell, and the user's name
+- Rebuilt the patient dashboard as a day-by-day exercise program with a progress ring, a range-of-motion gauge, reminders, and a compact adherence calendar, and gave the patient, therapist, and administrator dashboards a row of summary tiles and cards that share one screen
+- Split the therapist's patient profile into Overview, PT Program, Reports, and Sessions tabs, with range-of-motion, repetition, and adherence charts on a date range
+- Restyled the pages opened from the side menu to match: the therapist's profile, patients, exercises, assign exercise, and exercise program pages, the patient's progress, session, and profile pages, and the administrator's users, exercises, and assign patients tabs, with the full page width used
+- Restyled the landing, login, forgot password, change password, and first-time password pages as a green brand panel beside a clean form, with the clinic logo in place
+
+### *web\src\lib\email.ts*
+
+- Added the daily completed and missed exercise email, in a therapist version grouped by patient and a patient version listing only their own exercises
+- Added the pain pause email, in a therapist and a patient version, reading "paused" instead of "stopped" and stating the prescribed sets and reps and the set and repetition where the patient paused
+- Added the Assigned Therapist email for the patient and the Assigned Patient email for the therapist, with no exercise list
+- Added the Assigned Exercises, Assigned Exercises Updated, and Exercises Removed emails, each in a patient and a therapist version; every exercise shows its sets, reps, rest, order, side, resistance, repeat, and start and end dates, and a changed exercise shows each changed field's previous value
+- Removed the role from the archived and restored emails sent to the user; the administrator copies still name it
+- Left the permanent deletion emails unchanged because the account deletion function is still in the system
+
+### *web\src\lib\db.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Added the daily summary send, which emails each therapist and patient at most once a day per kind after 8 PM Manila time, using the demo clock where it is enabled; a failed send is retried the next hour
+- Counted an exercise as missed on the day its make-up window ended, and as completed on the day it was completed
+- Started an hourly check when the server starts, so the daily summary needs the server running and, on Azure, the web app's Always On setting
+- Added `notification_email_digests`, which records each sent summary so it is never sent twice; the table's `therapist_id` column holds the recipient, who may be a therapist or a patient
+- Changed the pain notification on the dashboard to read "paused" and to include the same progress
+- Took the progress from the saved repetition counts of the session
+- Did not email the manual exercise completion, which stays on the dashboard only
+
+### *web\src\app\api\patient-exercises\route.ts*, *web\src\app\api\users\[id]\route.ts*, and *web\src\lib\exercises\prescriptionEmail.ts*
+
+- Compared the patient's exercises before and after each assignment save, emailing the new ones as assigned and the ones with a different sets, reps, rest, order, side, resistance, repeat, or date as changed; an unchanged exercise sends nothing
+- Emailed the patient and the therapist the exercises that a removal actually took off the patient's program
+- Emailed the patient and the therapist when an administrator assigns a different therapist; the previous therapist receives nothing
+
+### *web\src\app\(app)\dashboard\_components\AppShell.tsx*, *web\src\app\(app)\dashboard\therapist\layout.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Added one shared frame for the three signed-in roles: a pale green sidebar with the ACC Bacoor logo and name, the active page highlighted in white, and Log Out pinned at the bottom, plus a white top bar with a page search, the notification bell, and the user's initials, name, and role
+- Made the search a quick jump between the pages in the sidebar; it does not search patients or data
+- Replaced the three separate dark green sidebars with the frame, keeping each page's own tabs and links, and turned the sidebar into a slide-out menu on narrow screens
+- Placed the page content on a soft green background with white shadowed cards, and kept the print layout free of the sidebar and top bar
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx* and *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+
+- Rebuilt the patient dashboard as "{Name}'s Exercise Program": the week of the program, a percent-complete ring, and one card per scheduled day marked completed, today, make-up open, missed, or upcoming
+- Opened a day to show each exercise's sets and repetitions, with Start for camera exercises and Mark done for manual ones, as before; showed three days back and seven ahead, with a button for the full schedule
+- Added a range-of-motion gauge from the latest, first, and best session of the most recent degree-measured exercise, labelled as camera estimates, and a reminders card from the patient's own schedule
+- Let the adherence calendar drop its frame and heading so it can sit inside another card, and added a compact version with a one-line streak, active days, and sessions count, smaller cells, and a one-line legend
+- Added a row of four tiles above the program: percent completed, today's done and total, the next scheduled day, and missed exercises
+- Fitted the dashboard to one screen on large displays: the program list scrolls inside its card, with the calendar above and the range-of-motion gauge and reminders side by side
+- Drew the gauge's arcs as a half circle: the arc was drawn the long way round for values above 90
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\therapist\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Added shared dashboard parts: a pastel summary tile with a round icon, a white card with a title row whose body can scroll, a short page heading, and the one-screen layout that stacks and scrolls normally on small screens
+- Rebuilt the therapist dashboard as five tiles, the patient roster beside a Needs attention list that shows why each patient is flagged, and quick links to assign exercises, manage exercises, and programs
+- Rebuilt the administrator dashboard as six tiles, the activity feed beside the recent sessions, and the three quick actions as one row; the activity feed and sessions scroll inside their cards
+- Let the page headings, tables, and cards of the old dashboards share the new look: white cards with a soft shadow and smaller rounded corners, dark gray titles, and light table headers
+
+### *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, *web\src\app\(app)\dashboard\therapist\profile\page.tsx*, and *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Added one profile layout for the therapist and the patient: a green identity card with the initials, name, email, role, and Change Password, then Personal Information and Account Information panels
+- Listed the therapist's assigned patients under the panels, with each patient's name, email, and a link to their profile, and listed the patient's assigned exercises under theirs
+- Restyled the Change Password popup as a white card with light fields and a green step indicator, keeping the verification, code, and reset steps
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*, *exercises\page.tsx*, *assign\page.tsx*, and *programs\page.tsx*
+
+- Rebuilt Manage Patients with four tiles and a searchable table of patients, their assigned exercises, and a View button
+- Rebuilt Manage Exercises with three tiles, a search box, and the system and custom exercises in two cards side by side
+- Let Assign Exercise use the full page width and show the selected patients panel only once a patient is chosen
+- Rebuilt Exercise Program with three tiles and the programs and custom exercises in two scrolling cards side by side, with the create and edit forms opening above them
+
+### *web\src\app\(app)\dashboard\patient\page.tsx* and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Rebuilt the patient's My Progress with four tiles and the trend cards two to a row on wide screens, and Session with three tiles, today's exercises on the left, and the next, later, and past dates on the right
+- Rebuilt the administrator's Manage Users with four tiles and the active users above the archived users, Manage Exercises with three tiles and the system and custom exercises side by side, and Assign Patients with four tiles, the unassigned list beside the therapist picker, and the assigned table and history below
+- Kept the add and edit user and exercise forms as long forms inside the new cards
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\(app)\dashboard\_components\PatientReports.tsx*, and *web\src\app\api\patient-exercises\route.ts*
+
+- Split the long patient profile into Overview, PT Program, Reports, and Sessions tabs, with every section kept and all tabs shown when printing
+- Added a Reports tab with an exercise selector, Prior Week, Prior Month, and All buttons, a range-of-motion line chart for the left and right sides, a repetitions bar chart, the adherence calendar, and session totals for the range
+- Made the therapist's request for a patient's exercises also return the scheduled days, which the adherence calendar needs
+- Pointed the "View Patient Progress" button at the Reports tab
+
+### *web\src\app\(auth)\AuthFrame.tsx*, *web\src\app\page.tsx*, and the login, forgot password, change password, and first-time password pages
+
+- Added one shared layout for the signed-out pages: a green panel with the clinic photo under a green wash, the clinic's name, services, phone, email, and address as text, and a clean form panel beside it
+- Replaced the letter P with the ACC Bacoor logo in the sidebar and on the signed-out pages, at the same size
+- Restyled the forms with light fields, green focus rings, green buttons, and larger headings, keeping the sign-in, OTP, reset, and password change behaviour
+- Rebuilt the landing page as a showcase: a hero with a Log In button, four things the system does in every session, how it serves therapists and patients, how it works, and what the software does and does not do
+
+### *Validation*
+
+- Type check passes
+- The new `prescriptionEmail.test.ts` passes, covering the exercise details, new versus changed exercises, and the previous values
+- 72 of 72 framework-free TypeScript suites pass in a full run; the patient workflow contract test now reads the dashboard's camera shortcut from `PatientProgramView.tsx`, where it moved
+- The login, forgot password, first-time password, and landing pages were viewed in the browser, and the one-screen patient dashboard and the profile layout were viewed with sample data on a temporary page that was removed; the sidebar and every other signed-in page were not, because the demo patient account does not exist in the local database and no signed-in session was available
+- The daily summary, pain progress, and exercise queries run against actual PostgreSQL without error but returned no rows, so the grouping and wording were not checked against real data
+- No email was sent: the emails were not tried with SMTP credentials, and the assign, remove, and pain pause actions were not exercised in the running app
+
+### *Remaining boundaries*
+
+- Before the daily summaries are used, the database owner runs `scripts\notification_email_digests_pg.sql` in the `postural` database
+- Emails are sent only when `SMTP_USER` and `SMTP_PASS` are set; a Gmail account allows about 500 emails a day
+- Exercises completed after 8 PM Manila time miss that day's summary
+- The pain pause email can miss the last repetition if it was saved after the session ended
+- The previous therapist receives no email when a patient is reassigned, and the permanent deletion function and its emails remain
+- The new frame and the restyled dashboards and pages have not been seen with real data
+- The camera pages were not changed
+- The range-of-motion gauge and charts show camera estimates, not clinical measurements
+- The long forms, such as Assign Exercise and the add and edit user and exercise forms, still scroll normally, and the one-screen layouts apply only on large displays
+
+---
+
 ## 📌 Update-10-14-26 | *RyanCodesling*
 
 - Set the lateral arm raise's full-range target to 85 instead of 90, and its return line to 15 instead of 10
@@ -36,6 +153,8 @@
 - The side bend has no form score in new sessions
 - A moderate sideways lean in the arm hold or the neck bends can still show LOWER rather than the trunk-lean cue, because on 16:9 frames the camera estimate reads the shoulder line about three times larger than the trunk line
 - Readings are still computed without correcting for the frame's shape, so the thresholds hold on 16:9 cameras
+
+---
 
 ## 📌 Update-10-11-26 | *RyanCodesling*
 
@@ -157,6 +276,8 @@
 - Whether physical therapists find the PDF wording and layout clear is untested
 - Three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
 
+---
+
 📌 Update-10-10-26 | Ron
 ### Web admin navigation
 Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
@@ -200,6 +321,7 @@ Validation
 TypeScript, ESLint, git diff --check, and npm run build pass
 The app is already running at http://localhost:3000; a second dev-server launch was blocked because that port is occupied
 
+---
 
 ## 📌 Update-10-1-26 | *Ron*
 
@@ -226,6 +348,8 @@ Test phase only, not offical yet
 
 - ESLint and TypeScript checks pass for the updated web code
 - The demo account seed completed successfully; the clinical-column migration remains pending owner-level database access
+
+---
 
 ## 📌 Update-9-27-26 | *RyanCodesling*
 
@@ -314,6 +438,8 @@ Test phase only, not offical yet
 - Firefox ignores the setting that hides the video's native full-screen control, so full screen started there shows the video without overlays
 - The demonstration videos stay in the gitignored `web\public\demos\` folder, and three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
 
+---
+
 ## 📌 Update-9-18-26 | *RyanCodesling*
 
 - Made manual recalibration and a dropout during calibration discard the measurement in progress, so no repetition or neutral baseline mixes readings from before and after them
@@ -399,6 +525,8 @@ Test phase only, not offical yet
 - The animations are illustrative, with authored timing, and no clinician has reviewed them
 - Three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
 
+---
+
 ## 📌 Update-9-8-26 | *RyanCodesling*
 
 - Stopped a capture dropout from silently re-capturing the neutral baseline, which could adopt a compensated posture as the reference every later deduction is measured against
@@ -447,6 +575,8 @@ Test phase only, not offical yet
 - The world-coordinate landmarks are recorded and read by nothing; no score, cue, or therapist surface consumes them
 - Two behaviours are patient-visible by intent: the head-position ceiling is looser, and a dropout no longer recalibrates on its own
 
+---
+
 ## 📌 Update-9-6-26 | *RyanCodesling*
 
 - Added an opt-in aspect-ratio correction to the clinical angle pipeline, default-disabled, so no patient-visible measurement changes until the affected thresholds are re-derived against it
@@ -492,6 +622,8 @@ Test phase only, not offical yet
 - The aspect correction is enabled nowhere and no threshold has been re-derived against it; four primary-coupled scoring fits regress a compensation channel on a primary the correction changes and would need re-fitting first
 - The trace additions apply to future recordings only; earlier sessions cannot be reprocessed because the frame size and calibration inputs they would need were never recorded
 - Angle values are image-plane estimates from a single camera, not validated anatomical joint measurements, and every single-subject pilot threshold remains exactly that
+
+---
 
 ## 📌 Update-9-4-26 | *RyanCodesling*
 

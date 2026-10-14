@@ -1,10 +1,11 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import ChangePasswordModal from "../../_components/ChangePasswordModal";
+import ProfileLayout, { ProfileField } from "../../_components/ProfileLayout";
 
 interface TherapistProfile {
   id: string;
@@ -15,10 +16,16 @@ interface TherapistProfile {
   createdAt: string | null;
 }
 
+interface AssignedPatient {
+  id: string;
+  name: string;
+  email: string;
+}
+
 export default function TherapistProfilePage() {
-  const { user, logout } = useAuth();
-  const router = useRouter();
+  const { user } = useAuth();
   const [profile, setProfile] = useState<TherapistProfile | null>(null);
+  const [patients, setPatients] = useState<AssignedPatient[]>([]);
   const [loading, setLoading] = useState(true);
   const [showChangePassword, setShowChangePassword] = useState(false);
 
@@ -33,6 +40,15 @@ export default function TherapistProfilePage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+
+    fetch(`/api/users?role=patient&therapistId=${user.id}`)
+      .then(async (res) => {
+        if (res.ok) {
+          const d = await res.json();
+          setPatients(d.users ?? []);
+        }
+      })
+      .catch(() => {});
   }, [user?.id]);
 
   if (loading) {
@@ -46,86 +62,73 @@ export default function TherapistProfilePage() {
   const username = profile?.email?.split("@")[0] ?? "—";
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold text-green-800 mb-1">My Profile</h1>
-      <p className="text-gray-500 mb-6">Manage your personal and account information</p>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {/* ── Left column: Personal Information ── */}
-        <div className="lg:col-span-2">
-          <div className="bg-white border border-green-200 rounded-2xl p-6 h-full">
-            <h2 className="text-base font-semibold text-green-700 mb-5">
-              Personal Information
-            </h2>
-
-            {!profile ? (
-              <p className="text-sm text-gray-400">
-                Unable to load profile. Please contact the admin.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
-                <InfoField icon={<PersonIcon />} label="Full Name"     value={profile.name} />
-                <InfoField icon={<EmailIcon />}  label="Email"         value={profile.email} />
-                <InfoField icon={<BriefcaseIcon />} label="Specialization" value={profile.specialty} />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Right column: Account Information + Account Actions ── */}
-        <div className="flex flex-col gap-4">
-
-          {/* Account Information */}
-          <div className="bg-white border border-green-200 rounded-2xl p-6">
-            <h2 className="text-base font-semibold text-green-700 mb-4">
-              Account Information
-            </h2>
-            <div className="space-y-4">
-              <AccountField label="Username"     value={username} />
-              <AccountField label="Account Type" value="Specialist" />
-              <AccountField
-                label="Member Since"
-                value={formatMemberSince(profile?.createdAt ?? null)}
-              />
+    <>
+      <ProfileLayout
+        name={profile?.name ?? user?.name}
+        email={profile?.email}
+        roleLabel="Therapist"
+        onChangePassword={() => setShowChangePassword(true)}
+        leftTitle="Personal Information"
+        left={
+          !profile ? (
+            <p className="text-sm text-gray-400">Unable to load profile. Please contact the admin.</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
+              <ProfileField icon={<PersonIcon />} label="Full Name" value={profile.name} />
+              <ProfileField icon={<EmailIcon />} label="Email" value={profile.email} />
+              <ProfileField icon={<BriefcaseIcon />} label="Specialization" value={profile.specialty} />
+              <ProfileField icon={<BriefcaseIcon />} label="Therapist ID" value={profile.therapistIDNum} />
             </div>
+          )
+        }
+        bottomTitle={`Assigned Patients (${patients.length})`}
+        bottom={
+          patients.length === 0 ? (
+            <p className="py-6 text-center text-sm text-gray-400">
+              No patients assigned yet. The admin assigns patients to you.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white">
+                <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
+                  <th className="py-2 pr-4 font-medium">Patient</th>
+                  <th className="px-4 py-2 font-medium">Email</th>
+                  <th className="py-2 pl-4 text-right font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                {patients.map((patient) => (
+                  <tr key={patient.id} className="border-b border-gray-50 transition hover:bg-green-50/40">
+                    <td className="py-2.5 pr-4 font-semibold text-gray-900">{patient.name}</td>
+                    <td className="px-4 py-2.5 text-gray-600">{patient.email}</td>
+                    <td className="py-2.5 pl-4 text-right">
+                      <Link
+                        href={`/dashboard/therapist/patients/${patient.id}`}
+                        className="text-sm font-medium text-green-700 hover:underline"
+                      >
+                        View
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        }
+        rightTitle="Account Information"
+        right={
+          <div className="space-y-5">
+            <ProfileField label="Username" value={username} />
+            <ProfileField label="Account Type" value="Specialist" />
+            <ProfileField label="Member Since" value={formatMemberSince(profile?.createdAt ?? null)} />
           </div>
-
-          {/* Account Actions */}
-          <div className="bg-white border border-green-200 rounded-2xl p-6">
-            <h2 className="text-base font-semibold text-green-700 mb-4">
-              Account Actions
-            </h2>
-            <div className="space-y-3">
-              <button
-                type="button"
-                onClick={() => setShowChangePassword(true)}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white text-sm font-medium transition"
-              >
-                <KeyIcon />
-                Change Password
-              </button>
-              <button
-                type="button"
-                onClick={async () => { await logout(); router.push("/"); }}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-red-500 text-red-600 text-sm font-medium hover:bg-red-50 transition"
-              >
-                <LogoutIcon />
-                Log Out
-              </button>
-            </div>
-          </div>
-
-        </div>
-      </div>
+        }
+      />
 
       {showChangePassword && profile?.email && (
-        <ChangePasswordModal
-          email={profile.email}
-          onClose={() => setShowChangePassword(false)}
-        />
+        <ChangePasswordModal email={profile.email} onClose={() => setShowChangePassword(false)} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -136,39 +139,6 @@ function formatMemberSince(dateStr: string | null): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-}
-
-// ── Sub-components ─────────────────────────────────────────────────────────
-
-function InfoField({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | null | undefined;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="mt-0.5 shrink-0 text-green-600">{icon}</div>
-      <div>
-        <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-        <p className="text-sm font-semibold text-gray-900">
-          {value ?? "—"}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function AccountField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-      <p className="text-sm font-semibold text-gray-900">{value}</p>
-    </div>
-  );
 }
 
 // ── Icons (inline SVG) ─────────────────────────────────────────────────────
@@ -197,18 +167,3 @@ function BriefcaseIcon() {
   );
 }
 
-function KeyIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
-    </svg>
-  );
-}
-
-function LogoutIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
-    </svg>
-  );
-}

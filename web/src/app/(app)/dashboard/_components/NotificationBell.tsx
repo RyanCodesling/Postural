@@ -298,7 +298,7 @@ export default function NotificationBell() {
 
       {/* Dropdown Overlay with Width Increased to w-[28rem] */}
       {isOpen && (
-        <div className="absolute right-0 mt-2.5 w-[28rem] max-h-[30rem] overflow-y-auto bg-white border border-green-100 rounded-2xl shadow-xl z-50 flex flex-col scrollbar-thin">
+        <div className="absolute right-0 mt-2.5 w-[28rem] max-h-[30rem] overflow-y-auto bg-white rounded-xl shadow-sm shadow-xl z-50 flex flex-col scrollbar-thin">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-green-50/50">
             <span className="text-sm font-semibold text-green-800">Notifications</span>

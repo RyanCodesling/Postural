@@ -9,9 +9,16 @@ import {
   getPatientExercises,
   getPatientOccurrences,
   getUsers,
+  getUserById,
   createNotification,
   getEffectiveNow,
 } from "@/lib/db";
+import {
+  sendRemovedExercisesEmail,
+  sendAssignedExercisesChangedEmail,
+  sendAssignedExercisesEmail,
+} from "@/lib/email";
+import { diffAssignedExercises, toPrescriptionDetail, type PrescriptionRow } from "@/lib/exercises/prescriptionEmail";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
@@ -73,10 +80,14 @@ export async function GET(request: NextRequest) {
       }
 
       const includeArchived = request.nextUrl.searchParams.get("includeArchived") === "true";
-      const exercises = filterDeprecated(
-        await getPatientExercises(patientId, { includeArchived }),
-      );
-      return NextResponse.json({ exercises });
+      const [patientExercises, occurrences] = await Promise.all([
+        getPatientExercises(patientId, { includeArchived }),
+        getPatientOccurrences(patientId),
+      ]);
+      return NextResponse.json({
+        exercises: filterDeprecated(patientExercises),
+        occurrences: filterDeprecated(occurrences),
+      });
     }
 
     // Patient: gets only their own exercises
@@ -120,7 +131,27 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
+    const before = await getPatientExercises(patientId);
     await archivePatientExercises(patientId, exerciseIds as string[], user.id);
+
+    // Email the patient and the therapist which prescriptions were actually removed.
+    try {
+      const remaining = new Set((await getPatientExercises(patientId)).map((row) => row.exercise_id));
+      const removed = (before as PrescriptionRow[])
+        .filter((row) => (exerciseIds as string[]).includes(row.exercise_id as string) && !remaining.has(row.exercise_id))
+        .map(toPrescriptionDetail);
+      if (removed.length > 0) {
+        const patient = await getUserById(patientId);
+        if (patient?.email) {
+          sendRemovedExercisesEmail(patient.email as string, patient.name as string, "patient", user.name, removed).catch(console.error);
+        }
+        if (user.email) {
+          sendRemovedExercisesEmail(user.email as string, user.name, "therapist", (patient?.name as string) ?? "your patient", removed).catch(console.error);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to send removed exercises emails:", err);
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/patient-exercises error:", error);
@@ -313,6 +344,34 @@ export async function POST(request: NextRequest) {
       })),
       user.id,
     );
+
+    // Email the patient and the assigning therapist: new exercises and changed ones
+    // are separate templates, and each lists the full prescription.
+    try {
+      const after = await getPatientExercises(patientId);
+      const { assigned, changed } = diffAssignedExercises(
+        existingAssignments as PrescriptionRow[],
+        after as PrescriptionRow[],
+        normalizedExercises.map((exercise) => exercise.exerciseId as string),
+      );
+      const patient = await getUserById(patientId);
+      const therapistEmail = user.email as string | undefined;
+      const sends: Array<[typeof sendAssignedExercisesEmail, typeof assigned]> = [
+        [sendAssignedExercisesEmail, assigned],
+        [sendAssignedExercisesChangedEmail, changed],
+      ];
+      for (const [send, details] of sends) {
+        if (details.length === 0) continue;
+        if (patient?.email) {
+          send(patient.email as string, patient.name as string, "patient", user.name, details).catch(console.error);
+        }
+        if (therapistEmail) {
+          send(therapistEmail, user.name, "therapist", (patient?.name as string) ?? "your patient", details).catch(console.error);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to send assigned exercises emails:", err);
+    }
 
     // Notify patient about assigned exercises
     try {

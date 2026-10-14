@@ -101,9 +101,15 @@ function cellClasses(state: DayState, isFuture: boolean): string {
 export default function ConsistencyCalendar({
   sessions,
   occurrences,
+  embedded = false,
+  compact = false,
 }: {
   sessions: CalendarSession[];
   occurrences: CalendarOccurrence[];
+  /** Drop the card frame and heading, for use inside another card. */
+  embedded?: boolean;
+  /** A short version for a dashboard that fits one screen: one-line stats, small cells. */
+  compact?: boolean;
 }) {
   // Today's Manila day by the demo clock (the real day outside demo mode).
   const { todayKey } = useDemoClock();
@@ -171,24 +177,34 @@ export default function ConsistencyCalendar({
     });
 
   return (
-    <div className="bg-white border border-green-200 rounded-2xl p-6">
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-base font-semibold text-green-700">Your Consistency</h2>
-      </div>
+    <div className={embedded ? "" : compact ? "flex h-full min-h-0 flex-col rounded-xl bg-white p-4 shadow-sm" : "bg-white rounded-xl p-5 shadow-sm"}>
+      {!embedded && (
+        <div className={`flex items-center justify-between ${compact ? "mb-2" : "mb-5"}`}>
+          <h2 className="text-base font-semibold text-gray-900">Your Consistency</h2>
+        </div>
+      )}
 
       {/* Summary stats (anchored to today) */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        <StatTile label="Current streak" value={`${streak}`} sub={streak === 1 ? "day" : "days"} />
-        <StatTile label="Active this month" value={`${activeThisMonth}`} sub={activeThisMonth === 1 ? "day" : "days"} />
-        <StatTile label="Total sessions" value={`${totalSessions}`} sub={totalSessions === 1 ? "session" : "sessions"} />
-      </div>
+      {compact ? (
+        <p className="mb-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-600">
+          <span><strong className="text-green-700">{streak}</strong> day streak</span>
+          <span><strong className="text-green-700">{activeThisMonth}</strong> active this month</span>
+          <span><strong className="text-green-700">{totalSessions}</strong> sessions</span>
+        </p>
+      ) : (
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          <StatTile label="Current streak" value={`${streak}`} sub={streak === 1 ? "day" : "days"} />
+          <StatTile label="Active this month" value={`${activeThisMonth}`} sub={activeThisMonth === 1 ? "day" : "days"} />
+          <StatTile label="Total sessions" value={`${totalSessions}`} sub={totalSessions === 1 ? "session" : "sessions"} />
+        </div>
+      )}
 
       {/* Month navigation */}
-      <div className="flex items-center justify-between mb-3">
+      <div className={`flex items-center justify-between ${compact ? "mb-1" : "mb-3"}`}>
         <button
           onClick={goPrev}
           aria-label="Previous month"
-          className="w-8 h-8 flex items-center justify-center rounded-lg border border-green-200 text-green-700 hover:bg-green-50 transition"
+          className={`flex items-center justify-center rounded-lg border border-green-200 text-green-700 hover:bg-green-50 transition ${compact ? "h-6 w-6 text-sm" : "w-8 h-8"}`}
         >
           ‹
         </button>
@@ -199,7 +215,7 @@ export default function ConsistencyCalendar({
           onClick={goNext}
           disabled={isCurrentOrFutureMonth}
           aria-label="Next month"
-          className={`w-8 h-8 flex items-center justify-center rounded-lg border transition ${
+          className={`${compact ? "h-6 w-6 text-sm" : "w-8 h-8"} flex items-center justify-center rounded-lg border transition ${
             isCurrentOrFutureMonth
               ? "border-gray-100 text-gray-300 cursor-not-allowed"
               : "border-green-200 text-green-700 hover:bg-green-50"
@@ -212,7 +228,7 @@ export default function ConsistencyCalendar({
       {/* Day-of-week header */}
       <div className="grid grid-cols-7 gap-1 mb-1">
         {DOW.map((d) => (
-          <div key={d} className="text-center text-[11px] font-medium text-gray-400 py-1">
+          <div key={d} className={`text-center text-[11px] font-medium text-gray-400 ${compact ? "py-0" : "py-1"}`}>
             {d}
           </div>
         ))}
@@ -232,7 +248,7 @@ export default function ConsistencyCalendar({
             <div
               key={key}
               title={dayTitle(key, state, dueList, sessionCount)}
-              className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs relative ${cellClasses(
+              className={`${compact ? "h-7" : "aspect-square"} rounded-lg flex flex-col items-center justify-center text-xs relative ${cellClasses(
                 state,
                 isFuture
               )} ${isToday ? "ring-2 ring-green-700 ring-offset-1" : ""}`}
@@ -249,7 +265,7 @@ export default function ConsistencyCalendar({
       </div>
 
       {/* Legend */}
-      <div className="mt-4 grid grid-cols-2 gap-y-1.5 gap-x-3 text-[11px] text-gray-500">
+      <div className={`text-gray-500 ${compact ? "mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]" : "mt-4 grid grid-cols-2 gap-y-1.5 gap-x-3 text-[11px]"}`}>
         <LegendDot className="bg-green-600" label="Completed all due" />
         <LegendDot className="bg-amber-400" label="Partly done" />
         <LegendDot className="bg-white border border-amber-400" label="Make-up available" />

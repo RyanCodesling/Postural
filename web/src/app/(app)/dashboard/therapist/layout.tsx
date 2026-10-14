@@ -1,11 +1,9 @@
 "use client";
 
 import React from "react";
-import Link from "next/link";
-import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import NotificationBell from "../_components/NotificationBell";
+import AppShell from "../_components/AppShell";
 
 // ── Nav icons ──────────────────────────────────────────────────────────────
 
@@ -65,14 +63,6 @@ function CameraIcon() {
   );
 }
 
-function LogoutIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
-    </svg>
-  );
-}
-
 // ── Nav items ──────────────────────────────────────────────────────────────
 
 const NAV = [
@@ -91,77 +81,24 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <div
-      className="min-h-screen flex bg-green-50 text-gray-900 print:block print:min-h-0 print:bg-white"
-      style={{ colorScheme: "light" }}
+    <AppShell
+      items={NAV.map(({ href, Icon, label, exact }) => ({
+        key: href,
+        label,
+        href,
+        icon: <Icon />,
+        active: isActive(href, exact),
+      }))}
+      userName={user?.name}
+      roleLabel="Therapist"
+      onLogout={async () => { await logout(); router.push("/"); }}
     >
-
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200 print:hidden
-        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
-        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
-        <div className="mb-8">
-          <div className="text-lg font-semibold text-white">{user?.name || "Therapist"}</div>
-        </div>
-
-        <nav>
-          <ul className="space-y-1">
-            {NAV.map(({ href, Icon, label, exact }) => (
-              <li key={href}>
-                <Link
-                  href={href}
-                  onClick={() => setSidebarOpen(false)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                    isActive(href, exact)
-                      ? "bg-green-700 text-white font-medium"
-                      : "text-green-200 hover:bg-green-800"
-                  }`}
-                >
-                  <Icon />
-                  {label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
-      </aside>
-
-      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0 print:p-0 print:overflow-visible">
-        <div className="flex justify-between items-center mb-6 print:hidden">
-          <button
-            className="md:hidden flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
-            onClick={() => setSidebarOpen(true)}
-          >
-            ☰ Menu
-          </button>
-          <div className="md:hidden flex-1" />
-          <div className="ml-auto flex items-center gap-3">
-            <NotificationBell />
-            <button
-              type="button"
-              onClick={async () => { await logout(); router.push("/"); }}
-              className="flex items-center gap-2 rounded border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
-            >
-              <LogoutIcon />
-              Log Out
-            </button>
-          </div>
-        </div>
-        {children}
-      </main>
-    </div>
+      {children}
+    </AppShell>
   );
 }

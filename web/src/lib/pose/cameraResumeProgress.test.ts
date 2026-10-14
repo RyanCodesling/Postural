@@ -67,6 +67,7 @@ const context: any = vm.createContext({
   captureRejectedByStatusRef: ref({ KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }), captureDropoutResetsRef: ref(2),
   captureUnsteadyFramesRef: ref(12),
   captureCheckedFramesRef: ref(900),
+  captureFrameSizesRef: ref({ "1280x720": 900, "640x480": 50 }),
   recordingWantedRef: ref(false),
 });
 vm.runInContext(transpile(cameraDeclarations([
@@ -90,7 +91,9 @@ test("a snapshot written after a completed set restores its sets, reps and captu
   assert.deepEqual(progress.repOutcomes.left[0], { peakValue: 70, classification: "partial" });
   assert.equal(progress.repOutcomes.left.filter((o: any) => o.classification === "complete").length, 11);
   assert.deepEqual(progress.captureFrames,
-    { total: 1000, ok: 950, rejectedByStatus: { KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }, dropoutResets: 2, unsteady: 12, checked: 900 });
+    { total: 1000, ok: 950, rejectedByStatus: { KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }, dropoutResets: 2, unsteady: 12, checked: 900,
+      frameSizes: { "1280x720": 900, "640x480": 50 } },
+    "the frame sizes measured before the disruption come back, both of them");
 });
 
 test("a second disruption keeps the restored outcomes plus the new ones", () => {
@@ -112,10 +115,16 @@ test("an older snapshot without the new fields restores nothing", () => {
     updatedAtWallMs: Date.now() };
   const progress = plain(api.restoredSessionProgress(old));
   assert.deepEqual(progress, { setsLog: [], repOutcomes: { left: [], right: [] },
-    captureFrames: { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0 } });
+    captureFrames: { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} } });
   // A snapshot from before the rejection reasons keeps its tally, with none.
   const tallyOnly = plain(api.restoredSessionProgress({ ...old, captureFrames: { total: 5, ok: 4 } }));
-  assert.deepEqual(tallyOnly.captureFrames, { total: 5, ok: 4, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0 });
+  assert.deepEqual(tallyOnly.captureFrames, { total: 5, ok: 4, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} });
+  // Frame sizes adding up to more frames than passed, or with a malformed key, restore none.
+  for (const frameSizes of [{ "1280x720": 5 }, { "1280-720": 2 }, { "0x720": 2 }, { "1280x720": -1 }, ["1280x720"]]) {
+    const restored = plain(api.restoredSessionProgress({ ...old, captureFrames: { total: 5, ok: 4, frameSizes } }));
+    assert.deepEqual(restored.captureFrames.frameSizes, {}, `restores none: ${JSON.stringify(frameSizes)}`);
+    assert.equal(restored.captureFrames.ok, 4, "the rest of the tally is kept");
+  }
   // More unsteady frames than tracked frames is inconsistent and restores none.
   const tooMany = plain(api.restoredSessionProgress({ ...old, captureFrames: { total: 5, ok: 4, unsteady: 9 } }));
   assert.equal(tooMany.captureFrames.unsteady, 0);
@@ -133,7 +142,7 @@ test("malformed fields are dropped rather than restored", () => {
   const progress = plain(api.restoredSessionProgress(bad));
   assert.deepEqual(progress.setsLog, [setRecord]);
   assert.deepEqual(progress.repOutcomes, { left: [{ peakValue: 88, classification: "partial" }], right: [] });
-  assert.deepEqual(progress.captureFrames, { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0 }, "ok cannot exceed total");
+  assert.deepEqual(progress.captureFrames, { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} }, "ok cannot exceed total");
 });
 
 test("whole-attempt outcomes list restored ones before this page's", () => {

@@ -3653,8 +3653,9 @@ export default function CameraClient() {
     const endToken = sessionTokenRef.current;
     flushRawFrames();
     // Session-level capture-quality summary: the % of active frames with OK
-    // capture, why the others were rejected, and how often a sustained
-    // rejection discarded the movement in progress.
+    // capture, why the others were rejected, how often a sustained
+    // rejection discarded the movement in progress, and the camera picture's
+    // size (readings depend on its shape; the thresholds were tuned on 16:9).
     const captureQualitySummary = buildCaptureQualitySummary({
       total: captureFramesTotalRef.current,
       ok: captureFramesOkRef.current,
@@ -3662,6 +3663,7 @@ export default function CameraClient() {
       dropoutResets: captureDropoutResetsRef.current,
       unsteady: captureUnsteadyFramesRef.current,
       checked: captureCheckedFramesRef.current,
+      frame: videoResolutionRef.current,
     });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.

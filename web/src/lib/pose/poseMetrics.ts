@@ -836,10 +836,16 @@ export function computeCompensationScore(
   // maximum penalty at 50 instead of 100). The bands lookup doubles as a
   // belt-and-braces guard: `validateRegistry()` already rejects a scored
   // metric without deduction bands at startup.
+  //
+  // A metric marked `excludedFromFormScore` is left out the same way: it
+  // cannot identify a fault on this exercise, so it must not cost a correct
+  // movement points. It is still recorded in the raw features, which follow
+  // the scoring mode.
   const scored = compensations.filter(
     (c) =>
       getCompensationScoring(c).mode !== "off" &&
-      getCompensationBands(c) !== undefined,
+      getCompensationBands(c) !== undefined &&
+      !c.excludedFromFormScore,
   );
   if (scored.length === 0) return null;
 
@@ -1000,7 +1006,8 @@ export function isNearPeak(
  *
  *   Arm at side, hanging down  →  ~0°
  *   Arm out horizontally       →  ~90°
- *   Arm raised past horizontal →  >90° (not relevant — registry targetROM is 90°)
+ *   Arm raised past horizontal →  >90° (not relevant — ex_001's registry targetROM is 85,
+ *                                  set below 90 because a horizontal arm reads just under it)
  *
  * ── WHY SHOULDER→ELBOW (not shoulder→wrist) ──────────────────────────────────
  * The elbow flexes during arm raise even when the patient is keeping the arm

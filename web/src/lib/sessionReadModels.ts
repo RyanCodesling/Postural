@@ -24,6 +24,14 @@ export interface CaptureQualityContext {
    * uneven, leave it unable to. Absent before 2026-10-10.
    */
   checkedFrames?: number;
+  /**
+   * The camera picture's size in pixels when the session ended, the frame the
+   * angles were computed on. Readings depend on its shape, and every
+   * threshold was tuned on 16:9 (1280x720) frames, so this shows whether a
+   * session's readings are comparable. Before 2026-10-14 the size was kept
+   * only in the opt-in tuning trace.
+   */
+  frame?: { width: number; height: number };
 }
 
 /** The capture tallies the camera keeps for one session. */
@@ -34,7 +42,17 @@ export type CaptureTallies = {
   dropoutResets: number;
   unsteady?: number;
   checked?: number;
+  /** The camera picture's latest size, when known. */
+  frame?: { width: number; height: number } | null;
 };
+
+/** A plausible camera picture size, or null. */
+function frameSize(value: unknown): { width: number; height: number } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { width, height } = value as Record<string, unknown>;
+  const ok = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n > 0 && n <= 10_000;
+  return ok(width) && ok(height) ? { width: width as number, height: height as number } : null;
+}
 
 /**
  * The capture-quality summary saved when a session ends, or undefined when no
@@ -42,6 +60,7 @@ export type CaptureTallies = {
  */
 export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQualityContext | undefined {
   if (tallies.total <= 0) return undefined;
+  const frame = frameSize(tallies.frame);
   return {
     framesTotal: tallies.total,
     framesOk: tallies.ok,
@@ -50,6 +69,7 @@ export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQual
     sustainedDropoutResets: tallies.dropoutResets,
     ...(tallies.unsteady === undefined ? {} : { unsteadyFrames: tallies.unsteady }),
     ...(tallies.checked === undefined ? {} : { checkedFrames: tallies.checked }),
+    ...(frame ? { frame } : {}),
   };
 }
 
@@ -99,6 +119,8 @@ export function parseCaptureQualitySummary(value: unknown): CaptureQualityContex
   if (unsteady !== null && unsteady <= summary.framesOk) summary.unsteadyFrames = Math.round(unsteady);
   const checked = finiteNonnegative(record.checkedFrames);
   if (checked !== null && checked <= summary.framesOk) summary.checkedFrames = Math.round(checked);
+  const frame = frameSize(record.frame);
+  if (frame) summary.frame = frame;
   return summary;
 }
 

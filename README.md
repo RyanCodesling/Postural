@@ -1,5 +1,42 @@
 # Sprint Updates 
 
+## 📌 Update-10-14-26 | *RyanCodesling*
+
+- Set the lateral arm raise's full-range target to 85 instead of 90, and its return line to 15 instead of 10
+- Left the side bend's neck tilt and shoulder elevation, and the arm hold's shoulder elevation, out of the form score; they are still recorded
+- Saved each session's camera picture size in its capture summary
+- Showed the arm raise's share of repetitions reaching the target, the side bend's form score, and the arm hold's form score as measured values only in the trends
+
+### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\poseMetrics.ts*
+
+- Set the lateral arm raise's full-range target to 85 instead of 90: a horizontal arm reads just under 90 in the camera estimate, so at 90 a correct raise passed or failed by chance, and the guide figure's raises to exactly 90 all count at 85
+- Raised its return line, the reading a repetition must fall back to before it counts, from 10 to 15: at 10, a side stopped counting for a whole set when its resting reading sat just above the line, and a return that stopped short merged two raises into one count
+- Left three measures out of the form score while still recording them: the side bend's neck tilt and shoulder elevation, and the arm hold's shoulder elevation, whose cues were already hidden because they cannot identify a fault; correct side bends had scored about 60
+- Changed only the arm raise's, side bend's, and arm hold's measurement versions, so their trend histories start new series; no coaching configuration changes
+
+### *web\src\lib\analytics\trendSeries.ts*
+
+- Showed the arm raise's share of repetitions reaching the target, the side bend's form score, and the arm hold's form score as measured values only, because their trend bands were learned under the old settings; the frozen trend settings are unchanged
+
+### *web\src\lib\sessionReadModels.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Saved the camera picture's size in each session's capture summary, so it shows whether a session's readings are comparable; the thresholds were tuned on 16:9 frames
+
+### *Validation*
+
+- 71 framework-free TypeScript suites pass, including new cases for the measures left out of the form score, the withheld trend bands, and the saved picture size
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop keeps every count; the only change is that the arm raise's shrug cue clears two frames sooner after a flagged raise, because a repetition now ends at 15
+- The six guide animations, run through the camera loop, draw no cue and count every repetition
+
+### *Remaining boundaries*
+
+- The new target and return line are engineering values from one subject's data and a rendered figure, not clinical targets
+- The side bend has no form score in new sessions
+- A moderate sideways lean in the arm hold or the neck bends can still show LOWER rather than the trunk-lean cue, because on 16:9 frames the camera estimate reads the shoulder line about three times larger than the trunk line
+- Readings are still computed without correcting for the frame's shape, so the thresholds hold on 16:9 cameras
+
 ## 📌 Update-10-11-26 | *RyanCodesling*
 
 - Replaced the progress trend labels with a Gaussian-process trend model learned offline from the app's own recorded sessions, on the therapist trend cards, the patient progress view, and the progress PDF

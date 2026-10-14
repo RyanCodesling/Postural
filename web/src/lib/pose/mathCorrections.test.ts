@@ -90,7 +90,10 @@ async function main() {
   for (let i = 0; i < 40; i++) replay.tick({ tMs: 1000 + i * 33,
     landmarks: Array.from({ length: 33 }, () => ({ x: .5, y: .5, visibility: 1 })),
     baselines: { scapLeft: .5, scapRight: .5, bidirectionalPrimary: 0 } });
-  assert.equal(replay.context.setFrameMetricsOutput.compensationScore, 100);
+  // Since 2026-10-14 neither ex_005 channel counts in the form score
+  // (`excludedFromFormScore`), so the side bend has no frame score. The coupled
+  // residual itself is still computed for the warning and checked below.
+  assert.equal(replay.context.setFrameMetricsOutput.compensationScore, null);
   const signal = replay.context.compensationWarningSignalsRef.current.get("scapularElevation");
   assert(Math.abs(signal.value) < .001, "camera must not manufacture a ~0.05 residual");
   assert(replay.frames.every(f => f.renderedTexts.length === 0), "no false cue after persistence window");

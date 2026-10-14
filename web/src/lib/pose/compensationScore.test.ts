@@ -416,6 +416,47 @@ test("worstSideCompensationScore: a null side is ignored; both null → null", (
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MEASURES LEFT OUT OF THE FORM SCORE (excludedFromFormScore, 2026-10-14)
+// ─────────────────────────────────────────────────────────────────────────────
+// ex_005 neckTilt and scapularElevation and ex_006 scapularElevation cannot
+// identify a fault on those exercises (their cues are hidden for that reason),
+// so they no longer cost points or take a share of the weight. They are still
+// recorded in the raw features, which follow the scoring mode.
+
+test("the three measures left out of the form score are declared with a reason and a date", () => {
+  const excluded = (d: ExerciseDefinition) =>
+    d.compensationMetrics.filter((c) => c.excludedFromFormScore).map((c) => c.name).join(",");
+  assertEq(excluded(ex005), "neckTilt,scapularElevation", "ex_005");
+  assertEq(excluded(ex006), "scapularElevation", "ex_006");
+  for (const d of [ex001, ex004, ex007, ex008]) assertEq(excluded(d), "", d.id);
+  for (const d of [ex005, ex006]) {
+    for (const c of d.compensationMetrics.filter((m) => m.excludedFromFormScore)) {
+      assertEq(c.excludedFromFormScore?.since, "2026-10-14", `${d.id} ${c.name} since`);
+      assertEq((c.excludedFromFormScore?.reason ?? "").length > 20, true, `${d.id} ${c.name} reason`);
+      // Still recorded: the raw features keep every metric whose mode is not "off".
+      assertEq(getCompensationScoring(c).mode, "primary-coupled", `${d.id} ${c.name} keeps its scoring mode`);
+    }
+  }
+});
+
+test("ex_005 has no scored measure left: null even with a primary and large readings", () => {
+  assertEq(computeCompensationScore(ex005, { neckTilt: 60, scapularElevation: 0.3 }, 20), null, "large readings");
+  assertEq(computeCompensationScore(ex005, { neckTilt: 0, scapularElevation: 0 }, 20), null, "zero readings");
+});
+
+test("ex_006 shoulder height neither deducts nor dilutes: any value scores as if it were null", () => {
+  // trunkLean 10 (global band, 75) and shoulderSymmetry 3 (override floor 7, 0)
+  // at 50 weight each: total 37.5, round(62.5) = 63, the two-metric value pinned above.
+  for (const scap of [null, 0, 0.04, 0.1, 0.3]) {
+    assertEq(
+      computeCompensationScore(ex006, { scapularElevation: scap, trunkLean: 10, shoulderSymmetry: 3 }, 90),
+      63,
+      `scap ${scap}`,
+    );
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUMMARY
 // ─────────────────────────────────────────────────────────────────────────────
 

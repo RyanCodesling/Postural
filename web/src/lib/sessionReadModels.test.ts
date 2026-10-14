@@ -88,6 +88,22 @@ test("capture summary saves and reads back the unsteady frames", () => {
     "more checked frames than tracked frames drops only the count");
 });
 
+test("capture summary saves and reads back the camera picture's size", () => {
+  const saved = buildCaptureQualitySummary({
+    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frame: { width: 1280, height: 720 },
+  });
+  const parsed = parseCaptureQualitySummary(JSON.parse(JSON.stringify(saved)));
+  assert(parsed?.frame?.width === 1280 && parsed.frame.height === 720, "expected 1280x720");
+  const unknown = buildCaptureQualitySummary({ total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frame: null });
+  assert(unknown !== undefined && unknown.frame === undefined, "no known size, no frame field");
+  const older = parseCaptureQualitySummary({ framesTotal: 300, framesOk: 276, pctOk: 92 });
+  assert(older !== null && older.frame === undefined, "older summaries have no frame");
+  for (const bad of [{ width: 0, height: 720 }, { width: 1280.5, height: 720 }, { width: "1280", height: 720 }, [1280, 720], { width: 20000, height: 720 }]) {
+    const parsedBad = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, frame: bad });
+    assert(parsedBad?.pctOk === 80 && parsedBad.frame === undefined, `an implausible size drops only the frame: ${JSON.stringify(bad)}`);
+  }
+});
+
 test("capture summary rejects inconsistent frame counts", () => {
   assert(
     parseCaptureQualitySummary({ framesTotal: 10, framesOk: 12, pctOk: 100 }) === null,

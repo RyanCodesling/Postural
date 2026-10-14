@@ -133,8 +133,9 @@ test("rep-to-rep spread is session level and needs 3 repetitions", () => {
 });
 
 test("ranges are cut to the values a measure can take", () => {
+  // The press's share stands in for any banded completion share (the arm raise's is withheld).
   const sessions = [0, 6, 12, 12].map((complete) => ({ ...rep(90, 90), completeLeftReps: complete, completeRightReps: complete }));
-  const series = modelSeries("ex_001", sessions, "completionPct", "left");
+  const series = modelSeries("ex_007", sessions, "completionPct", "left");
   const raw = fitTrend([0, 50, 100, 100], [12, 12, 12, 12], series.spec!);
   assert(raw.changeHigh > 100 || Math.min(...raw.levelLow) < 0 || Math.max(...raw.levelHigh) > 100, "the raw model reaches past a limit");
   assert(series.fit!.changeHigh <= 100 && series.fit!.changeLow >= -100, "change within ±100 points");
@@ -155,7 +156,31 @@ test("the side-bend completion share shows measured values only; its frozen sett
   assert(trendMeasureSpec("ex_005", "completionPct")?.band === true, "the frozen settings still read band true");
   assert(displayMeasureSpec("ex_005", "peak")?.band === true && modelSeries("ex_005", sessions, "peak", "left").fit !== null,
     "the side-bend peak keeps its band");
-  assert(modelSeries("ex_001", sessions, "completionPct", "left").fit !== null, "other exercises' completion keeps its band");
+  assert(modelSeries("ex_007", sessions, "completionPct", "left").fit !== null, "other exercises' completion keeps its band");
+});
+
+test("the arm-raise completion share shows measured values only after its 90-to-85 target change; its peak keeps its band", () => {
+  const sessions = [12, 10, 11, 12].map((complete) => ({ ...rep(20, 20), completeLeftReps: complete, completeRightReps: complete }));
+  const series = modelSeries("ex_001", sessions, "completionPct", "left");
+  assert(BAND_WITHHELD.has("ex_001:completionPct"), "withheld");
+  assert(series.spec?.band === false && series.fit === null && series.label === null, "no band, no fit, no label");
+  assert(series.values.map((v) => v?.toFixed(1)).join(",") === "100.0,83.3,91.7,100.0", `measured values kept: ${series.values}`);
+  assert(trendMeasureSpec("ex_001", "completionPct")?.band === true, "the frozen settings still read band true");
+  assert(displayMeasureSpec("ex_001", "peak")?.band === true && modelSeries("ex_001", sessions, "peak", "left").fit !== null,
+    "the arm-raise peak keeps its band");
+});
+
+test("the side-bend and arm-hold form scores show measured values only after the 2026-10-14 scoring change; the other bands stay", () => {
+  assert(BAND_WITHHELD.has("ex_005:formScore") && BAND_WITHHELD.has("ex_006:holdFormScore"), "withheld");
+  assert(displayMeasureSpec("ex_005", "formScore")?.band === false, "side-bend form score: no band");
+  assert(displayMeasureSpec("ex_006", "holdFormScore")?.band === false, "hold form score: no band");
+  assert(trendMeasureSpec("ex_005", "formScore")?.band === true && trendMeasureSpec("ex_006", "holdFormScore")?.band === true,
+    "the frozen settings still read band true");
+  assert(displayMeasureSpec("ex_005", "peak")?.band === true && displayMeasureSpec("ex_006", "inBandPct")?.band === true,
+    "the side-bend peak and the hold's time in band keep their bands");
+  // The excluded measures are still recorded, so their exposure charts keep their bands.
+  assert(displayMeasureSpec("ex_005", "exposure:neckTilt")?.band === true, "side-bend neck-tilt exposure keeps its band");
+  assert(displayMeasureSpec("ex_001", "formScore")?.band === true, "the arm raise's form score keeps its band");
 });
 
 test("compensation charts use the app's own labels", () => {

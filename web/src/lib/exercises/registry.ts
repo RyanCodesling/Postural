@@ -368,6 +368,17 @@ export type CompensationMetricSpec = {
    */
   scoring?: CompensationScoring;
   /**
+   * Leaves this metric out of the compensation (form) score while it is still
+   * recorded. The per-repetition raw features, the exposure trends and the ML
+   * features keep it, because they follow `scoring.mode`; `{ mode: "off" }`
+   * would drop it from those too. Use when the metric cannot identify a fault
+   * on this exercise, so that a correct movement does not lose points to it.
+   * Record the reason and the date, as for a hidden cue. Unlike `cue`, this
+   * field stays in the measurement version (`versioning.ts`), because it
+   * changes the score.
+   */
+  excludedFromFormScore?: { reason: string; since: string };
+  /**
    * Per-exercise override of the metric's global `COMPENSATION_BANDS` entry.
    * When present, the score deducts against THESE bands for this exercise
    * instead of the shared default. Use when the metric's clean-form noise
@@ -671,17 +682,29 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // noise and slight standing posture variance. 20° is well above that
         // floor and below the angle of any deliberate movement.
         startThreshold: 20,
-        // 10° gap below start gives a hysteresis band wide enough to absorb
-        // post-smoothing residual jitter without missing real returns to rest.
-        repCompleteThreshold: 10,
+        // A repetition ends only when the reading falls back to this line
+        // (`repCounter.ts`); until then the side waits and counts nothing.
+        // Raised from 10 to 15 on 2026-10-14 by user decision. At 10, a
+        // return that stopped just short of the line
+        // merged two raises into one count, and a resting reading above it
+        // left that side uncounted for a whole set. That happened in the
+        // cropped, mirrored guide-clip run: one arm rested at 10.4 to 10.9
+        // on an 870x720 frame, and the set read L 33, R 0. Six of the pilot
+        // subject's 189 returns stopped between 9 and 9.8. At 15, a replay of
+        // every traced pilot set gives the same counts and labels, and the
+        // cropped case counts both sides. The start line of 20 keeps a
+        // 5-point hysteresis band. Camera-estimate units, not anatomical
+        // degrees: on 16:9 frames 15 is about 25 degrees from the trunk in
+        // the picture.
+        repCompleteThreshold: 15,
         // Minimum peak to count as a rep at all. Peaks below this are
         // silently discarded as false starts (NOT classified "partial" — that
         // boundary is `targetROM`; see `RepCounter` semantics in repCounter.ts).
         // 45° (lowered from 60° on 2026-05-21 for reduced-ROM leniency; user
         // decision via the global-floor approach, NOT classification tiers.
         // ex_001 is per-limb, so the bidirectional `abs()` phantom that
-        // gated ex_004's reduced-ROM does not apply here. `targetROM` stays
-        // 90°, so peaks in [45°, 90°) still classify as `partial` — the
+        // gated ex_004's reduced-ROM does not apply here. Peaks from 45 up to
+        // `targetROM` (85) still classify as `partial` — the
         // weakness/asymmetry signal is preserved, the rep is no longer
         // silently dropped. Patients in early rehab often plateau around
         // 45–60° before regaining full ROM.
@@ -690,7 +713,17 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // ~180° anatomically, but home-exercise prescription typically targets
         // 90° (arm horizontal) for upper-body rehab. Source: standard PT
         // shoulder protocol, Kisner & Colby, Therapeutic Exercise.
-        targetROM: 90,
+        // Set to 85 on 2026-10-11 by user decision, down from 90: the camera
+        // estimate of a horizontal arm reads just under 90, so at a 90 line a
+        // correct raise passed or failed by chance. The guide figure, built to
+        // raise its arms to exactly 90 (tools/blender/build_ex001_mpfb_figure.py,
+        // PEAK_DEG), averaged 89.8 and 88.0 with 1 of 6 repetitions complete, and
+        // the pilot subject's session 168 (medians 89.3 and 89.8) had 19 of 40.
+        // At 85, 95% of the 261 ordinary pilot repetitions count as complete,
+        // and a raise clearly short of horizontal stays partial. A
+        // single-subject engineering value in camera-estimate units, not a
+        // clinical target; the groupmates' recordings test it.
+        targetROM: 85,
       },
     },
     compensationMetrics: [
@@ -1187,7 +1220,16 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 5,
-        scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" } },
+        scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision: hidden as a
+        // cue because it cannot separate a head tilt from a correct bend, it
+        // was over its threshold for nearly the whole of every ordinary pilot
+        // side bend, and with the shoulder measure below it held correct
+        // bends at a median form score of about 60.
+        excludedFromFormScore: {
+          reason: "Cannot isolate a head tilt from a correct side bend (the head-lean primary moves with it); over its threshold on nearly all of every ordinary pilot bend.",
+          since: "2026-10-14",
+        } },
       // Shoulder shrug during side bend = bracing through the shoulder
       // girdle instead of moving from the spine. Also `primary-coupled`: the
       // shoulder line necessarily rises on the lengthening side of a clean
@@ -1209,7 +1251,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" } },
+        scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision, for the
+        // reason it is hidden as a cue (see neckTilt above).
+        excludedFromFormScore: {
+          reason: "No clinical source for shoulder elevation as a side-bend compensation; the ear-to-shoulder reading follows the head during the bend.",
+          since: "2026-10-14",
+        } },
     ],
     // Display-only coaching check, added 2026-10-02 by user decision. Both
     // compensation cues above are hidden, and exercise and
@@ -1294,7 +1342,15 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" } },
+        scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision, for the
+        // reason it is hidden as a cue: in a replay of the pilot subject's
+        // correct holds it pulled the sets' lowest form scores to 56-79,
+        // against 80-85 without it.
+        excludedFromFormScore: {
+          reason: "The pilot-fit expectation at 90 degrees did not transfer between sessions (correct-hold residual about 0.08 against a 0.04 threshold).",
+          since: "2026-10-14",
+        } },
       // Trunk lean during T-pose hold = unbalanced load between arms. Keeps the
       // global floor — clean T-pose trunk lean is ~1° (mean deduction ~2.8).
       // Sources (cue review, 2026-10-03): as for ex_001's trunk lean (Fayad et

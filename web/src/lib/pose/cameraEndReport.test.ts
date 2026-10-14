@@ -36,6 +36,7 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
     captureDropoutResetsRef: ref(1),
     captureUnsteadyFramesRef: ref(3),
     captureCheckedFramesRef: ref(80),
+    videoResolutionRef: ref({ width: 1280, height: 720 }),
     buildCaptureQualitySummary,
     resetSessionPersistence: () => {},
     stopSessionRecording: () => { stoppedRecording += 1; },
@@ -69,8 +70,8 @@ async function run() {
     assert.deepEqual(h.bodies[0]?.captureQualitySummary, {
       framesTotal: 100, framesOk: 90, pctOk: 90,
       rejectedFramesByStatus: { KNEES_NOT_VISIBLE: 8, NOT_VISIBLE: 2 }, sustainedDropoutResets: 1,
-      unsteadyFrames: 3, checkedFrames: 80,
-    }, "the end request saves why frames were rejected, the dropout resets, the unsteady frames and the checked ones");
+      unsteadyFrames: 3, checkedFrames: 80, frame: { width: 1280, height: 720 },
+    }, "the end request saves why frames were rejected, the dropout resets, the unsteady and checked frames, and the picture size");
     console.log("  ✓ saved: the report is offered after the save completes");
   }
 

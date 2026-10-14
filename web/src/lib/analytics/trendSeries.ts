@@ -229,11 +229,27 @@ export function minUnitsFor(exerciseId: string, measure: TrendMeasureName, confi
  * itself changed. The side-bend target moved from 25 to 17 on 2026-10-02 by
  * user decision; this band's variation had been learned under 25, when almost
  * no repetitions reached the target, and the share now behaves differently.
- * The chart shows measured values only, like any measure without a checked
- * band, until the band is checked under the new target. The frozen settings
- * file is unchanged.
+ * The lateral arm raise target moved from 90 to 85 on 2026-10-11 by user
+ * decision, for the same kind of reason (a horizontal arm reads just under
+ * 90); its share's variation had been learned under 90, and the share now
+ * reads higher for the same raises. The chart shows measured values only,
+ * like any measure without a checked band, until the band is checked under
+ * the new target. The frozen settings file is unchanged.
+ *
+ * The side bend's form score and the arm hold's hold form score are withheld
+ * for the same kind of reason. On 2026-10-14, by user decision, the measures
+ * that cannot identify a fault on those exercises stopped counting in the
+ * score (`excludedFromFormScore` in the registry): the side bend's neck tilt
+ * and shoulder height, and the hold's shoulder height. Their bands were learned
+ * while those measures still cost correct movements points. The side bend now
+ * has no scored measure, so new sessions record no form score for it.
  */
-export const BAND_WITHHELD: ReadonlySet<string> = new Set(["ex_005:completionPct"]);
+export const BAND_WITHHELD: ReadonlySet<string> = new Set([
+  "ex_005:completionPct",
+  "ex_001:completionPct",
+  "ex_005:formScore",
+  "ex_006:holdFormScore",
+]);
 
 /** The measure's settings as the charts use them: a withheld band reads as no band. */
 export function displayMeasureSpec(

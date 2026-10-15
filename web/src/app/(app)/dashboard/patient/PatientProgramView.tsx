@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
-import { sessionPrimaryValue, type TrendSession } from "../_components/ExerciseTrends";
+import { prepareGroupModelSeries } from "@/lib/analytics/trendSeries";
+import { groupSessionsByExercise, primaryMetricMeta, type TrendSession } from "../_components/ExerciseTrends";
 import { FIT_SCREEN, Glyph, Panel, StatTile } from "../_components/DashboardKit";
 
 export interface ProgramOccurrence {
@@ -100,6 +101,37 @@ function ProgressRing({ percent }: { percent: number }) {
   );
 }
 
+/**
+ * The range-of-motion gauge's values, oldest first: the sessions of the newest
+ * exercise setup (exercise, side, resistance and configuration, grouped as on the
+ * trend cards) of a degree-measured repetition exercise, each as its average peak
+ * under the trend data rules. A session counts only when every prescribed side
+ * has a plotted value, so poorly tracked sessions and sides with too few
+ * repetitions are left out, as on the trend lines.
+ */
+export function gaugeHistory(sessions: TrendSession[]): { exerciseName: string; values: number[] } | null {
+  const newestFirst = [...sessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  for (const group of groupSessionsByExercise(newestFirst)) {
+    if (group.exerciseKind !== "dynamic" || !primaryMetricMeta(group.exerciseKind, group.primaryMetric).isAngle) continue;
+    const series = prepareGroupModelSeries(group.exerciseId, group.prescribedSide, group.sessions, "peak", true);
+    const values: number[] = [];
+    group.sessions.forEach((_, i) => {
+      let sum = 0;
+      let reps = 0;
+      for (const side of series) {
+        const value = side.values[i];
+        const units = side.units[i];
+        if (value === null || units === null) return;
+        sum += value * units;
+        reps += units;
+      }
+      values.push(sum / reps);
+    });
+    if (values.length > 0) return { exerciseName: group.exerciseName, values };
+  }
+  return null;
+}
+
 /** Half-circle gauge on a 0–180 scale: the needle is the latest value, the fill the best so far. */
 function Gauge({ latest, first, best }: { latest: number; first: number; best: number }) {
   const point = (value: number, r: number) => {
@@ -171,14 +203,10 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
   const inWindow = days.filter((d) => dayNumber(d) >= windowStart && dayNumber(d) <= windowEnd);
   const visibleDays = showAll || inWindow.length === 0 ? days : inWindow;
 
-  // Gauge: the latest rep-counted session of a degree-measured exercise, against
-  // the first and best sessions of that same exercise. Values are camera estimates.
-  const rom = sessions
-    .filter((s) => s.exerciseKind === "dynamic" && s.exerciseId !== "ex_007" && sessionPrimaryValue(s) != null)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-  const latestSession = rom[rom.length - 1];
-  const sameExercise = latestSession ? rom.filter((s) => s.exerciseId === latestSession.exerciseId) : [];
-  const values = sameExercise.map((s) => sessionPrimaryValue(s) as number);
+  // Gauge: the latest counted session of a degree-measured exercise, against the
+  // first and best sessions of the same setup (gaugeHistory). Values are camera estimates.
+  const gauge = gaugeHistory(sessions);
+  const values = gauge?.values ?? [];
 
   const upcoming = days.find((d) => d > today);
   const reminders: string[] = [];
@@ -327,11 +355,11 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
           <div className="min-h-0">{calendar}</div>
           <div className="grid min-h-0 grid-cols-2 gap-4">
             <Panel title="Range of Motion" scroll>
-              {latestSession && values.length > 0 ? (
+              {gauge ? (
                 <div className="flex h-full flex-col justify-between">
                   <Gauge latest={values[values.length - 1]} first={values[0]} best={Math.max(...values)} />
                   <div className="text-center leading-tight">
-                    <p className="truncate text-xs font-semibold text-gray-900">{latestSession.exerciseName}</p>
+                    <p className="truncate text-xs font-semibold text-gray-900">{gauge.exerciseName}</p>
                     <p className="text-[11px] text-gray-500">
                       Latest <strong className="text-green-700">{Math.round(values[values.length - 1])}</strong> · Best{" "}
                       <strong className="text-gray-900">{Math.round(Math.max(...values))}</strong> · First{" "}

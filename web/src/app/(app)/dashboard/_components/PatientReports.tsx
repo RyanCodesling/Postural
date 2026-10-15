@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { useDemoClock } from "@/lib/DemoClockContext";
+import { heldOutSessionCount, prepareGroupModelSeries } from "@/lib/analytics/trendSeries";
 import { groupSessionsByExercise, primaryMetricMeta, type TrendSession } from "./ExerciseTrends";
 import ConsistencyCalendar from "../patient/ConsistencyCalendar";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
@@ -57,6 +58,10 @@ interface Point {
   label: string;
   left: number | null;
   right: number | null;
+  /** A session the trend data rules leave out: drawn hollow, off the line, with why. */
+  leftHeld?: number | null;
+  rightHeld?: number | null;
+  heldReason?: string | null;
 }
 
 function niceMax(value: number): number {
@@ -65,11 +70,13 @@ function niceMax(value: number): number {
   return Math.ceil(value / step) * step;
 }
 
-function LineChart({ points }: { points: Point[] }) {
+function LineChart({ points, format }: { points: Point[]; format: (value: number) => string }) {
   const W = 480;
   const H = 220;
   const pad = { l: 34, r: 12, t: 12, b: 26 };
-  const values = points.flatMap((p) => [p.left, p.right]).filter((v): v is number => v != null);
+  const values = points
+    .flatMap((p) => [p.left, p.right, p.leftHeld ?? null, p.rightHeld ?? null])
+    .filter((v): v is number => v != null);
   const top = niceMax(Math.max(...values, 1));
   const x = (i: number) =>
     pad.l + (points.length === 1 ? (W - pad.l - pad.r) / 2 : (i * (W - pad.l - pad.r)) / (points.length - 1));
@@ -91,7 +98,7 @@ function LineChart({ points }: { points: Point[] }) {
       {ticks.map((t) => (
         <g key={t}>
           <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} stroke="#e5efe7" />
-          <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" fontSize="9" fill="#6b7280">{Math.round(t)}</text>
+          <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" fontSize="9" fill="#6b7280">{format(t)}</text>
         </g>
       ))}
       <path d={path((p) => p.left)} fill="none" stroke={LEFT} strokeWidth="2" />
@@ -100,6 +107,16 @@ function LineChart({ points }: { points: Point[] }) {
         <g key={`${p.label}-${i}`}>
           {p.left != null && <circle cx={x(i)} cy={y(p.left)} r="4" fill="#fff" stroke={LEFT} strokeWidth="2" />}
           {p.right != null && <circle cx={x(i)} cy={y(p.right)} r="4" fill="#fff" stroke={RIGHT} strokeWidth="2" />}
+          {[
+            { v: p.leftHeld, color: LEFT, side: "Left" },
+            { v: p.rightHeld, color: RIGHT, side: "Right" },
+          ].map(({ v, color, side }) =>
+            v == null ? null : (
+              <circle key={side} cx={x(i)} cy={y(v)} r="4" fill="#fff" stroke={color} strokeWidth="1.5" strokeDasharray="2 2" data-held-out="">
+                <title>{`${side} ${format(v)}: left out because ${p.heldReason}`}</title>
+              </circle>
+            ),
+          )}
           {i % every === 0 && (
             <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="#6b7280">{p.label}</text>
           )}
@@ -186,15 +203,33 @@ export default function PatientReports({
 
   const isIsometric = group?.exerciseKind === "isometric";
   const meta = group ? primaryMetricMeta(group.exerciseKind, group.primaryMetric) : null;
-  const romPoints: Point[] = inRange.map((s) => ({
-    label: shortLabel(dayKey(s.startedAt)),
-    left: isIsometric
-      ? (s.totalLeftHoldMs ?? s.totalPairedHoldMs ?? null) != null ? Math.round((s.totalLeftHoldMs ?? s.totalPairedHoldMs ?? 0) / 1000) : null
-      : s.avgLeftPeakValue != null || s.avgPeakValue != null ? Math.round((s.avgLeftPeakValue ?? s.avgPeakValue) as number) : null,
-    right: isIsometric
-      ? (s.totalRightHoldMs ?? null) != null ? Math.round((s.totalRightHoldMs ?? 0) / 1000) : null
-      : s.avgRightPeakValue != null ? Math.round(s.avgRightPeakValue) : null,
-  }));
+  // The shoulder press's normalized readings keep two decimals; angles and seconds are whole numbers.
+  const format = !isIsometric && meta && !meta.isAngle ? (v: number) => v.toFixed(2) : (v: number) => String(Math.round(v));
+  // Peaks follow the trend data rules, as on the trend cards: a poorly tracked
+  // repetition counts nowhere, a side needs enough repetitions to plot, and a
+  // poorly tracked session is drawn hollow, off the line.
+  const series = group && !isIsometric
+    ? prepareGroupModelSeries(group.exerciseId, group.prescribedSide, inRange, "peak", true)
+    : [];
+  const leftSeries = series.find((s) => s.side === "left");
+  const rightSeries = series.find((s) => s.side === "right");
+  const romPoints: Point[] = inRange.map((s, i) =>
+    isIsometric
+      ? {
+          label: shortLabel(dayKey(s.startedAt)),
+          left: (s.totalLeftHoldMs ?? s.totalPairedHoldMs ?? null) != null ? Math.round((s.totalLeftHoldMs ?? s.totalPairedHoldMs ?? 0) / 1000) : null,
+          right: (s.totalRightHoldMs ?? null) != null ? Math.round((s.totalRightHoldMs ?? 0) / 1000) : null,
+        }
+      : {
+          label: shortLabel(dayKey(s.startedAt)),
+          left: leftSeries?.values[i] ?? null,
+          right: rightSeries?.values[i] ?? null,
+          leftHeld: leftSeries?.heldOut[i]?.value ?? null,
+          rightHeld: rightSeries?.heldOut[i]?.value ?? null,
+          heldReason: leftSeries?.heldOut[i]?.reason ?? rightSeries?.heldOut[i]?.reason ?? null,
+        },
+  );
+  const leftOut = isIsometric ? 0 : heldOutSessionCount(inRange);
   const repPoints: Point[] = inRange.map((s) => ({
     label: shortLabel(dayKey(s.startedAt)),
     left: s.leftReps ?? s.completeLeftReps ?? null,
@@ -252,10 +287,19 @@ export default function PatientReports({
             <p className="py-10 text-center text-sm text-gray-400">No sessions in this range.</p>
           ) : (
             <>
-              <LineChart points={romPoints} />
+              <LineChart points={romPoints} format={format} />
               <p className="mt-1 text-[11px] text-gray-400">
-                {isIsometric ? "Seconds held per side." : `${meta?.label ?? "Peak"} per session. Camera estimates, not clinical measurements.`}
+                {isIsometric
+                  ? "Seconds held per side."
+                  : `${meta?.label ?? "Peak"} per session, without poorly tracked repetitions. Camera estimates, not clinical measurements.`}
               </p>
+              {leftOut > 0 && (
+                <p className="mt-1 text-[11px] leading-4 text-amber-700" data-held-out-note="">
+                  {leftOut} session{leftOut === 1 ? " is" : "s are"} left out of the lines because the camera tracked half or
+                  more of {leftOut === 1 ? "its" : "their"} repetitions poorly. {leftOut === 1 ? "It shows" : "They show"} as
+                  dashed hollow points where enough well-tracked repetitions remain to plot.
+                </p>
+              )}
             </>
           )}
         </Card>

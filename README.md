@@ -1,5 +1,49 @@
 # Sprint Updates 
 
+## 📌 Update-10-15-26 | *RyanCodesling*
+
+- Merged the 10-14 frame-size fix into Enah's 10-15 update, so this branch keeps every change the evaluation server runs
+- Kept the update's package upgrade, which clears every security advisory npm reports for the app's packages, including critical ones for the previous Next.js
+- Turned off the six React Compiler lint rules that the new lint package adds; the app does not use the React Compiler, and they failed on code that already runs
+- Made the new Reports tab's range-of-motion chart and the patient dashboard's range-of-motion gauge follow the same tracking rules as the trend charts, and kept the shoulder press's decimals
+
+### *web\package.json* and *web\package-lock.json*
+
+- Kept the update's versions: Next.js 16.4.0, nodemailer 10.1.1, esbuild 0.28.2, and eslint-config-next 16.4.0; npm's security audit flagged 7 of the app's packages in the previous lock, Next.js 16.2.6 among them with critical advisories, and flags none in this one
+- The trend worker built by the new esbuild is byte-identical to the previous build
+
+### *web\eslint.config.mjs*
+
+- Turned off react-hooks/refs, purity, set-state-in-effect, immutability, preserve-manual-memoization, and static-components, which the new lint package adds for the React Compiler; they raised 72 errors on code that already runs, 61 of them in the camera page, which the update did not change
+- Kept the hook-order and dependency checks on
+
+### *web\src\app\(app)\dashboard\_components\PatientReports.tsx*
+
+- Plotted each side's peak under the trend data rules, as the trend charts do: poorly tracked repetitions do not count, and a poorly tracked session shows as a dashed hollow point off the line, with the same note as the trend cards
+- Kept two decimals for the shoulder press's normalized readings, which the chart had rounded to 0 or 1
+- Left the hold times, repetition bars, adherence calendar, and session totals as recorded
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*
+
+- Compared the gauge's latest, best, and first values within one exercise setup only (exercise, side, resistance, and configuration), under the same tracking rules; a session counts when every prescribed side does
+
+### *Validation*
+
+- 74 framework-free TypeScript suites pass, including a new one for the Reports chart and the gauge
+- Type check, lint, and a production build pass on Next.js 16.4.0
+- The database check passes against actual PostgreSQL using connection-private temporary tables; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop gives the same results as before the merge
+- The landing and login pages render on the new versions
+
+### *Remaining boundaries*
+
+- The update's emails stay off on the evaluation server, which has no mail settings; two problems remain in them: ending a session paused for pain waits for its email, and the daily summary can miss exercises completed after 8 PM
+- Before the daily summaries are used, the database owner runs scripts\notification_email_digests_pg.sql
+- The landing and sign-in pages show the clinic's contact details, describe the camera as showing a stick-figure skeleton rather than a picture although sessions can save video, and offer daily emails the server cannot send yet; these are for Enah to settle before the update is deployed
+- The Reports chart and the gauge were checked by rendering them with test data, not in a signed-in browser, and no camera session has been recorded on the new versions yet
+
+---
+
 ## 📌 Update-10-15-26 | *Enah*
 
 - Sent each therapist and patient one email a day for the exercises completed and one for the exercises missed, listing each exercise's sets and reps, and left manual-monitoring exercises out

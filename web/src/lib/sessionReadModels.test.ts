@@ -88,19 +88,30 @@ test("capture summary saves and reads back the unsteady frames", () => {
     "more checked frames than tracked frames drops only the count");
 });
 
-test("capture summary saves and reads back the camera picture's size", () => {
+test("capture summary saves and reads back every camera frame size, largest count first", () => {
   const saved = buildCaptureQualitySummary({
-    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frame: { width: 1280, height: 720 },
+    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frameSizes: { "640x480": 70, "1280x720": 200 },
   });
   const parsed = parseCaptureQualitySummary(JSON.parse(JSON.stringify(saved)));
-  assert(parsed?.frame?.width === 1280 && parsed.frame.height === 720, "expected 1280x720");
-  const unknown = buildCaptureQualitySummary({ total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frame: null });
-  assert(unknown !== undefined && unknown.frame === undefined, "no known size, no frame field");
+  assert(JSON.stringify(parsed?.frameSizes) === JSON.stringify([
+    { width: 1280, height: 720, frames: 200 }, { width: 640, height: 480, frames: 70 },
+  ]), `both sizes, largest first: ${JSON.stringify(parsed?.frameSizes)}`);
+  const single = parseCaptureQualitySummary(buildCaptureQualitySummary({
+    total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frameSizes: { "1280x720": 270 },
+  }));
+  assert(single?.frameSizes?.length === 1 && single.frameSizes[0].frames === 270, "one size");
+  const none = buildCaptureQualitySummary({ total: 300, ok: 270, rejectedByStatus: {}, dropoutResets: 0, frameSizes: {} });
+  assert(none !== undefined && none.frameSizes === undefined, "no measured frame, no field");
   const older = parseCaptureQualitySummary({ framesTotal: 300, framesOk: 276, pctOk: 92 });
-  assert(older !== null && older.frame === undefined, "older summaries have no frame");
-  for (const bad of [{ width: 0, height: 720 }, { width: 1280.5, height: 720 }, { width: "1280", height: 720 }, [1280, 720], { width: 20000, height: 720 }]) {
-    const parsedBad = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, frame: bad });
-    assert(parsedBad?.pctOk === 80 && parsedBad.frame === undefined, `an implausible size drops only the frame: ${JSON.stringify(bad)}`);
+  assert(older !== null && older.frameSizes === undefined, "older summaries have no frame sizes");
+  const bad: unknown[] = [
+    [{ width: 0, height: 720, frames: 5 }], [{ width: 1280.5, height: 720, frames: 5 }], [{ width: "1280", height: 720, frames: 5 }],
+    [{ width: 20000, height: 720, frames: 5 }], [{ width: 1280, height: 720, frames: -1 }], [{ width: 1280, height: 720, frames: 9 }],
+    [{ width: 1280, height: 720, frames: 2 }, { width: 1280, height: 720, frames: 2 }], { "1280x720": 9 }, { "1280-720": 3 }, "1280x720", [],
+  ];
+  for (const value of bad) {
+    const parsedBad = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, frameSizes: value });
+    assert(parsedBad?.pctOk === 80 && parsedBad.frameSizes === undefined, `malformed or too many frames drops only the field: ${JSON.stringify(value)}`);
   }
 });
 

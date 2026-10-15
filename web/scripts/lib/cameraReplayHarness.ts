@@ -121,6 +121,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   for (const name of ["leftBaseline", "rightBaseline", "leftScapBaseline", "rightScapBaseline", "bidirectionalBaseline"]) context[`${name}Ref`] = ref({ value: null, samples: [] });
   context.lastCaptureOkRef = ref(true); context.lastCaptureMsgRef = ref("Captured");
   context.captureRejectedByStatusRef = ref({});
+  context.captureFrameSizesRef = ref({});
   context.steadinessRef = ref(globals.newSteadinessState());
   context.trackingMessageRef = ref(globals.NO_TRACKING_MESSAGE);
   context.trackingMarksRef = ref([]);

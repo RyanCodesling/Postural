@@ -36,8 +36,18 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
     captureDropoutResetsRef: ref(1),
     captureUnsteadyFramesRef: ref(3),
     captureCheckedFramesRef: ref(80),
-    videoResolutionRef: ref({ width: 1280, height: 720 }),
+    captureFrameSizesRef: ref({ "1280x720": 90 }),
     buildCaptureQualitySummary,
+    // What the camera's own stopCamera touches, so a test can press Stop first.
+    useCallback: (fn: any) => fn,
+    cameraStartEpochRef: ref(0), cameraReadyRef: ref(true), sessionStateRef: ref("active"),
+    coachingAuditRef: ref({ interrupt() {} }), performance: { now: () => 0 },
+    videoRef: ref({ srcObject: {} }), streamRef: ref({ getTracks: () => [] }), requestRef: ref(null),
+    cancelAnimationFrame: () => {}, applyTraceSyncReadout: () => {}, traceSyncElRef: ref(null), TRACE_SYNC_PLACEHOLDER: "",
+    videoResolutionRef: ref({ width: 1280, height: 720 }),
+    fpsFrameCountRef: ref(0), fpsWindowStartMsRef: ref(0), inferMsSumRef: ref(0), frameMsSumRef: ref(0), perfSampleCountRef: ref(0),
+    setCameraStreamActive: () => {}, setVideoResolution: () => {}, setFps: () => {}, setPerfMs: () => {},
+    activeDefinitionRef: ref(null), resetNeutralCalibration: () => {},
     resetSessionPersistence: () => {},
     stopSessionRecording: () => { stoppedRecording += 1; },
     flushRawFrames: () => {},
@@ -51,9 +61,13 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
       clearStorage: () => {},
     }),
   });
-  vm.runInContext(transpile(cameraDeclarations(["SESSION_END_DRAIN_TIMEOUT_MS", "endSessionPersistence"]) +
-    "\nglobalThis.end = endSessionPersistence;"), context);
-  return { context, offered, bodies, releaseDrain, recordingStops: () => stoppedRecording, end: () => context.end(false, "user") as Promise<string> };
+  vm.runInContext(transpile(cameraDeclarations(["SESSION_END_DRAIN_TIMEOUT_MS", "endSessionPersistence", "stopCamera"]) +
+    "\nglobalThis.end = endSessionPersistence; globalThis.stop = stopCamera;"), context);
+  return {
+    context, offered, bodies, releaseDrain, recordingStops: () => stoppedRecording,
+    end: () => context.end(false, "user") as Promise<string>,
+    stop: () => context.stop() as Promise<void>,
+  };
 }
 
 async function run() {
@@ -70,9 +84,23 @@ async function run() {
     assert.deepEqual(h.bodies[0]?.captureQualitySummary, {
       framesTotal: 100, framesOk: 90, pctOk: 90,
       rejectedFramesByStatus: { KNEES_NOT_VISIBLE: 8, NOT_VISIBLE: 2 }, sustainedDropoutResets: 1,
-      unsteadyFrames: 3, checkedFrames: 80, frame: { width: 1280, height: 720 },
-    }, "the end request saves why frames were rejected, the dropout resets, the unsteady and checked frames, and the picture size");
+      unsteadyFrames: 3, checkedFrames: 80, frameSizes: [{ width: 1280, height: 720, frames: 90 }],
+    }, "the end request saves why frames were rejected, the dropout resets, the unsteady and checked frames, and the frame sizes");
     console.log("  ✓ saved: the report is offered after the save completes");
+  }
+
+  {
+    // Codex's review of b84ebac: Stop cleared the footer readout the summary
+    // used, so Stop then End saved no size. The session's own count survives.
+    const h = harness({ sessionId: 218 });
+    await h.stop();
+    assert.equal(h.context.videoResolutionRef.current, null, "Stop ran and cleared the footer readout");
+    const ending = h.end();
+    h.releaseDrain();
+    assert.equal(await ending, "saved");
+    assert.deepEqual(h.bodies[0]?.captureQualitySummary?.frameSizes, [{ width: 1280, height: 720, frames: 90 }],
+      "Stop then End still saves the frame sizes");
+    console.log("  ✓ Stop then End keeps the frame sizes");
   }
 
   {
@@ -110,7 +138,7 @@ async function run() {
     console.log("  ✓ an unresolved create offers nothing");
   }
 
-  console.log("\n5 passed, 0 failed\n");
+  console.log("\n6 passed, 0 failed\n");
 }
 
 run().catch((error) => {

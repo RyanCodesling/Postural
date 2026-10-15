@@ -372,7 +372,7 @@ type ResumeSnapshot = {
    */
   completedSetsLog?: CompletedSetRecord[];
   repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number; unsteady?: number; checked?: number };
+  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number; unsteady?: number; checked?: number; frameSizes?: Record<string, number> };
   /** The patient opted in to video for this session and has not stopped it. */
   recordVideo?: boolean;
 };
@@ -413,7 +413,7 @@ function readResumeSnapshot(
 function restoredSessionProgress(snap: ResumeSnapshot): {
   setsLog: CompletedSetRecord[];
   repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
-  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number; unsteady: number; checked: number };
+  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number; unsteady: number; checked: number; frameSizes: Record<string, number> };
 } {
   const count = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -447,6 +447,16 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
     Object.values(rejected).every(count)
       ? { ...rejected }
       : {};
+  // The frame sizes came later still: "WxH" keys counting accepted frames,
+  // at most as many as the frames that passed. Anything else restores none.
+  const sizes = frames?.frameSizes;
+  const sizeEntries =
+    sizes && typeof sizes === "object" && !Array.isArray(sizes) ? Object.entries(sizes) : [];
+  const sizesValid =
+    sizeEntries.every(([key, n]) => /^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(key) && count(n)) &&
+    !!frames && count(frames.ok) &&
+    sizeEntries.reduce((sum, [, n]) => sum + (n as number), 0) <= frames.ok;
+  const frameSizes = sizesValid ? Object.fromEntries(sizeEntries) as Record<string, number> : {};
   const captureFrames =
     frames && count(frames.total) && count(frames.ok) && frames.ok <= frames.total
       ? {
@@ -456,8 +466,9 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
           dropoutResets: count(frames.dropoutResets) ? frames.dropoutResets : 0,
           unsteady: count(frames.unsteady) && frames.unsteady <= frames.ok ? frames.unsteady : 0,
           checked: count(frames.checked) && frames.checked <= frames.ok ? frames.checked : 0,
+          frameSizes,
         }
-      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0 };
+      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} };
   return {
     setsLog,
     repOutcomes: {
@@ -3112,6 +3123,11 @@ export default function CameraClient() {
   // grace discarded the movement in progress. Saved with the summary.
   const captureRejectedByStatusRef = useRef<Record<string, number>>({});
   const captureDropoutResetsRef = useRef<number>(0);
+  // Accepted active frames per camera frame size ("WxH"). Readings depend on
+  // the frame's shape and the thresholds were tuned on 16:9, so the summary
+  // lists every size the session measured on. Owned by the session, unlike
+  // the footer's resolution readout, which Stop clears.
+  const captureFrameSizesRef = useRef<Record<string, number>>({});
   // Unsteady-tracking check (display only): its state, the part its message
   // names, each processed frame's marks for the repetitions' tracking records,
   // and the session's unsteady frames (→ capture_quality_summary).
@@ -3654,8 +3670,9 @@ export default function CameraClient() {
     flushRawFrames();
     // Session-level capture-quality summary: the % of active frames with OK
     // capture, why the others were rejected, how often a sustained
-    // rejection discarded the movement in progress, and the camera picture's
-    // size (readings depend on its shape; the thresholds were tuned on 16:9).
+    // rejection discarded the movement in progress, and the camera frame
+    // sizes measured on (readings depend on the shape; the thresholds were
+    // tuned on 16:9).
     const captureQualitySummary = buildCaptureQualitySummary({
       total: captureFramesTotalRef.current,
       ok: captureFramesOkRef.current,
@@ -3663,7 +3680,7 @@ export default function CameraClient() {
       dropoutResets: captureDropoutResetsRef.current,
       unsteady: captureUnsteadyFramesRef.current,
       checked: captureCheckedFramesRef.current,
-      frame: videoResolutionRef.current,
+      frameSizes: captureFrameSizesRef.current,
     });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
@@ -3904,6 +3921,7 @@ export default function CameraClient() {
         dropoutResets: captureDropoutResetsRef.current,
         unsteady: captureUnsteadyFramesRef.current,
         checked: captureCheckedFramesRef.current,
+        frameSizes: { ...captureFrameSizesRef.current },
       },
     };
     try {
@@ -4381,6 +4399,7 @@ export default function CameraClient() {
     captureFramesOkRef.current = 0;
     captureRejectedByStatusRef.current = {};
     captureDropoutResetsRef.current = 0;
+    captureFrameSizesRef.current = {};
     captureUnsteadyFramesRef.current = 0;
     captureCheckedFramesRef.current = 0;
     trackingMarksRef.current = [];
@@ -4448,6 +4467,7 @@ export default function CameraClient() {
     captureFramesOkRef.current = progress.captureFrames.ok;
     captureRejectedByStatusRef.current = { ...progress.captureFrames.rejectedByStatus };
     captureDropoutResetsRef.current = progress.captureFrames.dropoutResets;
+    captureFrameSizesRef.current = { ...progress.captureFrames.frameSizes };
     captureUnsteadyFramesRef.current = progress.captureFrames.unsteady;
     captureCheckedFramesRef.current = progress.captureFrames.checked;
     trackingMarksRef.current = [];
@@ -6432,6 +6452,8 @@ export default function CameraClient() {
             captureFramesTotalRef.current += 1;
             if (r.ok) {
               captureFramesOkRef.current += 1;
+              const size = `${canvas.width}x${canvas.height}`;
+              captureFrameSizesRef.current[size] = (captureFrameSizesRef.current[size] ?? 0) + 1;
             } else {
               const rejected = captureRejectedByStatusRef.current;
               rejected[r.status] = (rejected[r.status] ?? 0) + 1;

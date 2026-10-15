@@ -5,6 +5,21 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  // With eslint-config-next 16.4, lint also runs eslint-plugin-react-hooks'
+  // React Compiler rules. This app does not use the React Compiler
+  // (next.config.ts), and on 2026-10-15 these six rules raised 72 errors on
+  // code that already runs, 61 of them in the camera page. Turned off by user
+  // decision instead of rewriting that code before the evaluation.
+  {
+    rules: {
+      "react-hooks/refs": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/static-components": "off",
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

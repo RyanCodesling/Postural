@@ -51,7 +51,7 @@ export default function ProfileLayout({
 }) {
   return (
     <div className={FIT_SCREEN}>
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 rounded-xl bg-gradient-to-br from-green-700 to-emerald-500 px-6 py-5 text-white shadow-sm">
+      <div id="tour-profile-card" className="flex shrink-0 flex-wrap items-center justify-between gap-4 rounded-xl bg-gradient-to-br from-green-700 to-emerald-500 px-6 py-5 text-white shadow-sm">
         <div className="flex min-w-0 items-center gap-4">
           <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-white text-xl font-bold text-green-700 shadow">
             {initials(name)}
@@ -63,6 +63,7 @@ export default function ProfileLayout({
           </div>
         </div>
         <button
+          id="tour-profile-password"
           type="button"
           onClick={onChangePassword}
           className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-green-800 transition hover:bg-green-50"
@@ -72,16 +73,16 @@ export default function ProfileLayout({
       </div>
 
       <div className={`grid gap-4 lg:grid-cols-12 ${bottom ? "shrink-0" : "min-h-0 flex-1"}`}>
-        <Panel className="lg:col-span-7" title={leftTitle} scroll={!bottom}>
+        <Panel id="tour-profile-left" className="lg:col-span-7" title={leftTitle} scroll={!bottom}>
           {left}
         </Panel>
-        <Panel className="lg:col-span-5" title={rightTitle} scroll={!bottom}>
+        <Panel id="tour-profile-right" className="lg:col-span-5" title={rightTitle} scroll={!bottom}>
           {right}
         </Panel>
       </div>
 
       {bottom && (
-        <Panel className="flex-1" title={bottomTitle ?? ""} scroll>
+        <Panel id="tour-profile-bottom" className="flex-1" title={bottomTitle ?? ""} scroll>
           {bottom}
         </Panel>
       )}

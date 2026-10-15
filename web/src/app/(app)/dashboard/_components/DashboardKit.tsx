@@ -47,7 +47,9 @@ export function Panel({
   children,
   className = "",
   scroll = false,
+  id,
 }: {
+  id?: string;
   title: ReactNode;
   right?: ReactNode;
   children: ReactNode;
@@ -55,7 +57,7 @@ export function Panel({
   scroll?: boolean;
 }) {
   return (
-    <section className={`flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm ${className}`}>
+    <section id={id} className={`flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm ${className}`}>
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-gray-900">{title}</h2>
         {right}

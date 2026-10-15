@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import AppShell from "../_components/AppShell";
+import { ADMIN_TOURS } from "../_components/tours";
 import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/DashboardKit";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
@@ -677,6 +678,7 @@ export default function AdminDashboard() {
       ]}
       userName={user?.name}
       roleLabel="Admin"
+      tour={ADMIN_TOURS[activeTab]}
       onLogout={async () => { await logout(); router.push("/"); }}
     >
         {activeTab === "demo-clock" && demoClockOn && (
@@ -717,7 +719,7 @@ export default function AdminDashboard() {
             ) : (
               <div className="flex min-h-0 flex-1 flex-col gap-4">
                 {/* KPI tiles */}
-                <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                   <StatTile label="Active patients" value={dashboardData.stats.activePatients} icon={Glyph.users} tone="green" />
                   <StatTile label="Active therapists" value={dashboardData.stats.activeTherapists} icon={Glyph.user} tone="teal" />
                   <StatTile label="Assignments" value={dashboardData.stats.activeAssignments} icon={Glyph.link} tone="lime" />
@@ -729,7 +731,7 @@ export default function AdminDashboard() {
                 {/* System Activity & Recent Sessions */}
                 <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
                   {/* Activity Feed */}
-                  <div className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7 lg:min-h-0">
+                  <div id="tour-feed" className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7 lg:min-h-0">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
                       <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
                         <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -776,7 +778,7 @@ export default function AdminDashboard() {
                   </div>
 
                   {/* Recent Sessions */}
-                  <div className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5 lg:min-h-0">
+                  <div id="tour-sessions" className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5 lg:min-h-0">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
                       <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
                         <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -816,7 +818,7 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Quick Actions */}
-                <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                <div id="tour-actions" className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
                   {[
                     { title: "Add New User", text: "Register a new patient or therapist", go: () => { setActiveTab("users"); setShowUserForm(true); } },
                     { title: "Add Custom Exercise", text: "Create a custom rehabilitation exercise", go: () => { setActiveTab("exercises"); setShowExerciseForm(true); } },
@@ -846,6 +848,7 @@ export default function AdminDashboard() {
             <div className="flex shrink-0 items-center justify-between gap-3">
               <PageHeading title="Manage Users" subtitle="Add, edit and archive patient and therapist accounts." />
               <button
+                id="tour-add-user"
                 onClick={() => {
                   if (editingUserId) {
                     handleCancelEdit();
@@ -882,7 +885,7 @@ export default function AdminDashboard() {
               </button>
             </div>
 
-            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+            <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
               <StatTile label="Active users" value={activeUsers.length} icon={Glyph.users} tone="green" />
               <StatTile label="Patients" value={activeUsers.filter((u) => u.role === "patient").length} icon={Glyph.user} tone="teal" />
               <StatTile label="Therapists" value={activeUsers.filter((u) => u.role === "therapist").length} icon={Glyph.link} tone="lime" />
@@ -1685,7 +1688,7 @@ export default function AdminDashboard() {
 
             <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]">
             {/* Users List — Active */}
-            <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+            <div id="tour-active-users" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>
                 Active Users
@@ -1741,7 +1744,7 @@ export default function AdminDashboard() {
             </div>
 
             {/* Users List — Archived */}
-            <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+            <div id="tour-archived-users" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                 Archived Users
@@ -1810,6 +1813,7 @@ export default function AdminDashboard() {
             <div className="flex shrink-0 items-center justify-between gap-3">
               <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage custom ones." />
               <button
+                id="tour-add-exercise"
                 onClick={() => setShowExerciseForm(!showExerciseForm)}
                 className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg transition"
               >
@@ -1817,7 +1821,7 @@ export default function AdminDashboard() {
               </button>
             </div>
 
-            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-3">
+            <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-3">
               <StatTile label="System exercises" value={exercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
               <StatTile label="Custom exercises" value={exercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
               <StatTile label="Total exercises" value={exercises.length} icon={Glyph.pulse} tone="lime" />
@@ -1868,7 +1872,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Search bar */}
-            <div className="shrink-0">
+            <div id="tour-search" className="shrink-0">
               <div className="relative w-full max-w-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
@@ -1887,7 +1891,7 @@ export default function AdminDashboard() {
               <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">No exercises found.</div>
             ) : (
               <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
-                <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+                <div id="tour-system" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
                   <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">System exercises ({systemExercises.length})</h3>
                   <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
                     {systemExercises.length === 0 && <p className="py-6 text-center text-sm text-gray-400">No system exercises match your search.</p>}
@@ -1907,7 +1911,7 @@ export default function AdminDashboard() {
                     ))}
                   </div>
                 </div>
-                <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+                <div id="tour-custom" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
                   <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">Custom exercises ({customExercises.length})</h3>
                   <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
                     {customExercises.length === 0 && (
@@ -1943,7 +1947,7 @@ export default function AdminDashboard() {
             <PageHeading title="Assign Patients to Therapists" subtitle="Link each patient to the therapist who will monitor them." />
             <div className="h-4" />
 
-            <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div id="tour-tiles" className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatTile label="Patients" value={patients.length} icon={Glyph.user} tone="green" />
               <StatTile label="Therapists" value={therapists.length} icon={Glyph.users} tone="teal" />
               <StatTile label="Unassigned" value={unassignedPatients.length} icon={Glyph.alert} tone={unassignedPatients.length > 0 ? "amber" : "green"} />
@@ -1958,7 +1962,7 @@ export default function AdminDashboard() {
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
               {/* Unassigned Patients */}
-              <div className="lg:col-span-5">
+              <div id="tour-unassigned" className="lg:col-span-5">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">Unassigned Patients ({unassignedPatients.length})</h3>
                 <div className="bg-white rounded-xl shadow-sm p-6 space-y-3 max-h-96 overflow-y-auto">
                   {unassignedPatients.length === 0 ? (
@@ -1983,7 +1987,7 @@ export default function AdminDashboard() {
               </div>
 
               {/* Therapist Selection and Assignment */}
-              <div className="lg:col-span-7">
+              <div id="tour-pick-therapist" className="lg:col-span-7">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">Select Therapist</h3>
                 <div className="bg-white rounded-xl shadow-sm p-6 space-y-4">
                   {selectedPatientId ? (
@@ -2027,7 +2031,7 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assigned Patients */}
-            <div className="mt-6">
+            <div id="tour-assigned" className="mt-6">
               <h3 className="text-base font-semibold text-gray-900 mb-3">
                 Currently Assigned Patients ({assignedPatients.length})
               </h3>
@@ -2073,7 +2077,7 @@ export default function AdminDashboard() {
             </div>
 
             {/* Assignment History */}
-            <div className="mt-6">
+            <div id="tour-history" className="mt-6">
               <h3 className="text-base font-semibold text-gray-900 mb-3">
                 Assignment History ({assignHistory.length})
               </h3>
@@ -2552,7 +2556,7 @@ function DemoClockPanel() {
   };
 
   return (
-    <section className="max-w-2xl rounded-xl bg-white p-6 shadow-sm">
+    <section id="tour-demo-clock" className="max-w-2xl rounded-xl bg-white p-6 shadow-sm">
       <h1 className="text-2xl font-bold text-gray-900">Demo Clock</h1>
       <p className="mt-1 text-sm text-gray-600">
         Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.

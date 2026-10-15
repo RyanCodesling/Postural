@@ -579,19 +579,6 @@ export function emailConfigured(): boolean {
   return Boolean(SMTP_USER && SMTP_PASS);
 }
 
-function dashboardButton(): string {
-  return `
-    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 16px;">
-      <tr>
-        <td style="background-color:#166534;border-radius:8px;">
-          <a href="${APP_URL}" target="_blank" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
-            Open Dashboard
-          </a>
-        </td>
-      </tr>
-    </table>`;
-}
-
 const PARAGRAPH = "margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;";
 
 export interface ExerciseDigestItem {
@@ -647,8 +634,7 @@ export async function sendExerciseDigestEmail(
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(recipientName)}</strong>,</p>
     <p style="${PARAGRAPH}">${escapeHtml(intro)}</p>
     ${groups}
-    <div style="height:20px;"></div>
-    ${dashboardButton()}`;
+    <div style="height:20px;"></div>`;
   return sendEmail(email, subject, wrapTemplate(title, body));
 }
 
@@ -690,8 +676,7 @@ export async function sendExercisePausedEmail(
         <strong>Prescribed:</strong> ${d.prescribedSets} sets × ${d.prescribedReps} reps<br/>
         <strong>Progress:</strong> ${escapeHtml(describePausedProgress(d))}
       </td></tr>
-    </table>
-    ${dashboardButton()}`;
+    </table>`;
   return sendEmail(email, "Exercise paused because of pain", wrapTemplate("Exercise Paused", body));
 }
 
@@ -705,8 +690,7 @@ export async function sendAssignedTherapistEmail(
 ): Promise<boolean> {
   const body = `
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(patientName)}</strong>,</p>
-    <p style="${PARAGRAPH}"><strong>${escapeHtml(therapistName)}</strong> is now your assigned therapist. Your therapist will prescribe and monitor your exercises.</p>
-    ${dashboardButton()}`;
+    <p style="${PARAGRAPH}"><strong>${escapeHtml(therapistName)}</strong> is now your assigned therapist. Your therapist will prescribe and monitor your exercises.</p>`;
   return sendEmail(email, "You Have an Assigned Therapist", wrapTemplate("Assigned Therapist", body));
 }
 
@@ -718,8 +702,7 @@ export async function sendAssignedPatientEmail(
 ): Promise<boolean> {
   const body = `
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
-    <p style="${PARAGRAPH}">Patient <strong>${escapeHtml(patientName)}</strong> has been assigned to you. You can now assign and monitor their exercises.</p>
-    ${dashboardButton()}`;
+    <p style="${PARAGRAPH}">Patient <strong>${escapeHtml(patientName)}</strong> has been assigned to you. You can now assign and monitor their exercises.</p>`;
   return sendEmail(email, "You Have a New Assigned Patient", wrapTemplate("Assigned Patient", body));
 }
 
@@ -777,8 +760,7 @@ function exercisesEmail(
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(recipientName)}</strong>,</p>
     <p style="${PARAGRAPH}">${intro}</p>
     ${details.map(prescriptionBlock).join("")}
-    <div style="height:8px;"></div>
-    ${dashboardButton()}`;
+    <div style="height:8px;"></div>`;
   return sendEmail(email, subject, wrapTemplate(title, body));
 }
 

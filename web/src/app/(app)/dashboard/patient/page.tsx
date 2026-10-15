@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useDemoClock } from "@/lib/DemoClockContext";
 import AppShell from "../_components/AppShell";
+import { PATIENT_TOURS } from "../_components/tours";
 import ProfileLayout, { ProfileField } from "../_components/ProfileLayout";
 import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../_components/DashboardKit";
 import {
@@ -289,6 +290,7 @@ export default function PatientDashboardPage() {
       ]}
       userName={user?.name}
       roleLabel="Patient"
+      tour={PATIENT_TOURS[activeTab]}
       onLogout={async () => { await logout(); router.push("/"); }}
     >
         {/* ── Dashboard ── */}
@@ -323,7 +325,7 @@ export default function PatientDashboardPage() {
           const lastSession = recorded.reduce<string | null>((latest, x) => (!latest || x.startedAt > latest ? x.startedAt : latest), null);
           return (
             <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div id="tour-progress-header" className="flex flex-wrap items-start justify-between gap-3">
                 <PageHeading title="My Progress" subtitle="Your session-over-session trends per exercise. Descriptive trends, not a diagnosis." />
                 {trendGroups.length > 0 && (
                   <ReportButton
@@ -337,7 +339,7 @@ export default function PatientDashboardPage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div id="tour-progress-tiles" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatTile label="Exercises tracked" value={trendGroups.length} icon={Glyph.dumbbell} tone="green" />
                 <StatTile label="Sessions recorded" value={recorded.length} icon={Glyph.pulse} tone="teal" />
                 <StatTile
@@ -354,7 +356,7 @@ export default function PatientDashboardPage() {
                   Finish a few sessions to see your progress here.
                 </div>
               ) : (
-                <div className="grid items-start gap-4 xl:grid-cols-2">
+                <div id="tour-progress-trends" className="grid items-start gap-4 xl:grid-cols-2">
                   {trendGroups.map((g) => (
                     <ExerciseTrendCard key={g.contextKey} group={g} />
                   ))}
@@ -425,7 +427,7 @@ export default function PatientDashboardPage() {
                 </div>
               ) : (
                 <>
-                  <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div id="tour-session-tiles" className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
                     <StatTile
                       label="Today"
                       value={startable > 0 ? `${startable} ready` : current.length > 0 ? "All done" : "Nothing due"}
@@ -450,6 +452,7 @@ export default function PatientDashboardPage() {
 
                   <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
                     <Panel
+                      id="tour-session-current"
                       className="lg:col-span-7"
                       title="Today & available make-ups"
                       right={<span className="text-xs text-gray-500">{current.length} item{current.length === 1 ? "" : "s"}</span>}
@@ -477,7 +480,7 @@ export default function PatientDashboardPage() {
                       )}
                     </Panel>
 
-                    <Panel className="lg:col-span-5" title="Upcoming & past" scroll>
+                    <Panel id="tour-session-upcoming" className="lg:col-span-5" title="Upcoming & past" scroll>
                       <div className="space-y-4">
                         {nextGroup && (
                           <section aria-labelledby="next-schedule-heading">

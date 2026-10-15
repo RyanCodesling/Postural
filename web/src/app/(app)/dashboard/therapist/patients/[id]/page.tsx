@@ -509,7 +509,7 @@ export default function PatientDetailPage() {
             <h1 className="text-2xl font-bold text-gray-900">Patient Profile</h1>
             <p className="text-gray-500 mt-1">{patient.name}</p>
           </div>
-          <div className="shrink-0 flex flex-wrap items-start justify-end gap-2">
+          <div id="tour-detail-actions" className="shrink-0 flex flex-wrap items-start justify-end gap-2">
             <Link
               href={`/dashboard/therapist/assign?patientId=${encodeURIComponent(patientId)}`}
               className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition"
@@ -534,10 +534,11 @@ export default function PatientDetailPage() {
           </div>
         </div>
 
-        <div role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto border-b border-green-100">
+        <div id="tour-detail-tabs" role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto border-b border-green-100">
           {PATIENT_TABS.map(({ key, label }) => (
             <button
               key={key}
+              id={`tour-detail-tab-${key}`}
               role="tab"
               aria-selected={tab === key}
               type="button"
@@ -912,7 +913,7 @@ export default function PatientDetailPage() {
       </TabPanel>
 
       <TabPanel active={tab === "reports"}>
-      <div className="mb-6 print:hidden">
+      <div id="tour-detail-reports" className="mb-6 print:hidden">
         <PatientReports sessions={sessions} occurrences={occurrences} />
       </div>
 

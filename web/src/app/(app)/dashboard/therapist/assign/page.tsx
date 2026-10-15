@@ -845,7 +845,7 @@ export default function AssignExercisePage() {
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
 
           {/* Step 1 — Select Patients */}
-          <div>
+          <div id="tour-assign-patients">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               1. Select Patients <span className="text-red-500">*</span>
             </label>
@@ -931,7 +931,7 @@ export default function AssignExercisePage() {
           )}
 
           {/* Step 2 — Load from Program */}
-          <div>
+          <div id="tour-assign-program">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               2. Load from Program{" "}
               <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
@@ -984,7 +984,7 @@ export default function AssignExercisePage() {
           </div>
 
           {/* Step 3 — Select & Configure Exercises */}
-          <div>
+          <div id="tour-assign-exercises">
             <p className="text-sm font-semibold text-gray-700 mb-3">
               3. Select Exercises <span className="text-red-500">*</span>
             </p>
@@ -1058,6 +1058,7 @@ export default function AssignExercisePage() {
 
           {existingAssignments.length === 0 ? (
             <button
+              id="tour-assign-submit"
               onClick={handleAssign}
               disabled={assigning}
               className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
@@ -1066,6 +1067,7 @@ export default function AssignExercisePage() {
             </button>
           ) : hasAssignChanges ? (
             <button
+              id="tour-assign-submit"
               onClick={handleAssign}
               disabled={assigning}
               className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
@@ -1075,7 +1077,7 @@ export default function AssignExercisePage() {
           ) : null}
         </div>
         {selectedPatients.length > 0 && (
-          <aside className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl bg-white shadow-sm">
+          <aside id="tour-assign-aside" className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl bg-white shadow-sm">
             <div className="border-b border-green-100 bg-[#f3f8f4] px-4 py-3">
               <h2 className="text-sm font-semibold text-gray-800">
                 Selected patients <span className="font-normal text-gray-400">({selectedPatients.length})</span>

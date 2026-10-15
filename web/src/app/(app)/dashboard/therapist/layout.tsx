@@ -4,6 +4,7 @@ import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import AppShell from "../_components/AppShell";
+import { therapistTourFor } from "../_components/tours";
 
 // ── Nav icons ──────────────────────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ export default function TherapistLayout({ children }: { children: React.ReactNod
       }))}
       userName={user?.name}
       roleLabel="Therapist"
+      tour={therapistTourFor(pathname)}
       onLogout={async () => { await logout(); router.push("/"); }}
     >
       {children}

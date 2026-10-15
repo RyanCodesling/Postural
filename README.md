@@ -1,5 +1,52 @@
 # Sprint Updates 
 
+## 📌 Update-10-15-26 | *Enah*
+
+- Added a How to Use button to the top bar of every patient, therapist, and administrator page, which opens a step-by-step tour of that page, in the style of the camera page's tour
+- Wrote a tour for each patient page, My Progress, Session, and View Profile as well as the dashboard, and for each therapist page, the dashboard, View Profile, Manage Patients, Manage Exercises, Assign Exercise, Exercise Program, and a patient's profile, and for each administrator tab, the dashboard, Manage Users, Manage Exercises, Assign Patients, and the demo clock
+- Removed the Open Dashboard button from the exercise, assignment, and pain emails
+- Removed the page search box from the top bar of the patient, therapist, and administrator screens
+- Asked for confirmation before logging out: Log Out now opens a pop-up with Cancel and Log Out on the patient, therapist, and administrator screens
+
+### *web\src\app\(app)\dashboard\_components\SpotlightTour.tsx*, *web\src\app\(app)\dashboard\_components\tours.ts*, and *web\src\app\(app)\dashboard\_components\AppShell.tsx*
+
+- Added a reusable tour that dims the page, outlines one element at a time with a pulsing ring, and shows a card beside it with an arrow, the step number, step dots, and Back, Next, and Got it buttons; the arrow keys move between steps and Esc closes it
+- Placed the card on the side of the outlined element with room for it, centred it when an element is not on screen, and scrolled the element into view before outlining it
+- Skipped the steps of an optional element that is not on the page, such as an empty list
+- Wrote the steps of each page in `tours.ts`: what the page shows, what each part does, and how to use it, for example how a patient reads My Progress
+- Wrote the administrator's tours for the dashboard, Manage Users, Manage Exercises, Assign Patients, and the demo clock, covering the system numbers, adding a user and the welcome email, editing, archiving, restoring, and the permanent deletion rules, the exercise lists, and assigning and unassigning patients
+- Showed the How to Use button in the top bar only on pages that have a tour, and gave the sidebar items, the bell, and Log Out ids so a tour can point at them
+- Left the camera page and its own tour unchanged
+- Removed the page search box from the top bar, leaving the notification bell and the user's initials, name, and role
+- Opened a confirmation pop-up when Log Out is pressed: a red icon, "Log out?", "Are you sure you want to log out of your account?", and Cancel and Log Out buttons, with Cancel focused so Enter does not log out, Esc or a click outside cancelling, and the Log Out button disabled while it works so it cannot be pressed twice
+- Kept Log Out reachable only through that one button, so every role's logout passes through the confirmation, including from the phone menu
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, and the dashboard pages
+
+- Gave the administrator page's tiles, activity feed, recent sessions, quick actions, add user and add exercise buttons, user lists, exercise search and lists, assignment panels, and demo clock ids, and passed each tab's tour to the shared frame
+- Let a card take an id, and gave the summary tiles, cards, search boxes, and tables that the tours point at ids on the patient dashboard, My Progress, Session, and profile pages and on the therapist dashboard, profile, patients, exercises, assign exercise, exercise program, and patient profile pages
+
+### *web\src\lib\email.ts*
+
+- Removed the Open Dashboard button and its helper from the daily completed and missed, pain pause, therapist and patient assignment, and exercise assigned, changed, and removed emails
+- Kept the Log In Now buttons in the welcome, new email address, and account restored emails
+
+### *Validation*
+
+- Type check passes and 74 of 74 framework-free TypeScript suites pass in a full run
+- The patient dashboard tour was opened and its first three steps stepped through on a temporary sample-data page that was removed: the outlined element, the card beside it, and the Next button worked
+- The other tours and the pages' ids, including the administrator's, were not tried on screen, because the demo accounts do not exist in the local database and no signed-in session was available
+- No email was sent after removing the button
+- The log out pop-up was opened on a temporary preview page that was removed: Cancel closed it without logging out, and Log Out then ran the logout; it was not tried on the signed-in pages
+
+### *Remaining boundaries*
+
+- The tours' wording was written from the pages' code, so it should be read once against how the clinic works
+- A tour opens only when the button is pressed, not automatically on a first visit
+- On a phone the sidebar is hidden, so a step that points at it shows its card in the centre
+
+---
+
 ## 📌 Update-10-15-26 | *RyanCodesling*
 
 - Merged the 10-14 frame-size fix into Enah's 10-15 update, so this branch keeps every change the evaluation server runs
@@ -50,7 +97,7 @@
 - Sent an email to the patient and the therapist when a patient pauses an exercise because of pain, with the prescribed sets and reps and how far the patient got
 - Sent separate patient and therapist emails when a therapist is assigned to a patient, and when exercises are assigned, changed, or removed, each exercise listed with its sets, reps, rest, order, side, resistance, repeat, and dates
 - Removed the role from the archived and restored account emails sent to the user
-- Gave the patient, therapist, and administrator screens a new shared frame: a light icon sidebar with the ACC Bacoor logo and Log Out at the bottom, and a top bar with a page search, the notification bell, and the user's name
+- Gave the patient, therapist, and administrator screens a new shared frame: a light icon sidebar with the ACC Bacoor logo and Log Out at the bottom, and a top bar with the notification bell and the user's name
 - Rebuilt the patient dashboard as a day-by-day exercise program with a progress ring, a range-of-motion gauge, reminders, and a compact adherence calendar, and gave the patient, therapist, and administrator dashboards a row of summary tiles and cards that share one screen
 - Split the therapist's patient profile into Overview, PT Program, Reports, and Sessions tabs, with range-of-motion, repetition, and adherence charts on a date range
 - Restyled the pages opened from the side menu to match: the therapist's profile, patients, exercises, assign exercise, and exercise program pages, the patient's progress, session, and profile pages, and the administrator's users, exercises, and assign patients tabs, with the full page width used
@@ -83,8 +130,7 @@
 
 ### *web\src\app\(app)\dashboard\_components\AppShell.tsx*, *web\src\app\(app)\dashboard\therapist\layout.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
 
-- Added one shared frame for the three signed-in roles: a pale green sidebar with the ACC Bacoor logo and name, the active page highlighted in white, and Log Out pinned at the bottom, plus a white top bar with a page search, the notification bell, and the user's initials, name, and role
-- Made the search a quick jump between the pages in the sidebar; it does not search patients or data
+- Added one shared frame for the three signed-in roles: a pale green sidebar with the ACC Bacoor logo and name, the active page highlighted in white, and Log Out pinned at the bottom, plus a white top bar with the notification bell and the user's initials, name, and role
 - Replaced the three separate dark green sidebars with the frame, keeping each page's own tabs and links, and turned the sidebar into a slide-out menu on narrow screens
 - Placed the page content on a soft green background with white shadowed cards, and kept the print layout free of the sidebar and top bar
 

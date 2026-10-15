@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import NotificationBell from "./NotificationBell";
+import SpotlightTour, { type TourStep } from "./SpotlightTour";
 import logo from "../../../../../media/acc_bacoor_logo.png";
 
 export interface ShellNavItem {
@@ -16,19 +17,15 @@ export interface ShellNavItem {
   onSelect?: () => void;
 }
 
+/** The element id a tour uses to point at a sidebar item. */
+export function navTourId(key: string): string {
+  return `tour-nav-${key.replace(/[^a-zA-Z0-9]+/g, "-")}`;
+}
+
 function initials(name: string | undefined): string {
   const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
   return ((parts[0][0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
-}
-
-function SearchIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.5-3.5" />
-    </svg>
-  );
 }
 
 function LogoutGlyph() {
@@ -41,7 +38,7 @@ function LogoutGlyph() {
 
 /**
  * The common frame for every signed-in role: a light icon sidebar, a top bar
- * with a quick-jump search, the notification bell and the user's name, and a
+ * with the notification bell and the user's name, and a
  * soft green page background that cards sit on.
  */
 export default function AppShell({
@@ -49,32 +46,30 @@ export default function AppShell({
   userName,
   roleLabel,
   onLogout,
+  tour,
   children,
 }: {
   items: ShellNavItem[];
   userName: string | undefined;
   roleLabel: string;
   onLogout: () => void;
+  /** The steps of the "How to Use" tour for the page on screen; the button appears when given. */
+  tour?: TourStep[];
   children: ReactNode;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
-
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? items.filter((item) => item.label.toLowerCase().includes(q)) : [];
-  }, [items, query]);
+  const [showTour, setShowTour] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    const close = (event: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(event.target as Node)) setSearchOpen(false);
+    if (!confirmLogout) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !loggingOut) setConfirmLogout(false);
     };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
-
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmLogout, loggingOut]);
   const itemClass = (active: boolean) =>
     `group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide transition ${
       active
@@ -91,12 +86,13 @@ export default function AppShell({
       </>
     );
     return item.href ? (
-      <Link key={item.key} href={item.href} className={itemClass(item.active)} onClick={() => setDrawerOpen(false)}>
+      <Link key={item.key} id={navTourId(item.key)} href={item.href} className={itemClass(item.active)} onClick={() => setDrawerOpen(false)}>
         {inner}
       </Link>
     ) : (
       <button
         key={item.key}
+        id={navTourId(item.key)}
         type="button"
         className={itemClass(item.active)}
         onClick={() => {
@@ -107,13 +103,6 @@ export default function AppShell({
         {inner}
       </button>
     );
-  };
-
-  const choose = (item: ShellNavItem) => {
-    setQuery("");
-    setSearchOpen(false);
-    if (item.href) window.location.assign(item.href);
-    else item.onSelect?.();
   };
 
   return (
@@ -139,8 +128,12 @@ export default function AppShell({
         </div>
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">{items.map(renderItem)}</nav>
         <button
+          id="tour-logout"
           type="button"
-          onClick={onLogout}
+          onClick={() => {
+            setDrawerOpen(false);
+            setConfirmLogout(true);
+          }}
           className="mt-2 flex w-full shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-red-700/80 transition hover:bg-white/60 hover:text-red-700"
         >
           <LogoutGlyph />
@@ -159,49 +152,22 @@ export default function AppShell({
             ☰
           </button>
 
-          <div ref={searchRef} className="relative min-w-0 flex-1 sm:max-w-md">
-            <div className="flex items-center gap-2 rounded-lg bg-[#eef4ef] px-3 py-2 text-gray-500">
-              <SearchIcon />
-              <input
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setSearchOpen(true);
-                }}
-                onFocus={() => setSearchOpen(true)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && matches[0]) choose(matches[0]);
-                  if (event.key === "Escape") setSearchOpen(false);
-                }}
-                placeholder="Search pages"
-                aria-label="Search pages"
-                className="w-full bg-transparent text-sm text-gray-800 outline-none placeholder:text-gray-400"
-              />
-            </div>
-            {searchOpen && query.trim() && (
-              <ul className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg border border-green-100 bg-white py-1 shadow-lg">
-                {matches.length === 0 ? (
-                  <li className="px-3 py-2 text-sm text-gray-500">No matching page</li>
-                ) : (
-                  matches.map((item) => (
-                    <li key={item.key}>
-                      <button
-                        type="button"
-                        onClick={() => choose(item)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-800 hover:bg-green-50"
-                      >
-                        <span className="text-green-700">{item.icon}</span>
-                        {item.label}
-                      </button>
-                    </li>
-                  ))
-                )}
-              </ul>
-            )}
-          </div>
-
           <div className="ml-auto flex items-center gap-3">
-            <NotificationBell />
+            {tour && (
+              <button
+                id="tour-how-to-use"
+                type="button"
+                onClick={() => setShowTour(true)}
+                className="flex items-center gap-1.5 rounded-lg border border-green-600 bg-white px-3 py-2 text-sm font-semibold text-green-700 transition hover:bg-green-50"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v.01M12 8v4" strokeLinecap="round" />
+                </svg>
+                <span className="hidden sm:inline">How to Use</span>
+              </button>
+            )}
+            <span id="tour-bell"><NotificationBell /></span>
             <div className="hidden items-center gap-3 sm:flex">
               <span className="grid h-9 w-9 place-items-center rounded-full bg-green-600 text-xs font-bold text-white">
                 {initials(userName)}
@@ -216,6 +182,51 @@ export default function AppShell({
 
         <main className="min-w-0 p-4 sm:p-6 print:p-0">{children}</main>
       </div>
+
+      {showTour && tour && <SpotlightTour steps={tour} onClose={() => setShowTour(false)} />}
+
+      {confirmLogout && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 print:hidden">
+          <div className="absolute inset-0 bg-black/50" onClick={() => !loggingOut && setConfirmLogout(false)} />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="logout-title"
+            aria-describedby="logout-text"
+            className="relative w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl"
+          >
+            <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-red-100 text-red-600">
+              <LogoutGlyph />
+            </span>
+            <h2 id="logout-title" className="mb-1 text-lg font-bold text-gray-900">Log out?</h2>
+            <p id="logout-text" className="mb-5 text-sm text-gray-600">
+              Are you sure you want to log out of your account?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                autoFocus
+                disabled={loggingOut}
+                onClick={() => setConfirmLogout(false)}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={loggingOut}
+                onClick={() => {
+                  setLoggingOut(true);
+                  onLogout();
+                }}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:opacity-60"
+              >
+                {loggingOut ? "Logging out…" : "Log Out"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

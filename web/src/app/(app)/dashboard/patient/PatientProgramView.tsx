@@ -231,7 +231,7 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
 
   return (
     <div className={FIT_SCREEN}>
-      <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Program completed" value={percent} unit="%" icon={Glyph.check} tone="green" />
         <StatTile label="Today" value={todayAll.length === 0 ? "Rest" : `${todayDone}/${todayAll.length}`} unit={todayAll.length === 0 ? "" : "done"} icon={Glyph.dumbbell} tone="teal" />
         <StatTile
@@ -245,6 +245,7 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
         <Panel
+          id="tour-program"
           className="lg:col-span-7"
           title={`${patientName}\u2019s Exercise Program`}
           right={<ProgressRing percent={percent} />}
@@ -352,9 +353,9 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
         </Panel>
 
         <div className="grid min-h-0 gap-4 lg:col-span-5 lg:grid-rows-[minmax(0,1.5fr)_minmax(0,1fr)]">
-          <div className="min-h-0">{calendar}</div>
+          <div id="tour-calendar" className="min-h-0">{calendar}</div>
           <div className="grid min-h-0 grid-cols-2 gap-4">
-            <Panel title="Range of Motion" scroll>
+            <Panel id="tour-rom" title="Range of Motion" scroll>
               {gauge ? (
                 <div className="flex h-full flex-col justify-between">
                   <Gauge latest={values[values.length - 1]} first={values[0]} best={Math.max(...values)} />
@@ -372,7 +373,7 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
                 <p className="py-4 text-center text-xs text-gray-500">Finish a session to see your range of motion here.</p>
               )}
             </Panel>
-            <Panel title="Reminders" scroll>
+            <Panel id="tour-reminders" title="Reminders" scroll>
               <ul className="space-y-1.5">
                 {reminders.map((text) => (
                   <li key={text} className="flex gap-2 text-xs text-gray-700">

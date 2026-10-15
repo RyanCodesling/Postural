@@ -136,7 +136,7 @@ export default function ManageExercisesPage() {
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
         <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage your manual custom tasks." />
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative w-64">
+          <div id="tour-search" className="relative w-64">
             <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
               <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
             </svg>
@@ -163,7 +163,7 @@ export default function ManageExercisesPage() {
         </div>
       )}
 
-      <div className="grid shrink-0 grid-cols-3 gap-3">
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-3 gap-3">
         <StatTile label="System exercises" value={exercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
         <StatTile label="Custom exercises" value={exercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
         <StatTile label="Total" value={exercises.length} icon={Glyph.pulse} tone="lime" />
@@ -175,7 +175,7 @@ export default function ManageExercisesPage() {
         </Panel>
       ) : (
         <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
-          <Panel className="lg:col-span-7" title={`System exercises (${systemExercises.length})`} scroll>
+          <Panel id="tour-system" className="lg:col-span-7" title={`System exercises (${systemExercises.length})`} scroll>
             {systemExercises.length === 0 ? (
               <p className="py-8 text-center text-sm text-gray-400">No system exercises match your search.</p>
             ) : (
@@ -198,7 +198,7 @@ export default function ManageExercisesPage() {
             )}
           </Panel>
 
-          <Panel className="lg:col-span-5" title={`Custom exercises (${customExercises.length})`} scroll>
+          <Panel id="tour-custom" className="lg:col-span-5" title={`Custom exercises (${customExercises.length})`} scroll>
             {customExercises.length === 0 ? (
               <p className="py-8 text-center text-sm text-gray-400">
                 {query === "" ? "No custom exercises yet. Add them in Exercise Program." : "No custom exercises match your search."}

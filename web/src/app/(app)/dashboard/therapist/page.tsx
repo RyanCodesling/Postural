@@ -97,7 +97,7 @@ export default function TherapistDashboardPage() {
         </div>
       )}
 
-      <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <StatTile label="Patients" value={patients.length} icon={Glyph.users} tone="green" />
         <StatTile label="Sessions this week" value={sessionsThisWeek} icon={Glyph.pulse} tone="teal" />
         <StatTile label="Programs" value={programCount} icon={Glyph.list} tone="lime" />
@@ -107,6 +107,7 @@ export default function TherapistDashboardPage() {
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
         <Panel
+          id="tour-roster"
           className="lg:col-span-8"
           title="Patients"
           right={
@@ -162,7 +163,7 @@ export default function TherapistDashboardPage() {
         </Panel>
 
         <div className="flex min-h-0 flex-col gap-4 lg:col-span-4">
-          <Panel className="flex-1" title="Needs attention" scroll>
+          <Panel id="tour-attention" className="flex-1" title="Needs attention" scroll>
             {attention.length === 0 ? (
               <p className="py-6 text-center text-sm text-gray-400">Everyone is on track.</p>
             ) : (
@@ -193,7 +194,7 @@ export default function TherapistDashboardPage() {
             )}
           </Panel>
 
-          <Panel className="shrink-0" title="Quick actions">
+          <Panel id="tour-actions" className="shrink-0" title="Quick actions">
             <div className="grid gap-2">
               {[
                 { href: "/dashboard/therapist/assign", label: "Assign exercise" },

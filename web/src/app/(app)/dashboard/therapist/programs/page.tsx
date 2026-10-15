@@ -488,7 +488,7 @@ export default function ExerciseProgramsPage() {
     <div className={showForm || showCustomForm ? "space-y-4" : FIT_SCREEN}>
       <PageHeading title="Exercise Program" subtitle="Create and manage reusable exercise programs." />
 
-      <div className="grid shrink-0 grid-cols-3 gap-3">
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-3 gap-3">
         <StatTile label="Programs" value={programs.length} icon={Glyph.list} tone="green" />
         <StatTile label="Custom exercises" value={customExercises.length} icon={Glyph.dumbbell} tone="teal" />
         <StatTile label="Exercises in programs" value={programs.reduce((n, pr) => n + pr.exercises.length, 0)} icon={Glyph.pulse} tone="lime" />
@@ -846,7 +846,7 @@ export default function ExerciseProgramsPage() {
           </div>
         </div>
       ) : (
-        <div className="flex shrink-0 flex-wrap gap-3">
+        <div id="tour-actions" className="flex shrink-0 flex-wrap gap-3">
           <button
             onClick={() => { setShowForm(true); setShowCustomForm(false); }}
             className="px-5 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
@@ -914,7 +914,7 @@ export default function ExerciseProgramsPage() {
 
       {/* Programs list */}
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
-      <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+      <div id="tour-programs" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
         <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Programs ({programs.length})
         </h2>
@@ -996,7 +996,7 @@ export default function ExerciseProgramsPage() {
       </div>
 
       {/* Your Custom Exercises */}
-      <div className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+      <div id="tour-custom" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
         <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Custom Exercises ({customExercises.length})
         </h2>

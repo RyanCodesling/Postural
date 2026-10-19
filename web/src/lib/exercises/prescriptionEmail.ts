@@ -1,6 +1,7 @@
 import type { PrescriptionDetail } from "@/lib/email";
 import { formatResistanceContext, resistanceContextFromRow } from "@/lib/prescriptionContext";
 import { formatCadence, type Recurrence } from "@/lib/exercises/occurrences";
+import { prescriptionMetricLabel, prescriptionMetricValue } from "@/lib/exercises/prescriptionDisplay";
 
 /** The patient_exercises columns (plus the exercise name) the emails describe. */
 export type PrescriptionRow = {
@@ -33,7 +34,13 @@ export function toPrescriptionDetail(row: PrescriptionRow): PrescriptionDetail {
   return {
     exerciseName: row.name,
     sets: Number(row.sets),
-    reps: Number(row.reps),
+    // Repetitions, or the hold time for a hold exercise, as the app shows them.
+    metricLabel: prescriptionMetricLabel(row.exercise_id as string | undefined),
+    metricValue: prescriptionMetricValue({
+      exerciseId: row.exercise_id as string | undefined,
+      reps: Number(row.reps),
+      holdSeconds: row.hold_seconds == null ? null : Number(row.hold_seconds),
+    }),
     restSeconds: Number(row.rest_seconds),
     order: Number(row.sequence_index),
     side: String(row.prescribed_side),
@@ -55,7 +62,7 @@ export function changedPrescriptionFields(
 ): Record<string, string> {
   const changed: Record<string, string> = {};
   if (before.sets !== after.sets) changed.Sets = String(before.sets);
-  if (before.reps !== after.reps) changed.Reps = String(before.reps);
+  if (before.metricValue !== after.metricValue) changed[after.metricLabel] = before.metricValue;
   if (before.restSeconds !== after.restSeconds) changed.Rest = `${before.restSeconds}s`;
   if (before.order !== after.order) changed.Order = String(before.order);
   if (before.side !== after.side) changed.Side = before.side;

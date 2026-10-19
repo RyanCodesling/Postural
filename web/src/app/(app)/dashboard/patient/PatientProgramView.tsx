@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
-import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
+import { rollupDay, type OccurrenceStatus } from "@/lib/exercises/occurrences";
 import {
   formatDuration,
   isOutcomeBearingSession,
@@ -25,7 +25,7 @@ export interface ProgramOccurrence {
   monitoring_mode: "camera" | "manual";
 }
 
-type DayState = "done" | "today" | "makeup" | "missed" | "upcoming";
+type DayState = "done" | "today" | "makeup" | "pain" | "partial" | "missed" | "upcoming";
 
 const DAY_MS = 86_400_000;
 
@@ -59,19 +59,42 @@ function manilaDay(iso: string): string {
   return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 }
 
-function dayState(day: string, items: ProgramOccurrence[], today: string): DayState {
-  if (items.every((o) => o.status === "completed")) return "done";
+/**
+ * A day's row state. Past days follow the calendar's own day rules
+ * (`rollupDay`), so a day stopped for pain or partly done is never called
+ * missed; an exercise that can still be made up comes first.
+ */
+export function dayState(day: string, items: ProgramOccurrence[], today: string): DayState {
+  const rollup = rollupDay(
+    items.map((o) => ({ dueDate: o.due_date, makeupUntil: o.makeup_until, status: o.status })),
+    day,
+    today,
+  );
+  if (rollup === "complete") return "done";
   if (day === today) return "today";
   if (day > today) return "upcoming";
-  return items.some((o) => o.status !== "completed" && o.status !== "pain_stopped" && o.makeup_until >= today)
-    ? "makeup"
-    : "missed";
+  if (items.some((o) => o.status !== "completed" && o.status !== "pain_stopped" && o.makeup_until >= today)) {
+    return "makeup";
+  }
+  if (rollup === "pain_stopped") return "pain";
+  if (rollup === "partial") return "partial";
+  return "missed";
+}
+
+/** One exercise's pill when it cannot be started: its own state, not its day's. */
+export function itemStatusLabel(o: ProgramOccurrence, day: string, today: string): string {
+  if (o.status === "pain_stopped") return "Stopped for pain";
+  if (day > today) return "Upcoming";
+  if (day === today) return "Today";
+  return o.makeup_until >= today ? "Make-up open" : "Missed";
 }
 
 const STATE_STYLE: Record<DayState, { bar: string; label: string }> = {
   done: { bar: "border-l-green-500", label: "Completed" },
   today: { bar: "border-l-green-700", label: "Today" },
   makeup: { bar: "border-l-amber-400", label: "Make-up open" },
+  pain: { bar: "border-l-orange-400", label: "Stopped for pain" },
+  partial: { bar: "border-l-amber-400", label: "Partly done" },
   missed: { bar: "border-l-red-400", label: "Missed" },
   upcoming: { bar: "border-l-green-200", label: "Upcoming" },
 };
@@ -88,6 +111,20 @@ function StateIcon({ state }: { state: DayState }) {
     return (
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-red-100 text-red-600">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+      </span>
+    );
+  }
+  if (state === "pain") {
+    return (
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-orange-100 text-orange-600">
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+      </span>
+    );
+  }
+  if (state === "partial") {
+    return (
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-amber-100 text-amber-600">
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" /></svg>
       </span>
     );
   }
@@ -162,10 +199,14 @@ export function lastSessionSummary(sessions: LastSessionRecord[]): LastSessionSu
     counted: side === "left" ? last.leftReps : last.rightReps,
     fullRange: side === "left" ? last.completeLeftReps : last.completeRightReps,
   }));
-  const hasSides = bySide.some((row) => row.counted > 0) || last.totalReps === 0;
+  // A row has side counts when either side counted repetitions, the
+  // unprescribed side included: that side is observation evidence, never the
+  // treated side's result, so the treated side keeps its own count, even 0.
+  // Only an older row with no side counts at all falls back to one total.
+  const hasSideCounts = last.leftReps + last.rightReps > 0 || last.totalReps === 0;
   return {
     ...base,
-    reps: hasSides ? bySide : [{ label: "Total", counted: last.totalReps, fullRange: last.completeReps }],
+    reps: hasSideCounts ? bySide : [{ label: "Total", counted: last.totalReps, fullRange: last.completeReps }],
     holds: null,
     targetHoldMs: null,
   };
@@ -415,7 +456,7 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
                               </>
                             ) : (
                               <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-500">
-                                {o.status === "pain_stopped" ? "Paused for pain" : STATE_STYLE[state].label}
+                                {itemStatusLabel(o, day, today)}
                               </span>
                             )}
                           </li>

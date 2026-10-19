@@ -10,6 +10,8 @@ import { strict as assert } from "node:assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 import PatientProgramView, {
+  dayState,
+  itemStatusLabel,
   lastSessionSummary,
   type LastSessionRecord,
   type ProgramOccurrence,
@@ -90,6 +92,15 @@ assert.deepEqual(lastSessionSummary([paired])?.holds, [
 const legacy = session("2026-10-18T02:00:00Z", { leftReps: 0, rightReps: 0, completeLeftReps: 0, completeRightReps: 0, totalReps: 12, completeReps: 10 });
 assert.deepEqual(lastSessionSummary([legacy])?.reps, [{ label: "Total", counted: 12, fullRange: 10 }], "legacy totals");
 
+// 5b. When only the unprescribed side moved, the treated side keeps its own 0:
+// the other side's repetitions are never shown as its result (Codex review 2026-10-19, finding 1).
+const otherSideOnly = session("2026-10-18T02:00:00Z", {
+  prescribedSide: "left",
+  totalReps: 5, completeReps: 5, leftReps: 0, completeLeftReps: 0, rightReps: 5, completeRightReps: 5,
+});
+assert.deepEqual(lastSessionSummary([otherSideOnly])?.reps, [{ label: "Left", counted: 0, fullRange: 0 }], "no Total from the other side");
+assert.equal(lastSessionSummary([otherSideOnly])?.sideText, "Left side");
+
 // 6. The day is the Manila day: 17:30 UTC on Oct 18 is Oct 19 in Manila, so "Today".
 assert.equal(lastSessionSummary([session("2026-10-18T17:30:00Z")])?.day, "2026-10-19", "Manila day");
 
@@ -143,4 +154,29 @@ assert.match(ended, /Schedule ended Thursday, Sep 10/, "an ended schedule says s
 assert.match(ended, /Began Thursday, Sep 3/);
 assert.ok(!/Week \d/.test(ended), "no week number after the end");
 
-console.log("Last Session card: newest session with a result, per-side counts only, no gauge; schedule heading and one percentage.");
+// 10. A past day stopped for pain, or partly done, is not called missed; the
+// calendar's day rules decide (Codex review 2026-10-19, finding 2).
+const YESTERDAY = "2026-10-18";
+const openUntil = (o: ProgramOccurrence, day: string): ProgramOccurrence => ({ ...o, makeup_until: day });
+assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY, "pain_stopped")], TODAY), "pain", "stopped for pain");
+assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY, "completed"), occurrence(2, YESTERDAY, "pain_stopped")], TODAY), "partial", "done and stopped for pain");
+assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY, "completed"), occurrence(2, YESTERDAY)], TODAY), "partial", "done and missed");
+assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY)], TODAY), "missed", "nothing done, make-up over");
+assert.equal(dayState(YESTERDAY, [openUntil(occurrence(1, YESTERDAY), "2026-10-20")], TODAY), "makeup", "make-up still open");
+assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY, "completed")], TODAY), "done");
+assert.equal(dayState(TODAY, [occurrence(1, TODAY, "pain_stopped")], TODAY), "today");
+assert.equal(dayState("2026-10-20", [occurrence(1, "2026-10-20")], TODAY), "upcoming");
+
+const painDay = render([occurrence(1, YESTERDAY, "pain_stopped")], []);
+assert.ok(painDay.includes('sm:inline">Stopped for pain</span>'), "the day row says stopped for pain");
+assert.ok(!painDay.includes('sm:inline">Missed</span>'), "and not missed");
+assert.ok(painDay.includes("border-l-orange-400") && !painDay.includes("border-l-red-400"), "not drawn red");
+
+// Each exercise's pill shows its own state, not its day's.
+assert.equal(itemStatusLabel(occurrence(1, YESTERDAY, "pain_stopped"), YESTERDAY, TODAY), "Stopped for pain");
+assert.equal(itemStatusLabel(occurrence(2, YESTERDAY), YESTERDAY, TODAY), "Missed");
+assert.equal(itemStatusLabel(openUntil(occurrence(3, YESTERDAY), "2026-10-20"), YESTERDAY, TODAY), "Make-up open");
+assert.equal(itemStatusLabel(occurrence(4, TODAY), TODAY, TODAY), "Today");
+assert.equal(itemStatusLabel(occurrence(5, "2026-10-20"), "2026-10-20", TODAY), "Upcoming");
+
+console.log("Last Session card: newest session with a result, per-side counts only, no gauge; schedule heading and one percentage; day states follow the calendar's rules.");

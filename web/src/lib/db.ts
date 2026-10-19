@@ -49,6 +49,7 @@ import {
   type TherapistReviewLabel,
 } from "@/lib/prescriptionContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import { isIsometricExercise, prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import {
   EXERCISE_CONFIG_VERSIONS,
   COACHING_CONFIG_VERSIONS,
@@ -1879,7 +1880,9 @@ async function emailPainPause(
 async function getPausedProgress(sessionId: number) {
   const prescription = await pool.query(
     `SELECT COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
-            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps
+            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+            COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+            pe.exercise_id
        FROM sessions s
        JOIN patient_exercises pe ON pe.id = s.patient_exercise_id
        LEFT JOIN exercise_occurrences eo ON eo.id = s.occurrence_id
@@ -1888,6 +1891,28 @@ async function getPausedProgress(sessionId: number) {
   );
   if (prescription.rows.length === 0) return null;
   const p = prescription.rows[0];
+  const isHold = isIsometricExercise(p.exercise_id);
+  const prescribedTarget = prescriptionTargetText({
+    exerciseId: p.exercise_id,
+    reps: Number(p.reps),
+    holdSeconds: p.hold_seconds == null ? null : Number(p.hold_seconds),
+  });
+  if (isHold) {
+    // A hold has no repetitions: its progress is the sets that reached their time.
+    const held = await pool.query(
+      "SELECT COUNT(*)::int AS done FROM set_events WHERE session_id = $1 AND terminated_by = 'min_reached'",
+      [sessionId],
+    );
+    return {
+      prescribedSets: Number(p.sets),
+      prescribedReps: Number(p.reps),
+      prescribedTarget,
+      isHold,
+      pausedSet: null,
+      repsInPausedSet: 0,
+      completedSets: Number(held.rows[0]?.done ?? 0),
+    };
+  }
   const perSet = await pool.query(
     "SELECT set_index, COUNT(*)::int AS reps FROM rep_events WHERE session_id = $1 GROUP BY set_index ORDER BY set_index",
     [sessionId],
@@ -1896,6 +1921,8 @@ async function getPausedProgress(sessionId: number) {
   return {
     prescribedSets: Number(p.sets),
     prescribedReps: Number(p.reps),
+    prescribedTarget,
+    isHold,
     pausedSet: last ? Number(last.set_index) : null,
     repsInPausedSet: last ? Number(last.reps) : 0,
     completedSets: last ? Math.max(0, Number(last.set_index) - 1) : 0,
@@ -1934,7 +1961,9 @@ export async function sendDailyTherapistDigests(): Promise<void> {
   const select = (ownerColumn: string) => `
     SELECT u.name AS patient_name, e.name AS exercise_name, eo.due_date::text AS due_date,
            COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
-           COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps
+           COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+           COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+           pe.exercise_id
       FROM exercise_occurrences eo
       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
       JOIN exercises e ON e.id = pe.exercise_id
@@ -1968,6 +1997,8 @@ export async function sendDailyTherapistDigests(): Promise<void> {
       },
     ];
     for (const { kind, rows } of kinds) {
+      // Set while this run holds a claim whose summary has not gone out.
+      let claimed = false;
       try {
         // The claim names the summarised day, so each day's summary goes out once.
         const claim = await pool.query(
@@ -1976,25 +2007,37 @@ export async function sendDailyTherapistDigests(): Promise<void> {
           [recipient.id, kind, day],
         );
         if (claim.rows.length === 0) continue;
+        claimed = true;
         const result = await rows();
         const items: ExerciseDigestItem[] = result.rows.map((r) => ({
           patientName: r.patient_name,
           exerciseName: r.exercise_name,
           sets: Number(r.sets),
-          reps: Number(r.reps),
+          target: prescriptionTargetText({
+            exerciseId: r.exercise_id,
+            reps: Number(r.reps),
+            holdSeconds: r.hold_seconds == null ? null : Number(r.hold_seconds),
+          }),
           dueDateLabel: label(r.due_date),
         }));
         const sent = items.length === 0
           ? true
           : await sendExerciseDigestEmail(recipient.email, recipient.name, kind, label(day), items, recipient.role);
-        if (!sent) {
+        if (sent) claimed = false;
+      } catch (err) {
+        console.error(`Failed to send ${kind} digest:`, err);
+      }
+      // A claim whose summary did not go out is released, so the next hourly
+      // check retries it: a failed send, and any failure before sending.
+      if (claimed) {
+        try {
           await pool.query(
             "DELETE FROM notification_email_digests WHERE therapist_id = $1 AND kind = $2 AND day = $3",
             [recipient.id, kind, day],
           );
+        } catch (err) {
+          console.error(`Failed to release the ${kind} digest claim:`, err);
         }
-      } catch (err) {
-        console.error(`Failed to send ${kind} digest:`, err);
       }
     }
   }

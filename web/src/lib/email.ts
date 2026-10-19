@@ -590,7 +590,8 @@ export interface ExerciseDigestItem {
   patientName: string;
   exerciseName: string;
   sets: number;
-  reps: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  target: string;
   dueDateLabel: string;
 }
 
@@ -628,7 +629,7 @@ export async function sendExerciseDigestEmail(
           .map(
             (r) => `<tr>
           <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}${completed ? "" : `<br/><span style="color:#6b7280;font-size:12px;">Scheduled ${escapeHtml(r.dueDateLabel)}</span>`}</td>
-          <td align="right" style="padding:10px 14px;color:#374151;font-size:14px;border-bottom:1px solid #f0fdf4;white-space:nowrap;">${r.sets} sets × ${r.reps} reps</td>
+          <td align="right" style="padding:10px 14px;color:#374151;font-size:14px;border-bottom:1px solid #f0fdf4;white-space:nowrap;">${r.sets} sets × ${escapeHtml(r.target)}</td>
         </tr>`,
           )
           .join("")}
@@ -648,6 +649,10 @@ export interface ExercisePausedDetails {
   exerciseName: string;
   prescribedSets: number;
   prescribedReps: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  prescribedTarget: string;
+  /** A hold exercise: its progress is the sets held, as it has no repetitions. */
+  isHold: boolean;
   /** Set the patient was in when they paused (1-based), or null if no rep was recorded. */
   pausedSet: number | null;
   repsInPausedSet: number;
@@ -655,8 +660,13 @@ export interface ExercisePausedDetails {
 }
 
 export function describePausedProgress(d: ExercisePausedDetails): string {
+  if (d.isHold) {
+    return d.completedSets > 0
+      ? `${d.completedSets} of ${d.prescribedSets} sets completed before the pause`
+      : `before completing any set (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
+  }
   if (d.pausedSet === null) {
-    return `before completing any rep (prescribed ${d.prescribedSets} sets × ${d.prescribedReps} reps)`;
+    return `before completing any rep (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
   }
   const setsPart = d.completedSets > 0
     ? `${d.completedSets} of ${d.prescribedSets} sets completed, `
@@ -678,7 +688,7 @@ export async function sendExercisePausedEmail(
     <p style="${PARAGRAPH}">${sentence}</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin:0 0 20px;">
       <tr><td style="padding:16px 20px;color:#374151;font-size:14px;line-height:1.7;">
-        <strong>Prescribed:</strong> ${d.prescribedSets} sets × ${d.prescribedReps} reps<br/>
+        <strong>Prescribed:</strong> ${d.prescribedSets} sets × ${escapeHtml(d.prescribedTarget)}<br/>
         <strong>Progress:</strong> ${escapeHtml(describePausedProgress(d))}
       </td></tr>
     </table>`;
@@ -716,7 +726,10 @@ export async function sendAssignedPatientEmail(
 export interface PrescriptionDetail {
   exerciseName: string;
   sets: number;
-  reps: number;
+  /** "Reps", or "Hold" for a hold exercise, as the app labels the target. */
+  metricLabel: "Reps" | "Hold";
+  /** The target as the app shows it: "10", or "30s" for a hold. */
+  metricValue: string;
   restSeconds: number;
   order: number;
   side: string;
@@ -741,7 +754,7 @@ function prescriptionBlock(d: PrescriptionDetail): string {
         <p style="margin:0 0 8px;color:#166534;font-size:16px;font-weight:600;">${escapeHtml(d.exerciseName)}</p>
         <table role="presentation" cellpadding="0" cellspacing="0">
           ${line("Sets", d.sets)}
-          ${line("Reps", d.reps)}
+          ${line(d.metricLabel, d.metricValue)}
           ${line("Rest", `${d.restSeconds}s`)}
           ${line("Order", d.order)}
           ${line("Side", d.side)}

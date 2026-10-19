@@ -27,7 +27,8 @@ const row = (overrides: Partial<PrescriptionRow> = {}): PrescriptionRow => ({
 assert.deepEqual(toPrescriptionDetail(row()), {
   exerciseName: "Standing Side Bends",
   sets: 2,
-  reps: 2,
+  metricLabel: "Reps",
+  metricValue: "2",
   restSeconds: 60,
   order: 3,
   side: "both",
@@ -59,6 +60,20 @@ assert.deepEqual(result.changed[0].changed, {
 
 // Exercises outside the request are ignored.
 result = diffAssignedExercises([row()], [row({ sets: 9 })], ["ex_999"]);
+assert.equal(result.assigned.length + result.changed.length, 0);
+
+// A hold exercise (Codex review 2026-10-19, finding 3): the email gives the hold
+// time as the app does, and a change to the hold time alone is a change.
+const hold = (overrides: Partial<PrescriptionRow> = {}): PrescriptionRow =>
+  row({ exercise_id: "ex_006", name: "Arm Abduction at 90°", reps: 10, hold_seconds: 10, ...overrides });
+const holdDetail = toPrescriptionDetail(hold({ hold_seconds: 30 }));
+assert.equal(holdDetail.metricLabel, "Hold");
+assert.equal(holdDetail.metricValue, "30s");
+result = diffAssignedExercises([hold()], [hold({ hold_seconds: 30 })], ["ex_006"]);
+assert.equal(result.changed.length, 1, "a hold-only change is emailed");
+assert.deepEqual(result.changed[0].changed, { Hold: "10s" });
+// A hold's repetition column is not its target, so changing it alone changes nothing the email shows.
+result = diffAssignedExercises([hold()], [hold({ reps: 12 })], ["ex_006"]);
 assert.equal(result.assigned.length + result.changed.length, 0);
 
 console.log("prescriptionEmail tests passed");

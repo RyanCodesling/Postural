@@ -4,6 +4,7 @@
  */
 
 import {
+  dayCountsText,
   summarizePrescription,
   type PrescriptionOccurrenceLite,
 } from "./prescriptionStatus";
@@ -107,6 +108,56 @@ test("pain-stopped work is not counted as missed or assessed completion", () => 
   assertEqual(summary.missedCount, 0, "missed count");
   assertEqual(summary.remainingCount, 0, "remaining count");
   assertEqual(summary.adherenceState, "not_assessed", "adherence state");
+});
+
+// The occurrence_summary shape getPatientExercises (db.ts) builds.
+function countsOf(summary: ReturnType<typeof summarizePrescription>) {
+  return {
+    scheduled: summary.scheduledCount,
+    completed: summary.completedCount,
+    missed: summary.missedCount,
+    remaining: summary.remainingCount,
+    painStopped: summary.painStoppedCount,
+  };
+}
+
+test("day counts split the schedule into done, missed, pain-stopped and to go", () => {
+  const summary = summarizePrescription({
+    occurrences: [
+      occ("2026-07-15", "completed"),
+      occ("2026-07-16", "in_progress"),
+      occ("2026-07-17", "pain_stopped"),
+      occ("2026-07-18", "pending"),
+      occ("2026-07-19", "pending", "2026-07-18T00:00:00Z"),
+    ],
+    endDate: "2026-07-19",
+    todayKey: "2026-07-18",
+  });
+
+  assertEqual(
+    dayCountsText(countsOf(summary)),
+    "1 done · 1 missed · 1 stopped for pain · 1 to go",
+    "counts text",
+  );
+});
+
+test("ended prescription with only unfinished attempts shows them as missed", () => {
+  const summary = summarizePrescription({
+    occurrences: [occ("2026-07-10", "in_progress"), occ("2026-07-11", "pending")],
+    endDate: "2026-07-11",
+    todayKey: "2026-07-18",
+  });
+
+  assertEqual(summary.prescriptionState, "ended", "prescription state");
+  assertEqual(dayCountsText(countsOf(summary)), "0 done · 2 missed", "counts text");
+});
+
+test("a prescription with no scheduled days says so", () => {
+  assertEqual(
+    dayCountsText({ scheduled: 0, completed: 0, missed: 0, remaining: 0, painStopped: 0 }),
+    "No days scheduled",
+    "counts text",
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

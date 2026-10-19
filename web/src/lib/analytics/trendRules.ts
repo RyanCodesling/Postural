@@ -16,12 +16,60 @@
  *   3. A session in which at least SESSION_POOR_SHARE of the repetitions with a
  *      tracking record were poorly tracked is left out of the trend line and
  *      drawn hollow.
+ *   4. (v2) The neck side bend's peaks are measured from the head's own resting
+ *      position. The camera reads the neck against the camera tilt it froze at
+ *      calibration, which comes from the hip and ear lines, so a still head can
+ *      read a few degrees to one side: every left peak then moves one way and
+ *      every right peak the other. The camera records what a still head reads
+ *      in the rests between sets of each calibration (`neckRest` in the capture
+ *      summary). Each repetition's peak is corrected by its calibration's
+ *      reading (`neckRestPeak`), and completion is judged on the corrected peak
+ *      against the repetition's own saved target. A repetition without such a
+ *      reading counts in no peak measure (peak, completion, peak spread); it
+ *      still counts as a repetition, and its timing still counts.
  *
  * The same rules run in the session list's SQL summary (`getSessionsForPatient`),
  * the session breakdown (`measureFromDetail`) and the trend-model export.
  */
 
-export const TREND_RULES_VERSION = "trend_rules_v1" as const;
+export const TREND_RULES_VERSION = "trend_rules_v2" as const;
+
+/** Exercises whose peaks follow rule 4. */
+export const NECK_REST_EXERCISES: ReadonlySet<string> = new Set(["ex_004"]);
+
+/** What a still head read in the rests between sets of one calibration, from `from` on (rule 4). */
+export interface NeckRestEpoch {
+  from: string;
+  offsetDeg: number | null;
+  frames: number;
+}
+
+/**
+ * The still-head reading that applies to a repetition starting at `startMs`:
+ * that of the latest calibration begun at or before it, or null when that
+ * calibration recorded no usable reading.
+ */
+export function neckRestOffsetAt(
+  epochs: readonly NeckRestEpoch[] | null | undefined,
+  startMs: number | null,
+): number | null {
+  if (!epochs || startMs === null || !Number.isFinite(startMs)) return null;
+  let found: NeckRestEpoch | null = null;
+  let foundFrom = -Infinity;
+  for (const epoch of epochs) {
+    const from = Date.parse(epoch.from);
+    if (Number.isFinite(from) && from <= startMs && from >= foundFrom) {
+      found = epoch;
+      foundFrom = from;
+    }
+  }
+  return found && typeof found.offsetDeg === "number" && Number.isFinite(found.offsetDeg) ? found.offsetDeg : null;
+}
+
+/** A neck repetition's peak from the resting position: a left peak loses the still-head reading, a right peak gains it. */
+export function neckRestPeak(side: string | null, peak: number, offsetDeg: number): number {
+  return side === "left" ? peak - offsetDeg : peak + offsetDeg;
+}
 
 /** Share of a repetition's frames that makes it poorly tracked (rule 2); an engineering value. */
 export const POOR_TRACKING_SHARE = 0.25;
@@ -84,10 +132,15 @@ export function firstRepsOfSets(reps: readonly { setIndex: number; side: string 
   return new Set(first.values());
 }
 
-/** Why a repetition is left out of some measures, for the breakdown. */
-export type RepLeftOut = "tracking" | "first-of-set" | null;
+/**
+ * Why a repetition is left out of some measures, for the breakdown:
+ * "tracking" from every measure (rule 2), "no-rest-reference" from the peak
+ * measures (rule 4), "first-of-set" from the timing measures (rule 1).
+ */
+export type RepLeftOut = "tracking" | "no-rest-reference" | "first-of-set" | null;
 
-export function repLeftOut(compensations: unknown, firstOfSet: boolean): RepLeftOut {
+export function repLeftOut(compensations: unknown, firstOfSet: boolean, noRestReference = false): RepLeftOut {
   if (repPoorlyTracked(compensations)) return "tracking";
+  if (noRestReference) return "no-rest-reference";
   return firstOfSet ? "first-of-set" : null;
 }

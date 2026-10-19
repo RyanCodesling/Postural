@@ -215,6 +215,69 @@ async function main() {
     assertEq(replay.emitted[0].side, "left", "on the left");
   });
 
+  await test("camera loop: a calibration takes no sample during the positioning countdown", async () => {
+    const provenance = await captureCoachingProvenance(ex004);
+    const replay = createCameraReplay(ex004, provenance);
+    let t = 1000;
+    replay.context.baselinePhaseRef.current = "capturing";
+    replay.context.frozenTiltDegRef.current = null;
+    replay.context.calibrationPositioningEndsAtMsRef.current = t + 5_000;
+    for (const deg of hold(0, 4_900)) replay.tick({ tMs: (t += FRAME_MS), landmarks: head(deg) });
+    assertEq(replay.context.neutralCalibrationSamplesRef.current.length, 0, "no sample while getting into position");
+    for (const deg of hold(0, 500)) replay.tick({ tMs: (t += FRAME_MS), landmarks: head(deg) });
+    assert(replay.context.neutralCalibrationSamplesRef.current.length > 0, "samples once the countdown has run out");
+  });
+
+  // A figure whose shoulders rest tilted by `restDeg` (shoulder line, pipeline
+  // units) and tilt `followDeg` further while the head bends to the right.
+  const withShoulders = (headDeg: number, restDeg: number, followDeg: number) => {
+    const lm = head(headDeg);
+    const tilt = restDeg + (headDeg < 0 ? (followDeg * -headDeg) / 40 : 0);
+    const half = (0.2 * Math.tan((tilt * Math.PI) / 180)) / 2;
+    lm[11] = { ...lm[11], y: 0.35 + half };
+    lm[12] = { ...lm[12], y: 0.35 - half };
+    return lm;
+  };
+  const lowerDrawn = async (restLine: number | null, followDeg = -3) => {
+    const provenance = await captureCoachingProvenance(ex004);
+    const replay = createCameraReplay(ex004, provenance);
+    replay.context.shoulderRestLineDegRef.current = restLine;
+    let t = 1000;
+    let drawn = 0;
+    const script = [...hold(0, 1000), ...stroke(0, -40, 0), ...hold(0, 600), ...stroke(0, -40, 0), ...hold(0, 1000)];
+    for (const deg of script) {
+      const frame = replay.tick({ tMs: (t += FRAME_MS), landmarks: withShoulders(deg, -6, followDeg), frozenTilt: 0 });
+      if (frame.renderedTexts.includes("LOWER")) drawn += 1;
+    }
+    return drawn;
+  };
+
+  await test("camera loop: LOWER judged against the resting shoulder line ignores a resting tilt (D-47)", async () => {
+    // Against the frozen tilt (0) the resting shoulders already read 6 and the
+    // bends add 3 more, past the switch-on level of 7. Against their resting
+    // line (-6) only the 3 added in each bend count.
+    const frozen = await lowerDrawn(null);
+    const resting = await lowerDrawn(-6);
+    assert(frozen > 0, `against the frozen tilt the cue is drawn (${frozen} frames)`);
+    assertEq(resting, 0, "against the resting shoulder line it is not");
+    // A shoulder that rises 9 from its resting line during the bends still draws it.
+    assert((await lowerDrawn(-6, -9)) > 0, "a real hike past the switch-on level still draws LOWER");
+  });
+
+  await test("camera loop: in the rests, a neck side bend records what the still head reads", async () => {
+    const provenance = await captureCoachingProvenance(ex004);
+    const replay = createCameraReplay(ex004, provenance);
+    let t = 1000;
+    replay.context.neckRestTallyRef.current = { epochs: [{ from: new Date(t).toISOString(), readings: [] }] };
+    for (const deg of hold(0, 300)) replay.tick({ tMs: (t += FRAME_MS), landmarks: head(deg), frozenTilt: 2 });
+    assertEq(replay.context.neckRestTallyRef.current.epochs[0].readings.length, 0, "nothing while a set is active");
+    replay.context.sessionStateRef.current = "resting";
+    for (const deg of hold(0, 1_000)) replay.tick({ tMs: (t += FRAME_MS), landmarks: head(deg), frozenTilt: 2 });
+    const readings: number[] = replay.context.neckRestTallyRef.current.epochs[0].readings;
+    assert(readings.length > 20, `readings during the rest: ${readings.length}`);
+    assert(readings.every((v) => Math.abs(v + 2) < 1e-6), "a level head under a frozen tilt of 2 reads -2");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exitCode = 1;
 }

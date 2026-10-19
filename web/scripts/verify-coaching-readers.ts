@@ -19,6 +19,7 @@ import * as versioning from "../src/lib/exercises/versioning";
 import * as context from "../src/lib/prescriptionContext";
 import * as readModels from "../src/lib/sessionReadModels";
 import * as trendRules from "../src/lib/analytics/trendRules";
+import { measureFromDetail } from "../src/lib/analytics/trendBreakdown";
 import { EventOutbox } from "../src/lib/pose/eventOutbox";
 import { groupSessionsByExercise } from "../src/app/(app)/dashboard/_components/ExerciseTrends";
 import ConsistencyCalendar from "../src/app/(app)/dashboard/patient/ConsistencyCalendar";
@@ -159,9 +160,55 @@ async function main() {
   const calendar = (sessions: any[]) => renderToStaticMarkup(createElement(ConsistencyCalendar, { sessions, occurrences: [] }));
   assert.equal(calendar(history.filter((s: any) => s.id <= 2)), calendar([]), "audit attempts must not create routine days or streaks");
   assert.equal(calendar(history), calendar(history.filter((s: any) => s.id > 2)));
+
+  // Trend data rule 4 in the session list SQL, against the breakdown's own
+  // rebuild: session 8's first calibration recorded a still-head reading of -4,
+  // its second (from 10:10) none; session 9 has no record at all.
+  await client.query("INSERT INTO pg_temp.exercises (id, name) VALUES ('ex_004','Neck Lateral Flexion')");
+  const neckRest = { rule: "neck_rest_reference_v1", epochs: [
+    { from: "2026-10-19T10:00:00.000Z", offsetDeg: -4, frames: 400 },
+    { from: "2026-10-19T10:10:00.000Z", offsetDeg: null, frames: 3 }] };
+  await client.query(
+    `INSERT INTO pg_temp.sessions (id, patient_id, exercise_id, started_at, ended_at, end_reason, capture_quality_summary)
+     VALUES (8, 'fixture', 'ex_004', '2026-10-19T09:59:00Z', '2026-10-19T10:12:00Z', 'completed', $1),
+            (9, 'fixture', 'ex_004', '2026-10-19T09:00:00Z', '2026-10-19T09:05:00Z', 'completed', NULL)`,
+    [JSON.stringify({ framesTotal: 100, framesOk: 100, pctOk: 100, neckRest })]);
+  const neckReps: [number, number, number, string, number, number][] = [
+    [8, 1, 1, "left", 28, 5], [8, 2, 1, "right", 48, 6], [8, 3, 1, "left", 34, 7], [8, 4, 1, "right", 50, 8],
+    [8, 5, 2, "left", 30, 700], [8, 6, 2, "right", 46, 701],
+    [9, 1, 1, "left", 33, -3000], [9, 2, 1, "right", 47, -2999],
+  ];
+  for (const [sid, rep, set, side, peak, seconds] of neckReps) await client.query(
+    `INSERT INTO pg_temp.rep_events (session_id, rep_index, set_index, side, peak_value, target_rom, classification,
+       time_to_peak_ms, descent_ms, start_ts) VALUES ($1, $2, $3, $4, $5, 30, $6, 500, 400, $7)`,
+    [sid, rep, set, side, peak, peak >= 30 ? "complete" : "partial", new Date(Date.parse("2026-10-19T10:00:00Z") + seconds * 1000).toISOString()]);
+  const neckHistory = plain(await db.exports.getSessionsForPatient("fixture"));
+  const s8 = neckHistory.find((s: any) => s.id === 8);
+  const s9 = neckHistory.find((s: any) => s.id === 9);
+  assert.equal(s8.trend.rulesVersion, "trend_rules_v2");
+  assert.equal(s8.trend.leftReps, 3); assert.equal(s8.trend.peakLeftReps, 2, "set 2 has no resting reading");
+  assert.equal(s8.trend.avgLeftPeakValue, 35, "28 and 34 from rest: 32 and 38");
+  assert.equal(s8.trend.avgRightPeakValue, 45, "48 and 50 from rest: 44 and 46");
+  assert.equal(s8.trend.completeLeftReps, 2, "28 saved partial is complete from rest");
+  assert.equal(s8.avgLeftPeakValue, 92 / 3, "the plain columns stay as saved");
+  const neckDetail = plain(await db.exports.getSessionDetail(8));
+  const peakFromDetail = measureFromDetail(neckDetail, "peak", "left");
+  assert.equal(peakFromDetail.value, s8.trend.avgLeftPeakValue, "SQL and breakdown agree");
+  assert.equal(peakFromDetail.units, s8.trend.peakLeftReps);
+  assert.equal(measureFromDetail(neckDetail, "completionPct", "left").value, 100 * s8.trend.completeLeftReps / s8.trend.peakLeftReps);
+  assert.equal(s9.trend.peakLeftReps, 0); assert.equal(s9.trend.avgLeftPeakValue, null, "no record: no peak");
+  assert.equal(s9.trend.leftReps, 1, "the repetition still counts");
+  assert.equal(measureFromDetail(plain(await db.exports.getSessionDetail(9)), "peak", "left").units, 0);
+  for (const id of [1, 3, 4]) {
+    const before = byId(id).trend;
+    const after = neckHistory.find((s: any) => s.id === id).trend;
+    assert.deepEqual({ ...after, peakLeftReps: undefined, peakRightReps: undefined, rulesVersion: undefined },
+      { ...before, peakLeftReps: undefined, peakRightReps: undefined, rulesVersion: undefined }, "other exercises unchanged");
+    assert.equal(after.peakLeftReps, after.leftReps, "every repetition of another exercise counts for its peaks");
+  }
   console.log(JSON.stringify({ status: "passed", sessions: history.length, outcomeSessions: roster[0].totalSessions,
     auditOnlySessions: 2, actualPostgres: true, authenticatedHttp: false, physicalCamera: false,
-    checks: "actual camera End, route/quarantine, outbox continuation, SQL aggregates/detail/review/roster, legacy and one-sided outcomes, trend grouping, rendered consistency calendar",
+    checks: "actual camera End, route/quarantine, outbox continuation, SQL aggregates/detail/review/roster, legacy and one-sided outcomes, trend grouping, rendered consistency calendar, neck rest rule 4 (SQL against the breakdown)",
     persistence: "connection-private temporary tables; no public rows or sequences changed" }));
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => client.end());

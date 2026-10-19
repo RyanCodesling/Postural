@@ -59,7 +59,7 @@ test("every clip uses the ex_001 crop scaled to its own frame", () => {
 });
 
 test("the 870 x 980 clips use the reference crop checked against every frame", () => {
-  for (const id of ["ex_001", "ex_005", "ex_006", "ex_007", "ex_008"]) {
+  for (const id of ["ex_001", "ex_004", "ex_005", "ex_006", "ex_007", "ex_008"]) {
     const clip = DEMO_CLIPS[id];
     assert(clip !== undefined, `${id} must have a clip`);
     assert(clip.width === 870 && clip.height === 980, `${id}: unexpected frame size`);
@@ -82,9 +82,19 @@ test("every clip belongs to an exercise in the registry", () => {
 });
 
 test("exercises without an accepted guide animation have no clip", () => {
-  assert(demoClipFor("ex_004") === null, "ex_004's active neck-tilt draft is not accepted for the guide");
+  assert(demoClipFor("ex_002") === null, "deprecated ex_002 has no guide animation");
+  assert(demoClipFor("ex_003") === null, "deprecated ex_003 has no guide animation");
+  assert(demoClipFor("ex_004") === DEMO_CLIPS.ex_004, "ex_004's active neck-tilt animation is accepted");
   assert(demoClipFor("ex_005") === DEMO_CLIPS.ex_005, "ex_005's side-bend animation is back");
   assert(demoClipFor("ex_008") === DEMO_CLIPS.ex_008, "ex_008's wall-angels animation is published");
+});
+
+test("the neck swing has no rest, so its one label holds for the whole loop", () => {
+  const clip = DEMO_CLIPS.ex_004;
+  for (const seconds of [0, 0.7, 4.5, 8.99, 9]) {
+    assert(demoStatusAtTime(clip, seconds).phase === "Swing", `${seconds} s is still Swing`);
+  }
+  assert(clip.frames === 270 && clip.fps === 30, "three 3-second cycles at 30 fps");
 });
 
 test("no id, an unknown id, or an inherited key returns null", () => {

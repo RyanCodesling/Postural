@@ -1,6 +1,20 @@
 export const NEUTRAL_CALIBRATION_DURATION_MS = 3_000;
 export const NEUTRAL_CALIBRATION_MIN_SAMPLES = 15;
 export const NEUTRAL_CALIBRATION_MAX_TICK_MS = 250;
+/**
+ * The countdown before every calibration (user decision 2026-10-19). The
+ * patient usually presses Start, Resume or Recalibrate at the computer and then
+ * walks back into place; the calibration's samples are only taken once this
+ * has run out, so the neutral reference is not taken mid-walk. Wall-clock time,
+ * whether or not the patient is in view.
+ */
+export const NEUTRAL_CALIBRATION_POSITIONING_MS = 5_000;
+
+/** Whole seconds left of the positioning countdown (0 once it has run out or when none is running). */
+export function positioningSecondsLeft(endsAtMs: number | null, nowMs: number): number {
+  if (endsAtMs === null || !Number.isFinite(endsAtMs) || !Number.isFinite(nowMs)) return 0;
+  return Math.max(0, Math.ceil((endsAtMs - nowMs) / 1_000));
+}
 
 export type NeutralCalibrationClock = {
   validElapsedMs: number;

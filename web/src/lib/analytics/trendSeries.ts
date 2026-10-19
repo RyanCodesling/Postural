@@ -20,7 +20,7 @@ import { OVERLAY_LABELS } from "@/lib/pose/drawCompensationOverlay";
 import type { PrescribedSide } from "@/lib/prescriptionContext";
 import { prescribedOutcomeSides } from "@/lib/sessionOutcomePresentation";
 import { measureFromDetail, type SessionRepsDetail } from "./trendBreakdown";
-import { sessionPoorlyTracked } from "./trendRules";
+import { NECK_REST_EXERCISES, sessionPoorlyTracked } from "./trendRules";
 import {
   fitTrend,
   TREND_MODEL,
@@ -100,9 +100,19 @@ export interface TrendRepSummary {
   /** Repetitions with a tracking record, and the poorly tracked ones among them. */
   trackedReps: number;
   poorlyTrackedReps: number;
+  /**
+   * Repetitions behind the peak measures (peak, completion, peak spread). They
+   * differ from leftReps/rightReps only for a neck side bend, whose repetitions
+   * without a resting reading are left out of them (rule 4). Absent before v2.
+   */
+  peakLeftReps?: number;
+  peakRightReps?: number;
 }
 
 type RepValues = Omit<TrendRepSummary, "rulesVersion" | "trackedReps" | "poorlyTrackedReps">;
+
+/** The measures rule 4 corrects for a neck side bend. */
+const PEAK_MEASURES: ReadonlySet<string> = new Set(["peak", "completionPct", "peakSpread"]);
 
 /** The repetition values a session's trend points use: its rule summary, or the plain fields before it. */
 function repValues(session: TrendModelSession): RepValues {
@@ -134,6 +144,26 @@ export function sessionHeldOutReason(session: TrendModelSession): string | null 
   const t = session.trend;
   if (!t || !sessionPoorlyTracked(t.trackedReps, t.poorlyTrackedReps)) return null;
   return `camera tracking was poor in ${t.poorlyTrackedReps} of ${t.trackedReps} repetitions`;
+}
+
+/**
+ * Why a neck side bend session is drawn but left out of a peak measure's trend
+ * line (rule 4), or null: it has repetitions on the side but none with a
+ * resting reading, so none of its peaks could be measured from the resting
+ * position.
+ */
+export function neckRestHeldOutReason(
+  exerciseId: string,
+  session: TrendModelSession,
+  measure: TrendMeasureName,
+  side: TrendSide,
+): string | null {
+  if (!NECK_REST_EXERCISES.has(exerciseId) || !PEAK_MEASURES.has(measure) || side === "card") return null;
+  const t = session.trend;
+  if (!t || t.peakLeftReps === undefined || t.peakRightReps === undefined) return null;
+  const reps = side === "left" ? t.leftReps : t.rightReps;
+  const peakReps = side === "left" ? t.peakLeftReps : t.peakRightReps;
+  return reps > 0 && peakReps === 0 ? "recorded without a resting head position to measure from" : null;
 }
 
 /**
@@ -181,7 +211,8 @@ export function sessionMeasure(
   }
   const left = side === "left";
   const r = repValues(session);
-  const reps = left ? r.leftReps : r.rightReps;
+  // Rule 4: the peak measures count only the repetitions they were measured on.
+  const peakReps = left ? (r.peakLeftReps ?? r.leftReps) : (r.peakRightReps ?? r.rightReps);
   if (measure.startsWith("exposure:")) {
     const exposure = session.exposure?.[measure.slice("exposure:".length)];
     const share = left ? exposure?.left : exposure?.right;
@@ -198,16 +229,16 @@ export function sessionMeasure(
     }
     case "completionPct": {
       const complete = left ? r.completeLeftReps : r.completeRightReps;
-      return { value: reps > 0 && finite(complete) ? (100 * complete) / reps : null, units: reps };
+      return { value: peakReps > 0 && finite(complete) ? (100 * complete) / peakReps : null, units: peakReps };
     }
     case "peakSpread":
-      return { value: (left ? r.sdLeftPeakValue : r.sdRightPeakValue) ?? null, units: reps };
+      return { value: (left ? r.sdLeftPeakValue : r.sdRightPeakValue) ?? null, units: peakReps };
   }
   switch (measure) {
     case "peak":
       return side === "left"
-        ? { value: r.avgLeftPeakValue, units: r.leftReps }
-        : { value: r.avgRightPeakValue, units: r.rightReps };
+        ? { value: r.avgLeftPeakValue, units: peakReps }
+        : { value: r.avgRightPeakValue, units: peakReps };
     case "formScore":
       return side === "left"
         ? { value: r.avgLeftFormScore, units: r.leftFormReps }
@@ -323,6 +354,18 @@ export function prepareModelSeries(
     const counts = finite(value) && count >= minUnits;
     // Rule 3: a poorly tracked session is drawn, hollow, but not fitted.
     const reason = counts && !HOLD_UNIT_MEASURES.has(measure) ? sessionHeldOutReason(session) : null;
+    if (!counts) {
+      // Rule 4: a neck session without resting readings is drawn, hollow, at
+      // its saved value (measured against the calibration's camera tilt).
+      const neck = neckRestHeldOutReason(exerciseId, session, measure, side);
+      const saved = neck ? sessionMeasure({ ...session, trend: null }, measure, side) : null;
+      if (neck && saved && finite(saved.value) && saved.units >= minUnits) {
+        values.push(null);
+        units.push(null);
+        heldOut.push({ value: saved.value, reason: neck });
+        continue;
+      }
+    }
     values.push(counts && reason === null ? value : null);
     units.push(counts && reason === null ? count : null);
     heldOut.push(reason === null ? null : { value: value as number, reason });

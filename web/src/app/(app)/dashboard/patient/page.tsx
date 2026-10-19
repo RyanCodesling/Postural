@@ -13,6 +13,11 @@ import {
   prescriptionMetricValue,
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
+import {
+  dayCountsText,
+  type OccurrenceCounts,
+  type PrescriptionState,
+} from "@/lib/exercises/prescriptionStatus";
 import ConsistencyCalendar from "./ConsistencyCalendar";
 import PatientProgramView from "./PatientProgramView";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
@@ -62,13 +67,23 @@ interface AssignedExercise {
   exercise_id: string;
   name: string;
   description: string;
-  status: string;
+  prescription_state: PrescriptionState;
+  occurrence_summary: OccurrenceCounts;
   sets: number;
   reps: number;
   rest_seconds: number;
   hold_seconds: number;
   assigned_date: string;
 }
+
+// Lifecycle only, worded as on the therapist's PT Program tab; how the days
+// went is the dayCountsText line under the exercise.
+const PRESCRIPTION_PILLS: Record<PrescriptionState, { label: string; classes: string }> = {
+  upcoming: { label: "Upcoming", classes: "bg-sky-100 text-sky-700" },
+  active: { label: "Active", classes: "bg-teal-100 text-teal-700" },
+  ended: { label: "Ended", classes: "bg-gray-100 text-gray-700" },
+  archived: { label: "Ended early", classes: "bg-gray-100 text-gray-700" },
+};
 
 // One scheduled day for an assigned exercise (a row of exercise_occurrences
 // joined to its prescription). Drives the Session schedule tab and the calendar.
@@ -315,6 +330,7 @@ export default function PatientDashboardPage() {
             }
             onStart={handleOccurrenceStart}
             calendar={<ConsistencyCalendar sessions={sessions} occurrences={occurrences} compact />}
+            onShowProgress={() => setActiveTab("my-progress")}
           />
         )}
 
@@ -324,7 +340,7 @@ export default function PatientDashboardPage() {
           const recorded = sessions.filter((x) => x.setCount > 0 || x.totalReps > 0);
           const lastSession = recorded.reduce<string | null>((latest, x) => (!latest || x.startedAt > latest ? x.startedAt : latest), null);
           return (
-            <div className="flex flex-col gap-4">
+            <div className="mx-auto flex max-w-6xl flex-col gap-4">
               <div id="tour-progress-header" className="flex flex-wrap items-start justify-between gap-3">
                 <PageHeading title="My Progress" subtitle="Your session-over-session trends per exercise. Descriptive trends, not a diagnosis." />
                 {trendGroups.length > 0 && (
@@ -356,7 +372,7 @@ export default function PatientDashboardPage() {
                   Finish a few sessions to see your progress here.
                 </div>
               ) : (
-                <div id="tour-progress-trends" className="grid items-start gap-4 xl:grid-cols-2">
+                <div id="tour-progress-trends" className="grid items-start gap-4">
                   {trendGroups.map((g) => (
                     <ExerciseTrendCard key={g.contextKey} group={g} />
                   ))}
@@ -591,17 +607,14 @@ export default function PatientDashboardPage() {
                           {ex.sets} sets ×{" "}
                           {prescriptionTargetText({ exerciseId: ex.exercise_id, reps: ex.reps, holdSeconds: ex.hold_seconds })}
                         </p>
+                        <p className="mt-0.5 text-xs text-gray-500">{dayCountsText(ex.occurrence_summary)}</p>
                       </div>
                       <span
                         className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-                          ex.status === "completed"
-                            ? "bg-green-100 text-green-700"
-                            : ex.status === "in_progress"
-                              ? "bg-teal-100 text-teal-700"
-                              : "bg-amber-100 text-amber-700"
+                          PRESCRIPTION_PILLS[ex.prescription_state].classes
                         }`}
                       >
-                        {ex.status === "completed" ? "Completed" : ex.status === "in_progress" ? "In Progress" : "Not Started"}
+                        {PRESCRIPTION_PILLS[ex.prescription_state].label}
                       </span>
                     </div>
                   ))}

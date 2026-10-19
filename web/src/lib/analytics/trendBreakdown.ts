@@ -8,16 +8,24 @@ import type { PainReportStatus, PainTiming } from "@/lib/prescriptionContext";
 import type { TrendMeasureName, TrendSide } from "./trendSeries";
 import {
   firstRepsOfSets,
+  NECK_REST_EXERCISES,
+  neckRestOffsetAt,
+  neckRestPeak,
   repLeftOut,
   repPoorlyTracked,
   repTrackingShare,
   repTrackingUnchecked,
   sessionPoorlyTracked,
+  type NeckRestEpoch,
   type RepLeftOut,
 } from "./trendRules";
 
 /** The parts of a GET /api/sessions/[id] session the breakdown reads. */
 export interface SessionRepsDetail {
+  /** Needed for trend data rule 4 (neck side bends); without it every repetition reads as saved. */
+  exerciseId?: string | null;
+  /** The capture summary; rule 4 reads its neck rest record. */
+  captureQuality?: { neckRest?: { epochs: NeckRestEpoch[] } | null } | null;
   reps: {
     repIndex: number;
     setIndex: number;
@@ -31,6 +39,8 @@ export interface SessionRepsDetail {
     /** Raise + top + lower, as saved. */
     totalMs?: number | null;
     compensations?: unknown;
+    /** When the repetition started; rule 4 finds its calibration by it. */
+    startTs?: string | number | Date | null;
   }[];
   sets: {
     setIndex: number;
@@ -168,6 +178,42 @@ function objectAt(value: unknown, ...path: string[]): object | null {
 
 const sideReps = (detail: SessionRepsDetail, side: TrendSide) => detail.reps.filter((r) => r.side === side);
 
+type Rep = SessionRepsDetail["reps"][number];
+
+/**
+ * Trend data rule 4. For a neck side bend, a repetition's peak and completion
+ * measured from the resting position, or `referenced: false` when its
+ * calibration recorded no resting reading. Other exercises read as saved.
+ */
+function restReferenced(detail: SessionRepsDetail): (r: Rep) => { referenced: boolean; peak: number | null; complete: boolean } {
+  const neck = typeof detail.exerciseId === "string" && NECK_REST_EXERCISES.has(detail.exerciseId);
+  const epochs = detail.captureQuality?.neckRest?.epochs ?? null;
+  return (r) => {
+    const saved = finite(r.peakValue) ? r.peakValue : null;
+    if (!neck) return { referenced: true, peak: saved, complete: r.classification === "complete" };
+    const offset = neckRestOffsetAt(epochs, timeMs(r.startTs));
+    if (offset === null) return { referenced: false, peak: null, complete: false };
+    const peak = saved === null ? null : neckRestPeak(r.side, saved, offset);
+    return {
+      referenced: true,
+      peak,
+      complete: peak !== null && finite(r.targetRom) ? peak >= r.targetRom : r.classification === "complete",
+    };
+  };
+}
+
+/**
+ * The still-head readings rule 4 takes off a neck session's peaks, one per
+ * calibration that recorded one, or null for other exercises and sessions
+ * without a record.
+ */
+export function neckRestOffsets(detail: SessionRepsDetail): number[] | null {
+  if (typeof detail.exerciseId !== "string" || !NECK_REST_EXERCISES.has(detail.exerciseId)) return null;
+  const epochs = detail.captureQuality?.neckRest?.epochs;
+  if (!epochs) return null;
+  return epochs.flatMap((e) => (typeof e.offsetDeg === "number" && Number.isFinite(e.offsetDeg) ? [e.offsetDeg] : []));
+}
+
 /** The side's repetitions in the order done, with the values each chart uses. */
 export function repRows(detail: SessionRepsDetail, side: "left" | "right", metrics: string[]): RepRow[] {
   const thresholds = recordedWarningThresholds(detail.context);
@@ -177,14 +223,18 @@ export function repRows(detail: SessionRepsDetail, side: "left" | "right", metri
     return size === null || threshold === undefined ? null : size / threshold;
   };
   const firsts = firstRepsOfSets(detail.reps);
+  const referenced = restReferenced(detail);
   return sideReps(detail, side).map((r) => {
     const rule = ruleScore(r.compensations);
+    const ref = referenced(r);
     return {
       repIndex: r.repIndex,
       setIndex: r.setIndex,
-      peak: finite(r.peakValue) ? r.peakValue : null,
+      // Rule 4: a neck peak from the resting position; without a resting
+      // reading the saved peak is shown and the repetition is marked.
+      peak: ref.referenced ? ref.peak : finite(r.peakValue) ? r.peakValue : null,
       target: finite(r.targetRom) ? r.targetRom : null,
-      complete: r.classification === "complete",
+      complete: ref.referenced ? ref.complete : r.classification === "complete",
       raisingS: finite(r.timeToPeakMs) ? r.timeToPeakMs / 1000 : null,
       pauseS: finite(r.holdMs) ? r.holdMs / 1000 : null,
       loweringS: finite(r.descentMs) ? r.descentMs / 1000 : null,
@@ -198,7 +248,7 @@ export function repRows(detail: SessionRepsDetail, side: "left" | "right", metri
       ),
       peakOverThreshold: Object.fromEntries(metrics.map((m) => [m, relative(r.compensations, m, "peakAbs")])),
       meanOverThreshold: Object.fromEntries(metrics.map((m) => [m, relative(r.compensations, m, "meanAbs")])),
-      leftOut: repLeftOut(r.compensations, firsts.has(r.repIndex)),
+      leftOut: repLeftOut(r.compensations, firsts.has(r.repIndex), !ref.referenced),
     };
   });
 }
@@ -337,8 +387,9 @@ function contributing(values: (number | null)[]): { value: number | null; units:
  * Repetitions: a repetition without a value still counts as a repetition, as
  * in the summary; time over a threshold counts the repetitions that recorded it.
  * The trend data rules apply as in the summary: a poorly tracked repetition
- * counts nowhere, and raising and lowering time skip each set's first
- * repetition.
+ * counts nowhere, raising and lowering time skip each set's first repetition,
+ * and a neck side bend's peak measures use the peaks from the resting position,
+ * leaving out repetitions without a resting reading (rule 4).
  */
 export function measureFromDetail(
   detail: SessionRepsDetail,
@@ -377,10 +428,12 @@ export function measureFromDetail(
     });
     return { value: shares.length > 0 ? 100 * mean(shares) : null, units: shares.length };
   }
-  const peaks = reps.flatMap((r) => (finite(r.peakValue) ? [r.peakValue] : []));
+  const referenced = restReferenced(detail);
+  const peakReps = reps.map(referenced).filter((r) => r.referenced);
+  const peaks = peakReps.flatMap((r) => (r.peak !== null ? [r.peak] : []));
   switch (measure) {
     case "peak":
-      return { value: peaks.length > 0 ? mean(peaks) : null, units: reps.length };
+      return { value: peaks.length > 0 ? mean(peaks) : null, units: peakReps.length };
     case "formScore": {
       const scores = reps.flatMap((r) => {
         const rule = ruleScore(r.compensations);
@@ -398,11 +451,11 @@ export function measureFromDetail(
     }
     case "completionPct":
       return {
-        value: reps.length > 0 ? (100 * reps.filter((r) => r.classification === "complete").length) / reps.length : null,
-        units: reps.length,
+        value: peakReps.length > 0 ? (100 * peakReps.filter((r) => r.complete).length) / peakReps.length : null,
+        units: peakReps.length,
       };
     case "peakSpread":
-      return { value: sampleSd(peaks), units: reps.length };
+      return { value: sampleSd(peaks), units: peakReps.length };
     default:
       return { value: null, units: 0 };
   }

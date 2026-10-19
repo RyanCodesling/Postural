@@ -28,7 +28,7 @@ const CAPABILITIES = [
   },
   {
     title: "Live form cues",
-    text: "Short on-screen prompts appear when a movement drifts from the target, such as a shrugged shoulder or a leaning trunk.",
+    text: "Short on-screen prompts appear when a movement drifts from the target, such as uneven shoulders or a leaning trunk.",
     icon: <Icon><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" /><path d="M9 11h6M9 14h4" /></Icon>,
   },
   {
@@ -146,7 +146,7 @@ export default function HomePage() {
               <h1 className="mt-5 text-4xl font-bold leading-tight sm:text-5xl">Postural Monitoring System</h1>
               <p className="mt-5 max-w-xl text-lg text-green-50/90">
                 Your webcam becomes a hands-free exercise coach: it counts repetitions, times holds and shows form cues
-                as you move, then sends your therapist objective data after every session.
+                as you move, then sends your therapist a record of every session.
               </p>
               <div className="mt-8">
                 <Link href="/login" className={LOGIN_BUTTON}>Log In</Link>

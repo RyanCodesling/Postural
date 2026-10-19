@@ -1,17 +1,16 @@
 /**
- * The Reports tab's range chart and the patient's range-of-motion gauge follow
- * the trend data rules, as the trend cards do. A poorly tracked session is drawn
- * hollow, off the line, with a note; the shoulder press's normalized readings
- * keep their decimals; and the gauge compares the sessions of one exercise
- * setup, under the same rules.
+ * The Reports tab's peak chart follows the trend data rules, as the trend cards
+ * do. A poorly tracked session is drawn hollow, off the line, with a note; the
+ * shoulder press's normalized readings keep their decimals; the chart is titled
+ * with the measure's own label, never "Range of Motion"; and the exercise list
+ * tells two setups of one exercise apart.
  * Run with: npx tsx "src/app/(app)/dashboard/_components/PatientReports.test.tsx"
  */
 import { strict as assert } from "node:assert";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { TrendRepSummary } from "@/lib/analytics/trendSeries";
-import type { TrendSession } from "./ExerciseTrends";
-import PatientReports from "./PatientReports";
-import PatientProgramView, { gaugeHistory } from "../patient/PatientProgramView";
+import { groupSessionsByExercise, type TrendSession } from "./ExerciseTrends";
+import PatientReports, { setupOptionLabel } from "./PatientReports";
 
 const DAY_MS = 86_400_000;
 // Recent days, so that the report's default range (the prior month) includes them.
@@ -39,8 +38,8 @@ const poorlyTracked = (n: number) => session(n, 120, { trend: trend({ trackedRep
 
 const report = (sessions: TrendSession[]) => {
   const html = renderToStaticMarkup(<PatientReports sessions={sessions} occurrences={[]} />).replace(/<!-- -->/g, "");
-  const svg = html.match(/<svg[^>]*aria-label="Range of motion by session"[^>]*>[\s\S]*?<\/svg>/)?.[0];
-  assert.ok(svg, "the range chart renders");
+  const svg = html.match(/<svg[^>]*aria-label="Peak[^"]* by session"[^>]*>[\s\S]*?<\/svg>/)?.[0];
+  assert.ok(svg, "the peak chart renders");
   return { html, svg };
 };
 const linePoints = (svg: string) =>
@@ -66,30 +65,25 @@ const normalized = report([press(1, 0.44), press(2, 0.24)]);
 assert.deepEqual(ticks(normalized.svg), ["0.00", "0.25", "0.50", "0.75", "1.00"], "normalized tick labels");
 assert.notEqual(normalized.svg, report([press(1, 0), press(2, 0)]).svg, "0.24 and 0.44 are not drawn as zero");
 
-// 3. The gauge: the newest setup only, under the trend data rules.
-const right85 = session(1, 85, { comparableContextKey: "new-setup", exerciseConfigVersion: "new", prescribedSide: "right" });
-const left145 = session(2, 145, { comparableContextKey: "old-setup", exerciseConfigVersion: "old", prescribedSide: "left" });
-assert.deepEqual(gaugeHistory([right85, left145]), { exerciseName: "Lateral Arm Raises", values: [85] }, "another setup is not compared");
-assert.deepEqual(gaugeHistory([session(1, 90), poorlyTracked(2), session(3, 70)])?.values, [70, 90], "a left-out session is not on the gauge");
-const uneven = session(1, 0, { trend: trend({ avgLeftPeakValue: 80, leftReps: 6, avgRightPeakValue: 60, rightReps: 3 }) });
-assert.ok(Math.abs((gaugeHistory([uneven])?.values[0] ?? 0) - (80 * 6 + 60 * 3) / 9) < 1e-9, "both sides weighted by repetitions");
-assert.equal(gaugeHistory([session(1, 90, { leftReps: 2 })]), null, "a side with too few repetitions does not count");
-assert.equal(gaugeHistory([press(1, 0.44)]), null, "normalized readings are not on the degree gauge");
-const sideBend = session(1, 40, { exerciseId: "ex_005", exerciseName: "Standing Side Bend", trend: trend({ trackedReps: 16, poorlyTrackedReps: 8 }) });
-assert.equal(gaugeHistory([sideBend, session(2, 88)])?.exerciseName, "Lateral Arm Raises", "an exercise with nothing counted is skipped");
+// 3. The chart's title and accessible name are the measure's label, as on the trend cards.
+assert.ok(clean.html.includes(">Peak angle (camera estimate)</h3>"), "angles: the camera-estimate label");
+assert.ok(clean.svg.includes('aria-label="Peak angle (camera estimate) by session"'), "the chart's accessible name");
+assert.ok(normalized.html.includes(">Peak</h3>"), "the press: its normalized reading");
+assert.ok(!clean.html.includes("Range of Motion") && !normalized.html.includes("Range of Motion"), "never Range of Motion");
 
-const program = renderToStaticMarkup(
-  <PatientProgramView
-    patientName="Test patient"
-    occurrences={[]}
-    sessions={[right85, left145]}
-    today={daysAgo(0).slice(0, 10)}
-    tagFor={() => ({ label: "", classes: "" })}
-    isActionable={() => false}
-    onStart={() => {}}
-    calendar={null}
-  />,
-).replace(/<!-- -->/g, "");
-assert.match(program, /Latest[^]*?>85<[^]*?Best[^]*?>85<[^]*?First[^]*?>85</, "the rendered gauge uses one setup");
+// 4. The exercise list tells two setups of one exercise apart: same side and
+// resistance, another measurement version, so the dates and counts differ.
+const current = [1, 2, 3].map((n) => session(n, 88, { comparableContextKey: "current", exerciseConfigVersion: "current", prescribedSide: "right" }));
+const earlier = session(9, 84, { comparableContextKey: "earlier", exerciseConfigVersion: "earlier", prescribedSide: "right" });
+const labels = groupSessionsByExercise([...current, earlier]).map(setupOptionLabel);
+assert.equal(labels.length, 2, "two setups");
+assert.notEqual(labels[0], labels[1], "their labels differ");
+for (const label of labels) {
+  assert.match(label, /^Lateral Arm Raises · right side · Legacy resistance not recorded · [A-Z][a-z]{2} \d{1,2}/, label);
+}
+assert.ok(labels.some((label) => / – .*\(3 sessions\)$/.test(label)), "a date range and its sessions");
+assert.ok(labels.some((label) => /\(1 session\)$/.test(label)), "a single session");
+const options = [...report([...current, earlier]).html.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1]);
+assert.deepEqual(options, labels, "the rendered options");
 
-console.log("Reports chart and gauge: trend data rules, normalized decimals and one exercise setup.");
+console.log("Reports chart: trend data rules, normalized decimals, the measure's label and distinguishable setups.");

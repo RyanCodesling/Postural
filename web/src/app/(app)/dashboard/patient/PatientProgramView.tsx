@@ -4,8 +4,12 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
-import { prepareGroupModelSeries } from "@/lib/analytics/trendSeries";
-import { groupSessionsByExercise, primaryMetricMeta, type TrendSession } from "../_components/ExerciseTrends";
+import {
+  formatDuration,
+  isOutcomeBearingSession,
+  type ScheduleSessionRecord,
+} from "@/lib/exercises/scheduleSessionSummary";
+import { prescribedOutcomeSides, sideLabel } from "@/lib/sessionOutcomePresentation";
 import { FIT_SCREEN, Glyph, Panel, StatTile } from "../_components/DashboardKit";
 
 export interface ProgramOccurrence {
@@ -37,6 +41,22 @@ function dayLabel(key: string): { weekday: string; date: string } {
     weekday: at.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
     date: at.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }),
   };
+}
+
+/** "Fri, Jul 31" for a YYYY-MM-DD day. */
+function shortDayLabel(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** The Manila day (YYYY-MM-DD) of a timestamp, the calendar the schedule uses. */
+function manilaDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 }
 
 function dayState(day: string, items: ProgramOccurrence[], today: string): DayState {
@@ -79,83 +99,148 @@ function StateIcon({ state }: { state: DayState }) {
   return <span className="h-9 w-9 shrink-0 rounded-full border-[3px] border-green-100" aria-hidden />;
 }
 
-function ProgressRing({ percent }: { percent: number }) {
-  const radius = 42;
-  const circumference = 2 * Math.PI * radius;
-  return (
-    <div className="relative h-20 w-20 shrink-0">
-      <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="#dcfce7" strokeWidth="7" />
-        <circle
-          cx="50" cy="50" r={radius} fill="none" stroke="#16a34a" strokeWidth="7" strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - percent / 100)}
-        />
-      </svg>
-      <div className="absolute inset-0 grid place-items-center text-center">
-        <div>
-          <p className="text-lg font-bold leading-none text-gray-900">{percent}%</p>
-        </div>
-      </div>
-    </div>
-  );
+/** A session the dashboard can summarise: the schedule record and its exercise's name. */
+export type LastSessionRecord = ScheduleSessionRecord & { exerciseName: string };
+
+export interface LastSessionSummary {
+  exerciseName: string;
+  /** "Both sides", "Left side" or "Right side". */
+  sideText: string;
+  /** The session's Manila day, YYYY-MM-DD. */
+  day: string;
+  sets: number;
+  /** Repetitions per prescribed side; one "Total" column for older rows kept without sides. */
+  reps: Array<{ label: string; counted: number; fullRange: number }> | null;
+  /** Time held per prescribed side, for a hold exercise. */
+  holds: Array<{ label: string; heldMs: number }> | null;
+  targetHoldMs: number | null;
 }
 
 /**
- * The range-of-motion gauge's values, oldest first: the sessions of the newest
- * exercise setup (exercise, side, resistance and configuration, grouped as on the
- * trend cards) of a degree-measured repetition exercise, each as its average peak
- * under the trend data rules. A session counts only when every prescribed side
- * has a plotted value, so poorly tracked sessions and sides with too few
- * repetitions are left out, as on the trend lines.
+ * The Last Session card: the newest session with a result (sets, repetitions or
+ * hold time, as the Session tab counts it), in counts only. Per prescribed side:
+ * the repetitions the camera counted and how many reached the exercise's
+ * full-range line, or the time held. No angle values: those are camera
+ * estimates, shown with the trend model's band on My Progress. The sides stay
+ * apart, as everywhere else.
  */
-export function gaugeHistory(sessions: TrendSession[]): { exerciseName: string; values: number[] } | null {
-  const newestFirst = [...sessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-  for (const group of groupSessionsByExercise(newestFirst)) {
-    if (group.exerciseKind !== "dynamic" || !primaryMetricMeta(group.exerciseKind, group.primaryMetric).isAngle) continue;
-    const series = prepareGroupModelSeries(group.exerciseId, group.prescribedSide, group.sessions, "peak", true);
-    const values: number[] = [];
-    group.sessions.forEach((_, i) => {
-      let sum = 0;
-      let reps = 0;
-      for (const side of series) {
-        const value = side.values[i];
-        const units = side.units[i];
-        if (value === null || units === null) return;
-        sum += value * units;
-        reps += units;
-      }
-      values.push(sum / reps);
-    });
-    if (values.length > 0) return { exerciseName: group.exerciseName, values };
+export function lastSessionSummary(sessions: LastSessionRecord[]): LastSessionSummary | null {
+  let newest: LastSessionRecord | null = null;
+  for (const session of sessions) {
+    if (!isOutcomeBearingSession(session)) continue;
+    const order = newest ? Date.parse(session.startedAt) - Date.parse(newest.startedAt) : 1;
+    if (!newest || order > 0 || (order === 0 && session.id > newest.id)) newest = session;
   }
-  return null;
+  if (!newest) return null;
+  const last = newest;
+
+  const sides = prescribedOutcomeSides(last.prescribedSide);
+  const base = {
+    exerciseName: last.exerciseName,
+    sideText: last.prescribedSide === "both" ? "Both sides" : `${sideLabel(last.prescribedSide)} side`,
+    day: manilaDay(last.startedAt),
+    sets: last.setCount,
+  };
+  const holdMs = {
+    left: last.totalLeftHoldMs ?? last.totalPairedHoldMs ?? 0,
+    right: last.totalRightHoldMs ?? last.totalPairedHoldMs ?? 0,
+  };
+  const isHold =
+    last.exerciseKind === "isometric" ||
+    (last.totalReps === 0 && sides.some((side) => holdMs[side] > 0));
+  if (isHold) {
+    return {
+      ...base,
+      reps: null,
+      holds: sides.map((side) => ({ label: sideLabel(side), heldMs: holdMs[side] })),
+      targetHoldMs: last.totalTargetHoldMs,
+    };
+  }
+
+  const bySide = sides.map((side) => ({
+    label: sideLabel(side),
+    counted: side === "left" ? last.leftReps : last.rightReps,
+    fullRange: side === "left" ? last.completeLeftReps : last.completeRightReps,
+  }));
+  const hasSides = bySide.some((row) => row.counted > 0) || last.totalReps === 0;
+  return {
+    ...base,
+    reps: hasSides ? bySide : [{ label: "Total", counted: last.totalReps, fullRange: last.completeReps }],
+    holds: null,
+    targetHoldMs: null,
+  };
 }
 
-/** Half-circle gauge on a 0–180 scale: the needle is the latest value, the fill the best so far. */
-function Gauge({ latest, first, best }: { latest: number; first: number; best: number }) {
-  const point = (value: number, r: number) => {
-    const angle = Math.PI * (1 - Math.min(Math.max(value, 0), 180) / 180);
-    return { x: 100 + r * Math.cos(angle), y: 100 - r * Math.sin(angle) };
-  };
-  const arc = (from: number, to: number, r: number) => {
-    const a = point(from, r);
-    const b = point(to, r);
-    return `M ${a.x} ${a.y} A ${r} ${r} 0 0 1 ${b.x} ${b.y}`;
-  };
-  const needle = point(latest, 70);
-  const firstMark = point(first, 80);
+function LastSessionCard({
+  summary,
+  today,
+  onShowProgress,
+}: {
+  summary: LastSessionSummary | null;
+  today: string;
+  onShowProgress?: () => void;
+}) {
+  if (!summary) {
+    return <p className="py-4 text-center text-xs text-gray-500">Finish a session to see it here.</p>;
+  }
   return (
-    <svg viewBox="0 0 200 118" className="w-full">
-      <path d={arc(0, 180, 78)} fill="none" stroke="#e5efe7" strokeWidth="14" strokeLinecap="round" />
-      <path d={arc(0, Math.max(best, 1), 78)} fill="none" stroke="#86efac" strokeWidth="14" strokeLinecap="round" />
-      <path d={arc(0, Math.max(latest, 1), 78)} fill="none" stroke="#16a34a" strokeWidth="14" strokeLinecap="round" />
-      <circle cx={firstMark.x} cy={firstMark.y} r="3" fill="#15803d" />
-      <line x1="100" y1="100" x2={needle.x} y2={needle.y} stroke="#14532d" strokeWidth="2" strokeDasharray="3 3" />
-      <circle cx="100" cy="100" r="5" fill="#fff" stroke="#14532d" strokeWidth="2" />
-      <text x="14" y="116" fontSize="9" fill="#6b7280">0</text>
-      <text x="178" y="116" fontSize="9" fill="#6b7280">180</text>
-    </svg>
+    <div className="flex h-full flex-col">
+      <p className="truncate text-sm font-semibold text-gray-900">{summary.exerciseName}</p>
+      <p className="text-xs text-gray-500">
+        {`${summary.sideText} · ${summary.day === today ? "Today" : shortDayLabel(summary.day)} · ${summary.sets} set${summary.sets === 1 ? "" : "s"}`}
+      </p>
+      <table className="mt-1.5 w-full text-xs">
+        {summary.reps ? (
+          <>
+            <thead>
+              <tr className="text-gray-500">
+                <th scope="col" className="py-0.5 text-left font-normal">Repetitions</th>
+                {summary.reps.map((row) => (
+                  <th key={row.label} scope="col" className="py-0.5 text-right font-medium">{row.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="border-t border-green-50">
+              <tr>
+                <th scope="row" className="py-0.5 text-left font-normal text-gray-600">Counted</th>
+                {summary.reps.map((row) => (
+                  <td key={row.label} className="py-0.5 text-right font-semibold text-gray-900">{row.counted}</td>
+                ))}
+              </tr>
+              <tr>
+                <th scope="row" className="py-0.5 text-left font-normal text-gray-600">Full range</th>
+                {summary.reps.map((row) => (
+                  <td key={row.label} className="py-0.5 text-right font-semibold text-gray-900">{row.fullRange}</td>
+                ))}
+              </tr>
+            </tbody>
+          </>
+        ) : (
+          <tbody>
+            {(summary.holds ?? []).map((row) => (
+              <tr key={row.label}>
+                <th scope="row" className="py-0.5 text-left font-normal text-gray-600">{row.label} held</th>
+                <td className="py-0.5 text-right font-semibold text-gray-900">
+                  {formatDuration(row.heldMs)}
+                  {summary.targetHoldMs ? (
+                    <span className="font-normal text-gray-500"> of {formatDuration(summary.targetHoldMs)}</span>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        )}
+      </table>
+      {onShowProgress && (
+        <button
+          type="button"
+          onClick={onShowProgress}
+          className="mt-auto pt-1.5 text-left text-xs font-medium text-green-700 transition hover:text-green-900"
+        >
+          Open My Progress →
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -168,15 +253,18 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
   isActionable,
   onStart,
   calendar,
+  onShowProgress,
 }: {
   patientName: string;
   occurrences: T[];
-  sessions: TrendSession[];
+  sessions: LastSessionRecord[];
   today: string;
   tagFor: (occurrence: T) => { label: string; classes: string };
   isActionable: (occurrence: T) => boolean;
   onStart: (occurrence: T) => void;
   calendar: ReactNode;
+  /** Opens My Progress, from the Last Session card. */
+  onShowProgress?: () => void;
 }) {
   const [openDay, setOpenDay] = useState<string | null>(today);
   const [showAll, setShowAll] = useState(false);
@@ -197,16 +285,15 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
   const week = first
     ? Math.min(Math.max(Math.floor((dayNumber(today) - dayNumber(first)) / 7) + 1, 1), totalWeeks)
     : 0;
+  // After the last scheduled day the schedule has ended, as the Session tab says.
+  const ended = Boolean(last) && today > last;
 
   const windowStart = dayNumber(today) - 3;
   const windowEnd = dayNumber(today) + 7;
   const inWindow = days.filter((d) => dayNumber(d) >= windowStart && dayNumber(d) <= windowEnd);
   const visibleDays = showAll || inWindow.length === 0 ? days : inWindow;
 
-  // Gauge: the latest counted session of a degree-measured exercise, against the
-  // first and best sessions of the same setup (gaugeHistory). Values are camera estimates.
-  const gauge = gaugeHistory(sessions);
-  const values = gauge?.values ?? [];
+  const lastSession = lastSessionSummary(sessions);
 
   const upcoming = days.find((d) => d > today);
   const reminders: string[] = [];
@@ -243,19 +330,19 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
         <StatTile label="Missed" value={missedCount} unit={missedCount === 1 ? "exercise" : "exercises"} icon={Glyph.alert} tone={missedCount > 0 ? "amber" : "green"} />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+      {/* grid-cols-1 is minmax(0, 1fr): on a phone the day rows truncate instead of widening the page. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel
           id="tour-program"
           className="lg:col-span-7"
           title={`${patientName}\u2019s Exercise Program`}
-          right={<ProgressRing percent={percent} />}
           scroll
         >
           {first ? (
             <p className="mb-3 text-sm text-gray-600">
-              Week {week}/{totalWeeks}
+              {ended ? `Schedule ended ${dayLabel(last).weekday}, ${dayLabel(last).date}` : `Week ${week}/${totalWeeks}`}
               <span className="mx-2 text-gray-300">|</span>
-              Beginning {dayLabel(first).weekday}, {dayLabel(first).date}
+              {ended ? "Began" : "Beginning"} {dayLabel(first).weekday}, {dayLabel(first).date}
             </p>
           ) : (
             <p className="mb-3 text-sm text-gray-500">Your therapist has not scheduled any exercises yet.</p>
@@ -355,23 +442,8 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
         <div className="grid min-h-0 gap-4 lg:col-span-5 lg:grid-rows-[minmax(0,1.5fr)_minmax(0,1fr)]">
           <div id="tour-calendar" className="min-h-0">{calendar}</div>
           <div className="grid min-h-0 grid-cols-2 gap-4">
-            <Panel id="tour-rom" title="Range of Motion" scroll>
-              {gauge ? (
-                <div className="flex h-full flex-col justify-between">
-                  <Gauge latest={values[values.length - 1]} first={values[0]} best={Math.max(...values)} />
-                  <div className="text-center leading-tight">
-                    <p className="truncate text-xs font-semibold text-gray-900">{gauge.exerciseName}</p>
-                    <p className="text-[11px] text-gray-500">
-                      Latest <strong className="text-green-700">{Math.round(values[values.length - 1])}</strong> · Best{" "}
-                      <strong className="text-gray-900">{Math.round(Math.max(...values))}</strong> · First{" "}
-                      <strong className="text-gray-900">{Math.round(values[0])}</strong>
-                    </p>
-                    <p className="text-[10px] text-gray-400">Camera estimates.</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="py-4 text-center text-xs text-gray-500">Finish a session to see your range of motion here.</p>
-              )}
+            <Panel id="tour-last-session" title="Last Session" scroll>
+              <LastSessionCard summary={lastSession} today={today} onShowProgress={onShowProgress} />
             </Panel>
             <Panel id="tour-reminders" title="Reminders" scroll>
               <ul className="space-y-1.5">

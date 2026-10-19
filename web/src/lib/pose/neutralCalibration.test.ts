@@ -4,7 +4,9 @@
  */
 import {
   NEUTRAL_CALIBRATION_DURATION_MS,
+  NEUTRAL_CALIBRATION_POSITIONING_MS,
   advanceNeutralCalibrationClock,
+  positioningSecondsLeft,
   frozenNeutralTiltReference,
   medianFinite,
   neutralCalibrationProgressPct,
@@ -112,5 +114,16 @@ assert(medianFinite([]) === null, "empty median must be null");
     "a changing observed tilt altered a static landmark outcome",
   );
 }
+
+// The positioning countdown before every calibration: 5 s, counted down in
+// whole seconds, then the 3 s calibration (user decision 2026-10-19).
+assert(NEUTRAL_CALIBRATION_POSITIONING_MS === 5_000, "the positioning countdown is 5 s");
+assert(NEUTRAL_CALIBRATION_DURATION_MS === 3_000, "the calibration stays 3 s");
+assert(positioningSecondsLeft(10_000, 5_000) === 5, "5 s left at its start");
+assert(positioningSecondsLeft(10_000, 5_001) === 5, "a part second rounds up");
+assert(positioningSecondsLeft(10_000, 9_999) === 1, "the last second shows 1");
+assert(positioningSecondsLeft(10_000, 10_000) === 0, "done when it runs out");
+assert(positioningSecondsLeft(10_000, 12_000) === 0, "never negative");
+assert(positioningSecondsLeft(null, 1_000) === 0, "no countdown running");
 
 console.log("neutralCalibration tests passed");

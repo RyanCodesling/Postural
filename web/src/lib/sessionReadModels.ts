@@ -35,7 +35,28 @@ export interface CaptureQualityContext {
    * tuning trace.
    */
   frameSizes?: { width: number; height: number; frames: number }[];
+  /**
+   * Neck side bends only (trend data rule 4): what a still head read in the
+   * rests between sets, per calibration, from the time that calibration was
+   * taken. Each repetition's peak is measured from it. Absent before
+   * 2026-10-19 and for other exercises.
+   */
+  neckRest?: NeckRestRecord;
 }
+
+/** Version of the neck rest record (trend data rule 4). */
+export const NECK_REST_RULE = "neck_rest_reference_v1" as const;
+
+/** The fewest still frames in a calibration's rests for a usable reading. */
+export const NECK_REST_MIN_FRAMES = 30;
+
+export interface NeckRestRecord {
+  rule: typeof NECK_REST_RULE;
+  epochs: { from: string; offsetDeg: number | null; frames: number }[];
+}
+
+/** The camera's running neck rest readings: one entry per calibration, in pipeline degrees. */
+export type NeckRestTally = { epochs: { from: string; readings: number[] }[] };
 
 /** The capture tallies the camera keeps for one session. */
 export type CaptureTallies = {
@@ -47,7 +68,53 @@ export type CaptureTallies = {
   checked?: number;
   /** Accepted frames per frame size, keyed "WxH" (for example "1280x720"). */
   frameSizes?: Record<string, number>;
+  /** Neck side bends: the still-head readings in the rests between sets, per calibration. */
+  neckRest?: NeckRestTally;
 };
+
+const isoTime = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value));
+
+const medianOf = (values: number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/**
+ * The neck rest record from the camera's readings: each calibration's median
+ * still-head reading, or null below NECK_REST_MIN_FRAMES. Null without epochs.
+ */
+export function neckRestRecordFromTally(tally: NeckRestTally | undefined): NeckRestRecord | null {
+  if (!tally || !Array.isArray(tally.epochs) || tally.epochs.length === 0) return null;
+  const epochs: NeckRestRecord["epochs"] = [];
+  for (const epoch of tally.epochs) {
+    if (!isoTime(epoch?.from) || !Array.isArray(epoch.readings)) return null;
+    const readings = epoch.readings.filter((v) => typeof v === "number" && Number.isFinite(v));
+    epochs.push({
+      from: epoch.from,
+      offsetDeg: readings.length >= NECK_REST_MIN_FRAMES ? Math.round(medianOf(readings) * 100) / 100 : null,
+      frames: readings.length,
+    });
+  }
+  return { rule: NECK_REST_RULE, epochs };
+}
+
+/** A saved neck rest record, or null when absent or malformed. */
+export function parseNeckRestRecord(value: unknown): NeckRestRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.rule !== NECK_REST_RULE || !Array.isArray(record.epochs) || record.epochs.length > 50) return null;
+  const epochs: NeckRestRecord["epochs"] = [];
+  for (const item of record.epochs) {
+    if (!item || typeof item !== "object") return null;
+    const { from, offsetDeg, frames } = item as Record<string, unknown>;
+    const offsetOk = offsetDeg === null || (typeof offsetDeg === "number" && Number.isFinite(offsetDeg) && Math.abs(offsetDeg) <= 45);
+    if (!isoTime(from) || !offsetOk || !frameCount(frames)) return null;
+    epochs.push({ from, offsetDeg: offsetDeg as number | null, frames });
+  }
+  return { rule: NECK_REST_RULE, epochs };
+}
 
 type FrameSizeCount = { width: number; height: number; frames: number };
 
@@ -97,6 +164,7 @@ function frameSizeList(value: unknown, maxFrames: number): FrameSizeCount[] | nu
 export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQualityContext | undefined {
   if (tallies.total <= 0) return undefined;
   const frameSizes = frameSizeList(tallies.frameSizes, tallies.ok);
+  const neckRest = neckRestRecordFromTally(tallies.neckRest);
   return {
     framesTotal: tallies.total,
     framesOk: tallies.ok,
@@ -106,6 +174,7 @@ export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQual
     ...(tallies.unsteady === undefined ? {} : { unsteadyFrames: tallies.unsteady }),
     ...(tallies.checked === undefined ? {} : { checkedFrames: tallies.checked }),
     ...(frameSizes ? { frameSizes } : {}),
+    ...(neckRest ? { neckRest } : {}),
   };
 }
 
@@ -157,6 +226,8 @@ export function parseCaptureQualitySummary(value: unknown): CaptureQualityContex
   if (checked !== null && checked <= summary.framesOk) summary.checkedFrames = Math.round(checked);
   const frameSizes = frameSizeList(record.frameSizes, summary.framesOk);
   if (frameSizes) summary.frameSizes = frameSizes;
+  const neckRest = parseNeckRestRecord(record.neckRest);
+  if (neckRest) summary.neckRest = neckRest;
   return summary;
 }
 

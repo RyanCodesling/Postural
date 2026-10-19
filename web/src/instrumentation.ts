@@ -1,5 +1,5 @@
-// Runs once when the Next.js server starts. Checks hourly whether the day-end
-// therapist summary emails are due; sendDailyTherapistDigests sends each only once.
+// Runs once when the Next.js server starts. Checks hourly whether the morning
+// summary emails of the previous day are due; sendDailyTherapistDigests sends each only once.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const state = globalThis as { __digestTimer?: NodeJS.Timeout };

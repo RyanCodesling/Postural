@@ -12,6 +12,7 @@ import {
   endOfSetRows,
   holdRows,
   measureFromDetail,
+  neckRestOffsets,
   repRows,
   sessionTracking,
   setTimings,
@@ -19,6 +20,7 @@ import {
   type RepRow,
   type SessionRepsDetail,
 } from "@/lib/analytics/trendBreakdown";
+import { NECK_REST_EXERCISES } from "@/lib/analytics/trendRules";
 import { exposureMetrics, minUnitsFor, type TrendMeasureName, type TrendSide } from "@/lib/analytics/trendSeries";
 import { formatPainAfter, formatPreSessionPain, preSessionPainFromContext } from "@/lib/prescriptionContext";
 import { ANGLE_ESTIMATE_LABEL, sideLabel } from "@/lib/sessionOutcomePresentation";
@@ -215,6 +217,21 @@ function Swatch({ color }: { color: string }) {
 }
 
 /** The chart's point for a session and side, and whether the session counts for the trend model. */
+/**
+ * Trend data rule 4, for a neck side bend: how its peaks were measured. They are
+ * taken from the resting head position, so the still-head reading between sets
+ * is taken off left peaks and added to right peaks.
+ */
+function neckRestCaption(detail: SessionRepsDetail, exerciseId: string): string {
+  if (!NECK_REST_EXERCISES.has(exerciseId)) return "";
+  const offsets = neckRestOffsets(detail) ?? [];
+  if (offsets.length === 0) {
+    return "No resting head position was recorded in this session, so its peaks are shown as measured against the camera tilt at the start and are left out of the peak trends.";
+  }
+  const readings = offsets.map((o) => `${o > 0 ? "+" : ""}${o.toFixed(1)}`).join(", ");
+  return `Peaks are measured from the resting head position: the still-head reading between sets (${readings}, camera estimate) is taken off left peaks and added to right peaks.`;
+}
+
 function chartPoint(detail: SessionRepsDetail, exerciseId: string, measure: TrendMeasureName, side: TrendSide) {
   const { value, units } = measureFromDetail(detail, measure, side);
   return { value, units, counted: value !== null && units >= minUnitsFor(exerciseId, measure) };
@@ -360,6 +377,10 @@ function RepSide({
       cell: (r) =>
         r.leftOut === "tracking" ? (
           <span className="text-amber-700" title="The camera tracked this repetition poorly, so it counts in no trend">No: camera tracking</span>
+        ) : r.leftOut === "no-rest-reference" ? (
+          <span className="text-amber-700" title="No resting head position was recorded to measure this peak from, so it counts in no peak trend">
+            Yes, peak left out
+          </span>
         ) : r.leftOut === "first-of-set" ? (
           "Yes, timing left out"
         ) : (
@@ -519,6 +540,7 @@ function RepSide({
             caption={[
               "Lowering ÷ raising above 1 means the repetition came down more slowly than it went up.",
               "† Each set's first repetition is left out of the raising and lowering trends, because its timing includes getting into position.",
+              neckRestCaption(detail, exerciseId),
               metrics.length > 0
                 ? "Compensation columns summarize raw signals: the share of observed repetition time above the configured threshold, and " +
                   "below it the raw peak as a multiple of that threshold (1.00× is at the threshold; hover for the average). " +

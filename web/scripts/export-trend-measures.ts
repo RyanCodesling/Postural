@@ -11,14 +11,24 @@
  *
  * Repetitions follow the trend data rules the app's charts use
  * (src/lib/analytics/trendRules.ts): timing skips each set's first repetition per
- * side, a poorly tracked repetition is left out, and a poorly tracked session is
- * not exported.
+ * side, a poorly tracked repetition is left out, a poorly tracked session is not
+ * exported, and a neck side bend's peaks and completion are measured from the
+ * resting head position, leaving out repetitions without a resting reading.
  */
 import { Client } from "pg";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TREND_RULES_VERSION, repPoorlyTracked, repTrackingShare, sessionPoorlyTracked } from "../src/lib/analytics/trendRules";
+import {
+  NECK_REST_EXERCISES,
+  TREND_RULES_VERSION,
+  neckRestOffsetAt,
+  neckRestPeak,
+  repPoorlyTracked,
+  repTrackingShare,
+  sessionPoorlyTracked,
+} from "../src/lib/analytics/trendRules";
+import { parseNeckRestRecord } from "../src/lib/sessionReadModels";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -72,13 +82,14 @@ async function main() {
       SELECT s.id, s.patient_id, s.exercise_id, s.started_at,
              COALESCE(s.exercise_config_version, 'legacy-unversioned') AS cfg,
              COALESCE(s.context_snapshot->'prescription'->>'prescribedSide', 'both') AS prescribed_side,
-             s.context_snapshot->'prescription'->'resistance' AS resistance
+             s.context_snapshot->'prescription'->'resistance' AS resistance,
+             s.capture_quality_summary->'neckRest' AS neck_rest
         FROM sessions s
        WHERE s.device_info IS NOT NULL
        ORDER BY s.started_at, s.id`)).rows;
     const reps = (await client.query(`
       SELECT session_id, set_index, side, peak_value, classification, time_to_peak_ms, descent_ms,
-             total_ms, compensations
+             total_ms, compensations, target_rom, start_ts
         FROM rep_events
        ORDER BY session_id, set_index, rep_index`)).rows;
     const sets = (await client.query(`
@@ -89,6 +100,11 @@ async function main() {
     await client.query("ROLLBACK");
 
     const bySession = new Map<number, SessionOut>();
+    // Trend data rule 4: each neck session's still-head readings, per calibration.
+    const neckRest = new Map<number, ReturnType<typeof parseNeckRestRecord>>();
+    for (const row of sessions) {
+      if (NECK_REST_EXERCISES.has(row.exercise_id)) neckRest.set(row.id, parseNeckRestRecord(row.neck_rest));
+    }
     for (const row of sessions) {
       bySession.set(row.id, {
         sessionId: row.id,
@@ -133,8 +149,21 @@ async function main() {
       if (heldOut.has(rep.session_id) || repPoorlyTracked(rep.compensations)) continue;
       session.kind = "dynamic";
       const side = rep.side as Side;
-      if (finite(rep.peak_value)) sideUnits(session, "peak")[side].push(rep.peak_value);
-      sideUnits(session, "complete")[side].push(rep.classification === "complete" ? 1 : 0);
+      if (NECK_REST_EXERCISES.has(session.exerciseId)) {
+        // Rule 4: the peak and completion from the resting position; a
+        // repetition without a resting reading counts in neither.
+        const start = rep.start_ts ? new Date(rep.start_ts).getTime() : null;
+        const offset = neckRestOffsetAt(neckRest.get(rep.session_id)?.epochs ?? null, start);
+        if (offset !== null) {
+          const peak = finite(rep.peak_value) ? neckRestPeak(side, rep.peak_value, offset) : null;
+          if (peak !== null) sideUnits(session, "peak")[side].push(peak);
+          const complete = peak !== null && finite(rep.target_rom) ? peak >= rep.target_rom : rep.classification === "complete";
+          sideUnits(session, "complete")[side].push(complete ? 1 : 0);
+        }
+      } else {
+        if (finite(rep.peak_value)) sideUnits(session, "peak")[side].push(rep.peak_value);
+        sideUnits(session, "complete")[side].push(rep.classification === "complete" ? 1 : 0);
+      }
       if (!firstOfSet) {
         if (finite(rep.total_ms)) sideUnits(session, "repDurationS")[side].push(rep.total_ms / 1000);
         if (finite(rep.descent_ms)) sideUnits(session, "loweringS")[side].push(rep.descent_ms / 1000);

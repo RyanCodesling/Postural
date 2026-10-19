@@ -95,3 +95,27 @@ export function summarizePrescription(args: {
     painStoppedCount,
   };
 }
+
+/** The `occurrence_summary` counts that `getPatientExercises` returns. */
+export interface OccurrenceCounts {
+  scheduled: number;
+  completed: number;
+  missed: number;
+  remaining: number;
+  painStopped: number;
+}
+
+/**
+ * Patient-facing outcome line, e.g. "1 done · 29 missed · 1 stopped for pain".
+ * Completed, missed, pain-stopped and remaining split the scheduled
+ * (uncancelled) days with no overlap, so the parts add up to the schedule.
+ * A day started but not finished before its window closed counts as missed.
+ */
+export function dayCountsText(counts: OccurrenceCounts): string {
+  if (counts.scheduled === 0) return "No days scheduled";
+  const parts = [`${counts.completed} done`];
+  if (counts.missed > 0) parts.push(`${counts.missed} missed`);
+  if (counts.painStopped > 0) parts.push(`${counts.painStopped} stopped for pain`);
+  if (counts.remaining > 0) parts.push(`${counts.remaining} to go`);
+  return parts.join(" · ");
+}

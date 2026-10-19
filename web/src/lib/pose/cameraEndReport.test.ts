@@ -37,6 +37,7 @@ function harness(options: { sessionId: number | null; rowOk?: boolean; drained?:
     captureUnsteadyFramesRef: ref(3),
     captureCheckedFramesRef: ref(80),
     captureFrameSizesRef: ref({ "1280x720": 90 }),
+    neckRestTallyRef: ref({ epochs: [] }),
     buildCaptureQualitySummary,
     // What the camera's own stopCamera touches, so a test can press Stop first.
     useCallback: (fn: any) => fn,

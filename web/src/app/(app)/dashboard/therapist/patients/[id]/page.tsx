@@ -534,7 +534,7 @@ export default function PatientDetailPage() {
           </div>
         </div>
 
-        <div id="tour-detail-tabs" role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto border-b border-green-100">
+        <div id="tour-detail-tabs" role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-green-100">
           {PATIENT_TABS.map(({ key, label }) => (
             <button
               key={key}
@@ -960,8 +960,9 @@ export default function PatientDetailPage() {
             <p className="text-sm font-medium text-gray-700 mb-1">Trend model</p>
             <p className="text-xs text-gray-500">
               The Rising / No clear change / Falling labels and shaded bands in Progress Trends come from a
-              machine-learning trend model. A label appears only when a side&apos;s change is larger than normal
-              session-to-session variation. Supplementary information, not a diagnosis.
+              machine-learning trend model. Rising or Falling appears only when a side&apos;s change is larger than
+              normal session-to-session variation; otherwise the label is No clear change. Supplementary
+              information, not a diagnosis.
             </p>
           </div>
         </div>

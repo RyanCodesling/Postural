@@ -2,10 +2,11 @@ import { coachingWarningSpecs, type ExerciseDefinition } from "@/lib/exercises/r
 import { resolveCoachingCue, resolveCoachingCueTiming } from "./coachingCue";
 import { COMPENSATION_WARNING_DEBOUNCE_MS } from "./compensationWarningState";
 import { OVERLAY_LABELS, OVERLAY_DIRECTION_LABELS } from "./drawCompensationOverlay";
+import { SHOULDER_CUE_REFERENCE } from "./shoulderRestReference";
 import { TRACKING_CHECK_VERSION, trackingCheckConfiguration } from "./trackingSteadiness";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v11_tracking_steadiness_check";
+export const COACHING_ALGORITHM_VERSION = "coaching_v12_shoulder_rest_reference";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {
@@ -32,6 +33,8 @@ export function coachingConfiguration(definition: ExerciseDefinition) {
     })),
     // The unsteady-tracking message: display only, its settings fingerprinted here.
     tracking: trackingCheckConfiguration(definition),
+    // How the LOWER cue's shoulder reading is referenced (display only, D-47).
+    shoulderReference: SHOULDER_CUE_REFERENCE,
   };
 }
 
@@ -68,7 +71,9 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
         (k.hold === undefined || k.hold === "repetition" || k.hold === "live");
     })) &&
     // Absent from configurations recorded before the tracking check.
-    (c.tracking === undefined || validTrackingConfiguration(c.tracking));
+    (c.tracking === undefined || validTrackingConfiguration(c.tracking)) &&
+    // Absent from configurations recorded before the resting shoulder reference.
+    (c.shoulderReference === undefined || c.shoulderReference === SHOULDER_CUE_REFERENCE);
 }
 
 function validTrackingConfiguration(value: unknown): boolean {

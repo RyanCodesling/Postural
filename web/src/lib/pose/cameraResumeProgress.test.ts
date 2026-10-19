@@ -68,6 +68,7 @@ const context: any = vm.createContext({
   captureUnsteadyFramesRef: ref(12),
   captureCheckedFramesRef: ref(900),
   captureFrameSizesRef: ref({ "1280x720": 900, "640x480": 50 }),
+  neckRestTallyRef: ref({ epochs: [{ from: "2026-10-19T10:00:00.000Z", readings: [1.5, -0.5, 2] }] }),
   recordingWantedRef: ref(false),
 });
 vm.runInContext(transpile(cameraDeclarations([
@@ -94,6 +95,8 @@ test("a snapshot written after a completed set restores its sets, reps and captu
     { total: 1000, ok: 950, rejectedByStatus: { KNEES_NOT_VISIBLE: 40, NOT_VISIBLE: 10 }, dropoutResets: 2, unsteady: 12, checked: 900,
       frameSizes: { "1280x720": 900, "640x480": 50 } },
     "the frame sizes measured before the disruption come back, both of them");
+  assert.deepEqual(progress.neckRest, { epochs: [{ from: "2026-10-19T10:00:00.000Z", readings: [1.5, -0.5, 2] }] },
+    "the neck rest readings taken before the disruption come back with their calibration");
 });
 
 test("a second disruption keeps the restored outcomes plus the new ones", () => {
@@ -115,7 +118,14 @@ test("an older snapshot without the new fields restores nothing", () => {
     updatedAtWallMs: Date.now() };
   const progress = plain(api.restoredSessionProgress(old));
   assert.deepEqual(progress, { setsLog: [], repOutcomes: { left: [], right: [] },
-    captureFrames: { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} } });
+    captureFrames: { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} },
+    neckRest: { epochs: [] } });
+  // Neck rest readings with a bad start time, a non-number or too many restore none.
+  for (const epochs of [[{ from: "yesterday", readings: [1] }], [{ from: "2026-10-19T10:00:00.000Z", readings: [1, "2"] }],
+    [{ from: "2026-10-19T10:00:00.000Z", readings: new Array(3001).fill(0) }], "nope"]) {
+    const restored = plain(api.restoredSessionProgress({ ...old, neckRest: { epochs } }));
+    assert.deepEqual(restored.neckRest, { epochs: [] }, `restores none: ${JSON.stringify(epochs).slice(0, 60)}`);
+  }
   // A snapshot from before the rejection reasons keeps its tally, with none.
   const tallyOnly = plain(api.restoredSessionProgress({ ...old, captureFrames: { total: 5, ok: 4 } }));
   assert.deepEqual(tallyOnly.captureFrames, { total: 5, ok: 4, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} });

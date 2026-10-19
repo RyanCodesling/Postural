@@ -6,6 +6,7 @@ import {
   sendExerciseDigestEmail,
   sendExercisePausedEmail,
   type ExerciseDigestItem,
+  type ExercisePausedDetails,
 } from "./email";
 import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
 import {
@@ -21,7 +22,7 @@ import {
 } from "@/lib/exercises/prescriptionStatus";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
-import { TREND_RULES_VERSION } from "@/lib/analytics/trendRules";
+import { NECK_REST_EXERCISES, TREND_RULES_VERSION } from "@/lib/analytics/trendRules";
 import {
   parseCaptureQualitySummary,
   summarizeDeviceInfo,
@@ -1817,13 +1818,6 @@ export async function endSession(
       const pausedDetails = paused
         ? { ...paused, patientName: row.patient_name as string, exerciseName: row.exercise_name as string }
         : null;
-      if (pausedDetails) {
-        const patient = await pool.query("SELECT email, name FROM users WHERE id = $1", [row.patient_id]);
-        if (patient.rows[0]?.email) {
-          await sendExercisePausedEmail(patient.rows[0].email, patient.rows[0].name, pausedDetails, "patient")
-            .catch((err) => console.error("Failed to email pain pause to patient:", err));
-        }
-      }
       if (row.therapist_id) {
         if (data.completed) {
           await createNotification(
@@ -1849,18 +1843,37 @@ export async function endSession(
             "patient_pain_stopped",
             row.occurrence_id,
           );
-          const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [row.therapist_id]);
-          if (pausedDetails && therapist.rows[0]?.email) {
-            await sendExercisePausedEmail(therapist.rows[0].email, therapist.rows[0].name, pausedDetails, "therapist")
-              .catch((err) => console.error("Failed to email pain pause to therapist:", err));
-          }
         }
       }
+      // Not awaited: a slow or unreachable mail server must not hold the end of
+      // the session or the therapist's in-app alert (Codex review 2026-10-15,
+      // finding 4). emailPainPause catches its own errors.
+      if (pausedDetails) void emailPainPause(row.patient_id, row.therapist_id ?? null, pausedDetails);
     }
   } catch (err) {
     console.error("Failed to create completion notification:", err);
   }
   return transitioned;
+}
+
+/** Emails the pain pause to the patient and, when one is assigned, the therapist. Never throws. */
+async function emailPainPause(
+  patientId: string,
+  therapistId: string | null,
+  details: ExercisePausedDetails,
+): Promise<void> {
+  const recipients: Array<[string, "patient" | "therapist"]> = [[patientId, "patient"]];
+  if (therapistId) recipients.push([therapistId, "therapist"]);
+  await Promise.all(recipients.map(async ([id, role]) => {
+    try {
+      const user = await pool.query("SELECT email, name FROM users WHERE id = $1", [id]);
+      if (user.rows[0]?.email) {
+        await sendExercisePausedEmail(user.rows[0].email, user.rows[0].name, details, role);
+      }
+    } catch (err) {
+      console.error(`Failed to email pain pause to ${role}:`, err);
+    }
+  }));
 }
 
 async function getPausedProgress(sessionId: number) {
@@ -1889,11 +1902,14 @@ async function getPausedProgress(sessionId: number) {
   };
 }
 
-// Emails each therapist and patient one summary of the day's completed exercises and one of
-// the exercises whose make-up window ended yesterday (missed). Safe to call
-// repeatedly: notification_email_digests lets each (therapist, kind, day) send
-// at most once. Manual-monitoring exercises are not included.
-export const DIGEST_HOUR_MANILA = 20;
+// Emails each therapist and patient, each morning, two summaries of the previous
+// Manila day: the exercises completed that day, and those whose make-up window
+// ended that day (missed). Only a finished day is summarised, so nothing can be
+// completed after its summary and fall between two of them (Codex review
+// 2026-10-15, finding 5). Safe to call repeatedly: notification_email_digests
+// lets each (recipient, kind, summarised day) send at most once.
+// Manual-monitoring exercises are not included.
+export const DIGEST_HOUR_MANILA = 7;
 
 export async function sendDailyTherapistDigests(): Promise<void> {
   if (!emailConfigured()) return;
@@ -1903,10 +1919,10 @@ export async function sendDailyTherapistDigests(): Promise<void> {
   );
   if (hour < DIGEST_HOUR_MANILA) return;
 
-  const today = manilaDayKey(now.getTime());
-  const yesterday = manilaDayKey(now.getTime() - DAY_MS);
-  const label = (day: string) =>
-    new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", {
+  // The day summarised: yesterday in Manila, which has finished.
+  const day = manilaDayKey(now.getTime() - DAY_MS);
+  const label = (key: string) =>
+    new Date(`${key}T00:00:00Z`).toLocaleDateString("en-US", {
       month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
     });
 
@@ -1934,31 +1950,30 @@ export async function sendDailyTherapistDigests(): Promise<void> {
     const kinds = [
       {
         kind: "completed" as const,
-        day: today,
         rows: () => pool.query(
           `${base} AND eo.status = 'completed'
              AND (eo.completed_at AT TIME ZONE 'Asia/Manila')::date = $2::date
            ORDER BY u.name, eo.completed_at`,
-          [recipient.id, today],
+          [recipient.id, day],
         ),
       },
       {
         kind: "missed" as const,
-        day: yesterday,
         rows: () => pool.query(
           `${base} AND eo.status NOT IN ('completed', 'pain_stopped')
              AND eo.makeup_until = $2::date
            ORDER BY u.name, eo.due_date`,
-          [recipient.id, yesterday],
+          [recipient.id, day],
         ),
       },
     ];
-    for (const { kind, day, rows } of kinds) {
+    for (const { kind, rows } of kinds) {
       try {
+        // The claim names the summarised day, so each day's summary goes out once.
         const claim = await pool.query(
           `INSERT INTO notification_email_digests (therapist_id, kind, day)
            VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING day`,
-          [recipient.id, kind, today],
+          [recipient.id, kind, day],
         );
         if (claim.rows.length === 0) continue;
         const result = await rows();
@@ -1975,7 +1990,7 @@ export async function sendDailyTherapistDigests(): Promise<void> {
         if (!sent) {
           await pool.query(
             "DELETE FROM notification_email_digests WHERE therapist_id = $1 AND kind = $2 AND day = $3",
-            [recipient.id, kind, today],
+            [recipient.id, kind, day],
           );
         }
       } catch (err) {
@@ -2391,6 +2406,7 @@ export async function getSessionsForPatient(patientId: string) {
          rt.trend_avg_left_form_score, rt.trend_avg_right_form_score, rt.trend_left_form_reps, rt.trend_right_form_reps,
          rt.trend_avg_left_lowering_ms, rt.trend_avg_right_lowering_ms, rt.trend_avg_left_raising_ms, rt.trend_avg_right_raising_ms,
          rt.trend_left_timing_reps, rt.trend_right_timing_reps, rt.tracked_reps, rt.poorly_tracked_reps,
+         rt.trend_peak_left_reps, rt.trend_peak_right_reps,
         st.set_count,
         st.exercise_kind,
          st.total_paired_hold_ms,
@@ -2531,12 +2547,16 @@ export async function getSessionsForPatient(patientId: string) {
        SELECT t.session_id,
               COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_left_reps,
               COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_right_reps,
-              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor AND t.classification = 'complete') AS trend_complete_left_reps,
-              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor AND t.classification = 'complete') AS trend_complete_right_reps,
-              AVG(t.peak_value) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_avg_left_peak_value,
-              AVG(t.peak_value) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_avg_right_peak_value,
-              STDDEV_SAMP(t.peak_value) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_sd_left_peak_value,
-              STDDEV_SAMP(t.peak_value) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_sd_right_peak_value,
+              -- Rule 4: a neck side bend's peak measures use the peaks from the
+              -- resting position and only the repetitions that have one.
+              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor AND t.ref_complete) AS trend_complete_left_reps,
+              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor AND t.ref_complete) AS trend_complete_right_reps,
+              AVG(t.ref_peak) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_avg_left_peak_value,
+              AVG(t.ref_peak) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_avg_right_peak_value,
+              STDDEV_SAMP(t.ref_peak) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_sd_left_peak_value,
+              STDDEV_SAMP(t.ref_peak) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_sd_right_peak_value,
+              COUNT(*) FILTER (WHERE t.side = 'left' AND NOT t.poor AND t.referenced) AS trend_peak_left_reps,
+              COUNT(*) FILTER (WHERE t.side = 'right' AND NOT t.poor AND t.referenced) AS trend_peak_right_reps,
               AVG(t.form_score) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_avg_left_form_score,
               AVG(t.form_score) FILTER (WHERE t.side = 'right' AND NOT t.poor) AS trend_avg_right_form_score,
               COUNT(t.form_score) FILTER (WHERE t.side = 'left' AND NOT t.poor) AS trend_left_form_reps,
@@ -2558,15 +2578,44 @@ export async function getSessionsForPatient(patientId: string) {
                                  THEN (re.compensations->'rawRule'->>'meanScore')::numeric END
                   END AS form_score,
                   CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN (re.compensations->'tracking'->>'frames')::numeric > 0 ELSE false END AS tracked,
-                  CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN CASE WHEN (re.compensations->'tracking'->>'frames')::numeric > 0 THEN (re.compensations->'tracking'->>'rejectedFrames')::numeric + (re.compensations->'tracking'->>'unsteadyFrames')::numeric >= 0.25 * (re.compensations->'tracking'->>'frames')::numeric ELSE false END ELSE false END AS poor
+                  CASE WHEN jsonb_typeof(re.compensations->'tracking'->'frames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'rejectedFrames') = 'number' AND jsonb_typeof(re.compensations->'tracking'->'unsteadyFrames') = 'number' THEN CASE WHEN (re.compensations->'tracking'->>'frames')::numeric > 0 THEN (re.compensations->'tracking'->>'rejectedFrames')::numeric + (re.compensations->'tracking'->>'unsteadyFrames')::numeric >= 0.25 * (re.compensations->'tracking'->>'frames')::numeric ELSE false END ELSE false END AS poor,
+                  -- Rule 4 (trendRules.ts): a neck repetition's peak and completion from
+                  -- the resting position; other exercises read as saved.
+                  CASE WHEN NOT nr.neck THEN re.peak_value
+                       WHEN nr.offset_deg IS NULL THEN NULL
+                       WHEN re.side = 'left' THEN re.peak_value - nr.offset_deg
+                       ELSE re.peak_value + nr.offset_deg END AS ref_peak,
+                  (NOT nr.neck OR nr.offset_deg IS NOT NULL) AS referenced,
+                  CASE WHEN NOT nr.neck THEN re.classification = 'complete'
+                       WHEN nr.offset_deg IS NULL THEN false
+                       WHEN re.peak_value IS NULL OR re.target_rom IS NULL THEN re.classification = 'complete'
+                       WHEN re.side = 'left' THEN re.peak_value - nr.offset_deg >= re.target_rom
+                       ELSE re.peak_value + nr.offset_deg >= re.target_rom END AS ref_complete
              FROM rep_events re
+             JOIN sessions sx ON sx.id = re.session_id
+             CROSS JOIN LATERAL (
+               -- The still-head reading of the latest calibration begun at or before
+               -- the repetition (the neck rest record in the capture summary).
+               SELECT sx.exercise_id = ANY($2::text[]) AS neck,
+                      (SELECT CASE WHEN jsonb_typeof(e->'offsetDeg') = 'number' THEN (e->>'offsetDeg')::float8 END
+                         FROM jsonb_array_elements(
+                                CASE WHEN sx.capture_quality_summary->'neckRest'->>'rule' = 'neck_rest_reference_v1'
+                                      AND jsonb_typeof(sx.capture_quality_summary->'neckRest'->'epochs') = 'array'
+                                     THEN sx.capture_quality_summary->'neckRest'->'epochs' ELSE '[]'::jsonb END) e
+                        WHERE jsonb_typeof(e->'from') = 'string'
+                          AND (e->>'from') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+                          AND re.start_ts IS NOT NULL
+                          AND (e->>'from')::timestamptz <= re.start_ts
+                        ORDER BY (e->>'from')::timestamptz DESC
+                        LIMIT 1) AS offset_deg
+             ) nr
             WHERE re.session_id IN (SELECT id FROM sessions WHERE patient_id = $1)
          ) t
         GROUP BY t.session_id
      ) rt ON rt.session_id = s.id
      WHERE s.patient_id = $1
      ORDER BY s.started_at DESC`,
-    [patientId]
+    [patientId, [...NECK_REST_EXERCISES]]
   );
 
   return result.rows.map((row) => {
@@ -2666,6 +2715,8 @@ export async function getSessionsForPatient(patientId: string) {
         rightTimingReps: Number(row.trend_right_timing_reps ?? 0),
         trackedReps: Number(row.tracked_reps ?? 0),
         poorlyTrackedReps: Number(row.poorly_tracked_reps ?? 0),
+        peakLeftReps: Number(row.trend_peak_left_reps ?? 0),
+        peakRightReps: Number(row.trend_peak_right_reps ?? 0),
       },
       totalPairedHoldMs: row.total_paired_hold_ms != null ? Number(row.total_paired_hold_ms) : null,
       totalTargetHoldMs: row.total_target_hold_ms != null ? Number(row.total_target_hold_ms) : null,

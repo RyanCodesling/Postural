@@ -23,7 +23,9 @@ import {
 } from "@mediapipe/tasks-vision";
 
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
-import { buildCaptureQualitySummary } from "@/lib/sessionReadModels";
+import { buildCaptureQualitySummary, type NeckRestTally } from "@/lib/sessionReadModels";
+import { NECK_REST_EXERCISES } from "@/lib/analytics/trendRules";
+import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/pose/shoulderRestReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
 import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
@@ -117,6 +119,8 @@ import {
 import {
   NEUTRAL_CALIBRATION_DURATION_MS,
   NEUTRAL_CALIBRATION_MIN_SAMPLES,
+  NEUTRAL_CALIBRATION_POSITIONING_MS,
+  positioningSecondsLeft,
   advanceNeutralCalibrationClock,
   frozenNeutralTiltReference,
   medianFinite,
@@ -373,6 +377,8 @@ type ResumeSnapshot = {
   completedSetsLog?: CompletedSetRecord[];
   repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
   captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number; unsteady?: number; checked?: number; frameSizes?: Record<string, number> };
+  /** Neck side bends: the still-head readings so far, per calibration (trend data rule 4). */
+  neckRest?: NeckRestTally;
   /** The patient opted in to video for this session and has not stopped it. */
   recordVideo?: boolean;
 };
@@ -414,6 +420,7 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
   setsLog: CompletedSetRecord[];
   repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
   captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number; unsteady: number; checked: number; frameSizes: Record<string, number> };
+  neckRest: NeckRestTally;
 } {
   const count = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -469,6 +476,23 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
           frameSizes,
         }
       : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} };
+  // The neck rest readings came later again: per calibration, an ISO start
+  // time and at most 3000 finite readings. Anything else restores none.
+  const rest = snap.neckRest?.epochs;
+  const neckRest: NeckRestTally =
+    Array.isArray(rest) &&
+    rest.length <= 50 &&
+    rest.every(
+      (e) =>
+        !!e &&
+        typeof e.from === "string" &&
+        Number.isFinite(Date.parse(e.from)) &&
+        Array.isArray(e.readings) &&
+        e.readings.length <= 3_000 &&
+        e.readings.every((v) => typeof v === "number" && Number.isFinite(v)),
+    )
+      ? { epochs: rest.map((e) => ({ from: e.from, readings: [...e.readings] })) }
+      : { epochs: [] };
   return {
     setsLog,
     repOutcomes: {
@@ -476,6 +500,7 @@ function restoredSessionProgress(snap: ResumeSnapshot): {
       right: outcomes(snap.repOutcomes?.right),
     },
     captureFrames,
+    neckRest,
   };
 }
 
@@ -1885,6 +1910,11 @@ export default function CameraClient() {
   const rightCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(
     new Map(),
   );
+  // The LOWER cue's own reading (D-47): the shoulders against their resting
+  // line from the calibration, smoothed by its own filter so the score's
+  // filters above keep the frozen-tilt reading. Null until a calibration.
+  const shoulderRestLineDegRef = useRef<number | null>(null);
+  const cueCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
   // the metricFiltersRef map because per-limb exercises need TWO filters for
   // the same MetricName — one per side. Cleared on exercise change, reset on
@@ -1913,6 +1943,10 @@ export default function CameraClient() {
     newNeutralCalibrationClock(),
   );
   const neutralCalibrationSamplesRef = useRef<NeutralCalibrationSample[]>([]);
+  // When the positioning countdown that comes before every calibration ends
+  // (performance.now() clock). Until then no calibration sample is taken, so a
+  // patient still walking back from the computer is not measured as neutral.
+  const calibrationPositioningEndsAtMsRef = useRef<number | null>(null);
   const frozenTiltDegRef = useRef<number | null>(null);
   const lastMetricsUpdateRef = useRef(0);
   const compensationWarningLatchesRef = useRef<Map<MetricName, CompensationWarningLatch>>(
@@ -2904,7 +2938,14 @@ export default function CameraClient() {
   const sessionStartMsRef = useRef<number | null>(null);
   const countdownResumeElapsedMsRef = useRef<number | null>(null);
   const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
-  const [countdownSec, setCountdownSec] = useState(3);
+  const [countdownSec, setCountdownSec] = useState(5);
+  // Which part of the start countdown is showing: getting into place, or the
+  // calibration that follows it.
+  const [countdownStage, setCountdownStage] = useState<"positioning" | "baseline">("positioning");
+  // Seconds left of the positioning countdown before any calibration, for the
+  // baseline banner during a recalibration mid-session (at the start, the
+  // countdown overlay shows them).
+  const [positioningSec, setPositioningSec] = useState(0);
 
   /**
    * Completed sets count for the current session. State + ref pair so
@@ -3128,6 +3169,11 @@ export default function CameraClient() {
   // lists every size the session measured on. Owned by the session, unlike
   // the footer's resolution readout, which Stop clears.
   const captureFrameSizesRef = useRef<Record<string, number>>({});
+  // Neck side bends (trend data rule 4): what a still head reads in the rests
+  // between sets, one entry per calibration from the time it was taken, so each
+  // repetition's peak can be measured from the resting position. Owned by the
+  // session like the frame sizes: Stop keeps it and Resume carries it.
+  const neckRestTallyRef = useRef<NeckRestTally>({ epochs: [] });
   // Unsteady-tracking check (display only): its state, the part its message
   // names, each processed frame's marks for the repetitions' tracking records,
   // and the session's unsteady frames (→ capture_quality_summary).
@@ -3681,6 +3727,7 @@ export default function CameraClient() {
       unsteady: captureUnsteadyFramesRef.current,
       checked: captureCheckedFramesRef.current,
       frameSizes: captureFrameSizesRef.current,
+      neckRest: neckRestTallyRef.current,
     });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
@@ -3923,6 +3970,15 @@ export default function CameraClient() {
         checked: captureCheckedFramesRef.current,
         frameSizes: { ...captureFrameSizesRef.current },
       },
+      neckRest:
+        neckRestTallyRef.current.epochs.length > 0
+          ? {
+              epochs: neckRestTallyRef.current.epochs.map((e) => ({
+                from: e.from,
+                readings: [...e.readings],
+              })),
+            }
+          : undefined,
     };
     try {
       window.localStorage.setItem(
@@ -4019,19 +4075,47 @@ export default function CameraClient() {
     return () => clearInterval(interval);
   }, [sessionState]);
 
-  /** Neutral-calibration countdown. It cannot open the outcome gate early. */
+  /** The positioning countdown's seconds for the baseline banner, while a calibration waits for it. */
+  useEffect(() => {
+    if (baselinePhase !== "capturing") {
+      setPositioningSec(0);
+      return;
+    }
+    const tick = () =>
+      setPositioningSec(positioningSecondsLeft(calibrationPositioningEndsAtMsRef.current, performance.now()));
+    tick();
+    const interval = setInterval(tick, 200);
+    return () => clearInterval(interval);
+  }, [baselinePhase]);
+
+  /**
+   * The start countdown: first the positioning countdown (no measuring, time
+   * to get into place), then the neutral calibration's. It cannot open the
+   * outcome gate early.
+   */
   useEffect(() => {
     if (sessionState !== "countdown") return;
-    setCountdownSec(3);
+    setCountdownStage("positioning");
+    setCountdownSec(Math.ceil(NEUTRAL_CALIBRATION_POSITIONING_MS / 1_000));
     const tick = () => {
-      const clock = neutralCalibrationClockRef.current;
-      const remaining = Math.max(
-        0,
-        Math.ceil(
-          (NEUTRAL_CALIBRATION_DURATION_MS - clock.validElapsedMs) / 1_000,
-        ),
-      );
-      setCountdownSec(remaining);
+      const positioning =
+        baselinePhaseRef.current === "capturing"
+          ? positioningSecondsLeft(calibrationPositioningEndsAtMsRef.current, performance.now())
+          : 0;
+      if (positioning > 0) {
+        setCountdownStage("positioning");
+        setCountdownSec(positioning);
+      } else {
+        const clock = neutralCalibrationClockRef.current;
+        const remaining = Math.max(
+          0,
+          Math.ceil(
+            (NEUTRAL_CALIBRATION_DURATION_MS - clock.validElapsedMs) / 1_000,
+          ),
+        );
+        setCountdownStage("baseline");
+        setCountdownSec(remaining);
+      }
       if (
         sessionStateRef.current === "countdown" &&
         baselinePhaseRef.current === "captured"
@@ -4400,6 +4484,7 @@ export default function CameraClient() {
     captureRejectedByStatusRef.current = {};
     captureDropoutResetsRef.current = 0;
     captureFrameSizesRef.current = {};
+    neckRestTallyRef.current = { epochs: [] };
     captureUnsteadyFramesRef.current = 0;
     captureCheckedFramesRef.current = 0;
     trackingMarksRef.current = [];
@@ -4468,6 +4553,7 @@ export default function CameraClient() {
     captureRejectedByStatusRef.current = { ...progress.captureFrames.rejectedByStatus };
     captureDropoutResetsRef.current = progress.captureFrames.dropoutResets;
     captureFrameSizesRef.current = { ...progress.captureFrames.frameSizes };
+    neckRestTallyRef.current = progress.neckRest;
     captureUnsteadyFramesRef.current = progress.captureFrames.unsteady;
     captureCheckedFramesRef.current = progress.captureFrames.checked;
     trackingMarksRef.current = [];
@@ -4979,7 +5065,10 @@ export default function CameraClient() {
         };
       }
 
-      if (baselinePhaseRef.current === "capturing") {
+      if (
+        baselinePhaseRef.current === "capturing" &&
+        tNow >= (calibrationPositioningEndsAtMsRef.current ?? -Infinity)
+      ) {
         ex004FaceShadowBaselineSamplesRef.current.push(
           rawOrientation.rollImageDeg,
         );
@@ -5188,6 +5277,19 @@ export default function CameraClient() {
   ): void => {
     neutralCalibrationClockRef.current = newNeutralCalibrationClock();
     neutralCalibrationSamplesRef.current = [];
+    // Every calibration starts with the positioning countdown; its samples are
+    // taken only after it (see NEUTRAL_CALIBRATION_POSITIONING_MS).
+    calibrationPositioningEndsAtMsRef.current =
+      phase === "capturing" ? performance.now() + NEUTRAL_CALIBRATION_POSITIONING_MS : null;
+    // The banner and the start countdown show the positioning stage from their
+    // first frame, not only after their timers' first tick.
+    const positioningSecs =
+      phase === "capturing" ? Math.ceil(NEUTRAL_CALIBRATION_POSITIONING_MS / 1_000) : 0;
+    setPositioningSec(positioningSecs);
+    if (phase === "capturing") {
+      setCountdownStage("positioning");
+      setCountdownSec(positioningSecs);
+    }
     // Whatever prompted this, the baseline is being taken again, so the stale
     // warning has been answered.
     calibrationStaleRef.current = false;
@@ -5197,6 +5299,8 @@ export default function CameraClient() {
     calibrationSamplesEmittedSetRef.current = null;
     calibrationTraceSamplesRef.current = null;
     frozenTiltDegRef.current = null;
+    shoulderRestLineDegRef.current = null;
+    cueCompensationFiltersRef.current.clear();
     ex004FaceShadowRoiRef.current = null;
     ex004FaceShadowBaselineSamplesRef.current = [];
     ex004FaceShadowBaselineYawSamplesRef.current = [];
@@ -5350,6 +5454,11 @@ export default function CameraClient() {
     }
 
     frozenTiltDegRef.current = frozenTiltDeg;
+    // The LOWER cue's resting shoulder line (D-47), from the same samples.
+    shoulderRestLineDegRef.current = restingShoulderLineDeg(
+      samples.map((sample) => sample.landmarks),
+    );
+    cueCompensationFiltersRef.current.clear();
     // Snapshot BEFORE the ring is freed on the next line. Order matters: the
     // trace writer only runs once the phase below flips to "captured", by
     // which point the ring is gone.
@@ -5367,6 +5476,17 @@ export default function CameraClient() {
     leftPrimaryFilterRef.current.reset();
     rightPrimaryFilterRef.current.reset();
     resetCompensationWarnings();
+    // Neck side bends (trend data rule 4): a new reference starts a new entry,
+    // which the still-head readings of the following rests fill. The time is
+    // the session clock the repetitions are stamped with.
+    if (NECK_REST_EXERCISES.has(definition.id)) {
+      neckRestTallyRef.current = {
+        epochs: [
+          ...neckRestTallyRef.current.epochs,
+          { from: perfToIso(performance.now()), readings: [] },
+        ],
+      };
+    }
     setBaselinePhase("captured");
     updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
     return true;
@@ -6552,7 +6672,10 @@ export default function CameraClient() {
                 tNow,
               );
 
-              if (baselinePhaseRef.current === "capturing") {
+              if (
+                baselinePhaseRef.current === "capturing" &&
+                tNow >= (calibrationPositioningEndsAtMsRef.current ?? -Infinity)
+              ) {
                 const clock = advanceNeutralCalibrationClock(
                   neutralCalibrationClockRef.current,
                   tNow,
@@ -6595,6 +6718,20 @@ export default function CameraClient() {
                 activeDefinition,
                 effectiveTilt,
               );
+              // Trend data rule 4: in the rests between sets, a neck side bend
+              // records what the still head reads under the current
+              // calibration (capped at 3000 readings per calibration).
+              const neckReading = raw.metrics.neckLateralFlexion;
+              if (
+                sessionStateRef.current === "resting" &&
+                NECK_REST_EXERCISES.has(activeDefinition.id) &&
+                typeof neckReading === "number" &&
+                Number.isFinite(neckReading)
+              ) {
+                const epochs = neckRestTallyRef.current.epochs;
+                const current = epochs[epochs.length - 1];
+                if (current && current.readings.length < 3_000) current.readings.push(neckReading);
+              }
               const metricInputs: Partial<Record<MetricName, number | null>> = {
                 ...raw.metrics,
               };
@@ -6931,10 +7068,39 @@ export default function CameraClient() {
                 rawRightCompensations.scapularElevation = scapDeltaRight;
               }
 
+              // The LOWER cue alone reads the shoulders against their resting
+              // line from the calibration (D-47), smoothed by its own filter;
+              // the score above keeps the frozen-tilt reading. Without a
+              // resting line the cue reads as before.
+              const restShoulder = restReferencedShoulderSymmetry(
+                landmarks,
+                shoulderRestLineDegRef.current,
+              );
+              const shoulderSpec = activeDefinition.compensationMetrics.find(
+                (c) => c.name === "shoulderSymmetry",
+              );
+              const cueShoulderValue =
+                restShoulder !== null && shoulderSpec
+                  ? filterSideCompensation(
+                      cueCompensationFiltersRef.current,
+                      "shoulderSymmetry",
+                      restShoulder.angleDeg,
+                      shoulderSpec.warningThreshold,
+                    )
+                  : null;
+              const cueValue = (
+                name: MetricName,
+                smoothed: number | null,
+              ): number | null =>
+                name === "shoulderSymmetry" && cueShoulderValue !== null
+                  ? cueShoulderValue
+                  : smoothed;
+
               // Warning/card inputs use the same transformed signal as the
-              // score. Coupled metrics therefore show and threshold their
-              // residual from the expected value, not the raw movement that
-              // naturally accompanies the exercise.
+              // score (except the LOWER cue's reference, above). Coupled
+              // metrics therefore show and threshold their residual from the
+              // expected value, not the raw movement that naturally
+              // accompanies the exercise.
               const warningDisplayMetrics: Partial<
                 Record<MetricName, number | null>
               > = { ...smoothedMetrics };
@@ -6965,12 +7131,12 @@ export default function CameraClient() {
                     prescriptionRef.current.prescribedSide,
                     {
                       left: {
-                        value: smoothedLeftCompensations[comp.name] ?? null,
+                        value: cueValue(comp.name, smoothedLeftCompensations[comp.name] ?? null),
                         primary: smoothedPrimaryLeft,
                         phase: leftRepCounterRef.current?.getState() ?? null,
                       },
                       right: {
-                        value: smoothedRightCompensations[comp.name] ?? null,
+                        value: cueValue(comp.name, smoothedRightCompensations[comp.name] ?? null),
                         primary: smoothedPrimaryRight,
                         phase: rightRepCounterRef.current?.getState() ?? null,
                       },
@@ -6997,17 +7163,17 @@ export default function CameraClient() {
                       prescriptionRef.current.prescribedSide,
                       {
                         leftValue:
-                          smoothedLeftCompensations[comp.name] ?? null,
+                          cueValue(comp.name, smoothedLeftCompensations[comp.name] ?? null),
                         leftPrimary: smoothedPrimaryLeft,
                         rightValue:
-                          smoothedRightCompensations[comp.name] ?? null,
+                          cueValue(comp.name, smoothedRightCompensations[comp.name] ?? null),
                         rightPrimary: smoothedPrimaryRight,
                       },
                       warningRestOptions,
                     )
                   : singleCompensationWarningSignal(
                       comp,
-                      smoothedMetrics[comp.name] ?? null,
+                      cueValue(comp.name, smoothedMetrics[comp.name] ?? null),
                       smoothedMetrics[scorePrimaryName] ?? null,
                       warningRestOptions,
                     );
@@ -7764,13 +7930,14 @@ export default function CameraClient() {
               });
               // The LOWER arrow keeps the shoulder it first appeared on until
               // the cue leaves the slot, and moves only once the other shoulder
-              // reads higher than the cue's switch-off level (lowerArrowShoulder).
+              // reads higher than the cue's switch-off level (lowerArrowShoulder),
+              // read against the resting shoulder line like the cue (D-47).
               const lowerSpec = overlayComps.find((comp) => comp.name === "shoulderSymmetry");
               if (lowerSpec) {
                 lockedShoulderIndexRef.current = lowerArrowShoulder(
                   lockedShoulderIndexRef.current,
                   landmarks,
-                  computeShoulderSymmetry(landmarks, raw.tiltReference),
+                  restShoulder ?? computeShoulderSymmetry(landmarks, raw.tiltReference),
                   cueClearLevel(lowerSpec),
                 );
               } else if (selectedCoachingCueMetricRef.current !== "shoulderSymmetry") {
@@ -8147,6 +8314,13 @@ export default function CameraClient() {
     sessionState === "countdown" ||
     sessionState === "reporting";
   const baselineVisible = baselinePhase === "capturing";
+  // At the start, the positioning stage has its own overlay and the baseline
+  // banner takes over for the 3 s baseline, so the two never show together
+  // and nothing dims the camera view while the baseline is taken. A
+  // recalibration mid-session shows both stages in the banner.
+  const positioningOverlayVisible =
+    sessionState === "countdown" && countdownStage === "positioning";
+  const bannerPositioningSec = sessionState === "countdown" ? 0 : positioningSec;
   const baselineProgressPct = neutralCalibrationProgressPct({
     validElapsedMs: baselineProgress.validElapsedMs,
     sampleCount: baselineProgress.samples,
@@ -9531,8 +9705,9 @@ export default function CameraClient() {
                 )}
 
                 {/* Baseline-capture banner. The loudest card on the view, because
-                    the patient has to hold still while it runs. */}
-                {baselineVisible && (
+                    the patient has to hold still while it runs. At the start it
+                    follows the positioning overlay. */}
+                {baselineVisible && !positioningOverlayVisible && (
                   <div style={{
                     alignSelf: "stretch",
                     width: "100%",
@@ -9547,34 +9722,43 @@ export default function CameraClient() {
                     <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 12 : 20 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ ...EYEBROW_STYLE, fontSize: tightLayout ? 13 : 16, color: ACCENT.text, marginBottom: 6 }}>
-                          Baseline capture
+                          {bannerPositioningSec > 0 ? "Before the baseline" : "Baseline capture"}
                         </div>
                         <div style={{ fontSize: tightLayout ? 22 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "oklch(0.18 0.01 240)" }}>
-                          {captureOk
-                            ? baselineFinishingSamples
-                              ? "Finishing setup — stand still"
-                              : "Stand naturally, arms relaxed"
-                            : "Paused — improve framing"}
+                          {bannerPositioningSec > 0
+                            ? "Get into position"
+                            : captureOk
+                              ? baselineFinishingSamples
+                                ? "Finishing setup — stand still"
+                                : "Stand naturally, arms relaxed"
+                              : "Paused — improve framing"}
                         </div>
                       </div>
                       <div style={{ flexShrink: 0, fontFamily: "var(--mono)", fontSize: tightLayout ? 36 : 56, fontWeight: 600, lineHeight: 1, color: ACCENT.text, fontVariantNumeric: "tabular-nums" }}>
-                        {baselineFinishingSamples
-                          ? `${Math.min(
-                              baselineProgress.samples,
-                              NEUTRAL_CALIBRATION_MIN_SAMPLES,
-                            )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
-                          : baselineRemainingSec}
-                        {!baselineFinishingSamples && (
+                        {bannerPositioningSec > 0
+                          ? bannerPositioningSec
+                          : baselineFinishingSamples
+                            ? `${Math.min(
+                                baselineProgress.samples,
+                                NEUTRAL_CALIBRATION_MIN_SAMPLES,
+                              )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
+                            : baselineRemainingSec}
+                        {(bannerPositioningSec > 0 || !baselineFinishingSamples) && (
                           <span style={{ fontSize: tightLayout ? 18 : 24, marginLeft: 2 }}>s</span>
                         )}
                       </div>
                     </div>
-                    <div style={{ height: 10, marginTop: 14, borderRadius: 5, overflow: "hidden", background: "oklch(0.93 0.01 200)" }}>
-                      <div style={{ height: "100%", width: `${baselineProgressPct}%`, borderRadius: 5, background: ACCENT.hex, transition: "width .3s" }} />
-                    </div>
-                    <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".14em", color: "oklch(0.50 0.01 240)" }}>
-                      {baselineProgressPct}% READY
-                    </div>
+                    {/* No progress while getting into position: nothing is measured yet. */}
+                    {bannerPositioningSec === 0 && (
+                      <>
+                        <div style={{ height: 10, marginTop: 14, borderRadius: 5, overflow: "hidden", background: "oklch(0.93 0.01 200)" }}>
+                          <div style={{ height: "100%", width: `${baselineProgressPct}%`, borderRadius: 5, background: ACCENT.hex, transition: "width .3s" }} />
+                        </div>
+                        <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".14em", color: "oklch(0.50 0.01 240)" }}>
+                          {baselineProgressPct}% READY
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -9775,7 +9959,6 @@ export default function CameraClient() {
                 </div>
               )}
 
-              {/* 3-2-1 countdown overlay */}
               {/* Session video indicator: always visible while recording. */}
               {recordingState !== "off" && recordingState !== "stopped" &&
                 (sessionState === "countdown" || sessionState === "active" || sessionState === "resting") && (
@@ -9823,7 +10006,10 @@ export default function CameraClient() {
                 </div>
               )}
 
-              {sessionState === "countdown" && (
+              {/* Start countdown overlay: the positioning stage only. The
+                  baseline that follows shows in the baseline banner, with the
+                  camera view clear. */}
+              {positioningOverlayVisible && (
                 <div style={{
                   position: "absolute",
                   inset: 0,
@@ -9848,7 +10034,7 @@ export default function CameraClient() {
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    {countdownSec > 0 ? countdownSec : "···"}
+                    {countdownSec}
                   </span>
                   <span style={{
                     fontSize: tightLayout ? 20 : 26,
@@ -9857,7 +10043,16 @@ export default function CameraClient() {
                     textTransform: "uppercase",
                     color: "oklch(0.92 0.01 240)",
                   }}>
-                    {countdownSec > 0 ? "Get ready" : "Finishing setup"}
+                    Get into position
+                  </span>
+                  <span style={{
+                    fontSize: tightLayout ? 13 : 15,
+                    fontWeight: 500,
+                    color: "oklch(0.92 0.01 240)",
+                    textAlign: "center",
+                    maxWidth: "80%",
+                  }}>
+                    Step into place where the camera can see you.
                   </span>
                 </div>
               )}
@@ -11024,7 +11219,7 @@ const TOUR_STEPS: {
     cardW: 600,
     lines: [
       "Press Start session when you are ready.",
-      "A 3-2-1 countdown gives you time to get into position before counting begins.",
+      "A 5-second countdown gives you time to get into position. Then stand still for 3 seconds, looking straight ahead, while your starting position is measured. Counting begins after that.",
       "Press End at any time to stop the exercise early — your progress is still saved.",
       "After finishing all sets, the session saves automatically and is sent to your therapist.",
       "Not happy with your performance? Press Restart button to redo the exercise — your therapist will see the latest attempt.",
@@ -11897,7 +12092,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
             <div style={{ ...digit, opacity: 0, fontSize: 11, letterSpacing: ".08em", color: "oklch(0.40 0.07 145)", animation: "cd-go 3.6s linear infinite" }}>GO</div>
           </div>
           <div style={{ fontSize: 10.5, lineHeight: 1.45, color: "oklch(0.40 0.01 240)" }}>
-            A 3-2-1 countdown runs before counting starts.
+            A 5-second countdown to get into position, then 3 seconds standing still, run before counting starts.
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>

@@ -84,13 +84,13 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       ],
     },
     {
-      targetId: "tour-rom",
-      title: "Range of motion",
+      targetId: "tour-last-session",
+      title: "Last session",
       placement: "above",
       lines: [
-        "The gauge compares your latest session with your first and your best session of the same exercise.",
-        "These numbers are camera estimates, not clinical measurements.",
-        "It appears after you have finished a session of an exercise measured in angles.",
+        "Your most recent session: the exercise, the side, the day and the number of sets.",
+        "Counted is how many repetitions the camera counted. Full range is how many of them reached the line your exercise counts as a full repetition. For a hold, it shows how long you held against the time prescribed.",
+        "Open My Progress shows your charts over time.",
       ],
     },
     {
@@ -144,7 +144,7 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       lines: [
         "Each card follows one exercise set up the same way (same side and resistance), so like is compared with like.",
         "The chart shows one point per session. Select a point to see that session's repetitions.",
-        "A label such as Rising, No clear change or Falling only appears when the change is larger than your normal session-to-session variation.",
+        "Rising or Falling appears only when the change is larger than your normal session-to-session variation. Otherwise the card says No clear change, or Collecting data until there are enough sessions.",
         "Finish a few sessions if you do not see any cards yet.",
       ],
     },
@@ -212,7 +212,11 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       title: "Assigned exercises",
       placement: "above",
       optional: true,
-      lines: ["Every exercise your therapist has assigned, with its sets and repetitions and whether it is completed, in progress or not started."],
+      lines: [
+        "Every exercise your therapist has assigned, with its sets and repetitions.",
+        "The label on the right shows whether the exercise is active, upcoming or ended.",
+        "The line under the sets counts your scheduled days: done, missed, stopped for pain and still to go. A day you started but did not finish counts as missed once its make-up period is over.",
+      ],
     },
   ],
 };
@@ -434,7 +438,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       placement: "below",
       lines: [
         "Assign Exercise opens the assign page for this patient.",
-        "Progress report (PDF) downloads a report. Print / Save as PDF prints this profile with every tab included.",
+        "Progress report (PDF) downloads a report. Print / Save as PDF prints this profile with every tab included, except the charts at the top of Reports.",
       ],
     },
     {
@@ -444,7 +448,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       lines: [
         "Overview — personal and clinical information and attached files. Opening an attached file asks for your password.",
         "PT Program — current and ended prescriptions, and the exercises the patient has completed.",
-        "Reports — charts of range of motion, repetitions and adherence for one exercise over a date range, plus form quality and trends.",
+        "Reports — charts of the peak angle (camera estimate) or hold time, repetitions and adherence for one exercise over a date range, plus form quality and trends.",
         "Sessions — every session with its repetitions, so you can review the details and mark a review.",
       ],
     },
@@ -454,7 +458,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       placement: "below",
       lines: [
         "Pick an exercise, then Prior Week, Prior Month or All to change the date range.",
-        "Range of motion values are camera estimates, not clinical measurements.",
+        "Peak angles are camera estimates, not clinical measurements.",
       ],
     },
     {

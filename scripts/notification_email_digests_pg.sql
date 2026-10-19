@@ -1,5 +1,5 @@
 -- Records which daily summary emails (therapist_id holds the recipient: a therapist or patient) (completed / missed exercises)
--- have been sent, so each therapist gets at most one of each kind per day.
+-- have been sent, so each recipient gets at most one of each kind per summarised day (day = the Manila day summarised).
 -- Run as the database owner after user_credentials_pg.sql.
 
 CREATE TABLE IF NOT EXISTS notification_email_digests (

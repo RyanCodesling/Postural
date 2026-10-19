@@ -3,7 +3,8 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useDemoClock } from "@/lib/DemoClockContext";
 import { heldOutSessionCount, prepareGroupModelSeries } from "@/lib/analytics/trendSeries";
-import { groupSessionsByExercise, primaryMetricMeta, type TrendSession } from "./ExerciseTrends";
+import { formatResistanceContext } from "@/lib/prescriptionContext";
+import { groupSessionsByExercise, primaryMetricMeta, type TrendGroup, type TrendSession } from "./ExerciseTrends";
 import ConsistencyCalendar from "../patient/ConsistencyCalendar";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 
@@ -31,6 +32,19 @@ function shiftDay(key: string, days: number): string {
 function shortLabel(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/**
+ * An exercise setup as the trend cards describe it: side, resistance and the
+ * dates of its sessions, so two setups of one exercise can be told apart.
+ */
+export function setupOptionLabel(group: TrendGroup): string {
+  const side = group.prescribedSide === "both" ? "both sides" : `${group.prescribedSide} side`;
+  const first = dayKey(group.sessions[0].startedAt);
+  const last = dayKey(group.sessions[group.sessions.length - 1].startedAt);
+  const days = first === last ? shortLabel(first) : `${shortLabel(first)} – ${shortLabel(last)}`;
+  const count = group.sessions.length;
+  return `${group.exerciseName} · ${side} · ${formatResistanceContext(group.resistance)} · ${days} (${count} session${count === 1 ? "" : "s"})`;
 }
 
 function Card({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
@@ -70,7 +84,7 @@ function niceMax(value: number): number {
   return Math.ceil(value / step) * step;
 }
 
-function LineChart({ points, format }: { points: Point[]; format: (value: number) => string }) {
+function LineChart({ points, format, label }: { points: Point[]; format: (value: number) => string; label: string }) {
   const W = 480;
   const H = 220;
   const pad = { l: 34, r: 12, t: 12, b: 26 };
@@ -94,7 +108,7 @@ function LineChart({ points, format }: { points: Point[]; format: (value: number
   };
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Range of motion by session">
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`${label} by session`}>
       {ticks.map((t) => (
         <g key={t}>
           <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} stroke="#e5efe7" />
@@ -178,9 +192,9 @@ function BarChart({ points }: { points: Point[] }) {
 }
 
 /**
- * The Reports tab of a patient profile: a range-of-motion line chart, a
- * repetitions bar chart and the adherence calendar for one exercise over a
- * chosen date range. Values are the camera's estimates.
+ * The Reports tab of a patient profile: a peak (or hold time) line chart, a
+ * repetitions bar chart and the adherence calendar for one exercise setup over
+ * a chosen date range. Values are the camera's estimates.
  */
 export default function PatientReports({
   sessions,
@@ -203,6 +217,9 @@ export default function PatientReports({
 
   const isIsometric = group?.exerciseKind === "isometric";
   const meta = group ? primaryMetricMeta(group.exerciseKind, group.primaryMetric) : null;
+  // Titled with the measure's own label, as the trend cards are: "Peak angle
+  // (camera estimate)" for angles, never a clinical "range of motion".
+  const chartTitle = isIsometric ? "Hold Time" : (meta?.label ?? "Peak");
   // The shoulder press's normalized readings keep two decimals; angles and seconds are whole numbers.
   const format = !isIsometric && meta && !meta.isAngle ? (v: number) => v.toFixed(2) : (v: number) => String(Math.round(v));
   // Peaks follow the trend data rules, as on the trend cards: a poorly tracked
@@ -256,7 +273,7 @@ export default function PatientReports({
           >
             {groups.map((g) => (
               <option key={g.contextKey} value={g.contextKey}>
-                {g.exerciseName} · {g.prescribedSide}
+                {setupOptionLabel(g)}
               </option>
             ))}
           </select>
@@ -282,12 +299,12 @@ export default function PatientReports({
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Card title={isIsometric ? "Hold Time" : "Range of Motion"} right={<Legend />}>
+        <Card title={chartTitle} right={<Legend />}>
           {romPoints.length === 0 ? (
             <p className="py-10 text-center text-sm text-gray-400">No sessions in this range.</p>
           ) : (
             <>
-              <LineChart points={romPoints} format={format} />
+              <LineChart points={romPoints} format={format} label={chartTitle} />
               <p className="mt-1 text-[11px] text-gray-400">
                 {isIsometric
                   ? "Seconds held per side."

@@ -21,8 +21,6 @@
  * ── WHAT IT IS NOT ──────────────────────────────────────────────────────────
  * The animations are illustrative presentation with authored timing, not
  * clinical demonstrations, and the therapist's instructions override them.
- * No clip is published yet for ex_004 (its animation follows the change to
- * active neck tilts).
  *
  * ── WHY IT IS NOT IN THE REGISTRY ───────────────────────────────────────────
  * Exercise definitions feed the measurement-configuration hash that groups a
@@ -84,8 +82,24 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
   },
   // Full-size 870 x 980 renders like ex_001, so they use the reference crop
   // itself. Over every decoded frame the figure stays inside it with at least
-  // 32 px (ex_005), 41 px (ex_006), 32 px (ex_007) and 29 px (ex_008) to
-  // spare, and the baked text ends by row 92.
+  // 40 px (ex_004), 32 px (ex_005), 41 px (ex_006), 30 px (ex_007) and 29 px
+  // (ex_008) to spare, and the baked text ends by row 92.
+  // Active alternating neck tilts, as the app counts them: the head swings ear
+  // toward shoulder at 40 beats per minute, one side per beat, without stopping
+  // at the centre, while the arms rest at the sides. Added 2026-10-11 by user
+  // decision before the multi-person neck counting test; if that test returns
+  // the exercise to the assisted stretch, this clip comes out.
+  ex_004: {
+    src: "/demos/ex_004-figure-motion.mp4",
+    width: 870,
+    height: 980,
+    crop: sharedCrop(870, 980),
+    subject: "side-to-side neck bends",
+    fps: 30,
+    frames: 270,
+    phases: [{ start: 1, label: "Swing" }],
+    detail: { label: "Head and shoulders", crop: { x: 285, y: 116, w: 300, h: 324 } },
+  },
   // The side bend is shown to one side only, so it does not suggest
   // alternating: one hand stays on the hip while the other arm hangs.
   ex_005: {

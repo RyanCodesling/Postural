@@ -42,7 +42,7 @@ export function productGlobals(): Record<string, any> {
   for (const n of ast.statements) {
     if (!ts.isImportDeclaration(n) || !ts.isStringLiteral(n.moduleSpecifier)) continue;
     const path = n.moduleSpecifier.text;
-    if (!/^@\/lib\/(pose\/|exercises\/|prescriptionContext|sessionOutcomePresentation)/.test(path)) continue;
+    if (!/^@\/lib\/(pose\/|exercises\/|prescriptionContext|sessionOutcomePresentation|analytics\/trendRules)/.test(path)) continue;
     const mod = require(fileURLToPath(new URL(`../../src/${path.slice(2)}.ts`, import.meta.url)));
     const bindings = n.importClause?.namedBindings;
     if (bindings && ts.isNamedImports(bindings)) for (const b of bindings.elements) {
@@ -122,6 +122,12 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   context.lastCaptureOkRef = ref(true); context.lastCaptureMsgRef = ref("Captured");
   context.captureRejectedByStatusRef = ref({});
   context.captureFrameSizesRef = ref({});
+  context.neckRestTallyRef = ref({ epochs: [] });
+  context.calibrationPositioningEndsAtMsRef = ref(null);
+  // Replays start from a stored baseline without its calibration samples, so
+  // no resting shoulder line: the LOWER cue reads as it did when recorded.
+  context.shoulderRestLineDegRef = ref(null);
+  context.cueCompensationFiltersRef = ref(new Map());
   context.steadinessRef = ref(globals.newSteadinessState());
   context.trackingMessageRef = ref(globals.NO_TRACKING_MESSAGE);
   context.trackingMarksRef = ref([]);

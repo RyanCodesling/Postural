@@ -524,6 +524,22 @@ export type ShoulderSymmetryResult = {
  *   correctedAngle > 0  →  left shoulder lower  → RIGHT shoulder is elevated
  *   correctedAngle < 0  →  right shoulder lower → LEFT shoulder is elevated
  */
+/**
+ * The shoulder line's raw angle (landmark 12 to 11, image coordinates, the same
+ * convention as `computeShoulderSymmetry`), with no reference subtracted, or
+ * null when the shoulders are not both visible. For a reference taken from the
+ * patient's own resting shoulders (`shoulderRestReference.ts`).
+ */
+export function shoulderLineAngleDeg(
+  landmarks: LM[],
+  frameAspect: number = NO_ASPECT_CORRECTION,
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  return bodyPairAngleDeg(leftShoulder!, rightShoulder!, frameAspect);
+}
+
 export function computeShoulderSymmetry(
   landmarks: LM[],
   tiltRef: TiltReference,

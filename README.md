@@ -9,6 +9,7 @@
 - Showed My Progress one trend card per row again, in a centred column as wide as the therapist page
 - Showed each assigned exercise on View Profile as Upcoming, Active, Ended, or Ended early, with a line counting the days done, missed, stopped for pain, and to go
 - Fixed the two problems left in the 10-15 update's emails: ending a session paused for pain no longer waits for its email, and the daily summary no longer misses exercises completed after 8 PM
+- Fixed four problems Codex found after this update was deployed: the Last Session card credited the other side's repetitions to a one-sided prescription, a day stopped for pain showed as missed, emails described hold exercises by repetitions, and a daily summary whose query failed was never retried
 - Added the neck side bends animation to the Reference Guide and replaced the overhead press animation with the deep-start revision (low priority)
 
 ### *web\src\lib\analytics\trendRules.ts*, *web\src\lib\analytics\trendBreakdown.ts*, *web\src\lib\analytics\trendSeries.ts*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\db.ts*
@@ -39,6 +40,9 @@
 - Kept the dashboard within a phone's width: the day rows truncate instead of widening the page
 - Put the My Progress trend cards back one to a row, in a centred column as wide as the therapist page
 - Showed View Profile's exercise label as Upcoming, Active, Ended, or Ended early, the therapist's program words, with a line under it counting the days done, missed, stopped for pain, and to go
+- Kept a one-sided prescription's own count in the Last Session card, even 0, when only the other side moved; the Total column is only for older rows without side counts
+- Showed a past day stopped for pain as "Stopped for pain" and a partly done day as "Partly done", following the calendar's day rules, instead of "Missed"
+- Showed each exercise's own state in its label: Stopped for pain, Missed, Make-up open, Today, or Upcoming
 
 ### *web\src\app\(app)\dashboard\_components\PatientReports.tsx* and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
 
@@ -46,12 +50,15 @@
 - Corrected the patient profile's trend model note: Rising or Falling shows only beyond normal variation, and otherwise No clear change
 - Hid the patient profile tab bar's stray scrollbar
 
-### *web\src\lib\db.ts*, *web\src\lib\email.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+### *web\src\lib\db.ts*, *web\src\lib\email.ts*, *web\src\lib\exercises\prescriptionEmail.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
 
 - Started the pain pause emails after the in-app notifications without waiting for them, so ending a paused session returns at once
 - Gave each email a time limit: 10 seconds to connect, 10 seconds for the mail server's greeting, and 20 seconds of silence
 - Sent the daily summaries at 7 AM for the whole previous day, so exercises completed after 8 PM are included
 - Changed only the comments in the summary table's script; the table is the same
+- Gave a hold exercise's target as its hold time, as the app shows it, in the assigned, changed, and removed exercise emails, the daily summaries, and the pain pause email, and sent a change email when only the hold time changes
+- Described a hold stopped for pain by the sets held instead of repetitions
+- Released a daily summary's claim whenever the summary was not sent, including when a query fails before sending, so the next hourly check retries it
 
 ### *web\src\lib\exercises\demoClips.ts* (low priority)
 
@@ -64,6 +71,7 @@
 - In `tours.ts`, replaced the gauge step with a Last Session step, said that Rising or Falling appears only beyond normal variation and otherwise No clear change, said that the Reports charts are not printed, called the Reports measure peak angle instead of range of motion, and described the new View Profile label and day counts
 - On the landing page, said the app sends the therapist "a record of every session" instead of "objective data", and used "uneven shoulders" as the cue example instead of "a shrugged shoulder", which the shoulder measure cannot tell apart from a lowered head
 - The email fixes above change the update's `email.ts`, `db.ts`, and `instrumentation.ts`
+- The review fixes above change the update's patient dashboard day list (`PatientProgramView.tsx`) and its `prescriptionEmail.ts`
 
 ### *Validation*
 
@@ -71,8 +79,9 @@
 - Type check, lint, and a production build pass
 - The database check passes against actual PostgreSQL using connection-private temporary tables, including the neck rule in the session list query against the breakdown
 - Replaying the saved pilot traces through the camera loop gives the same results as before
+- Codex's four cases from its review of the deployed update, run again on the fixed source, now behave as fixed, and each fix has its own tests
 - A live neck session on the new version counted both sets to their targets, took its baseline after the 5-second countdown, and saved the resting reading, and the app's session list read its peaks through the new rule
-- The Last Session card, the Reports list, the landing page, My Progress, and View Profile at phone width were checked on screen; the countdown's new display was not
+- The Last Session card, the Reports list, the landing page, My Progress, and View Profile at phone width were checked on screen; the countdown's new display and the day list's new labels were not
 
 ### *Remaining boundaries*
 

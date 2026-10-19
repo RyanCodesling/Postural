@@ -19,6 +19,11 @@ import {
   sendAssignedExercisesEmail,
 } from "@/lib/email";
 import { diffAssignedExercises, toPrescriptionDetail, type PrescriptionRow } from "@/lib/exercises/prescriptionEmail";
+import {
+  assignedExercisesMessage,
+  changedExercisesMessage,
+  removedExercisesMessage,
+} from "@/lib/notificationText";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
@@ -141,6 +146,12 @@ export async function DELETE(request: NextRequest) {
         .filter((row) => (exerciseIds as string[]).includes(row.exercise_id as string) && !remaining.has(row.exercise_id))
         .map(toPrescriptionDetail);
       if (removed.length > 0) {
+        await createNotification(
+          patientId,
+          "Exercises Removed",
+          removedExercisesMessage(user.name, removed.map((d) => d.exerciseName)),
+          "therapist_removed_exercises",
+        ).catch((err) => console.error("Failed to create removed exercises notification:", err));
         const patient = await getUserById(patientId);
         if (patient?.email) {
           sendRemovedExercisesEmail(patient.email as string, patient.name as string, "patient", user.name, removed).catch(console.error);
@@ -346,7 +357,9 @@ export async function POST(request: NextRequest) {
     );
 
     // Email the patient and the assigning therapist: new exercises and changed ones
-    // are separate templates, and each lists the full prescription.
+    // are separate templates, and each lists the full prescription. The patient's
+    // in-app notifications follow the same split: one for everything newly
+    // assigned, one for everything edited, each naming the exercises.
     try {
       const after = await getPatientExercises(patientId);
       const { assigned, changed } = diffAssignedExercises(
@@ -354,6 +367,26 @@ export async function POST(request: NextRequest) {
         after as PrescriptionRow[],
         normalizedExercises.map((exercise) => exercise.exerciseId as string),
       );
+      try {
+        if (assigned.length > 0) {
+          await createNotification(
+            patientId,
+            "Exercises Assigned",
+            assignedExercisesMessage(user.name, assigned.map((d) => d.exerciseName)),
+            "therapist_assigned_exercises",
+          );
+        }
+        if (changed.length > 0) {
+          await createNotification(
+            patientId,
+            "Exercises Edited",
+            changedExercisesMessage(user.name, changed),
+            "therapist_edited_exercises",
+          );
+        }
+      } catch (err) {
+        console.error("Failed to create assigned exercises notifications:", err);
+      }
       const patient = await getUserById(patientId);
       const therapistEmail = user.email as string | undefined;
       const sends: Array<[typeof sendAssignedExercisesEmail, typeof assigned]> = [
@@ -371,18 +404,6 @@ export async function POST(request: NextRequest) {
       }
     } catch (err) {
       console.error("Failed to send assigned exercises emails:", err);
-    }
-
-    // Notify patient about assigned exercises
-    try {
-      await createNotification(
-        patientId,
-        "Exercises Assigned",
-        `Therapist ${user.name} assigned exercises to you.`,
-        "therapist_assigned_exercises"
-      );
-    } catch (err) {
-      console.error("Failed to create exercises assigned notification:", err);
     }
 
     return NextResponse.json({ success: true });

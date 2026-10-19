@@ -51,7 +51,7 @@ function Card({ title, right, children }: { title: string; right?: ReactNode; ch
   return (
     <section className="rounded-xl bg-white p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+        <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
         {right}
       </div>
       {children}
@@ -61,7 +61,7 @@ function Card({ title, right, children }: { title: string; right?: ReactNode; ch
 
 function Legend() {
   return (
-    <div className="flex items-center gap-3 text-xs text-gray-600">
+    <div className="flex items-center gap-3 text-sm text-gray-600">
       <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full" style={{ background: LEFT }} />Left</span>
       <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full" style={{ background: RIGHT }} />Right</span>
     </div>
@@ -112,7 +112,7 @@ function LineChart({ points, format, label }: { points: Point[]; format: (value:
       {ticks.map((t) => (
         <g key={t}>
           <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} stroke="#e5efe7" />
-          <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" fontSize="9" fill="#6b7280">{format(t)}</text>
+          <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" fontSize="11" fill="#6b7280">{format(t)}</text>
         </g>
       ))}
       <path d={path((p) => p.left)} fill="none" stroke={LEFT} strokeWidth="2" />
@@ -132,7 +132,7 @@ function LineChart({ points, format, label }: { points: Point[]; format: (value:
             ),
           )}
           {i % every === 0 && (
-            <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="#6b7280">{p.label}</text>
+            <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="11" fill="#6b7280">{p.label}</text>
           )}
         </g>
       ))}
@@ -158,7 +158,7 @@ function BarChart({ points }: { points: Point[] }) {
       {[0, 0.5, 1].map((f) => (
         <g key={f}>
           <line x1={pad.l} x2={W - pad.r} y1={y(f * top)} y2={y(f * top)} stroke="#e5efe7" />
-          <text x={pad.l - 6} y={y(f * top) + 3} textAnchor="end" fontSize="9" fill="#6b7280">{Math.round(f * top)}</text>
+          <text x={pad.l - 6} y={y(f * top) + 3} textAnchor="end" fontSize="11" fill="#6b7280">{Math.round(f * top)}</text>
         </g>
       ))}
       {points.map((p, i) => {
@@ -173,16 +173,16 @@ function BarChart({ points }: { points: Point[] }) {
                 <g key={tag}>
                   <rect x={cx + dx - bar / 2} y={y(v)} width={bar} height={Math.max(base - y(v), 1)} rx="3" fill={color} />
                   {showValues && (
-                    <text x={cx + dx} y={y(v) - 3} textAnchor="middle" fontSize="8" fill="#374151">{v}</text>
+                    <text x={cx + dx} y={y(v) - 3} textAnchor="middle" fontSize="10" fill="#374151">{v}</text>
                   )}
                   {bar >= 12 && base - y(v) > 14 && (
-                    <text x={cx + dx} y={base - 4} textAnchor="middle" fontSize="7" fontWeight="700" fill="#fff">{tag}</text>
+                    <text x={cx + dx} y={base - 4} textAnchor="middle" fontSize="9" fontWeight="700" fill="#fff">{tag}</text>
                   )}
                 </g>
               ),
             )}
             {i % every === 0 && (
-              <text x={cx} y={H - 8} textAnchor="middle" fontSize="9" fill="#6b7280">{p.label}</text>
+              <text x={cx} y={H - 8} textAnchor="middle" fontSize="11" fill="#6b7280">{p.label}</text>
             )}
           </g>
         );
@@ -269,7 +269,7 @@ export default function PatientReports({
             value={group?.contextKey}
             onChange={(event) => setSelected(event.target.value)}
             aria-label="Exercise"
-            className="max-w-full rounded-lg border border-green-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900 outline-none focus:border-green-500"
+            className="max-w-full rounded-lg border border-green-200 bg-white px-3 py-2 text-base font-semibold text-gray-900 outline-none focus:border-green-500"
           >
             {groups.map((g) => (
               <option key={g.contextKey} value={g.contextKey}>
@@ -278,17 +278,17 @@ export default function PatientReports({
             ))}
           </select>
         ) : (
-          <span className="text-sm text-gray-500">No recorded sessions yet.</span>
+          <span className="text-base text-gray-500">No recorded sessions yet.</span>
         )}
         <div className="flex flex-wrap items-center gap-2 print:hidden">
-          <span className="rounded-lg bg-green-600 px-3 py-2 text-xs font-medium text-white">{rangeText}</span>
+          <span className="rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white">{rangeText}</span>
           {buttons.map((b) => (
             <button
               key={b.key}
               type="button"
               onClick={() => setRange(b.key)}
               aria-pressed={range === b.key}
-              className={`rounded-lg px-3 py-2 text-xs font-medium transition ${
+              className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                 range === b.key ? "bg-green-100 text-green-800" : "bg-[#eef4ef] text-gray-600 hover:bg-green-50"
               }`}
             >
@@ -301,17 +301,17 @@ export default function PatientReports({
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card title={chartTitle} right={<Legend />}>
           {romPoints.length === 0 ? (
-            <p className="py-10 text-center text-sm text-gray-400">No sessions in this range.</p>
+            <p className="py-10 text-center text-base text-gray-400">No sessions in this range.</p>
           ) : (
             <>
               <LineChart points={romPoints} format={format} label={chartTitle} />
-              <p className="mt-1 text-[11px] text-gray-400">
+              <p className="mt-1 text-[13px] text-gray-400">
                 {isIsometric
                   ? "Seconds held per side."
                   : `${meta?.label ?? "Peak"} per session, without poorly tracked repetitions. Camera estimates, not clinical measurements.`}
               </p>
               {leftOut > 0 && (
-                <p className="mt-1 text-[11px] leading-4 text-amber-700" data-held-out-note="">
+                <p className="mt-1 text-[13px] leading-4 text-amber-700" data-held-out-note="">
                   {leftOut} session{leftOut === 1 ? " is" : "s are"} left out of the lines because the camera tracked half or
                   more of {leftOut === 1 ? "its" : "their"} repetitions poorly. {leftOut === 1 ? "It shows" : "They show"} as
                   dashed hollow points where enough well-tracked repetitions remain to plot.
@@ -327,7 +327,7 @@ export default function PatientReports({
 
         <Card title="Repetitions" right={<Legend />}>
           {!hasReps ? (
-            <p className="py-10 text-center text-sm text-gray-400">
+            <p className="py-10 text-center text-base text-gray-400">
               {isIsometric ? "Hold exercises count seconds, not repetitions." : "No repetitions in this range."}
             </p>
           ) : (
@@ -337,20 +337,20 @@ export default function PatientReports({
 
         <Card title="Sessions in Range">
           {inRange.length === 0 ? (
-            <p className="py-10 text-center text-sm text-gray-400">No sessions in this range.</p>
+            <p className="py-10 text-center text-base text-gray-400">No sessions in this range.</p>
           ) : (
             <dl className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-lg bg-[#f3f8f4] p-3">
-                <dt className="text-xs text-gray-500">Sessions</dt>
-                <dd className="text-2xl font-bold text-green-700">{inRange.length}</dd>
+                <dt className="text-sm text-gray-500">Sessions</dt>
+                <dd className="text-3xl font-bold text-green-700">{inRange.length}</dd>
               </div>
               <div className="rounded-lg bg-[#f3f8f4] p-3">
-                <dt className="text-xs text-gray-500">Total reps</dt>
-                <dd className="text-2xl font-bold text-green-700">{inRange.reduce((n, s) => n + s.totalReps, 0)}</dd>
+                <dt className="text-sm text-gray-500">Total reps</dt>
+                <dd className="text-3xl font-bold text-green-700">{inRange.reduce((n, s) => n + s.totalReps, 0)}</dd>
               </div>
               <div className="rounded-lg bg-[#f3f8f4] p-3">
-                <dt className="text-xs text-gray-500">Sets</dt>
-                <dd className="text-2xl font-bold text-green-700">{inRange.reduce((n, s) => n + s.setCount, 0)}</dd>
+                <dt className="text-sm text-gray-500">Sets</dt>
+                <dd className="text-3xl font-bold text-green-700">{inRange.reduce((n, s) => n + s.setCount, 0)}</dd>
               </div>
             </dl>
           )}

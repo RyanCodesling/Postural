@@ -5,8 +5,13 @@ import {
   emailConfigured,
   sendExerciseDigestEmail,
   sendExercisePausedEmail,
+  sendExerciseReminderEmail,
+  sendPartialDayEmail,
   type ExerciseDigestItem,
   type ExercisePausedDetails,
+  type ExerciseReminderItem,
+  type PartialDayItem,
+  type PartialDayPatient,
 } from "./email";
 import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
 import {
@@ -59,6 +64,7 @@ import {
 } from "@/lib/exercises/versioning";
 import { coachingConfiguration, type CoachingProvenance } from "@/lib/pose/coachingConfig";
 import { isAuditOnlyMeasurement } from "@/lib/pose/holdQuality";
+import { joinNames } from "@/lib/notificationText";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -1681,15 +1687,22 @@ export async function createSession(data: {
   // Trigger start notification for therapist
   try {
     const patient = await getUserById(data.patientId);
-    if (patient && patient.therapistId) {
+    if (patient) {
       const exerciseNameResult = await pool.query("SELECT name FROM exercises WHERE id = $1", [data.exerciseId]);
       const exerciseName = exerciseNameResult.rows[0]?.name || data.exerciseId;
-      await createNotification(
-        patient.therapistId as string,
-        "Exercise Started",
-        `${patient.name as string} started exercise ${exerciseName}.`,
-        "patient_started_exercise",
-        occurrenceId
+      const therapistId = (patient.therapistId as string | null) ?? null;
+      if (therapistId) {
+        await createNotification(
+          therapistId,
+          "Exercise Started",
+          `${patient.name as string} started exercise ${exerciseName}.`,
+          "patient_started_exercise",
+          occurrenceId
+        );
+      }
+      await notifyResumedAfterPain(
+        Number(row.id), data.patientExerciseId, occurrenceId,
+        data.patientId, patient.name as string, therapistId, exerciseName,
       );
     }
   } catch (err) {
@@ -1701,6 +1714,49 @@ export async function createSession(data: {
     runtimePrescription,
     context,
   };
+}
+
+/**
+ * A start is a resume when the exercise's previous attempt was stopped for
+ * pain: the patient and their therapist are told, once, on that first start.
+ */
+async function notifyResumedAfterPain(
+  sessionId: number,
+  patientExerciseId: number,
+  occurrenceId: number,
+  patientId: string,
+  patientName: string,
+  therapistId: string | null,
+  exerciseName: string,
+): Promise<void> {
+  const previous = await pool.query(
+    `SELECT end_reason, ended_at FROM sessions
+      WHERE patient_exercise_id = $1 AND id <> $2
+      ORDER BY started_at DESC LIMIT 1`,
+    [patientExerciseId, sessionId],
+  );
+  if (previous.rows[0]?.end_reason !== "pain") return;
+  const pausedOn = previous.rows[0].ended_at
+    ? ` on ${new Date(previous.rows[0].ended_at).toLocaleDateString("en-US", {
+        month: "long", day: "numeric", year: "numeric", timeZone: "Asia/Manila",
+      })}`
+    : "";
+  await createNotification(
+    patientId,
+    "Exercise Resumed",
+    `You resumed ${exerciseName}, which you paused because of pain${pausedOn}.`,
+    "exercise_resumed",
+    occurrenceId,
+  );
+  if (therapistId) {
+    await createNotification(
+      therapistId,
+      "Exercise Resumed",
+      `${patientName} resumed ${exerciseName}, which they paused because of pain${pausedOn}.`,
+      "exercise_resumed",
+      occurrenceId,
+    );
+  }
 }
 
 /** Returns the owning patient_id for a session, or null if it does not exist. */
@@ -1846,6 +1902,16 @@ export async function endSession(
           );
         }
       }
+      if (pausedForPain) {
+        const progress = pausedDetails ? ` (${describePausedProgress(pausedDetails)})` : "";
+        await createNotification(
+          row.patient_id,
+          "Exercise paused because of pain",
+          `You paused ${row.exercise_name} because of pain${progress}. ${row.therapist_id ? "Your therapist has been notified and will review it before rescheduling." : "Please contact your therapist before trying it again."}`,
+          "patient_pain_stopped",
+          row.occurrence_id,
+        );
+      }
       // Not awaited: a slow or unreachable mail server must not hold the end of
       // the session or the therapist's in-app alert (Codex review 2026-10-15,
       // finding 4). emailPainPause catches its own errors.
@@ -1929,29 +1995,76 @@ async function getPausedProgress(sessionId: number) {
   };
 }
 
-// Emails each therapist and patient, each morning, two summaries of the previous
-// Manila day: the exercises completed that day, and those whose make-up window
-// ended that day (missed). Only a finished day is summarised, so nothing can be
-// completed after its summary and fall between two of them (Codex review
-// 2026-10-15, finding 5). Safe to call repeatedly: notification_email_digests
-// lets each (recipient, kind, summarised day) send at most once.
-// Manual-monitoring exercises are not included.
-export const DIGEST_HOUR_MANILA = 7;
+/** "October 19, 2026" for a YYYY-MM-DD day key. */
+function longDateLabel(key: string): string {
+  return new Date(`${String(key).slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
+}
+
+function manilaHour(now: Date): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", hour: "numeric", hourCycle: "h23" }).format(now),
+  );
+}
+
+/**
+ * Claims (recipient, kind, day) in notification_email_digests, then runs `send`.
+ * A claim already held means the email went out. A claim whose email did not go
+ * out is released, so the next hourly check retries it: a failed send, and any
+ * failure before sending.
+ */
+async function sendDigestOnce(
+  recipientId: string,
+  kind: string,
+  day: string,
+  send: () => Promise<boolean>,
+): Promise<void> {
+  // Set while this run holds a claim whose email has not gone out.
+  let claimed = false;
+  try {
+    const claim = await pool.query(
+      `INSERT INTO notification_email_digests (therapist_id, kind, day)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING day`,
+      [recipientId, kind, day],
+    );
+    if (claim.rows.length === 0) return;
+    claimed = true;
+    if (await send()) claimed = false;
+  } catch (err) {
+    console.error(`Failed to send ${kind} digest:`, err);
+  }
+  if (claimed) {
+    try {
+      await pool.query(
+        "DELETE FROM notification_email_digests WHERE therapist_id = $1 AND kind = $2 AND day = $3",
+        [recipientId, kind, day],
+      );
+    } catch (err) {
+      console.error(`Failed to release the ${kind} digest claim:`, err);
+    }
+  }
+}
+
+// Emails each therapist and patient, just after midnight, two summaries of the
+// Manila day that just ended: the exercises completed that day, and those whose
+// make-up window ended that day (missed). Therapists also get one email listing
+// the patients who did only part of that day's exercises. Only a finished day is
+// summarised, so nothing can be completed after its summary and fall between
+// two of them (Codex review 2026-10-15, finding 5). Safe to call repeatedly:
+// notification_email_digests lets each (recipient, kind, summarised day) send
+// at most once. Manual-monitoring exercises are not in the completed and missed
+// summaries.
+export const DIGEST_HOUR_MANILA = 0;
 
 export async function sendDailyTherapistDigests(): Promise<void> {
   if (!emailConfigured()) return;
   const now = await getEffectiveNow();
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", hour: "numeric", hourCycle: "h23" }).format(now),
-  );
-  if (hour < DIGEST_HOUR_MANILA) return;
+  if (manilaHour(now) < DIGEST_HOUR_MANILA) return;
 
   // The day summarised: yesterday in Manila, which has finished.
   const day = manilaDayKey(now.getTime() - DAY_MS);
-  const label = (key: string) =>
-    new Date(`${key}T00:00:00Z`).toLocaleDateString("en-US", {
-      month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
-    });
+  const label = longDateLabel;
 
   const recipients = await pool.query(
     `SELECT id, email, name, role FROM users
@@ -1997,17 +2110,8 @@ export async function sendDailyTherapistDigests(): Promise<void> {
       },
     ];
     for (const { kind, rows } of kinds) {
-      // Set while this run holds a claim whose summary has not gone out.
-      let claimed = false;
-      try {
-        // The claim names the summarised day, so each day's summary goes out once.
-        const claim = await pool.query(
-          `INSERT INTO notification_email_digests (therapist_id, kind, day)
-           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING day`,
-          [recipient.id, kind, day],
-        );
-        if (claim.rows.length === 0) continue;
-        claimed = true;
+      // The claim names the summarised day, so each day's summary goes out once.
+      await sendDigestOnce(recipient.id, kind, day, async () => {
         const result = await rows();
         const items: ExerciseDigestItem[] = result.rows.map((r) => ({
           patientName: r.patient_name,
@@ -2020,24 +2124,146 @@ export async function sendDailyTherapistDigests(): Promise<void> {
           }),
           dueDateLabel: label(r.due_date),
         }));
-        const sent = items.length === 0
+        return items.length === 0
           ? true
           : await sendExerciseDigestEmail(recipient.email, recipient.name, kind, label(day), items, recipient.role);
-        if (sent) claimed = false;
-      } catch (err) {
-        console.error(`Failed to send ${kind} digest:`, err);
+      });
+    }
+    if (recipient.role === "therapist") {
+      await sendDigestOnce(recipient.id, "partial", day, async () => {
+        const patients = await partialDayPatients(recipient.id, day);
+        return patients.length === 0
+          ? true
+          : await sendPartialDayEmail(recipient.email, recipient.name, label(day), patients);
+      });
+    }
+  }
+}
+
+/**
+ * The therapist's patients who completed some, but not all, of the exercises
+ * due on `day`, with where each unfinished exercise stopped.
+ */
+async function partialDayPatients(therapistId: string, day: string): Promise<PartialDayPatient[]> {
+  const result = await pool.query(
+    `SELECT u.id AS patient_id, u.name AS patient_name, e.name AS exercise_name, eo.status,
+            COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+            COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+            pe.exercise_id,
+            (SELECT s.id FROM sessions s WHERE s.occurrence_id = eo.id
+              ORDER BY s.started_at DESC LIMIT 1) AS session_id
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
+       JOIN users u ON u.id = pe.patient_id
+      WHERE u.therapist_id = $1
+        AND pe.archived_at IS NULL AND e.archived_at IS NULL
+        AND eo.cancelled_at IS NULL
+        AND eo.due_date = $2::date
+      ORDER BY u.name, u.id, pe.sequence_index, eo.id`,
+    [therapistId, day],
+  );
+  const byPatient = new Map<string, typeof result.rows>();
+  for (const row of result.rows) {
+    byPatient.set(row.patient_id, [...(byPatient.get(row.patient_id) ?? []), row]);
+  }
+  const patients: PartialDayPatient[] = [];
+  for (const rows of byPatient.values()) {
+    const completed = rows.filter((r) => r.status === "completed").length;
+    if (completed === 0 || completed === rows.length) continue;
+    const items: PartialDayItem[] = [];
+    for (const r of rows) {
+      const target = `${Number(r.sets)} sets × ${prescriptionTargetText({
+        exerciseId: r.exercise_id,
+        reps: Number(r.reps),
+        holdSeconds: r.hold_seconds == null ? null : Number(r.hold_seconds),
+      })}`;
+      if (r.status === "completed") {
+        items.push({ exerciseName: r.exercise_name, status: "Completed", detail: target });
+        continue;
       }
-      // A claim whose summary did not go out is released, so the next hourly
-      // check retries it: a failed send, and any failure before sending.
-      if (claimed) {
-        try {
-          await pool.query(
-            "DELETE FROM notification_email_digests WHERE therapist_id = $1 AND kind = $2 AND day = $3",
-            [recipient.id, kind, day],
-          );
-        } catch (err) {
-          console.error(`Failed to release the ${kind} digest claim:`, err);
-        }
+      const progress = r.session_id ? await getPausedProgress(Number(r.session_id)) : null;
+      const where = progress
+        ? describePausedProgress({ ...progress, patientName: r.patient_name, exerciseName: r.exercise_name })
+        : null;
+      items.push({
+        exerciseName: r.exercise_name,
+        status: r.status === "pain_stopped"
+          ? "Paused because of pain"
+          : r.session_id ? "Started, not finished" : "Not started",
+        detail: where ? `${where} (prescribed ${target})` : `Prescribed ${target}`,
+      });
+    }
+    patients.push({ patientName: rows[0].patient_name, completed, total: rows.length, items });
+  }
+  return patients;
+}
+
+// Reminds each patient by email of the exercises due: in the evening for the
+// next day, and in the morning for that day. One email per patient per day
+// lists every exercise due; a day with nothing due sends nothing. Safe to call
+// repeatedly, like the daily summaries.
+export const REMINDER_TOMORROW_HOUR_MANILA = 18;
+export const REMINDER_TODAY_HOUR_MANILA = 7;
+
+export async function sendExerciseReminderEmails(): Promise<void> {
+  if (!emailConfigured()) return;
+  const now = await getEffectiveNow();
+  const hour = manilaHour(now);
+  const reminders: Array<{ kind: "due_today" | "due_tomorrow"; day: string; statuses: string[] }> = [];
+  if (hour >= REMINDER_TODAY_HOUR_MANILA) {
+    reminders.push({ kind: "due_today", day: manilaDayKey(now.getTime()), statuses: ["pending", "in_progress"] });
+  }
+  if (hour >= REMINDER_TOMORROW_HOUR_MANILA) {
+    reminders.push({ kind: "due_tomorrow", day: manilaDayKey(now.getTime() + DAY_MS), statuses: ["pending"] });
+  }
+  if (reminders.length === 0) return;
+
+  const patients = await pool.query(
+    `SELECT id, email, name FROM users
+      WHERE role = 'patient' AND email IS NOT NULL
+        AND (is_archived IS NULL OR is_archived = FALSE)`,
+  );
+  for (const patient of patients.rows) {
+    for (const { kind, day, statuses } of reminders) {
+      try {
+        const due = await pool.query(
+          `SELECT e.name AS exercise_name,
+                  COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+                  COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+                  COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+                  pe.exercise_id
+             FROM exercise_occurrences eo
+             JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+             JOIN exercises e ON e.id = pe.exercise_id
+            WHERE pe.patient_id = $1
+              AND pe.archived_at IS NULL AND e.archived_at IS NULL
+              AND eo.cancelled_at IS NULL
+              AND eo.due_date = $2::date
+              AND eo.status = ANY($3::text[])
+            ORDER BY pe.sequence_index, eo.id`,
+          [patient.id, day, statuses],
+        );
+        // Nothing is claimed for a day with nothing due, so exercises assigned
+        // later that day are still reminded.
+        if (due.rows.length === 0) continue;
+        const items: ExerciseReminderItem[] = due.rows.map((r) => ({
+          exerciseName: r.exercise_name,
+          sets: Number(r.sets),
+          target: prescriptionTargetText({
+            exerciseId: r.exercise_id,
+            reps: Number(r.reps),
+            holdSeconds: r.hold_seconds == null ? null : Number(r.hold_seconds),
+          }),
+        }));
+        await sendDigestOnce(patient.id, kind, day, () =>
+          sendExerciseReminderEmail(
+            patient.email, patient.name, kind === "due_today" ? "today" : "tomorrow", longDateLabel(day), items,
+          ),
+        );
+      } catch (err) {
+        console.error(`Failed to send ${kind} reminder:`, err);
       }
     }
   }
@@ -3013,15 +3239,49 @@ export async function createAdminNotification(
   }
 }
 
-export async function getNotifications(userId: string) {
-  const result = await pool.query(
-    `SELECT id, user_id AS "userId", title, message, type, occurrence_id AS "occurrenceId", is_read AS "isRead", created_at AS "createdAt"
-     FROM notifications
-     WHERE user_id = $1 AND (is_deleted IS NULL OR is_deleted = FALSE)
-     ORDER BY created_at DESC`,
-    [userId]
-  );
-  return result.rows;
+export type NotificationFilter = "all" | "unread" | "read";
+
+/**
+ * One page of the bell's notifications (newest first), its total under the
+ * filter, the unread count, and the newest unread ones for on-screen pop-ups.
+ * Login and logout events are the admin activity log's, not the bell's.
+ */
+export async function getNotificationPage(
+  userId: string,
+  { filter, limit, offset }: { filter: NotificationFilter; limit: number; offset: number },
+) {
+  const visible = `user_id = $1 AND (is_deleted IS NULL OR is_deleted = FALSE)
+    AND type NOT IN ('user_login', 'user_logout')`;
+  const filtered = filter === "unread" ? `${visible} AND is_read = FALSE`
+    : filter === "read" ? `${visible} AND is_read = TRUE`
+    : visible;
+  const columns = `id, user_id AS "userId", title, message, type, occurrence_id AS "occurrenceId", is_read AS "isRead", created_at AS "createdAt"`;
+  const [page, counts, recent] = await Promise.all([
+    pool.query(
+      `SELECT ${columns} FROM notifications WHERE ${filtered}
+        ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`,
+      [userId, limit, offset],
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE is_read = FALSE)::int AS unread
+         FROM notifications WHERE ${visible}`,
+      [userId],
+    ),
+    pool.query(
+      `SELECT ${columns} FROM notifications WHERE ${visible} AND is_read = FALSE
+        ORDER BY id DESC LIMIT 5`,
+      [userId],
+    ),
+  ]);
+  const all = Number(counts.rows[0]?.total ?? 0);
+  const unread = Number(counts.rows[0]?.unread ?? 0);
+  return {
+    notifications: page.rows,
+    total: filter === "unread" ? unread : filter === "read" ? all - unread : all,
+    unreadCount: unread,
+    recent: recent.rows,
+  };
 }
 
 export async function markNotificationAsRead(id: number, userId: string): Promise<void> {
@@ -3057,7 +3317,8 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
        AND e.archived_at IS NULL
        AND eo.cancelled_at IS NULL
        AND eo.status NOT IN ('completed', 'pain_stopped')
-       AND eo.makeup_until < $2::date`,
+       AND eo.makeup_until < $2::date
+     ORDER BY eo.due_date, pe.sequence_index, eo.id`,
     [patientId, today]
   );
 
@@ -3082,26 +3343,72 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
       );
     }
 
-    // Check if therapist notification exists
-    if (row.therapist_id) {
-      const tCheck = await pool.query(
-        "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'exercise_missed'",
-        [row.therapist_id, row.id]
+  }
+
+  // The therapist gets one alert per missed day, naming every exercise missed.
+  // It is linked to the day's first occurrence; any notification already linked
+  // to one of that day's occurrences (this alert, or an older per-exercise one)
+  // means the day was reported.
+  const therapistId = missedResult.rows[0]?.therapist_id as string | undefined;
+  if (therapistId) {
+    const byDay = new Map<string, Array<{ id: number; exercise_name: string; patient_name: string }>>();
+    for (const row of missedResult.rows) {
+      const day = String(row.due_date).slice(0, 10);
+      byDay.set(day, [...(byDay.get(day) ?? []), row]);
+    }
+    for (const [day, rows] of byDay) {
+      const reported = await pool.query(
+        `SELECT 1 FROM notifications n
+          WHERE n.user_id = $1
+            AND n.type IN ('exercise_missed', 'exercise_missed_day')
+            AND n.occurrence_id IN (
+              SELECT eo.id FROM exercise_occurrences eo
+                JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+               WHERE pe.patient_id = $2 AND eo.due_date = $3::date)
+          LIMIT 1`,
+        [therapistId, patientId, day],
       );
-      if (tCheck.rows.length === 0) {
-        const formattedDate = new Date(row.due_date).toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric"
-        });
-        await createNotification(
-          row.therapist_id,
-          "Exercise Missed",
-          `${row.patient_name} missed exercise ${row.exercise_name} scheduled for ${formattedDate}.`,
-          "exercise_missed",
-          row.id
-        );
-      }
+      if (reported.rows.length > 0) continue;
+      const names = rows.map((r) => r.exercise_name);
+      await createNotification(
+        therapistId,
+        "Missed Exercises",
+        `${rows[0].patient_name} missed ${names.length === 1 ? "1 exercise" : `${names.length} exercises`} scheduled for ${longDateLabel(day)}: ${joinNames(names)}.`,
+        "exercise_missed_day",
+        rows[0].id,
+      );
+    }
+  }
+
+  // The patient gets one reminder on the day exercises are due, naming them all.
+  const dueToday = await pool.query(
+    `SELECT eo.id, eo.status, e.name AS exercise_name
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
+      WHERE pe.patient_id = $1
+        AND pe.archived_at IS NULL
+        AND e.archived_at IS NULL
+        AND eo.cancelled_at IS NULL
+        AND eo.due_date = $2::date
+      ORDER BY pe.sequence_index, eo.id`,
+    [patientId, today],
+  );
+  const toDo = dueToday.rows.filter((r) => r.status === "pending" || r.status === "in_progress");
+  if (toDo.length > 0) {
+    const reminded = await pool.query(
+      "SELECT 1 FROM notifications WHERE user_id = $1 AND type = 'exercise_due_today' AND occurrence_id = ANY($2::integer[]) LIMIT 1",
+      [patientId, dueToday.rows.map((r) => r.id)],
+    );
+    if (reminded.rows.length === 0) {
+      const names = toDo.map((r) => r.exercise_name as string);
+      await createNotification(
+        patientId,
+        "Exercises Due Today",
+        `You have ${names.length === 1 ? "1 exercise" : `${names.length} exercises`} due today: ${joinNames(names)}.`,
+        "exercise_due_today",
+        toDo[0].id,
+      );
     }
   }
 

@@ -1,5 +1,94 @@
 # Sprint Updates 
 
+## 📌 Update-10-19-26 | *Enah*
+
+- Named every exercise in the patient's assigned, edited, and removed exercise notifications, one notification for each change, and showed each edited field's old and new value
+- Added the patient's in-app reminder on the day exercises are due, and reminder emails the evening before and that morning, one email a day listing every exercise due
+- Notified the patient in the app when they pause an exercise for pain, and the patient and therapist when the exercise is resumed after that pause
+- Named the therapist in the patient's assigned, changed, and unassigned therapist notifications, and told the therapist a patient leaves which therapist the patient was moved to
+- Replaced the therapist's one missed notification per exercise with one per missed day, and added an email listing the patients who did only part of a day's exercises, with where each unfinished exercise stopped
+- Moved the daily summary emails from 7 AM to just after 12 AM
+- Added pop-up notifications that disappear after 3 seconds, All, Unread, and Read filters, and pages of 10 to the bell, and made it check every 30 seconds instead of every 3
+- Reloaded the patient dashboard when a new notification arrives or the patient returns to the tab, so a removed exercise no longer needs a page reload
+- Let the patient fold the camera page's Form check card to one line
+- Enlarged the text on the patient profile's PT Program, Reports, and Sessions tabs and on the patient's My Progress trends
+
+### *web\src\lib\notificationText.ts*, *web\src\app\api\patient-exercises\route.ts*, and *web\src\app\api\users\[id]\route.ts*
+
+- Added the notification wording: names joined as "A, B, and C", and each edited field as "Sets 3 → 4"
+- Sent the patient one Exercises Assigned notification naming every new exercise and one Exercises Edited notification listing each changed exercise with its changed sets, repetitions, hold, rest, order, side, resistance, repeat, or schedule; a save that changes nothing sends neither
+- Sent the patient an Exercises Removed notification naming the removed exercises
+- Told the patient "Ana Reyes is now your assigned therapist, replacing Mark Cruz" when the therapist changes, and "Mark Cruz is no longer your assigned therapist" when unassigned
+- Told the therapist a patient leaves "Patient Maria Santos was moved to therapist Ana Reyes", or that the patient is no longer assigned to them
+
+### *web\src\lib\db.ts*
+
+- Notified the patient in the app when they pause an exercise for pain, with where it stopped, as the therapist already was
+- Treated a start whose exercise's previous attempt was stopped for pain as a resume, and told the patient and the therapist once, naming the day of the pause
+- Gave the patient one Exercises Due Today notification a day naming every exercise still to do that day
+- Gave the therapist one Missed Exercises notification for each patient's missed day, naming every exercise missed; a day already reported, by this notification or an older per-exercise one, is not reported again
+- Moved the summary claim and retry into a shared helper used by the daily summaries and the reminders, with the same rules as before: each email is sent once, and a claim whose email did not go out is released for the next hourly check
+- Sent the daily summaries for the day that just ended at the first hourly check after 12 AM
+- Added the therapist's partly done day: patients who completed some but not all of a day's exercises, each exercise marked Completed, Not started, Started, not finished, or Paused because of pain, with the sets and repetitions reached
+- Added the patient's reminders: from 6 PM the next day's exercises and from 7 AM that day's, one email per patient per day; a day with nothing due claims nothing, so exercises assigned later that day are still reminded
+- Added the bell's page query: 10 at a time newest first, filtered by read state, with the totals and the newest unread ones for the pop-ups; login and logout events stay in the administrator's activity log
+
+### *web\src\lib\email.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Added the Exercises Due Tomorrow and Exercises Due Today email, a table of each exercise with its sets and target
+- Added the Partially Completed Exercises email, one table per patient with "1 of 3 completed" and each exercise's status in green, red, or amber
+- Ran the reminders in the same hourly check as the daily summaries
+- Allowed the summary table's new kinds, partial, due_tomorrow, and due_today; the script can be rerun on an existing table
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*, *web\src\app\api\notifications\route.ts*, and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Showed each new notification as a small card in the top right, with its title and two lines of its message, gone after 3 seconds, at most three at once; clicking it opens the notification
+- Kept notifications that were there before the page opened from popping up
+- Added All, Unread, and Read tabs, with the unread count on Unread, and pages of 10 with Previous and Next and "11–20 of 34"
+- Checked for new notifications every 30 seconds instead of every 3
+- Showed "99+" on the bell past 99 unread, and kept the list within a phone's width
+- Announced new notifications to the page so it can reload what they change
+- Described the pop-ups, filters, and pages in the bell's tour step
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Reloaded the patient's exercises, schedule, and sessions when the bell finds a new notification, such as an assigned, edited, or removed exercise, and when the patient returns to the tab
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Made the Form check card's header a button that folds the card to one line showing its status, still amber on a warning, and opens it again
+- Kept the choice in the browser, so the card stays folded on that device; the card is the same for patients, therapists, and administrators
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\SessionBreakdown.tsx*, *web\src\app\(app)\dashboard\_components\TrendChart.tsx*, and *web\src\app\(app)\dashboard\_components\PatientReports.tsx*
+
+- Raised every text size one step, for example 12px to 14px and 14px to 16px, on the PT Program, Reports, and Sessions tabs and in the trend cards, which My Progress shares, and the chart labels by 2
+- Changed nothing else: the page header, the tab bar, the Overview tab, the calendar, and the session video are as before
+
+### *Changes to RyanCodesling's Update-10-19-26*
+
+- The daily summaries now go out after 12 AM instead of 7 AM, still for the whole previous day
+- The summary claim and retry in `db.ts` moved into a shared helper with the same behaviour, and the summaries' tests in `notificationEmails.test.ts` now check midnight and the partly done day
+- The patient's pain pause test expects the patient's new in-app notification beside the therapist's
+
+### *Validation*
+
+- Type check and lint pass on the changed files
+- The notification email suite passes 12 of 12, including new cases for the midnight summary, the partly done day, and the reminders, and a new suite checks the notification wording
+- The demo clock, coaching contract, clinical field, clinical context, schedule date, patient dashboard, workflow, trend, Reports, and twelve camera page suites pass; a full run of every suite and a production build were not done
+- No email was sent: the app was started only with the mail settings blanked, and its log showed the emails skipped
+- The bell, its pop-ups, filters, and pages, the folded Form check card, the larger text, and the dashboard reload were not checked on screen
+
+### *Remaining boundaries*
+
+- The new emails stay off on the evaluation server until its mail settings are added
+- Before the reminders and the partly done day are used, the database owner runs scripts\notification_email_digests_pg.sql again, which also creates the table if it is missing
+- A pop-up, and the patient dashboard's reload, can take up to 30 seconds after the therapist's change
+- The patient's due-day reminder and the therapist's missed-day notification are created when the patient or therapist opens the app, as the missed notifications were
+- A paused-for-pain exercise counts as resumed when its next attempt starts, since a pain stop cannot be continued
+- The partly done email says "paused in set" for an exercise started but not finished, the wording of the pain pause it reuses
+
+---
+
 ## 📌 Update-10-19-26 | *RyanCodesling*
 
 - Measured each neck side bend's peak from the head's resting position, which the camera now records between sets, so the charts no longer shift with how the camera was set up

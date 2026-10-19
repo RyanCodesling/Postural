@@ -95,7 +95,7 @@ export default function TrendChart({
   const n = Math.max(0, ...series.map((s) => s.values.length));
 
   if (allValues.length === 0 || n === 0) {
-    return <p className="text-xs text-gray-400 py-4 text-center">No data to chart.</p>;
+    return <p className="text-sm text-gray-400 py-4 text-center">No data to chart.</p>;
   }
 
   const dataMin = Math.min(...allValues);
@@ -159,7 +159,7 @@ export default function TrendChart({
           {ticks.values.map((v) => (
             <g key={`tick-${v}`} data-tick={v}>
               <line x1={M.left} y1={yAt(v)} x2={VBW - M.right} y2={yAt(v)} stroke="#f3f4f6" strokeWidth={1} />
-              <text x={M.left - 4} y={yAt(v) + 3} textAnchor="end" fontSize={8} fill="#9ca3af">
+              <text x={M.left - 4} y={yAt(v) + 3} textAnchor="end" fontSize={10} fill="#9ca3af">
                 {v.toFixed(ticks.decimals)}
                 {axisUnit}
               </text>
@@ -167,11 +167,11 @@ export default function TrendChart({
           ))}
           {pointDates && pointDates.length > 0 && (
             <g data-dates="">
-              <text x={xAt(0)} y={VBH - 5} textAnchor={n === 1 ? "middle" : "start"} fontSize={8} fill="#9ca3af">
+              <text x={xAt(0)} y={VBH - 5} textAnchor={n === 1 ? "middle" : "start"} fontSize={10} fill="#9ca3af">
                 {pointDates[0]}
               </text>
               {n > 1 && (
-                <text x={xAt(n - 1)} y={VBH - 5} textAnchor="end" fontSize={8} fill="#9ca3af">
+                <text x={xAt(n - 1)} y={VBH - 5} textAnchor="end" fontSize={10} fill="#9ca3af">
                   {pointDates[n - 1]}
                 </text>
               )}
@@ -277,7 +277,7 @@ export default function TrendChart({
         {active !== null && shown && (
           <div
             role="tooltip"
-            className="pointer-events-none absolute z-10 whitespace-nowrap rounded-md bg-gray-900/90 px-2 py-1 text-[11px] leading-4 text-white shadow"
+            className="pointer-events-none absolute z-10 whitespace-nowrap rounded-md bg-gray-900/90 px-2 py-1 text-[13px] leading-4 text-white shadow"
             style={{
               left: `${(xAt(active) / VBW) * 100}%`,
               top: `${(shownTop / VBH) * 100}%`,
@@ -301,7 +301,7 @@ export default function TrendChart({
       </div>
 
       {/* Legend + latest value(s), with the data min/max for scale. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-gray-500">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
         {series.map((s) => {
           const present = s.values.filter(isNum);
           if (present.length === 0) return null;

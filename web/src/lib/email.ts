@@ -644,6 +644,89 @@ export async function sendExerciseDigestEmail(
   return sendEmail(email, subject, wrapTemplate(title, body));
 }
 
+export interface ExerciseReminderItem {
+  exerciseName: string;
+  sets: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  target: string;
+}
+
+/** Patient template: every exercise due on one day, sent the evening before and that morning. */
+export async function sendExerciseReminderEmail(
+  email: string,
+  patientName: string,
+  when: "today" | "tomorrow",
+  dayLabel: string,
+  items: ExerciseReminderItem[],
+): Promise<boolean> {
+  const n = items.length;
+  const title = when === "today" ? "Exercises Due Today" : "Exercises Due Tomorrow";
+  const intro = `You have ${n} exercise${n === 1 ? "" : "s"} due ${when}, ${dayLabel}:`;
+  const rows = items
+    .map(
+      (r) => `<tr>
+          <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}</td>
+          <td align="right" style="padding:10px 14px;color:#374151;font-size:14px;border-bottom:1px solid #f0fdf4;white-space:nowrap;">${r.sets} sets × ${escapeHtml(r.target)}</td>
+        </tr>`,
+    )
+    .join("");
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(patientName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${escapeHtml(intro)}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;">${rows}</table>
+    <div style="height:20px;"></div>`;
+  return sendEmail(email, `${title} – ${dayLabel}`, wrapTemplate(title, body));
+}
+
+export interface PartialDayItem {
+  exerciseName: string;
+  /** "Completed", "Not started", "Started, not finished", or "Paused because of pain". */
+  status: string;
+  /** The prescription, and for an unfinished exercise where it stopped. */
+  detail: string;
+}
+
+export interface PartialDayPatient {
+  patientName: string;
+  completed: number;
+  total: number;
+  items: PartialDayItem[];
+}
+
+/** Therapist template: the patients who did only part of one day's exercises. */
+export async function sendPartialDayEmail(
+  email: string,
+  therapistName: string,
+  dayLabel: string,
+  patients: PartialDayPatient[],
+): Promise<boolean> {
+  const n = patients.length;
+  const intro = `${n} of your patients completed only part of the exercises scheduled for ${dayLabel}.`;
+  const statusColor = (status: string) =>
+    status === "Completed" ? "#166534" : status === "Paused because of pain" ? "#b91c1c" : "#b45309";
+  const groups = patients
+    .map((p) => `
+      <p style="margin:16px 0 6px;color:#166534;font-size:15px;font-weight:600;">${escapeHtml(p.patientName)}
+        <span style="color:#6b7280;font-size:13px;font-weight:400;">· ${p.completed} of ${p.total} completed</span></p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;">
+        ${p.items
+          .map(
+            (r) => `<tr>
+          <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}<br/><span style="color:#6b7280;font-size:12px;">${escapeHtml(r.detail)}</span></td>
+          <td align="right" style="padding:10px 14px;color:${statusColor(r.status)};font-size:13px;font-weight:600;border-bottom:1px solid #f0fdf4;white-space:nowrap;vertical-align:top;">${escapeHtml(r.status)}</td>
+        </tr>`,
+          )
+          .join("")}
+      </table>`)
+    .join("");
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${escapeHtml(n === 1 ? intro.replace("1 of your patients", "One of your patients") : intro)}</p>
+    ${groups}
+    <div style="height:20px;"></div>`;
+  return sendEmail(email, `Partially Completed Exercises – ${dayLabel}`, wrapTemplate("Partially Completed Exercises", body));
+}
+
 export interface ExercisePausedDetails {
   patientName: string;
   exerciseName: string;

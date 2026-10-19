@@ -104,6 +104,8 @@ function digestHarness() {
   const claims = new Set<string>();
   const completions: Array<{ day: string; row: any }> = [];
   const sent: Array<{ kind: string; dayLabel: string; items: any[] }> = [];
+  // The therapist's patients' occurrences by due day, for the partial-day email.
+  const dueRows: Array<{ day: string; row: any }> = [];
   let now = new Date();
   let failNext = false;
   let failNextQuery = false;
@@ -122,6 +124,13 @@ function digestHarness() {
         claims.delete(values.join("|"));
         return { rows: [] };
       }
+      if (sql.includes("AS session_id")) {
+        return { rows: dueRows.filter((r) => r.day === values[1]).map((r) => r.row) };
+      }
+      if (sql.includes("prescription_snapshot") && sql.includes("FROM sessions s")) {
+        return { rows: [{ sets: 3, reps: 10, exercise_id: "ex_001" }] };
+      }
+      if (sql.includes("SELECT set_index")) return { rows: [{ set_index: 2, reps: 4 }] };
       // Stands in for the SQL filter on the Manila day of completed_at.
       if (sql.includes("eo.status = 'completed'")) {
         if (failNextQuery) {
@@ -138,7 +147,7 @@ function digestHarness() {
     exports: {}, pool, console: { error() {} },
     emailConfigured: () => true,
     getEffectiveNow: async () => now,
-    manilaDayKey, DAY_MS, prescriptionTargetText,
+    manilaDayKey, DAY_MS, prescriptionTargetText, isIsometricExercise, describePausedProgress,
     sendExerciseDigestEmail: async (_email: string, _name: string, kind: string, dayLabel: string, items: any[]) => {
       if (failNext) {
         failNext = false;
@@ -147,9 +156,20 @@ function digestHarness() {
       sent.push({ kind, dayLabel, items });
       return true;
     },
+    sendPartialDayEmail: async (_email: string, _name: string, dayLabel: string, patients: any[]) => {
+      sent.push({ kind: "partial", dayLabel, items: patients });
+      return true;
+    },
   });
-  vm.runInContext(production(["DIGEST_HOUR_MANILA", "sendDailyTherapistDigests"]), context);
+  vm.runInContext(production([
+    "longDateLabel", "manilaHour", "sendDigestOnce", "DIGEST_HOUR_MANILA", "sendDailyTherapistDigests",
+    "partialDayPatients", "getPausedProgress",
+  ]), context);
   return {
+    due: (day: string, row: Record<string, unknown>) => dueRows.push({
+      day,
+      row: { patient_id: "p", patient_name: "Fixture patient", sets: 3, reps: 10, exercise_id: "ex_001", session_id: null, ...row },
+    }),
     /** Runs the hourly check at a Manila time such as "2026-10-15T20:10". */
     check: async (manila: string) => {
       now = new Date(`${manila}:00+08:00`);
@@ -165,6 +185,66 @@ function digestHarness() {
   };
 }
 
+/** sendExerciseReminderEmails with one patient, an in-memory claim table and a recording mailer. */
+function reminderHarness() {
+  const claims = new Set<string>();
+  const dueRows: Array<{ day: string; name: string }> = [];
+  const sent: Array<{ when: string; dayLabel: string; names: string[] }> = [];
+  let now = new Date();
+  let failNext = false;
+  const pool = {
+    query: async (sql: string, values: any[] = []) => {
+      if (sql.includes("SELECT id, email, name FROM users")) {
+        return { rows: [{ id: "p", name: "Fixture patient", email: "p@example.invalid" }] };
+      }
+      if (sql.includes("INSERT INTO notification_email_digests")) {
+        const key = values.join("|");
+        if (claims.has(key)) return { rows: [] };
+        claims.add(key);
+        return { rows: [{ day: values[2] }] };
+      }
+      if (sql.includes("DELETE FROM notification_email_digests")) {
+        claims.delete(values.join("|"));
+        return { rows: [] };
+      }
+      if (sql.includes("eo.status = ANY")) {
+        return {
+          rows: dueRows.filter((r) => r.day === values[1])
+            .map((r) => ({ exercise_name: r.name, sets: 3, reps: 10, exercise_id: "ex_001" })),
+        };
+      }
+      throw new Error(`Unexpected fixture query: ${sql}`);
+    },
+  };
+  const context: any = vm.createContext({
+    exports: {}, pool, console: { error() {} },
+    emailConfigured: () => true,
+    getEffectiveNow: async () => now,
+    manilaDayKey, DAY_MS, prescriptionTargetText,
+    sendExerciseReminderEmail: async (_email: string, _name: string, when: string, dayLabel: string, items: any[]) => {
+      if (failNext) {
+        failNext = false;
+        return false;
+      }
+      sent.push({ when, dayLabel, names: items.map((i) => i.exerciseName) });
+      return true;
+    },
+  });
+  vm.runInContext(production([
+    "longDateLabel", "manilaHour", "sendDigestOnce",
+    "REMINDER_TOMORROW_HOUR_MANILA", "REMINDER_TODAY_HOUR_MANILA", "sendExerciseReminderEmails",
+  ]), context);
+  return {
+    check: async (manila: string) => {
+      now = new Date(`${manila}:00+08:00`);
+      await context.exports.sendExerciseReminderEmails();
+    },
+    due: (day: string, name: string) => dueRows.push({ day, name }),
+    failNextSend: () => { failNext = true; },
+    sent,
+  };
+}
+
 async function run() {
   console.log("\nNotification emails: never waited on, nothing skipped\n");
 
@@ -173,7 +253,11 @@ async function run() {
     const result = await Promise.race([endSession(1, { completed: false, endReason: "pain" }), timeout(500)]);
     assert.equal(result, true, "endSession must not wait for the emails");
     assert.equal(state.committed, true);
-    assert.deepEqual(state.notifications, ["Exercise paused because of pain"], "the therapist's in-app alert comes first");
+    assert.deepEqual(
+      state.notifications,
+      ["Exercise paused because of pain", "Exercise paused because of pain"],
+      "the therapist's and the patient's in-app alerts come first",
+    );
     await settle();
     assert.deepEqual([...state.mails].sort(), ["patient", "therapist"], "both emails are still sent");
   });
@@ -198,13 +282,13 @@ async function run() {
     assert.deepEqual(state.mails, []);
   });
 
-  await test("a completion after an evening check is in the next morning's summary (Codex's case)", async () => {
+  await test("a completion after an evening check is in the summary sent after midnight (Codex's case)", async () => {
     const digest = digestHarness();
     await digest.check("2026-10-15T20:10");
     digest.complete("2026-10-15T21:30");
-    await digest.check("2026-10-15T22:10");
+    await digest.check("2026-10-15T23:10");
     assert.equal(digest.sent.length, 0, "the day is not summarised before it ends");
-    await digest.check("2026-10-16T07:10");
+    await digest.check("2026-10-16T00:10");
     assert.equal(digest.sent.length, 1);
     assert.equal(digest.sent[0].kind, "completed");
     assert.equal(digest.sent[0].dayLabel, "October 15, 2026");
@@ -214,12 +298,35 @@ async function run() {
     assert.equal(digest.sent.length, 1, "each day's summary goes out once");
   });
 
-  await test("nothing is claimed before 07:00; then both summaries claim the finished day", async () => {
+  await test("the first check after midnight claims the day that just ended, for all three summaries", async () => {
     const digest = digestHarness();
-    await digest.check("2026-10-16T06:50");
-    assert.equal(digest.claims.size, 0);
-    await digest.check("2026-10-16T07:05");
-    assert.deepEqual([...digest.claims].sort(), ["t|completed|2026-10-15", "t|missed|2026-10-15"]);
+    await digest.check("2026-10-15T23:50");
+    assert(!digest.claims.has("t|completed|2026-10-15"), "the day is not claimed before it ends");
+    await digest.check("2026-10-16T00:05");
+    assert.deepEqual([...digest.claims].filter((c) => c.endsWith("2026-10-15")).sort(), [
+      "t|completed|2026-10-15", "t|missed|2026-10-15", "t|partial|2026-10-15",
+    ]);
+  });
+
+  await test("a patient who did only part of a day is emailed to the therapist, with where each exercise stopped", async () => {
+    const digest = digestHarness();
+    digest.due("2026-10-15", { exercise_name: "Raise", status: "completed" });
+    digest.due("2026-10-15", { exercise_name: "Rotation", status: "pain_stopped", session_id: 9 });
+    digest.due("2026-10-15", { exercise_name: "Shrug", status: "pending" });
+    digest.due("2026-10-15", { patient_id: "q", patient_name: "Done patient", exercise_name: "Raise", status: "completed" });
+    digest.due("2026-10-15", { patient_id: "r", patient_name: "Absent patient", exercise_name: "Raise", status: "pending" });
+    await digest.check("2026-10-16T00:10");
+    const partial = digest.sent.filter((s) => s.kind === "partial");
+    assert.equal(partial.length, 1, "one email for all the therapist's patients");
+    // Array.from: the lists are built inside the vm context, with its own Array.
+    assert.deepEqual(Array.from(partial[0].items, (p: any) => p.patientName), ["Fixture patient"], "only patients who did part of the day");
+    assert.deepEqual(Array.from(partial[0].items[0].items, (i: any) => `${i.exerciseName}: ${i.status} – ${i.detail}`), [
+      "Raise: Completed – 3 sets × 10 reps",
+      "Rotation: Paused because of pain – 1 of 3 sets completed, paused in set 2 of 3 after 4 of 10 reps (prescribed 3 sets × 10 reps)",
+      "Shrug: Not started – Prescribed 3 sets × 10 reps",
+    ]);
+    await digest.check("2026-10-16T01:10");
+    assert.equal(digest.sent.filter((s) => s.kind === "partial").length, 1, "and it goes out once");
   });
 
   await test("a failed send is retried at the next hourly check", async () => {
@@ -278,6 +385,33 @@ async function run() {
     await settle();
     assert.equal(reps.state.details[0].prescribedTarget, "10 reps");
     assert.equal(describePausedProgress(reps.state.details[0]), "1 of 3 sets completed, paused in set 2 of 3 after 4 of 10 reps");
+  });
+
+  await test("a patient's reminders: one email per day listing every exercise, the evening before and that morning", async () => {
+    const reminders = reminderHarness();
+    reminders.due("2026-10-16", "Raise");
+    reminders.due("2026-10-16", "Rotation");
+    await reminders.check("2026-10-15T17:10");
+    assert.equal(reminders.sent.length, 0, "nothing for tomorrow before 18:00, nothing due today");
+    await reminders.check("2026-10-15T18:10");
+    assert.deepEqual(reminders.sent, [{ when: "tomorrow", dayLabel: "October 16, 2026", names: ["Raise", "Rotation"] }]);
+    await reminders.check("2026-10-15T19:10");
+    await reminders.check("2026-10-16T06:10");
+    assert.equal(reminders.sent.length, 1, "once per day");
+    await reminders.check("2026-10-16T07:10");
+    assert.deepEqual(reminders.sent[1], { when: "today", dayLabel: "October 16, 2026", names: ["Raise", "Rotation"] });
+    await reminders.check("2026-10-16T08:10");
+    assert.equal(reminders.sent.length, 2);
+  });
+
+  await test("a failed reminder is retried at the next hourly check", async () => {
+    const reminders = reminderHarness();
+    reminders.due("2026-10-16", "Raise");
+    reminders.failNextSend();
+    await reminders.check("2026-10-16T07:10");
+    assert.equal(reminders.sent.length, 0);
+    await reminders.check("2026-10-16T08:10");
+    assert.equal(reminders.sent.length, 1);
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

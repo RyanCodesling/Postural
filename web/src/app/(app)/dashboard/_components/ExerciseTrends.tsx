@@ -364,7 +364,7 @@ function TrendBadges({ series, format, unit }: { series: ModelSeries[]; format: 
   const labelled = series.filter((s) => s.label !== null);
   if (labelled.length === 0) {
     return (
-      <span className="shrink-0 text-xs px-3 py-1 rounded-full font-medium bg-gray-50 text-gray-400">
+      <span className="shrink-0 text-sm px-3 py-1 rounded-full font-medium bg-gray-50 text-gray-400">
         No trend model
       </span>
     );
@@ -374,7 +374,7 @@ function TrendBadges({ series, format, unit }: { series: ModelSeries[]; format: 
       {labelled.map((s) => (
         <span
           key={s.side}
-          className={`text-xs px-3 py-1 rounded-full font-medium ${LABEL_STYLE[s.label!]}`}
+          className={`text-sm px-3 py-1 rounded-full font-medium ${LABEL_STYLE[s.label!]}`}
           title={
             s.fit
               ? `Change since the first counted session: ${changeText(s.fit, (v) => `${format(v)}${unit}`)}`
@@ -488,14 +488,14 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
           <h3 className="font-semibold text-green-700">{exerciseName}</h3>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 mt-0.5">
             {prescribedSide === "both"
               ? "Both sides"
               : `${prescribedSide[0].toUpperCase()}${prescribedSide.slice(1)} side`}
             {" · "}
             {formatResistanceContext(resistance)}
           </p>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <p className="text-sm text-gray-400 mt-0.5">
             {sessions.length} session{sessions.length === 1 ? "" : "s"}
             {sessions.length > 1 && (
               <>
@@ -506,14 +506,14 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
           </p>
         </div>
         {pendingPrimary || failedPrimary ? (
-          <span className="shrink-0 text-xs text-gray-500">
+          <span className="shrink-0 text-sm text-gray-500">
             {failedPrimary ? "Trend unavailable" : "Calculating trend…"}
           </span>
         ) : <TrendBadges series={primarySeries} format={meta.format} unit={meta.changeUnit} />}
       </div>
 
       {(pending || failed) && (
-        <p role="status" className="text-xs text-gray-500 mb-3">
+        <p role="status" className="text-sm text-gray-500 mb-3">
           {failed
             ? "Some trend bands could not be calculated. Measured values remain available."
             : "Calculating trend bands. Measured values are available while you wait."}
@@ -522,11 +522,11 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       )}
 
       {sessions.length < 2 ? (
-        <p className="text-xs text-gray-400 py-4 text-center">Needs ≥2 sessions to chart.</p>
+        <p className="text-sm text-gray-400 py-4 text-center">Needs ≥2 sessions to chart.</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <p className="text-xs font-medium text-gray-500 mb-1">{primaryTitle}</p>
+            <p className="text-sm font-medium text-gray-500 mb-1">{primaryTitle}</p>
             {hasPrimary ? (
               <>
                 <TrendChart
@@ -535,13 +535,13 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
                   {...chartProps(measures.primary, primaryTitle)}
                 />
                 {canOpenSessions && (
-                  <p className="text-[11px] leading-4 text-gray-400 mt-1">
+                  <p className="text-[13px] leading-4 text-gray-400 mt-1">
                     Click or tap a point on any chart to see the {isIso ? "sets" : "repetitions"} behind it.
                   </p>
                 )}
               </>
             ) : (
-              <p className="text-xs text-gray-400 py-4 text-center">
+              <p className="text-sm text-gray-400 py-4 text-center">
                 No {meta.label.toLowerCase()} {leftOut > 0 ? "to plot" : "recorded"}.
               </p>
             )}
@@ -549,7 +549,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
 
           {!isIso && (
             <div>
-              <p className="text-xs font-medium text-gray-500 mb-1">{completedTitle}</p>
+              <p className="text-sm font-medium text-gray-500 mb-1">{completedTitle}</p>
               <TrendChart
                 series={prescribedOutcomeSides(prescribedSide).map((side) => ({
                   label: sideLabel(side),
@@ -569,7 +569,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
 
           {hasForm && (
             <div>
-              <p className="text-xs font-medium text-gray-500 mb-1">{formTitle}</p>
+              <p className="text-sm font-medium text-gray-500 mb-1">{formTitle}</p>
               <TrendChart
                 series={modelChartSeries(formSeries, formatScore, "", unitsWord)}
                 {...chartProps(measures.form, formTitle)}
@@ -580,7 +580,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       )}
 
       {sessions.length >= 2 && leftOut > 0 && (
-        <p className="text-[11px] leading-4 text-amber-700 mt-2" data-held-out-note="">
+        <p className="text-[13px] leading-4 text-amber-700 mt-2" data-held-out-note="">
           {leftOut} session{leftOut === 1 ? " is" : "s are"} left out of the trend lines because the camera tracked half or
           more of {leftOut === 1 ? "its" : "their"} repetitions poorly. {leftOut === 1 ? "It shows" : "They show"} as hollow
           points where enough well-tracked repetitions remain to plot.
@@ -591,27 +591,27 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
 
       {sessions.length >= 2 && extras.length > 0 && (
         <details className="mt-4" open={extrasOpen} onToggle={event => setExtrasOpen(event.currentTarget.open)}>
-          <summary className="cursor-pointer select-none text-xs font-medium text-green-700">
+          <summary className="cursor-pointer select-none text-sm font-medium text-green-700">
             More measures ({extras.length}):{" "}
             {isIso ? "steadiness, distance from the target and drift" : "descent control, consistency and compensations"}
           </summary>
           {extrasOpen && <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-3">
             {extras.map(({ def, series, pending, failed }) => (
               <div key={def.measure}>
-                <p className="text-xs font-medium text-gray-500 mb-1">{def.title}</p>
+                <p className="text-sm font-medium text-gray-500 mb-1">{def.title}</p>
                 <TrendChart
                   series={modelChartSeries(series, def.format, def.unit, unitsWord)}
                   unitSuffix={def.unit}
                   {...chartProps(def.measure, def.title)}
                 />
-                <p className="text-[11px] leading-4 text-gray-400 mt-1">
+                <p className="text-[13px] leading-4 text-gray-400 mt-1">
                   {failed ? "Trend band unavailable; measured values shown." : pending ? "Calculating trend band…" : extraMeasureSummary(series, def)}
                 </p>
               </div>
             ))}
           </div>}
           {openedFromExtras && breakdown}
-          <p className="text-[11px] leading-4 text-gray-400 mt-3">
+          <p className="text-[13px] leading-4 text-gray-400 mt-3">
             These measures show the trend model&apos;s band and estimated change but never a Rising or Falling label.
             Where a measure has no band, its range did not pass the model&apos;s check, it has no learned
             variation yet, or its band is withheld (the line under that chart says so), so only the measured
@@ -622,7 +622,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       )}
 
       {sessions.length >= 2 && (
-        <p className="text-[11px] leading-4 text-gray-400 mt-3">
+        <p className="text-[13px] leading-4 text-gray-400 mt-3">
           Shaded bands are the trend model&apos;s estimate of the underlying level, with a 95 % range. Rising or
           Falling appears only when a side&apos;s change since its first counted session is larger than normal
           session-to-session variation; the form score has a band but no label.{" "}

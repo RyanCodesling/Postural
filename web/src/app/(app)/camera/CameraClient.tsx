@@ -12304,11 +12304,15 @@ function CameraStatusButton({
 
 type FormCheckState = "warning" | "clear" | "setup" | "paused";
 
+const FORM_CHECK_COLLAPSED_KEY = "postural.formCheckCollapsed.v1";
+
 /**
  * Neutral form-check status beside the camera view. It never names a movement
  * or says how to correct one — cue wording and the overlay labels still await
  * physiotherapist review — so the warning state only points at the highlight
- * the overlay is already drawing.
+ * the overlay is already drawing. The patient can fold it to one line, which
+ * this device remembers; folded, it still shows the status and turns amber on a
+ * warning.
  */
 function FormCheckCard({
   state,
@@ -12317,6 +12321,23 @@ function FormCheckCard({
   state: FormCheckState;
   isometric: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(FORM_CHECK_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((was) => {
+      try {
+        window.localStorage.setItem(FORM_CHECK_COLLAPSED_KEY, was ? "0" : "1");
+      } catch {
+        /* localStorage unavailable — the choice lasts for this page only */
+      }
+      return !was;
+    });
+  };
   const warning = state === "warning";
   const title =
     state === "warning"
@@ -12334,16 +12355,56 @@ function FormCheckCard({
         : state === "setup"
           ? "Form checks start once setup finishes."
           : "Form checks resume when the camera can see you clearly.";
+  const eyebrowColor = warning ? "oklch(0.42 0.11 60)" : "oklch(0.42 0.01 240)";
   return (
     <div style={{
-      padding: 20,
+      padding: collapsed ? "12px 20px" : 20,
       borderRadius: 12,
       background: warning ? "oklch(0.97 0.05 75)" : "white",
       border: warning ? "2px solid oklch(0.70 0.16 65)" : "1px solid oklch(0.93 0.003 240)",
     }}>
-      <div style={{ ...EYEBROW_STYLE, marginBottom: 8, color: warning ? "oklch(0.42 0.11 60)" : "oklch(0.42 0.01 240)" }}>
-        Form check
-      </div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Show form check" : "Hide form check"}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          marginBottom: collapsed ? 0 : 8,
+          padding: 0,
+          border: "none",
+          background: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          color: eyebrowColor,
+        }}
+      >
+        <span style={{ ...EYEBROW_STYLE, color: eyebrowColor }}>Form check</span>
+        {collapsed && (
+          <span style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 15,
+            fontWeight: 600,
+            color: warning ? "oklch(0.30 0.09 60)" : "oklch(0.30 0.01 240)",
+          }}>
+            {title}
+          </span>
+        )}
+        <svg
+          width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"
+          style={{ marginLeft: "auto", flexShrink: 0, transform: collapsed ? "none" : "rotate(180deg)", transition: "transform .15s" }}
+        >
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+      {!collapsed && <>
       <div style={{
         marginBottom: 6,
         fontSize: 26,
@@ -12357,6 +12418,7 @@ function FormCheckCard({
       <div style={{ fontSize: 17, lineHeight: 1.45, color: warning ? "oklch(0.38 0.07 60)" : "oklch(0.42 0.01 240)" }}>
         {body}
       </div>
+      </>}
     </div>
   );
 }

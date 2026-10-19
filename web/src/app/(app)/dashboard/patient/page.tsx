@@ -25,6 +25,7 @@ import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ReportButton from "../_components/ReportButton";
 import SessionVideo from "../_components/SessionVideo";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
+import { NEW_NOTIFICATIONS_EVENT } from "../_components/NotificationBell";
 import {
   classifyScheduleOccurrence,
   isOccurrenceActionable,
@@ -251,6 +252,23 @@ export default function PatientDashboardPage() {
 
   useEffect(() => {
     if (!loading && user?.id) void loadData();
+  }, [user?.id, loading, loadData]);
+
+  // A therapist's change (assigned, edited or removed exercises) arrives as a
+  // notification; reload then, and when the patient returns to this tab, so the
+  // dashboard never needs a page reload to catch up.
+  useEffect(() => {
+    if (loading || !user?.id) return;
+    const reload = () => void loadData();
+    const reloadIfVisible = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    window.addEventListener(NEW_NOTIFICATIONS_EVENT, reload);
+    document.addEventListener("visibilitychange", reloadIfVisible);
+    return () => {
+      window.removeEventListener(NEW_NOTIFICATIONS_EVENT, reload);
+      document.removeEventListener("visibilitychange", reloadIfVisible);
+    };
   }, [user?.id, loading, loadData]);
 
   const NAV_TABS: { key: ActiveTab; label: string; Icon: () => React.ReactElement }[] = [

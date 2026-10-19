@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
-  getNotifications,
+  getNotificationPage,
+  type NotificationFilter,
   markNotificationAsRead,
   markAllNotificationsAsRead,
   syncTimeNotifications,
@@ -10,6 +11,8 @@ import {
   deleteMultipleNotifications,
   clearActivityLogs,
 } from "@/lib/db";
+
+const NOTIFICATIONS_PAGE_SIZE = 10;
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,18 +39,19 @@ export async function GET(request: NextRequest) {
       console.error("Failed to sync notifications:", syncErr);
     }
 
-    const allNotifications = await getNotifications(user.id);
+    // ?filter=all|unread|read&page=1 (10 per page).
+    const params = request.nextUrl.searchParams;
+    const filterParam = params.get("filter");
+    const filter: NotificationFilter =
+      filterParam === "unread" || filterParam === "read" ? filterParam : "all";
+    const page = Math.max(1, Math.floor(Number(params.get("page")) || 1));
+    const result = await getNotificationPage(user.id, {
+      filter,
+      limit: NOTIFICATIONS_PAGE_SIZE,
+      offset: (page - 1) * NOTIFICATIONS_PAGE_SIZE,
+    });
 
-    // Filter login/logout events out of the regular bell notifications list
-    const notifications = allNotifications.filter(
-      (notification: { type: string }) =>
-        notification.type !== "user_login" && notification.type !== "user_logout"
-    );
-
-    // Return empty array for realtimeLogs to disable top-floating popup toasts
-    const realtimeLogs: unknown[] = [];
-
-    return NextResponse.json({ notifications, realtimeLogs });
+    return NextResponse.json({ ...result, page, pageSize: NOTIFICATIONS_PAGE_SIZE });
   } catch (error) {
     console.error("GET /api/notifications error:", error);
     return NextResponse.json({ error: "Failed to fetch notifications" }, { status: 500 });

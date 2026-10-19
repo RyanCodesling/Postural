@@ -132,20 +132,20 @@ export default function SessionBreakdown({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-gray-700">{title}: how the points were formed</p>
-          <p className="text-[11px] leading-4 text-gray-500 mt-0.5">
+          <p className="text-sm font-semibold text-gray-700">{title}: how the points were formed</p>
+          <p className="text-[13px] leading-4 text-gray-500 mt-0.5">
             Opened from &ldquo;{focusTitle}&rdquo;: {focusRule(focus)}. The last row of each table gives every
             chart&apos;s point for this session.
           </p>
         </div>
-        <button type="button" onClick={onClose} className="shrink-0 text-xs text-gray-500 hover:text-gray-800">
+        <button type="button" onClick={onClose} className="shrink-0 text-sm text-gray-500 hover:text-gray-800">
           Close
         </button>
       </div>
 
-      {state.kind === "loading" && <p className="text-xs text-gray-400 mt-3">Loading…</p>}
+      {state.kind === "loading" && <p className="text-sm text-gray-400 mt-3">Loading…</p>}
       {state.kind === "error" && (
-        <p className="text-xs text-red-600 mt-3">The {isHold ? "sets" : "repetitions"} could not be loaded.</p>
+        <p className="text-sm text-red-600 mt-3">The {isHold ? "sets" : "repetitions"} could not be loaded.</p>
       )}
       {state.kind === "ready" && (
         <div className="mt-3 space-y-5">
@@ -170,7 +170,7 @@ export default function SessionBreakdown({
                   main={main}
                 />
               ))}
-              <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
+              <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-gray-500">
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block h-2 w-2 rounded-full bg-gray-500" />
                   reached the target range (counted in completed reps)
@@ -183,7 +183,7 @@ export default function SessionBreakdown({
               </p>
             </>
           )}
-          <p className="text-[11px] leading-4 text-gray-400">
+          <p className="text-[13px] leading-4 text-gray-400">
             The shaded band on each chart is the trend model&apos;s estimate across sessions, so it can sit away from a
             single session&apos;s point.
           </p>
@@ -204,7 +204,7 @@ function SessionLine({ detail }: { detail: SessionRepsDetail }) {
     )
     .join(" · ");
   return (
-    <p className="text-[11px] leading-4 text-gray-600">
+    <p className="text-[13px] leading-4 text-gray-600">
       Pain before: {formatPreSessionPain(preSessionPainFromContext(detail.context))} · after:{" "}
       {detail.painReport ? formatPainAfter(detail.painReport) : "not reported"}
       {timings.length > 0 && <> · {sets}</>}
@@ -266,7 +266,7 @@ function BreakdownTable<R>({
   const focused = (col: Column<R>) => col.focus.includes(focus);
   return (
     <div className="overflow-x-auto mt-2">
-      <table className="min-w-full border-collapse text-[11px] leading-4 text-gray-600">
+      <table className="min-w-full border-collapse text-[13px] leading-4 text-gray-600">
         {caption && <caption className="caption-bottom pt-1 text-left text-gray-400">{caption}</caption>}
         <thead>
           <tr className="border-b border-gray-200 text-gray-500">
@@ -500,7 +500,7 @@ function RepSide({
 
   return (
     <div className="min-w-0">
-      <p className="text-xs text-gray-700">
+      <p className="text-sm text-gray-700">
         <Swatch color={color} />
         <span className="font-medium">{sideLabel(side)}</span> · {rows.length} repetition{rows.length === 1 ? "" : "s"}
         {peak.value !== null && <> · average {shown(peak.value)}</>}
@@ -513,20 +513,20 @@ function RepSide({
         )}
       </p>
       {tracking.heldOut && (
-        <p className="text-[11px] text-amber-700 mt-1">
+        <p className="text-[13px] text-amber-700 mt-1">
           This session is left out of the trend lines, drawn hollow where enough well-tracked repetitions remain to plot: the
           camera tracked {tracking.poorReps} of its {tracking.trackedReps} repetitions poorly.
         </p>
       )}
       {tracking.uncheckedReps > 0 && (
-        <p className="text-[11px] text-gray-500 mt-1" data-tracking-unchecked="">
+        <p className="text-[13px] text-gray-500 mt-1" data-tracking-unchecked="">
           The tracking check could not judge {tracking.uncheckedReps} of this session&apos;s {tracking.trackedReps} repetitions,
           usually because the computer was processing too few frames a second, so their tracking is unknown. They still
           count in the trends.
         </p>
       )}
       {rows.length === 0 ? (
-        <p className="text-[11px] text-gray-400 mt-1">No repetitions on this side.</p>
+        <p className="text-[13px] text-gray-400 mt-1">No repetitions on this side.</p>
       ) : (
         <>
           <RepStrip rows={rows} average={peak.value} target={target} color={color} main={main} activeRep={activeRep} onPick={setActiveRep} />
@@ -565,7 +565,7 @@ function EndOfSet({ rows, main }: { rows: EndOfSetRow[]; main: MainMeasure }) {
   const exact = main.precise ?? main.format;
   const change = (v: number) => `${v >= 0 ? "+" : "−"}${exact(Math.abs(v))}${main.unit}`;
   return (
-    <div className="mt-2 text-[11px] text-gray-700" data-end-of-set="">
+    <div className="mt-2 text-[13px] text-gray-700" data-end-of-set="">
       <p>
         <span className="font-medium">End of set:</span>{" "}
         {compared.map((r, i) => (
@@ -782,12 +782,12 @@ function HoldSide({
   ];
   return (
     <div className="min-w-0">
-      <p className="text-xs text-gray-700">
+      <p className="text-sm text-gray-700">
         <Swatch color={color} />
         <span className="font-medium">{sideLabel(side)}</span> · {rows.length} set{rows.length === 1 ? "" : "s"}
       </p>
       {rows.length === 0 ? (
-        <p className="text-[11px] text-gray-400 mt-1">No sets recorded.</p>
+        <p className="text-[13px] text-gray-400 mt-1">No sets recorded.</p>
       ) : (
         <BreakdownTable columns={columns} rows={rows} rowKey={(r) => r.setIndex} focus={focus} />
       )}
@@ -859,7 +859,7 @@ function HoldWhole({ detail, exerciseId, focus }: { detail: SessionRepsDetail; e
   ];
   return (
     <div className="min-w-0">
-      <p className="text-xs text-gray-700 font-medium">The hold as a whole</p>
+      <p className="text-sm text-gray-700 font-medium">The hold as a whole</p>
       <BreakdownTable
         columns={columns}
         rows={rows}

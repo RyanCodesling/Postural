@@ -789,17 +789,17 @@ export default function PatientDetailPage() {
       {/* Current prescription lifecycle */}
       <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-gray-900 font-semibold text-lg">Current Prescriptions</h2>
+          <h2 className="text-gray-900 font-semibold text-xl">Current Prescriptions</h2>
           <button
             onClick={scrollToSessions}
-            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition print:hidden"
+            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-base font-medium rounded-lg transition print:hidden"
           >
             View Patient Progress
           </button>
         </div>
 
         {currentPrescriptions.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No active or upcoming prescriptions.</p>
+          <p className="text-gray-400 text-base text-center py-6">No active or upcoming prescriptions.</p>
         ) : (
           <div className="space-y-4">
             {currentPrescriptions.map((ex) => (
@@ -811,12 +811,12 @@ export default function PatientDetailPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-semibold text-green-700">{ex.name}</h3>
                     {ex.monitoring_mode === "manual" && (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
                         Manual · no camera
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500 mt-1">
+                  <p className="text-base text-gray-500 mt-1">
                     {ex.sets} sets ×{" "}
                     {prescriptionTargetText({
                       exerciseId: ex.exercise_id,
@@ -824,16 +824,16 @@ export default function PatientDetailPage() {
                       holdSeconds: ex.hold_seconds,
                     })} · {ex.rest_seconds}s rest
                   </p>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-sm text-gray-500">
                     {prescribedSideText(ex.prescribed_side ?? "both")} ·{" "}
                     {formatResistanceContext(patientExerciseResistance(ex))}
                   </p>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-sm text-gray-500">
                     {formatDateKey(ex.start_date ?? ex.assigned_date)} to {formatDateKey(ex.end_date ?? ex.assigned_date)}
                   </p>
-                  <p className="mt-1 text-xs text-gray-500">{adherenceSummaryText(ex)}</p>
+                  <p className="mt-1 text-sm text-gray-500">{adherenceSummaryText(ex)}</p>
                 </div>
-                <span className={`px-3 py-1 text-sm rounded-full font-medium shrink-0 ${
+                <span className={`px-3 py-1 text-base rounded-full font-medium shrink-0 ${
                   ex.prescription_state === "upcoming"
                     ? "bg-gray-100 text-gray-700"
                     : "bg-blue-100 text-blue-700"
@@ -849,8 +849,8 @@ export default function PatientDetailPage() {
       {/* Ended prescription lifecycle */}
       {endedPrescriptions.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-          <h2 className="text-gray-800 font-semibold text-lg mb-2">Ended Prescriptions</h2>
-          <p className="mb-5 text-xs text-gray-500">
+          <h2 className="text-gray-800 font-semibold text-xl mb-2">Ended Prescriptions</h2>
+          <p className="mb-5 text-sm text-gray-500">
             Prescription state is shown separately from the completed and missed occurrence outcomes below.
           </p>
           <div className="space-y-4">
@@ -861,16 +861,16 @@ export default function PatientDetailPage() {
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-sm text-gray-500">
                     {prescribedSideText(ex.prescribed_side ?? "both")} ·{" "}
                     {formatResistanceContext(patientExerciseResistance(ex))}
                   </p>
-                  <p className="mt-1 text-sm text-gray-500">{adherenceSummaryText(ex)}</p>
-                  <p className="mt-1 text-xs text-gray-400">
+                  <p className="mt-1 text-base text-gray-500">{adherenceSummaryText(ex)}</p>
+                  <p className="mt-1 text-sm text-gray-400">
                     Scheduled through {formatDateKey(ex.end_date ?? ex.assigned_date)}
                   </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700">
+                <span className="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-base font-medium text-gray-700">
                   {ex.prescription_state === "archived" ? "Ended early" : "Ended"}
                 </span>
               </div>
@@ -881,13 +881,13 @@ export default function PatientDetailPage() {
 
       {/* Completed occurrence outcomes */}
       <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <h2 className="text-gray-900 font-semibold text-lg mb-2">Completed Exercise Outcomes</h2>
-        <p className="mb-5 text-xs text-gray-500">
+        <h2 className="text-gray-900 font-semibold text-xl mb-2">Completed Exercise Outcomes</h2>
+        <p className="mb-5 text-sm text-gray-500">
           Populated from completed scheduled occurrences, even when the overall prescription later ended with missed work.
         </p>
 
         {completedExercises.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No completed occurrences yet.</p>
+          <p className="text-gray-400 text-base text-center py-6">No completed occurrences yet.</p>
         ) : (
           <div className="space-y-4">
             {completedExercises.map((ex) => (
@@ -897,11 +897,11 @@ export default function PatientDetailPage() {
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
-                  <p className="text-sm text-gray-500 mt-1">
+                  <p className="text-base text-gray-500 mt-1">
                     {adherenceSummaryText(ex)}
                   </p>
                 </div>
-                <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                <span className="px-3 py-1 bg-green-100 text-green-700 text-base rounded-full font-medium">
                   {ex.occurrence_summary.completed} completed
                 </span>
               </div>
@@ -919,8 +919,8 @@ export default function PatientDetailPage() {
 
       {/* Form Quality */}
       <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <h2 className="text-gray-900 font-semibold text-lg">Form Quality</h2>
-        <p className="text-xs text-gray-400 mt-1 mb-5">
+        <h2 className="text-gray-900 font-semibold text-xl">Form Quality</h2>
+        <p className="text-sm text-gray-400 mt-1 mb-5">
           How cleanly the movement was performed (compensation patterns). Supplementary — not a diagnosis.
         </p>
 
@@ -928,26 +928,26 @@ export default function PatientDetailPage() {
           {/* Rule-based heuristic (currently isometric holds only) */}
           <div className="rounded-xl border border-gray-100 p-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-700">Rule-based score</p>
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-gray-100 text-gray-500 font-medium">
+              <p className="text-base font-medium text-gray-700">Rule-based score</p>
+              <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">
                 heuristic
               </span>
             </div>
             {compScoreAvg !== null ? (
               <>
-                <p className="text-3xl font-bold text-green-700">
+                <p className="text-4xl font-bold text-green-700">
                   {Math.round(compScoreAvg)}
-                  <span className="text-base font-medium text-gray-400">/100</span>
+                  <span className="text-lg font-medium text-gray-400">/100</span>
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-sm text-gray-500 mt-1">
                   Average over {compScoreCount} isometric hold session
                   {compScoreCount === 1 ? "" : "s"}. Higher is cleaner form.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-2xl font-semibold text-gray-300">—</p>
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-3xl font-semibold text-gray-300">—</p>
+                <p className="text-sm text-gray-400 mt-1">
                   Available for the isometric hold exercise (Arm Abduction at 90°). No scored
                   sessions yet.
                 </p>
@@ -957,8 +957,8 @@ export default function PatientDetailPage() {
 
           {/* Machine-learning trend analytics: the Progress Trends below. */}
           <div className="rounded-xl border border-gray-100 p-4">
-            <p className="text-sm font-medium text-gray-700 mb-1">Trend model</p>
-            <p className="text-xs text-gray-500">
+            <p className="text-base font-medium text-gray-700 mb-1">Trend model</p>
+            <p className="text-sm text-gray-500">
               The Rising / No clear change / Falling labels and shaded bands in Progress Trends come from a
               machine-learning trend model. Rising or Falling appears only when a side&apos;s change is larger than
               normal session-to-session variation; otherwise the label is No clear change. Supplementary
@@ -970,17 +970,17 @@ export default function PatientDetailPage() {
 
       {/* Progress Trends */}
       <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <h2 className="text-gray-900 font-semibold text-lg">Progress Trends</h2>
-        <p className="text-xs text-gray-400 mt-1 mb-6">
+        <h2 className="text-gray-900 font-semibold text-xl">Progress Trends</h2>
+        <p className="text-sm text-gray-400 mt-1 mb-6">
           Session-over-session trends per exercise. Descriptive statistics — not a diagnosis.
         </p>
 
         {sessionsError ? (
-          <p className="text-red-600 text-sm text-center py-6">
+          <p className="text-red-600 text-base text-center py-6">
             Couldn&apos;t load session history.
           </p>
         ) : trendGroups.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No sessions recorded yet.</p>
+          <p className="text-gray-400 text-base text-center py-6">No sessions recorded yet.</p>
         ) : (
           <div className="space-y-5">
             {trendGroups.map((g) => (
@@ -995,14 +995,14 @@ export default function PatientDetailPage() {
       <TabPanel active={tab === "sessions"}>
       {/* Sessions Record */}
       <div ref={sessionsCardRef} className="bg-white rounded-xl shadow-sm p-6 scroll-mt-6">
-        <h2 className="text-gray-900 font-semibold text-lg mb-6">Sessions Record</h2>
+        <h2 className="text-gray-900 font-semibold text-xl mb-6">Sessions Record</h2>
 
         {sessionsError ? (
-          <p className="text-red-600 text-sm text-center py-6">
+          <p className="text-red-600 text-base text-center py-6">
             Couldn&apos;t load session history. Check that the session tables exist and try again.
           </p>
         ) : sessions.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-6">No sessions recorded</p>
+          <p className="text-gray-400 text-base text-center py-6">No sessions recorded</p>
         ) : (
           <div className="space-y-3">
             {sessions.map((s) => (
@@ -1024,7 +1024,7 @@ export default function PatientDetailPage() {
       </TabPanel>
 
       {/* Print-only disclaimer footer */}
-      <p className="hidden print:block text-[10px] text-gray-500 mt-6 pt-3 border-t border-gray-300">
+      <p className="hidden print:block text-xs text-gray-500 mt-6 pt-3 border-t border-gray-300">
         Supplementary monitoring output — not a medical device and not clinically validated.
         Figures are estimated from a single front-facing camera and require professional interpretation.
       </p>
@@ -1111,32 +1111,32 @@ function SessionCard({
           <div className="flex items-center gap-2">
             <h3 className="font-semibold text-green-700">{session.exerciseName}</h3>
             {session.endedAt === null && (
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-amber-100 text-amber-700 font-medium">
+              <span className="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-700 font-medium">
                 incomplete
               </span>
             )}
             {session.hasRecording && (
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-gray-100 text-gray-700 font-medium">
+              <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-700 font-medium">
                 video
               </span>
             )}
             {session.endReason === "pain" && (
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-red-100 text-red-700 font-semibold">
+              <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold">
                 stopped for pain
               </span>
             )}
             {session.latestReview && (
-              <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-700 font-medium">
+              <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 font-medium">
                 clinician reviewed
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500 mt-0.5">{fmtDateTime(session.startedAt)}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-500 mt-0.5">{fmtDateTime(session.startedAt)}</p>
+          <p className="text-sm text-gray-500 mt-0.5">
             {prescribedSideText(session.prescribedSide)} ·{" "}
             {formatResistanceContext(session.resistance)}
           </p>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-gray-600">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-base text-gray-600">
             <span>{fmtDuration(session.durationMs)}</span>
             <span>{session.setCount} set{session.setCount === 1 ? "" : "s"}</span>
             {isIsometric ? (
@@ -1166,14 +1166,14 @@ function SessionCard({
             )}
           </div>
         </div>
-        <span className="text-gray-400 text-sm shrink-0 mt-1">{expanded ? "▲" : "▼"}</span>
+        <span className="text-gray-400 text-base shrink-0 mt-1">{expanded ? "▲" : "▼"}</span>
       </button>
 
       {/* Drill-down */}
       {expanded && (
         <div className="border-t border-gray-100 bg-gray-50/60 p-4">
           {loadingDetail && !detail ? (
-            <p className="text-sm text-gray-400">Loading session detail…</p>
+            <p className="text-base text-gray-400">Loading session detail…</p>
           ) : detail ? (
             <SessionDetailBody
               detail={detail}
@@ -1183,7 +1183,7 @@ function SessionCard({
               patientName={patientName}
             />
           ) : (
-            <p className="text-sm text-gray-400">Could not load session detail.</p>
+            <p className="text-base text-gray-400">Could not load session detail.</p>
           )}
         </div>
       )}
@@ -1219,7 +1219,7 @@ function SessionDetailBody({
     // Legacy/edge sessions may have rep records but no set records.
     <RepFallbackList reps={detail.reps} prescribedSide={prescribedSide} />
   ) : (
-    <p className="text-sm text-gray-400">No set or rep records for this session.</p>
+    <p className="text-base text-gray-400">No set or rep records for this session.</p>
   );
 
   return (
@@ -1231,7 +1231,7 @@ function SessionDetailBody({
             const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
             await downloadSessionReport(detail.id, patientName);
           }}
-          className="px-3 py-1.5 border border-green-700 text-green-700 text-xs font-medium rounded-lg hover:bg-green-50 transition disabled:opacity-60"
+          className="px-3 py-1.5 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition disabled:opacity-60"
         />
       </div>
       <SessionVideo sessionId={detail.id} />
@@ -1254,13 +1254,13 @@ function SessionPrescriptionContext({ detail }: { detail: SessionDetail }) {
   const context = detail.context;
   if (!context) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500">
         Prescription and scoring context is unavailable for this legacy session.
       </div>
     );
   }
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600">
       <p className="font-semibold text-gray-800">Recorded session context</p>
       <p className="mt-1">
         {prescribedSideText(context.prescription.prescribedSide)} ·{" "}
@@ -1288,8 +1288,8 @@ function SessionPainReport({ detail }: { detail: SessionDetail }) {
   if (!painStop && report.status !== "reported" && before === null) return null;
   return (
     <div className={painStop
-      ? "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
-      : "rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600"}>
+      ? "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+      : "rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600"}>
       <p className={painStop ? "font-semibold" : "font-semibold text-gray-800"}>
         {painStop ? "Pain follow-up required before rescheduling" : "Pain reports"}
       </p>
@@ -1366,7 +1366,7 @@ function SessionReviewPanel({
   };
 
   return (
-    <div className="rounded-lg border border-blue-100 bg-white p-3 text-xs">
+    <div className="rounded-lg border border-blue-100 bg-white p-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-semibold text-gray-800">Clinician score review</p>
@@ -1410,7 +1410,7 @@ function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
   const device = detail.deviceContext;
   if (!quality && !device) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500">
         Capture context is unavailable for this legacy session.
       </div>
     );
@@ -1418,7 +1418,7 @@ function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
   const captureClass =
     quality && quality.pctOk < 80 ? "text-amber-700" : "text-gray-700";
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs">
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
       <span className="font-semibold text-gray-800">Capture context</span>
       {quality && (
         <span className={`ml-3 ${captureClass}`}>
@@ -1457,7 +1457,7 @@ function RepFallbackList({
   const setIndexes = Array.from(bySet.keys()).sort((a, b) => a - b);
   return (
     <div className="space-y-3">
-      <p className="text-xs text-gray-400">No set records — reconstructed from reps.</p>
+      <p className="text-sm text-gray-400">No set records — reconstructed from reps.</p>
       {setIndexes.map((idx) => {
         const group = bySet.get(idx)!;
         const outcomeSides = prescribedOutcomeSides(prescribedSide);
@@ -1472,7 +1472,7 @@ function RepFallbackList({
         );
         const formScore = meanRawRuleScore(outcomeReps);
         return (
-          <div key={idx} className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
+          <div key={idx} className="rounded-lg border border-gray-200 bg-white p-3 text-base">
             <span className="font-semibold text-gray-800">Set {idx}</span>{" "}
             <span className="text-gray-600">
               {outcomeSides.map((side) => {
@@ -1540,7 +1540,7 @@ function SetRow({
   };
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-base">
         <span className="font-semibold text-gray-800">Set {set.setIndex}</span>
         {isIso ? (
           outcomeSides.map((side) => (
@@ -1574,7 +1574,7 @@ function SetRow({
             )}
           </>
         )}
-        <span className="text-gray-400 text-xs">ended: {set.terminatedBy}</span>
+        <span className="text-gray-400 text-sm">ended: {set.terminatedBy}</span>
       </div>
 
       {/* Isometric hold-quality grid */}
@@ -1609,7 +1609,7 @@ function HoldQualityGrid({
   const dropCount =
     typeof hq.dropCount === "number" && Number.isFinite(hq.dropCount) ? hq.dropCount : null;
   return (
-    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600">
+    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-gray-600">
       {prescribedOutcomeSides(prescribedSide).map((side) => (
         <div key={side}>
           <span className="text-gray-400">{sideLabel(side)} arm:</span>{" "}

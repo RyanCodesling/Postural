@@ -8,6 +8,7 @@ const bell: TourStep = {
   lines: [
     "The bell shows what needs your attention, for example missed exercises or newly assigned exercises.",
     "Open a notification to read it, mark everything as read, or delete the ones you no longer need.",
+    "New notifications also pop up at the top right for a few seconds. Use All, Unread and Read to filter the list, and Previous and Next to page through it.",
   ],
 };
 

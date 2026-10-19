@@ -1,5 +1,89 @@
 # Sprint Updates 
 
+## 📌 Update-10-19-26 | *RyanCodesling*
+
+- Measured each neck side bend's peak from the head's resting position, which the camera now records between sets, so the charts no longer shift with how the camera was set up
+- Added a 5-second positioning countdown before every 3-second baseline, so the baseline is not taken while the patient is still getting into place
+- Judged "Level your shoulders" against the patient's own resting shoulder line from the baseline instead of the camera tilt
+- Replaced the patient dashboard's 0-180 range-of-motion gauge with a Last Session card that shows counts only, and made smaller interface fixes
+- Showed My Progress one trend card per row again, in a centred column as wide as the therapist page
+- Showed each assigned exercise on View Profile as Upcoming, Active, Ended, or Ended early, with a line counting the days done, missed, stopped for pain, and to go
+- Fixed the two problems left in the 10-15 update's emails: ending a session paused for pain no longer waits for its email, and the daily summary no longer misses exercises completed after 8 PM
+- Added the neck side bends animation to the Reference Guide and replaced the overhead press animation with the deep-start revision (low priority)
+
+### *web\src\lib\analytics\trendRules.ts*, *web\src\lib\analytics\trendBreakdown.ts*, *web\src\lib\analytics\trendSeries.ts*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\db.ts*
+
+- Saved the still head's reading in the rests between sets of a neck session, for each baseline, in the session's capture summary, and kept it through Stop and Resume
+- Measured each side's peak from that reading instead of the baseline's camera tilt in the trend charts, the session breakdown, the Reports chart, and the PDF reports, and judged completion on that peak against the repetition's own target
+- Left a repetition without a resting reading out of the peak measures, and drew a neck session without any reading as a hollow point at its saved value, with the reason
+- Applied the same rule in the session list query, which now also returns how many repetitions on each side have a peak, and in the trend-model export
+- Left live counting, cues, thresholds, and the stored peaks unchanged; the rule changes only what the charts read
+
+### *web\src\lib\pose\neutralCalibration.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Started every baseline (Start, Resume, Recalibrate, a camera switch, and the restart of an unfinished baseline) with 5 seconds of "Get into position" in which nothing is measured, followed by the 3-second baseline as before
+- Showed the 5 seconds in the start countdown's overlay and the 3 seconds in the baseline card, so the camera view is no longer dimmed while the baseline is taken; a recalibration in the middle of a session shows both in the card
+- Updated the camera page's help text
+
+### *web\src\lib\pose\shoulderRestReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Took the resting shoulder line from the baseline and judged the "Level your shoulders" cue and its arrow against it, through their own smoothing
+- Kept the form score, the stored features, the cue's switch-on level of 7, and the measurement versions on the camera tilt as before
+- Recorded the new coaching version and the shoulder reference in each session's coaching configuration
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\lib\exercises\scheduleSessionSummary.ts*, and *web\src\lib\exercises\prescriptionStatus.ts*
+
+- Replaced the 0-180 gauge with a Last Session card: the newest session with a result, its exercise, side, day, and sets, and for each prescribed side the repetitions counted and those that reached the full-range line, or the time held against the target
+- Removed the second completion ring and added an Open My Progress button to the card
+- Headed a finished schedule "Schedule ended" instead of a week number
+- Kept the dashboard within a phone's width: the day rows truncate instead of widening the page
+- Put the My Progress trend cards back one to a row, in a centred column as wide as the therapist page
+- Showed View Profile's exercise label as Upcoming, Active, Ended, or Ended early, the therapist's program words, with a line under it counting the days done, missed, stopped for pain, and to go
+
+### *web\src\app\(app)\dashboard\_components\PatientReports.tsx* and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Titled the Reports chart with its measure, "Peak angle (camera estimate)", and named each exercise setup's side, resistance, dates, and session count in its list, so two setups of one exercise read differently
+- Corrected the patient profile's trend model note: Rising or Falling shows only beyond normal variation, and otherwise No clear change
+- Hid the patient profile tab bar's stray scrollbar
+
+### *web\src\lib\db.ts*, *web\src\lib\email.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Started the pain pause emails after the in-app notifications without waiting for them, so ending a paused session returns at once
+- Gave each email a time limit: 10 seconds to connect, 10 seconds for the mail server's greeting, and 20 seconds of silence
+- Sent the daily summaries at 7 AM for the whole previous day, so exercises completed after 8 PM are included
+- Changed only the comments in the summary table's script; the table is the same
+
+### *web\src\lib\exercises\demoClips.ts* (low priority)
+
+- Added the neck side bends animation to the Reference Guide ahead of the multi-person neck counting test; it comes out if that test returns the exercise to the assisted stretch
+- Replaced the guide's overhead press with the deep-start revision
+- Kept the animation files out of the repository; they are copied to the server separately
+
+### *Changes to Enah's Update-10-15-26*
+
+- In `tours.ts`, replaced the gauge step with a Last Session step, said that Rising or Falling appears only beyond normal variation and otherwise No clear change, said that the Reports charts are not printed, called the Reports measure peak angle instead of range of motion, and described the new View Profile label and day counts
+- On the landing page, said the app sends the therapist "a record of every session" instead of "objective data", and used "uneven shoulders" as the cue example instead of "a shrugged shoulder", which the shoulder measure cannot tell apart from a lowered head
+- The email fixes above change the update's `email.ts`, `db.ts`, and `instrumentation.ts`
+
+### *Validation*
+
+- 78 framework-free TypeScript suites pass, including new ones for the neck rest reference, the shoulder reference, the Last Session card, and the emails
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables, including the neck rule in the session list query against the breakdown
+- Replaying the saved pilot traces through the camera loop gives the same results as before
+- A live neck session on the new version counted both sets to their targets, took its baseline after the 5-second countdown, and saved the resting reading, and the app's session list read its peaks through the new rule
+- The Last Session card, the Reports list, the landing page, My Progress, and View Profile at phone width were checked on screen; the countdown's new display was not
+
+### *Remaining boundaries*
+
+- The emails stay off on the evaluation server until its mail settings are added; until then the tours and the landing page describe emails it does not send
+- Before the daily summaries are used, the database owner runs scripts\notification_email_digests_pg.sql
+- A neck session needs at least two sets for a resting reading; neck sessions recorded before this update have none, so their peaks are drawn hollow
+- "Level your shoulders" still shows on most of one tester's right bends; whether that is a shoulder hike or the pose model following the head needs other people's recordings and the physical therapist's review
+- The 3D builder's updates and notes for the two new animations (assets\blender and tools\blender) are not in this update
+
+---
+
 ## 📌 Update-10-15-26 | *Enah*
 
 - Added a How to Use button to the top bar of every patient, therapist, and administrator page, which opens a step-by-step tour of that page, in the style of the camera page's tour

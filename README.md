@@ -1,5 +1,92 @@
 # Sprint Updates 
 
+## 📌 Update-10-23-26 | *RyanCodesling*
+
+- Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic squeezed angles near the horizontal and stretched those near the vertical; against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high
+- Converted every angle threshold to the corrected measurement so that counting and cues behave as before, except that a lateral raise peaking between a real 45 and 60 degrees now counts as partial instead of being dropped
+- Counted neck side bends from the head's own resting line, taken during the 3-second baseline, instead of the camera's tilt
+- Kept counting when the camera briefly stalls, for under a second, just as a limb leaves its resting position; this had lost a repetition in three recordings
+- Re-learned the trend model in the corrected measurement, now including the neck sessions
+- Showed angle trends recorded before the correction as measured values only, with a note, and started a new trend history at the change
+- Refused to start or resume a session from a page or saved progress measured under an older version, and asked the patient to reload instead
+- Upgraded Next.js from 16.4.0 to 16.4.2, which fixes two critical remote code execution advisories and one denial-of-service advisory
+- Built this update on top of Enah's 10-19 update
+
+### *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\shoulderRestReference.ts*, *web\src\lib\pose\metricVersion.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Rescaled the landmark coordinates by each frame's width-to-height ratio before any angle is taken; every metric function now requires that ratio, so no caller can leave it out
+- Passed each frame's own ratio from the camera loop to every metric, the baseline samples, the resting shoulder line, and the tuning trace
+- Changed the measurement version to pose_metrics_v3_aspect_corrected, so each exercise's history starts again at the change; no saved data is rewritten
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\compensationWarningState.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\lib\pose\holdQuality.ts*
+
+- Converted each angle threshold from its old value by the shape of the line it measures, on the 16:9 frames it was tuned on: the lateral raise's start, return, and full-range lines of 20, 15, and 85 became 32.9, 25.5, and 87.2; the side bend's 5, 2, 15, and 17 became 8.8, 3.6, 25.5, and 28.5; the neck's 12, 6, 18, and 30 became 6.8, 3.4, 10.4, and 18; the wall angels' 85, 70, 110, and 150 became 87.2, 78.4, 101.6, and 134.3; the arm hold's band of 10 became 5.7; and the cue and warning lines followed
+- Set the lateral raise's minimum peak to a real 45; the old 45 sat at about 65 degrees on a body
+- Refitted the four shoulder-linked expected lines on the corrected pilot data, and converted the elbow checks at the arm position where each one runs
+- Corrected two registry comments that called the thresholds clinical norms; they are engineering settings
+- Recorded the coaching version coaching_v13_aspect_corrected, and marked hold records as measured in the corrected unit
+
+### *web\src\lib\pose\neckCalibrationReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\exercises\registry.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Took the median ear line over each 3-second baseline, after the 5-second countdown, and measured the live neck side bends from it instead of the camera tilt, so a head that rests tilted in the picture no longer reaches one side's line early and the other's late
+- Kept the form check's measures on the camera tilt, and the thresholds, the per-side counting, and the charts' rest rule as before
+- Changed only the neck exercise's measurement version
+
+### *web\src\lib\pose\repCounter.ts*, *web\src\lib\pose\bidirectionalRepCounter.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Kept the counter's evidence that a limb was resting across a camera stall of up to 1 second; frames the camera processes without a reading still clear it after 300 ms, as before, so an arm swept across the body is still not counted
+- Marked the counters on every processed frame of a set that gives them no reading
+
+### *web\src\app\api\sessions\route.ts*, *web\src\lib\exercises\versionPayload.ts*, *web\src\lib\exercises\versioning.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Sent the page's measurement version and the exercise's own version with Start; when either differs from the server's, the server answers "The app has been updated. Reload this page, then start again.", so a tab left open across a deploy cannot save a session in the old unit
+- Offered saved progress only to a page measuring under the same versions
+
+### *web\src\lib\analytics\trendSeries.ts*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, *web\src\lib\analytics\trendModelConfig.json*, and *web\src\lib\analytics\trendModelFixtures.json*
+
+- Showed the angle measures of a history recorded before the correction as measured values only, without the trend model's band or label, with a note on the chart and in the progress report
+- Replaced the trend model's settings with the re-learned ones (trend-model-a318495d08c5)
+
+### *ml\trend\EVALUATION_PROTOCOL.md*, *ml\trend\learn.py*, *ml\trend\evaluate.py*, *ml\trend\extra.py*, and *web\scripts\export-trend-measures.ts*
+
+- Wrote amendment v4 before the run: the corrected unit, sessions measured before the change converted, and neck sessions 225 and 227 to 229 in and 226 out
+- The model passed again with the same settings and threshold, confirmed on the held-back seeds
+
+### *web\scripts\replay-coaching.ts* and *web\scripts\lib\cameraReplayHarness.ts*
+
+- Recomputed each recording's baseline in the current measurement from its samples, including the neck's ear line
+- Set a new replay baseline, with a manifest that expects the 9 raises and 9 presses the labels record
+
+### *web\package.json* and *web\package-lock.json*
+
+- Upgraded next and eslint-config-next from 16.4.0 to 16.4.2
+
+### *Changes to Enah's Update-10-19-26*
+
+- Built this update on her commit (508b684); her camera page change, the folding Form check card, and ours touch different parts of the file
+- Gave the new note on the My Progress trend card her larger text size
+
+### *Validation*
+
+- 81 framework-free TypeScript suites pass, including new ones for the corrected measurement, the neck's ear line, the camera stall, and the version check, and Enah's notification suites
+- Type check, lint, and a production build pass on Next.js 16.4.2
+- The database check passes against actual PostgreSQL using connection-private temporary tables
+- Replaying the saved pilot recordings counts the same repetitions as before the correction in every recording; with the stall fix, the arm-raise and press recordings that each lost one repetition to a camera stall now count 9 of 9, as their labels do
+- Against motion capture (REHAB24-6: 8 people, 71 raises), the lateral raise's peak reads +5.6 ± 6.7 degrees, from +18.5 ± 9.5 before the correction
+- The re-learned trend model's TypeScript and Python versions agree on all 26 fixtures
+- Live checks on the laptop: a neck session counted from the ear line (session 230), and two lateral raise sessions (233 and 234) counted raises to about 60 degrees as partial and raises to shoulder height as complete
+
+### *Remaining boundaries*
+
+- Sessions recorded before this update keep their old measurement and their own trend history; their angle charts show measured values without the trend model
+- Deploy while no one is in a session; a page left open from before the update asks for a reload
+- The database owner runs Enah's scripts\notification_email_digests_pg.sql on the server, so the new reminder emails can be recorded
+- The neck exercise's description waits for the counting test on other people's recordings
+- The thesis manuscript's measurement text and threshold table still describe the old unit
+- The 3D builder's files (assets\blender and tools\blender) and the 10-21 email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
+
+---
+
 ## 📌 Update-10-19-26 | *Enah*
 
 - Named every exercise in the patient's assigned, edited, and removed exercise notifications, one notification for each change, and showed each edited field's old and new value

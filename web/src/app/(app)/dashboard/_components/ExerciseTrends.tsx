@@ -515,7 +515,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
       </div>
 
       {primarySeries.some((s) => s.beforeCorrection) && (
-        <p className="text-xs text-gray-500 mb-3">
+        <p className="text-sm text-gray-500 mb-3">
           Angles here were measured before the measurement correction of 21 October 2026, so they are
           shown as measured, without the trend model. Sessions since then start a new history.
         </p>

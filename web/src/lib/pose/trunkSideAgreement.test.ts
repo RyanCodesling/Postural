@@ -28,6 +28,7 @@ import {
   computeTrunkLateralFlexionUncorrectedSigned,
   computeShoulderSymmetry,
   computeTiltReference,
+  NO_ASPECT_CORRECTION,
 } from "./poseMetrics";
 
 let testsPassed = 0;
@@ -94,10 +95,10 @@ test("bend (head image-right + shoulders tilted) → rep tag is opposite the ele
     rightShoulder: { x: 0.42, y: 0.30 },
     ...LEVEL_HIPS,
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left");
-  const sym = computeShoulderSymmetry(lms, tiltRef);
+  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
+  const sym = computeShoulderSymmetry(lms, tiltRef, NO_ASPECT_CORRECTION);
   if (signed === null || sym === null) throw new Error("metric returned null on a valid pose");
   if (Math.abs(signed) < 5) throw new Error(`pose too subtle (signed=${signed.toFixed(2)}°)`);
   if (sym.elevatedSide === "level") throw new Error("shoulder symmetry reports 'level' — pose too subtle");
@@ -122,10 +123,10 @@ test("bend (head image-left + shoulders tilted) → rep tag is opposite the elev
     rightShoulder: { x: 0.36, y: 0.40 }, // image-left shoulder dropped
     ...LEVEL_HIPS,
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left");
-  const sym = computeShoulderSymmetry(lms, tiltRef);
+  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
+  const sym = computeShoulderSymmetry(lms, tiltRef, NO_ASPECT_CORRECTION);
   if (signed === null || sym === null) throw new Error("metric returned null on a valid pose");
   if (Math.abs(signed) < 5) throw new Error(`pose too subtle (signed=${signed.toFixed(2)}°)`);
   if (sym.elevatedSide === "level") throw new Error("shoulder symmetry reports 'level' — pose too subtle");
@@ -152,9 +153,9 @@ test("shoulder tilt with the head centered reads ~0° (rejects the shoulder-tilt
     rightShoulder: { x: 0.42, y: 0.30 },
     ...LEVEL_HIPS,
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left");
+  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
   if (signed === null) throw new Error("metric returned null on a valid pose");
   console.log(`      signed=${signed.toFixed(2)}° (expected ~0)`);
 
@@ -174,9 +175,9 @@ test("off-frame ear with good visibility returns null, not an extrapolated head 
     rightShoulder: { x: 0.42, y: 0.30 },
     ...LEVEL_HIPS,
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left");
+  const signed = computeTrunkLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
   console.log(`      signed=${signed === null ? "null" : signed.toFixed(2) + "°"} (expected null)`);
 
   if (signed !== null) {
@@ -193,7 +194,7 @@ test("neutral baseline preserves head lean when per-frame hip tilt would cancel 
     rightEar: { x: 0.46, y: 0.20 },
     ...LEVEL_HIPS,
   });
-  const neutralUncorrected = computeTrunkLateralFlexionUncorrectedSigned(neutral);
+  const neutralUncorrected = computeTrunkLateralFlexionUncorrectedSigned(neutral, NO_ASPECT_CORRECTION);
   if (neutralUncorrected === null) throw new Error("neutral baseline returned null");
 
   const deg = Math.PI / 180;
@@ -222,12 +223,14 @@ test("neutral baseline preserves head lean when per-frame hip tilt would cancel 
 
   const perFrame = computeTrunkLateralFlexionSigned(
     bend,
-    computeTiltReference(bend),
+    computeTiltReference(bend, NO_ASPECT_CORRECTION),
     "left",
+    NO_ASPECT_CORRECTION,
   );
   const fixedNeutral = computeTrunkLateralFlexionFromNeutralSigned(
     bend,
     neutralUncorrected,
+    NO_ASPECT_CORRECTION,
   );
   if (perFrame === null || fixedNeutral === null) {
     throw new Error("valid bend returned null");

@@ -21,8 +21,15 @@ const INACTIVE_WARNING: CompensationWarningLatch = {
 };
 
 /**
- * Display-only warning hysteresis. Degree-scale metrics get a few degrees of
- * deadband, while normalized trunk-length metrics get a small unit-scaled band.
+ * Display-only warning hysteresis. Degree-scale metrics get a deadband of half
+ * their line, or 2.5 for the large interior-angle lines (the elbow checks), while
+ * normalized trunk-length metrics get a small unit-scaled band.
+ *
+ * Until 2026-10-21 degree metrics got min(2.5, half the line). The lines were
+ * then re-derived for the aspect-corrected readings (D-48), and half of each
+ * re-derived small line keeps its switch-off level where it was: trunk lean's
+ * 5 (off at 2.5) became 8.8 (off at 4.4, the corrected 2.5). A 2.5 cap would
+ * have moved it. The elbow lines (130-150) keep the fixed 2.5.
  */
 export function compensationWarningMargin(
   metricName: MetricName,
@@ -31,7 +38,7 @@ export function compensationWarningMargin(
   if (threshold < 1 || metricName === "scapularElevation" || metricName === "shoulderElbowDistance") {
     return Math.max(0.005, Math.min(0.03, threshold * 0.2));
   }
-  return Math.min(2.5, threshold * 0.5);
+  return threshold >= 45 ? 2.5 : threshold * 0.5;
 }
 
 /**

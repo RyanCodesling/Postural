@@ -30,7 +30,9 @@
  *                                the classification comments in repCounter.ts and the
  *                                ex_001 inline comment for the authoritative
  *                                semantics.)
- *   - `targetROM`              — clinically prescribed full ROM. THIS is the
+ *   - `targetROM`              — the exercise's full-range target, an
+ *                                engineering setting in the reading's own
+ *                                units (not a clinical norm). THIS is the
  *                                "complete" vs "partial" classification boundary:
  *                                peak ≥ targetROM             → "complete";
  *                                minimumPeakThreshold ≤ peak < targetROM → "partial";
@@ -55,11 +57,13 @@
  * (per project memory) and must not be averaged away.
  *
  * ── THRESHOLD CALIBRATION STATUS ─────────────────────────────────────────────
- * All thresholds in this file are defensible starting values grounded in
- * clinical ROM literature for healthy adults. They are NOT pilot-calibrated.
- * Pilot recordings during the testing phase (per the proposal calendar,
- * Aug–Nov 2026) should be used to refine these values. Each threshold is
- * marked with a citation or rationale comment.
+ * The thresholds in this file are engineering settings, established through
+ * pilot calibration on recorded sessions (single-subject tuning data, D-08)
+ * and later engineering revisions. None is derived from clinical
+ * range-of-motion norms, and none is a clinically validated cutoff (CST1
+ * check, 2026-10-23). Since 2026-10-21 their numbers are in the
+ * aspect-corrected unit (D-48; see the UNITS note above the registry). Each
+ * threshold's comment records its provenance.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +189,14 @@ export type PrimaryMetricSpec = {
     beta: number;
     dCutoff?: number;
   };
+  /**
+   * What the primary metric is measured from when it is not the camera tilt
+   * frozen in the neutral calibration. "calibration-ear-line": the ear line
+   * frozen over the same baseline, so the still head reads 0 and each side's
+   * counter starts from the patient's own resting head (`neckLateralFlexion`
+   * only; see neckCalibrationReference.ts). Part of the measurement version.
+   */
+  reference?: "calibration-ear-line";
 };
 
 /**
@@ -490,7 +502,8 @@ export type Band = { max: number; deductionMin: number; deductionMax: number };
  * lack its bands.
  *
  * Units match the metric:
- *   - angle metrics (neck, shoulder symmetry, trunk lean):    degrees
+ *   - angle metrics (neck, shoulder symmetry, trunk lean):    aspect-corrected
+ *     image-plane degrees (camera estimate; D-48, 2026-10-21)
  *   - displacement metrics (scapular elevation):              torso-length fraction
  *
  * Each metric's first band is its measurement noise floor (no deduction).
@@ -506,26 +519,29 @@ export type Band = { max: number; deductionMin: number; deductionMax: number };
  * N is the number of scored compensation metrics available in the frame.
  */
 export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
-  // Neck tilt: 5° normal floor (matches the severity classifier)
+  // The three angle band sets below were re-derived on 2026-10-21 (D-48) from
+  // their pipeline-unit edges on 16:9 frames, so each band covers the same
+  // movement as before (Review_Artifacts/2026-10-21_aspect_lift/).
+  // Neck tilt: normal floor matching the severity classifier (was 5/10/20/30).
   neckTilt: [
-    { max: 5,  deductionMin: 0,   deductionMax: 0   },
-    { max: 10, deductionMin: 0,   deductionMax: 35  },
-    { max: 20, deductionMin: 35,  deductionMax: 75  },
-    { max: 30, deductionMin: 75,  deductionMax: 100 },
+    { max: 2.8,  deductionMin: 0,   deductionMax: 0   },
+    { max: 5.7,  deductionMin: 0,   deductionMax: 35  },
+    { max: 11.6, deductionMin: 35,  deductionMax: 75  },
+    { max: 18,   deductionMin: 75,  deductionMax: 100 },
   ],
-  // Shoulder symmetry: 3° landmark noise floor
+  // Shoulder symmetry: landmark noise floor (was 3/7/12/20).
   shoulderSymmetry: [
-    { max: 3,  deductionMin: 0,   deductionMax: 0   },
-    { max: 7,  deductionMin: 0,   deductionMax: 35  },
-    { max: 12, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
+    { max: 1.7,  deductionMin: 0,   deductionMax: 0   },
+    { max: 4,    deductionMin: 0,   deductionMax: 35  },
+    { max: 6.8,  deductionMin: 35,  deductionMax: 75  },
+    { max: 11.6, deductionMin: 75,  deductionMax: 100 },
   ],
-  // Trunk lean: 2° standing-sway floor
+  // Trunk lean: standing-sway floor (was 2/5/10/20).
   trunkLean: [
-    { max: 2,  deductionMin: 0,   deductionMax: 0   },
-    { max: 5,  deductionMin: 0,   deductionMax: 35  },
-    { max: 10, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
+    { max: 3.6,  deductionMin: 0,   deductionMax: 0   },
+    { max: 8.8,  deductionMin: 0,   deductionMax: 35  },
+    { max: 17.4, deductionMin: 35,  deductionMax: 75  },
+    { max: 32.9, deductionMin: 75,  deductionMax: 100 },
   ],
   // Scapular elevation as compensation: thresholds in normalized torso-length
   // CHANGE from baseline. Below 0.02 = within noise floor.
@@ -553,11 +569,13 @@ export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
 // clean frames (mean deduction ~21). Raising the floor to 6° puts honest sway
 // in the no-deduction band while still flagging a real torso shift. The braced
 // overhead exercises (ex_007/ex_008, clean trunk <2°) keep the global floor.
+// The figures in this note are pipeline units; the edges were re-derived on
+// 2026-10-21 (D-48) from 6/10/15/25.
 const TRUNK_LEAN_UNBRACED_BANDS: Band[] = [
-  { max: 6,  deductionMin: 0,   deductionMax: 0   },
-  { max: 10, deductionMin: 0,   deductionMax: 35  },
-  { max: 15, deductionMin: 35,  deductionMax: 75  },
-  { max: 25, deductionMin: 75,  deductionMax: 100 },
+  { max: 10.6, deductionMin: 0,   deductionMax: 0   },
+  { max: 17.4, deductionMin: 0,   deductionMax: 35  },
+  { max: 25.5, deductionMin: 35,  deductionMax: 75  },
+  { max: 39.7, deductionMin: 75,  deductionMax: 100 },
 ];
 
 // shoulderSymmetry, exercises where the subject's resting shoulder-line
@@ -566,12 +584,13 @@ const TRUNK_LEAN_UNBRACED_BANDS: Band[] = [
 // resting asymmetry out of the deduction while still flagging a genuine uneven
 // shoulder line. (Future: a per-side, baseline-relative shoulder check would
 // replace this with a true zero-baseline; that needs per-exercise baseline
-// capture — out of scope here.)
+// capture — out of scope here.) Figures in this note are pipeline units; the
+// edges were re-derived on 2026-10-21 (D-48) from 7/12/17/25.
 const SHOULDER_SYMMETRY_ASYMMETRIC_BANDS: Band[] = [
-  { max: 7,  deductionMin: 0,   deductionMax: 0   },
-  { max: 12, deductionMin: 0,   deductionMax: 35  },
-  { max: 17, deductionMin: 35,  deductionMax: 75  },
-  { max: 25, deductionMin: 75,  deductionMax: 100 },
+  { max: 4,    deductionMin: 0,   deductionMax: 0   },
+  { max: 6.8,  deductionMin: 0,   deductionMax: 35  },
+  { max: 9.8,  deductionMin: 35,  deductionMax: 75  },
+  { max: 14.7, deductionMin: 75,  deductionMax: 100 },
 ];
 
 /**
@@ -663,6 +682,14 @@ export type ExerciseDefinition =
 // REGISTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
+// UNITS, 2026-10-21 (D-48): every angle in this registry is the aspect-corrected
+// image-plane angle the camera loop now measures (camera estimate, not
+// anatomical degrees). Each value was re-derived from its earlier pipeline-unit
+// value, measured on 16:9 frames with x and y normalised separately, so that
+// counting and cues behave as before; the one deliberate change is ex_001's
+// minimum peak. The notes beside each value give the old number ("was"). Prose
+// written before 2026-10-21 quotes pipeline units throughout. Table and method:
+// Review_Artifacts/2026-10-21_aspect_lift/threshold_conversion.md.
 export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // ────────────────────────────────────────────────────────────────────────
   // ex_001 — Lateral Arm Raises (Shoulder Abduction)
@@ -681,7 +708,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Resting arm-at-side gives ~5–10° apparent abduction from landmark
         // noise and slight standing posture variance. 20° is well above that
         // floor and below the angle of any deliberate movement.
-        startThreshold: 20,
+        startThreshold: 32.9, // was 20 (pipeline units); D-48
         // A repetition ends only when the reading falls back to this line
         // (`repCounter.ts`); until then the side waits and counts nothing.
         // Raised from 10 to 15 on 2026-10-14 by user decision. At 10, a
@@ -696,7 +723,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // 5-point hysteresis band. Camera-estimate units, not anatomical
         // degrees: on 16:9 frames 15 is about 25 degrees from the trunk in
         // the picture.
-        repCompleteThreshold: 15,
+        repCompleteThreshold: 25.5, // was 15 (pipeline units); D-48
         // Minimum peak to count as a rep at all. Peaks below this are
         // silently discarded as false starts (NOT classified "partial" — that
         // boundary is `targetROM`; see `RepCounter` semantics in repCounter.ts).
@@ -708,6 +735,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // weakness/asymmetry signal is preserved, the rep is no longer
         // silently dropped. Patients in early rehab often plateau around
         // 45–60° before regaining full ROM.
+        // A REAL 45 since 2026-10-21 (user decision, D-48): the old 45 was in
+        // pipeline units and sat at a corrected 60.6, about 65 degrees on a
+        // body against motion capture (REHAB24-6), so raises peaking 45-60
+        // were dropped against the intent above. Not converted, unlike every
+        // other line here.
         minimumPeakThreshold: 45,
         // Clinical full ROM for shoulder abduction in the frontal plane is
         // ~180° anatomically, but home-exercise prescription typically targets
@@ -723,7 +755,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // and a raise clearly short of horizontal stays partial. A
         // single-subject engineering value in camera-estimate units, not a
         // clinical target; the groupmates' recordings test it.
-        targetROM: 85,
+        targetROM: 87.2, // was 85 (pipeline units); D-48
       },
     },
     compensationMetrics: [
@@ -747,7 +779,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           message: "Keep your torso upright.",
           priority: 10,
         },
-        warningThreshold: 5, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+        warningThreshold: 8.8, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS }, // was 5; D-48
       // Shoulder shrug (scapular elevation) is the second-most-common
       // compensation — patients hike the trapezius to substitute for
       // weak deltoid. Surfaced as a warning when shrug exceeds the
@@ -787,10 +819,14 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           priority: 20,
           minActiveMs: 0,
           cooldownMs: 0,
-          evaluation: { mode: "rep-ascent", upTo: 60, persistMs: 0 },
+          evaluation: { mode: "rep-ascent", upTo: 72, persistMs: 0 }, // upTo was 60; D-48
         },
         warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" } },
+        // Refitted 2026-10-21 for the corrected abduction (D-48): the same
+        // estimator in the corrected plane, n=1836, R2=0.79, on sessions
+        // 200-205 (Review_Artifacts/2026-09-10_coupled_refits/, mode
+        // "corrected"). Was -0.0077 + 0.00124 per pipeline unit.
+        scoring: { mode: "primary-coupled", intercept: -0.0435, slopePerPrimaryUnit: 0.00162, source: "pilot-fit" } },
       // Uneven shoulder line during the raise — one whole shoulder rides
       // higher than the other (distinct from a symmetric shrug). Drives the
       // per-shoulder overlay boxes + "LOWER" arrow. Starting threshold 5°
@@ -813,13 +849,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           id: "ex_001.shoulder-symmetry",
           message: "Level your shoulders.",
           priority: 30,
-          trigger: { on: 7, off: 5 },
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
           hidden: {
             reason: "Cue review: in a two-arm raise the higher arm's shoulder rises with it, so the shoulder line cannot tell a hitch from an uneven raise; the per-arm shrug check covers one-sided shrugging.",
             since: "2026-10-03",
           },
         },
-        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
     ],
     // Display-only coaching check, added 2026-10-04 by user decision. A
     // clinical exercise library raises the arm to the side "with your elbow
@@ -842,12 +878,16 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     // flag is held until the arm is back at rest. No wait and no cooldown, so
     // each repetition can show its own cue. Last in priority, after the
     // compensation cues above.
+    // Re-derived 2026-10-21 (D-48): 130 and 75 above are pipeline units. The
+    // line is converted at a horizontal upper arm with the forearm bending in
+    // the image plane (146.2); no pilot frame reaches it, so it could not be
+    // re-derived from recorded decisions. `from` is the converted 75.
     coachingChecks: [
       {
         name: "elbowBend",
-        warningThreshold: 130,
+        warningThreshold: 146.2,
         compareDirection: "below",
-        check: { mode: "elbow-bend", from: 75, persistMs: 100, hold: "repetition" },
+        check: { mode: "elbow-bend", from: 81.4, persistMs: 100, hold: "repetition" },
         cue: {
           id: "ex_001.elbow-bend",
           message: "Keep your elbows straight as you raise your arms.",
@@ -873,6 +913,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
    * filtered out of the staff DEBUG_IDS list in `CameraClient.tsx`, not
    * assigned to patients. `computeShoulderFlexion` stays live (delegates to
    * `computeShoulderAbduction`; no harm in keeping the path).
+   * Its angle values stay in the pipeline units used before 2026-10-21 (D-48)
+   * as a historical record; re-derive them before any revival.
    */
   ex_002: {
     id: "ex_002",
@@ -952,7 +994,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
    * structurally (assertions on `EXERCISE_REGISTRY.ex_003.kind === "dynamic"`
    * and `primaryMetric.requiresBaselineCapture`). The entry MUST stay
    * unchanged in shape and field values — only this deprecation JSDoc was
-   * added. Do not "tidy up" the entry below.
+   * added. Do not "tidy up" the entry below. Its shoulderSymmetry line (5)
+   * therefore stays in the pipeline units used before 2026-10-21 (D-48).
    */
   ex_003: {
     id: "ex_003",
@@ -1050,27 +1093,39 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     bilateralMode: "per-limb",
     primaryMetric: {
       name: "neckLateralFlexion",
+      // Counted from the ear line frozen in the neutral calibration (D-49),
+      // not from the camera tilt frozen there. That tilt comes from the hip
+      // and ear lines, so whenever the resting ear line is not parallel to the
+      // hip line in the picture (uneven hips, standing at an angle to the
+      // camera) a still head read off zero all session, and one side reached
+      // every line that much early and the other late. From the calibration's
+      // own ear line the still head reads 0. The lines below are therefore
+      // degrees from the calibration posture; the trends still measure each
+      // peak from the rests between sets (trend data rule 4).
+      reference: "calibration-ear-line",
       thresholds: {
-        // Pipeline units: the ear line is near-horizontal, so on a 16:9 frame
-        // a reading is larger than the true tilt. Engineering starting points,
-        // to be checked against multi-person recordings; not clinician-approved.
+        // Engineering starting points, to be checked against multi-person
+        // recordings; not clinician-approved. The degree figures in these
+        // notes are pipeline units, where the near-horizontal ear line read
+        // larger than its tilt on a 16:9 frame; each line was re-derived on
+        // 2026-10-21 (D-48) to the corrected tilt it stood for.
         // At rest the unsmoothed ear-line angle measured ~2.3° SD and ~11°
         // peak-to-peak, the noisiest metric in the registry, and the June 2026
         // thresholds (5° start, 12° minimum peak) sat inside that noise. 12° is
         // the floor already validated for the former hold band's lower edge.
-        startThreshold: 12,
+        startThreshold: 6.8, // was 12 (pipeline units); D-48
         // Half of start: a repetition completes once the head is back near
         // centre, and always when it crosses into the other side (this side's
         // magnitude then reads 0).
-        repCompleteThreshold: 6,
+        repCompleteThreshold: 3.4, // was 6; D-48
         // Peaks below this are discarded as false starts, so a passive
         // overshoot past neutral or a posture adjustment that briefly crosses
         // the start threshold does not count. 18° ≈ 10° of true tilt on 16:9.
-        minimumPeakThreshold: 18,
+        minimumPeakThreshold: 10.4, // was 18; D-48
         // "complete" vs "partial" boundary. 30° (the June 2026 starting value)
         // ≈ 18° of true tilt on 16:9: a modest active range, so reduced
         // mobility records partial repetitions instead of losing them.
-        targetROM: 30,
+        targetROM: 18, // was 30; D-48
       },
     },
     compensationMetrics: [
@@ -1101,10 +1156,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           priority: 10,
           minActiveMs: 0,
           cooldownMs: 0,
-          trigger: { on: 6, off: 5 },
+          trigger: { on: 10.6, off: 8.8 }, // was 6/5; D-48
           evaluation: { mode: "rep-ascent", upTo: 90, persistMs: 0 },
         },
-        warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+        warningThreshold: 5.3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS }, // was 3; D-48
       // Uneven shoulder line = hiking a shoulder toward the ear instead of
       // tilting the head. Valid again for the active exercise, where both
       // shoulders stay level (the assisted stretch depressed the opposite
@@ -1134,10 +1189,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           priority: 20,
           minActiveMs: 0,
           cooldownMs: 0,
-          trigger: { on: 7, off: 5 },
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
           evaluation: { mode: "rep-ascent", upTo: 90, persistMs: 0 },
         },
-        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
     ],
   },
 
@@ -1177,12 +1232,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       thresholds: {
         // Small neutral band: the head sits ~above the hips at rest, so a few
         // degrees of lean is noise.
-        startThreshold: 5,
-        repCompleteThreshold: 2,
+        startThreshold: 8.8, // was 5 (pipeline units); D-48
+        repCompleteThreshold: 3.6, // was 2; D-48
         // 15 of head lean is a meaningful side bend; a bend peaking below it is
         // not counted at all. Kept on 2026-10-02 by user decision: 12 would have
         // counted only 2 more of the pilot subject's traced bends.
-        minimumPeakThreshold: 15,
+        minimumPeakThreshold: 25.5, // was 15; D-48
         // Set to 17 on 2026-10-02 by user decision, down from 25. The reading
         // is a head-lean angle in pipeline units with no aspect correction, and
         // on a 16:9 frame that squeezes this near-vertical line. The pilot
@@ -1191,8 +1246,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // degrees in the image. 25 had been set as if the reading were degrees
         // and was reached by 3 of 126; at 17, 111 of 126 count as complete. A
         // single-subject engineering value from pilot tuning data, not a
-        // clinical target; the groupmates' recordings test it.
-        targetROM: 17,
+        // clinical target; the groupmates' recordings test it. Since
+        // 2026-10-21 the reading is aspect-corrected (D-48) and this line is
+        // the converted 17; the image-lean figures above still hold.
+        targetROM: 28.5, // was 17; D-48
       },
     },
     compensationMetrics: [
@@ -1219,8 +1276,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
             since: "2026-10-01",
           },
         },
-        warningThreshold: 5,
-        scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" },
+        warningThreshold: 2.8, // was 5; D-48
+        // Refitted 2026-10-21 for the corrected readings (D-48): the same
+        // estimator in the corrected plane with the frozen tilt the live loop
+        // uses, n=1715, R2=0.93, on sessions 200-205
+        // (Review_Artifacts/2026-09-10_coupled_refits/, mode "corrected").
+        // Was 11.7093 + 1.50466 per pipeline unit, fitted with a per-frame tilt.
+        scoring: { mode: "primary-coupled", intercept: 1.5574, slopePerPrimaryUnit: 1.38065, source: "pilot-fit" },
         // Out of the form score since 2026-10-14 by user decision: hidden as a
         // cue because it cannot separate a head tilt from a correct bend, it
         // was over its threshold for nearly the whole of every ordinary pilot
@@ -1251,7 +1313,11 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" },
+        // Refitted 2026-10-21 (D-48) with the same estimator in the corrected
+        // plane: n=1715, R2=0.06 (2026-09-10 review, mode "corrected"). The
+        // line describes this channel poorly once corrected, which is in line
+        // with its exclusion from the form score below. Was -0.0230 + 0.01306.
+        scoring: { mode: "primary-coupled", intercept: -0.0199, slopePerPrimaryUnit: 0.00204, source: "pilot-fit" },
         // Out of the form score since 2026-10-14 by user decision, for the
         // reason it is hidden as a cue (see neckTilt above).
         excludedFromFormScore: {
@@ -1277,7 +1343,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       {
         name: "hipShift",
         warningThreshold: 0.45,
-        check: { mode: "hip-shift-from-stance", stanceMs: 1500, from: 10, persistMs: 100 },
+        check: { mode: "hip-shift-from-stance", stanceMs: 1500, from: 17.4, persistMs: 100 }, // from was 10; D-48
         cue: {
           id: "ex_005.hip-shift",
           message: "Keep your hips over your feet as you bend.",
@@ -1311,7 +1377,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // ±10° is the standard clinical hold tolerance — tight enough to
         // require active engagement, loose enough to accommodate fatigue
         // tremor and landmark noise without fragmenting the hold.
-        tolerance: 10,
+        // The 10 was pipeline units: on 16:9 the band 80-100 covered a
+        // corrected 84.3-95.7. Since 2026-10-21 the tolerance is that
+        // converted 5.7, keeping the band's behaviour (user decision, D-48).
+        tolerance: 5.7,
       },
     },
     compensationMetrics: [
@@ -1342,7 +1411,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           },
         },
         warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" },
+        // Refitted 2026-10-21 (D-48) with the same estimator in the corrected
+        // plane: n=4110, R2=0.46 (2026-09-10 review, mode "corrected"). Was
+        // -0.0142 + 0.00093 per pipeline unit.
+        scoring: { mode: "primary-coupled", intercept: 0.0028, slopePerPrimaryUnit: 0.00089, source: "pilot-fit" },
         // Out of the form score since 2026-10-14 by user decision, for the
         // reason it is hidden as a cue: in a replay of the pilot subject's
         // correct holds it pulled the sets' lowest form scores to 56-79,
@@ -1362,7 +1434,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           message: "Keep your torso upright.",
           priority: 20,
         },
-        warningThreshold: 5 },
+        warningThreshold: 8.8 }, // was 5; D-48
       // Uneven shoulder line during the hold — one shoulder rides higher than
       // the other. Drives the per-shoulder overlay boxes + "LOWER" arrow.
       // Starting threshold 5° (above the 3° landmark noise floor); tune live.
@@ -1381,9 +1453,9 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           id: "ex_006.shoulder-symmetry",
           message: "Level your shoulders.",
           priority: 30,
-          trigger: { on: 7, off: 5 },
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
         },
-        warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
     ],
     // Display-only coaching check, added 2026-10-04 by user decision: the same
     // elbow reading, source and 130 line as on ex_001 (see the comment there).
@@ -1393,13 +1465,15 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     // hold has no repetitions, so `hold: "live"` passes the live angle and the
     // cue clears once the arms are straightened; the warning latch's debounce
     // and the default cue wait give the persistence (`persistMs` 0). Last in
-    // priority, after the compensation cues above.
+    // priority, after the compensation cues above. Re-derived 2026-10-21
+    // (D-48) as on ex_001: 146.2 is the converted 130, and `from` the
+    // converted 80 (the band's corrected lower edge, 84.3).
     coachingChecks: [
       {
         name: "elbowBend",
-        warningThreshold: 130,
+        warningThreshold: 146.2,
         compareDirection: "below",
-        check: { mode: "elbow-bend", from: 80, persistMs: 0, hold: "live" },
+        check: { mode: "elbow-bend", from: 84.3, persistMs: 0, hold: "live" },
         cue: {
           id: "ex_006.elbow-bend",
           message: "Keep your elbows straight.",
@@ -1503,7 +1577,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Cue review (2026-10-03): kept, on the general support for trunk lean
         // in arm raising recorded on ex_001's trunk lean. Leaning back, the
         // press's usual fault, is out of the image plane and is not measured.
-        warningThreshold: 5 },
+        // Re-derived 2026-10-21 (D-48) from 5 in pipeline units.
+        warningThreshold: 8.8 },
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list. The metric returns a raw signed projection that
       // is ~0.30 positive at rest (ear naturally sits above shoulder along
@@ -1551,7 +1626,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
             since: "2026-10-01",
           },
         },
-        warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+        // 134.3 is the 150 above converted at a vertical upper arm (D-48).
+        warningThreshold: 134.3, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
     ],
   },
 
@@ -1600,21 +1676,22 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // the W p75 of 50°). With these values every one of the recorded
         // session's 15 clean cycles per side counts. Single-subject pilot
         // values.
-        startThreshold: 85,
-        repCompleteThreshold: 70,
+        startThreshold: 87.2, // was 85 (pipeline units); D-48
+        repCompleteThreshold: 78.4, // was 70; D-48
         // 110° = clearly past horizontal into the W→Y slide. The recorded
         // clean Y-peaks ran 146–167°, so 110 keeps deliberate partial
         // slides countable while arm settles near the W (≤ ~50°) stay
         // discarded.
-        minimumPeakThreshold: 110,
+        minimumPeakThreshold: 101.6, // was 110; D-48
         // 150° ≈ arms-overhead position at full extension along the wall.
         // Foreshortening at full overhead is an accepted thesis limitation
         // (known foreshortening limitation in computeShoulderAbduction).
         // Confirmed plausible by the 2026-06-11 recorded clean session:
         // Y-peaks ran 146–167° (p50 ≈ 147), so clean full extension
         // straddles 150 the same way ex_001's clean peaks straddle its 90°
-        // target.
-        targetROM: 150,
+        // target. All degree figures here are pipeline units; on 16:9 the
+        // aspect-corrected reading compresses this overhead range.
+        targetROM: 134.3, // was 150; D-48
       },
       // No descentEpsilon override (degree-scale, global 0.5 is fine).
       // No smoothing override (global degree-scale default fine).
@@ -1634,7 +1711,7 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           message: "Keep your torso upright.",
           priority: 10,
         },
-        warningThreshold: 5 },
+        warningThreshold: 8.8 }, // was 5; D-48
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list for the same reason as ex_007 — see that comment
       // for full rationale. Trapezius-hiking is partially caught by
@@ -1673,7 +1750,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
             since: "2026-10-03",
           },
         },
-        warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+        // 134.3 is the 150 above converted along the new target line (D-48).
+        warningThreshold: 134.3, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
       // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
       // elbow-off-wall detection) was REMOVED from this compensation list
       // after live-tuning iter #4. The metric was designed to flag an elbow
@@ -2028,6 +2106,17 @@ function validateRegistry(): void {
             `OneEuroFilter uses it to smooth derivative estimates.`
           );
         }
+      }
+      if (
+        def.primaryMetric.reference === "calibration-ear-line" &&
+        def.primaryMetric.name !== "neckLateralFlexion"
+      ) {
+        throw new Error(
+          `Registry invariant violated for ${def.id}: ` +
+          `reference "calibration-ear-line" applies only to neckLateralFlexion, ` +
+          `whose reading is the ear line itself. Any other metric would be ` +
+          `measured against an unrelated line.`
+        );
       }
     }
     if (def.kind === "isometric") {

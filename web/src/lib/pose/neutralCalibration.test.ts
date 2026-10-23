@@ -14,7 +14,7 @@ import {
   newNeutralCalibrationClock,
   pauseNeutralCalibrationClock,
 } from "./neutralCalibration";
-import { computeShoulderSymmetry, type TiltReference } from "./poseMetrics";
+import { computeShoulderSymmetry, type TiltReference, NO_ASPECT_CORRECTION } from "./poseMetrics";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -102,10 +102,12 @@ assert(medianFinite([]) === null, "empty median must be null");
   const first = computeShoulderSymmetry(
     landmarks,
     frozenNeutralTiltReference(observedA, 4.5),
+    NO_ASPECT_CORRECTION,
   );
   const second = computeShoulderSymmetry(
     landmarks,
     frozenNeutralTiltReference(observedB, 4.5),
+    NO_ASPECT_CORRECTION,
   );
   assert(first?.angleDeg === 4.5, "frozen correction was not applied");
   assert(

@@ -13,6 +13,7 @@ import { getExerciseDefinition } from "@/lib/exercises/registry";
 import { TREND_MODEL } from "@/lib/analytics/trendModel";
 import {
   BAND_WITHHELD,
+  BEFORE_CORRECTION_NOTE,
   changeText,
   extraTrendMeasures,
   hasChartPoints,
@@ -350,6 +351,7 @@ export function extraMeasureSummary(series: ModelSeries[], def: ExtraMeasureDefi
     .filter(hasChartPoints)
     .map((s) => {
       const side = s.side === "card" ? "" : `${sideLabel(s.side)}: `;
+      if (s.beforeCorrection) return `${side}measured values only (${BEFORE_CORRECTION_NOTE})`;
       if (s.spec && BAND_WITHHELD.has(`${s.spec.exercise}:${s.spec.measure}`)) {
         return `${side}measured values only (band withheld: the target changed after the model learned this measure)`;
       }
@@ -511,6 +513,13 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
           </span>
         ) : <TrendBadges series={primarySeries} format={meta.format} unit={meta.changeUnit} />}
       </div>
+
+      {primarySeries.some((s) => s.beforeCorrection) && (
+        <p className="text-xs text-gray-500 mb-3">
+          Angles here were measured before the measurement correction of 21 October 2026, so they are
+          shown as measured, without the trend model. Sessions since then start a new history.
+        </p>
+      )}
 
       {(pending || failed) && (
         <p role="status" className="text-sm text-gray-500 mb-3">

@@ -69,16 +69,20 @@ type LM = { x: number; y: number; visibility?: number };
  * `lineAngleDeg` and in the four trunk-projection metrics rather than in a
  * landmark transform.
  *
- * ── DEFAULT ──────────────────────────────────────────────────────────────────
+ * ── NO DEFAULT ───────────────────────────────────────────────────────────────
  *
- * The default is 1, i.e. NO correction, which reproduces the historical
- * behaviour exactly. Every threshold in the registry was fitted or chosen
- * against readings in the uncorrected space, so switching the live path over is
- * a separate, deliberate step that belongs with the threshold re-derivation.
- * Callers opt in by passing the real aspect. `poseNormalization.test.ts` pins
- * both regimes.
+ * Every metric function REQUIRES the aspect (since 2026-10-21, D-48), so the
+ * type checker lists any caller that forgets it. Until then the default was 1,
+ * the uncorrected space every registry threshold had been tuned in, and the
+ * live path never passed a real aspect. On 16:9 that read a shoulder angle
+ * 10-20 degrees low below horizontal and up to 22 high above it against
+ * motion capture (REHAB24-6, `Review_Artifacts/2026-10-20_rehab24_benchmark/`).
+ * The thresholds were re-derived for the corrected space at the switch
+ * (`Review_Artifacts/2026-10-21_aspect_lift/`). Pass `NO_ASPECT_CORRECTION`
+ * only to reproduce the historical readings, as `poseNormalization.test.ts`
+ * does to pin the defect.
  */
-const NO_ASPECT_CORRECTION = 1;
+export const NO_ASPECT_CORRECTION = 1;
 
 /** Frame aspect for a video source, as the ratio the correction expects. */
 export function frameAspectOf(width: number, height: number): number {
@@ -106,7 +110,7 @@ export function frameAspectOf(width: number, height: number): number {
  * the RIGHT landmark, dy is positive (right.y > left.y), so the angle
  * is positive. We use this consistently across all landmark pairs.
  */
-function lineAngleDeg(a: LM, b: LM, frameAspect: number = NO_ASPECT_CORRECTION): number {
+function lineAngleDeg(a: LM, b: LM, frameAspect: number): number {
   const dx = (b.x - a.x) * frameAspect;
   const dy = b.y - a.y; // positive = b is LOWER in the frame than a
   return Math.atan2(dy, dx) * (180 / Math.PI);
@@ -190,7 +194,7 @@ function inFrame01(p: LM): boolean {
 function bodyPairAngleDeg(
   subjectLeft: LM,
   subjectRight: LM,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number {
   return lineAngleDeg(subjectRight, subjectLeft, frameAspect);
 }
@@ -240,13 +244,15 @@ export function hasMissingTiltReferenceLine(tiltReference: TiltReference): boole
  * Maximum angular difference between the hip line and ear line for them
  * to be considered "in agreement" about the camera tilt.
  *
- * Why 3°?
+ * Why 3° (in the pipeline units this was set in)?
  * - MediaPipe Full model has a landmark placement noise floor of ~1–2°
  * - A 1° buffer on top brings us to 3°
  * - Any divergence larger than 3° cannot be reliably attributed to
  *   measurement noise alone and is more likely a real body asymmetry
+ * Both lines are near-horizontal, so on the 16:9 frames this was set on the
+ * 3 corresponds to a corrected 1.7 (re-derived 2026-10-21, D-48).
  */
-const AGREEMENT_THRESHOLD_DEG = 3;
+const AGREEMENT_THRESHOLD_DEG = 1.7;
 
 /**
  * computeTiltReference
@@ -290,7 +296,7 @@ const AGREEMENT_THRESHOLD_DEG = 3;
  */
 export function computeTiltReference(
   landmarks: LM[],
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): TiltReference {
   const leftHip  = landmarks[23];
   const rightHip = landmarks[24];
@@ -346,9 +352,10 @@ export type Severity = "normal" | "mild" | "moderate" | "severe";
  * where corrective feedback is not clinically indicated.
  */
 function classifyNeckTilt(absDeg: number): Severity {
-  if (absDeg < 5)  return "normal";
-  if (absDeg < 10) return "mild";
-  if (absDeg < 20) return "moderate";
+  // Edges re-derived 2026-10-21 (D-48) from 5/10/20 in pipeline units.
+  if (absDeg < 2.8)  return "normal";
+  if (absDeg < 5.7)  return "mild";
+  if (absDeg < 11.6) return "moderate";
   return "severe";
 }
 
@@ -365,9 +372,10 @@ function classifyNeckTilt(absDeg: number): Severity {
  *   Severe (>12°):  Strong clinical flag, warrants therapist review
  */
 function classifyShoulderAsymmetry(absDeg: number): Severity {
-  if (absDeg < 3)  return "normal";
-  if (absDeg < 7)  return "mild";
-  if (absDeg < 12) return "moderate";
+  // Edges re-derived 2026-10-21 (D-48) from 3/7/12 in pipeline units.
+  if (absDeg < 1.7) return "normal";
+  if (absDeg < 4)   return "mild";
+  if (absDeg < 6.8) return "moderate";
   return "severe";
 }
 
@@ -405,15 +413,24 @@ export type NeckTiltResult = {
 function signedNeckFlexionAngle(
   landmarks: LM[],
   tiltRef: TiltReference,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
+  const rawEarAngle = earLineAngleDeg(landmarks, frameAspect);
+  if (rawEarAngle === null) return null;
+  return angleDiffDeg(rawEarAngle, tiltRef.cameraTiltDeg);
+}
+
+/**
+ * The ear line's angle in the image ("level → 0°", as `bodyPairAngleDeg`), or
+ * null if either ear is unreliable. The neck readings above are this angle
+ * minus their reference; frozen over the neutral calibration, it is the zero
+ * ex_004 counts from (`neckCalibrationReference.ts`, D-49).
+ */
+export function earLineAngleDeg(landmarks: LM[], frameAspect: number): number | null {
   const leftEar  = landmarks[7];
   const rightEar = landmarks[8];
- 
   if (!pairVisible(leftEar, rightEar)) return null;
- 
-  const rawEarAngle = bodyPairAngleDeg(leftEar!, rightEar!, frameAspect);
-  return angleDiffDeg(rawEarAngle, tiltRef.cameraTiltDeg);
+  return bodyPairAngleDeg(leftEar!, rightEar!, frameAspect);
 }
 
 /**
@@ -456,16 +473,17 @@ function signedNeckFlexionAngle(
 export function computeLateralNeckTilt(
   landmarks: LM[],
   tiltRef: TiltReference,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): NeckTiltResult | null {
   const correctedAngle = signedNeckFlexionAngle(landmarks, tiltRef, frameAspect);
   if (correctedAngle === null) return null;
  
   const absDeg = Math.abs(correctedAngle);
  
-  // 2° dead-band: below this, the angle is indistinguishable from landmark noise
+  // Dead-band: below this, the angle is indistinguishable from landmark noise
+  // (re-derived 2026-10-21, D-48, from 2 in pipeline units).
   const direction: NeckTiltResult["direction"] =
-    absDeg < 2         ? "center" :
+    absDeg < 1.1       ? "center" :
     correctedAngle > 0 ? "left"  : "right";
  
   return {
@@ -532,7 +550,7 @@ export type ShoulderSymmetryResult = {
  */
 export function shoulderLineAngleDeg(
   landmarks: LM[],
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -543,7 +561,7 @@ export function shoulderLineAngleDeg(
 export function computeShoulderSymmetry(
   landmarks: LM[],
   tiltRef: TiltReference,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): ShoulderSymmetryResult | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -596,9 +614,10 @@ export type TrunkLeanResult = {
  *   >10° (severe):    significant trunk dump, exercise should be re-instructed
  */
 function classifyTrunkLean(absDeg: number): Severity {
-  if (absDeg < 2)  return "normal";
-  if (absDeg < 5)  return "mild";
-  if (absDeg < 10) return "moderate";
+  // Edges re-derived 2026-10-21 (D-48) from 2/5/10 in pipeline units.
+  if (absDeg < 3.6)  return "normal";
+  if (absDeg < 8.8)  return "mild";
+  if (absDeg < 17.4) return "moderate";
   return "severe";
 }
  
@@ -623,7 +642,7 @@ function classifyTrunkLean(absDeg: number): Severity {
 function signedTrunkLeanAngle(
   landmarks: LM[],
   tiltRef: TiltReference,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -710,7 +729,7 @@ function signedTrunkLeanAngle(
 export function computeTrunkLateralLean(
   landmarks: LM[],
   tiltRef: TiltReference,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): TrunkLeanResult | null {
   const deviation = signedTrunkLeanAngle(landmarks, tiltRef, frameAspect);
   if (deviation === null) return null;
@@ -945,8 +964,10 @@ export function worstSideCompensationScore(
  *
  * STARTING value — live-tunable, same status as the ex_007 / ex_008 thresholds
  * it gates. At 0.9 the gate lands at:
- *   ex_007 Overhead Press → 0.9 × 0.6  = 0.54 trunk-lengths (just below full extension)
- *   ex_008 Wall Angels     → 0.9 × 150° = 135° (just below the Y-position)
+ *   ex_007 Overhead Press → 0.9 × 0.85  = 0.765 trunk-lengths (just below full extension)
+ *   ex_008 Wall Angels     → 0.9 × 134.3 = 120.9 (just below the Y-position;
+ *     the corrected target since 2026-10-21, D-48; it was 0.9 × 150 = 135 in
+ *     pipeline units, where 135 corresponds to a corrected 119.4)
  * i.e. only flag "Straighten arms" very near the top of the movement, where
  * straight elbows are actually the expected posture.
  *
@@ -1090,7 +1111,7 @@ export function computeShoulderAbduction(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -1191,7 +1212,7 @@ export function computeShoulderFlexion(
   landmarks: LM[],
   tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   return computeShoulderAbduction(landmarks, tiltRef, side, frameAspect);
 }
@@ -1248,7 +1269,7 @@ export function computeScapularElevation(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -1320,7 +1341,7 @@ export function computeNeckLateralFlexionSigned(
   landmarks: LM[],
   tiltRef: TiltReference,
   _side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   void _side;
   return signedNeckFlexionAngle(landmarks, tiltRef, frameAspect);
@@ -1399,7 +1420,7 @@ export function computeTrunkLateralFlexionSigned(
   landmarks: LM[],
   tiltRef: TiltReference,
   _side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   void _side;
   return computeTrunkLateralFlexionWithCameraTiltSigned(
@@ -1411,7 +1432,7 @@ export function computeTrunkLateralFlexionSigned(
 
 export function computeTrunkLateralFlexionUncorrectedSigned(
   landmarks: LM[],
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftEar  = landmarks[7];
   const rightEar = landmarks[8];
@@ -1441,7 +1462,7 @@ export function computeTrunkLateralFlexionUncorrectedSigned(
 export function computeTrunkLateralFlexionWithCameraTiltSigned(
   landmarks: LM[],
   cameraTiltDeg: number,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(landmarks, frameAspect);
   if (uncorrected === null) return null;
@@ -1451,7 +1472,7 @@ export function computeTrunkLateralFlexionWithCameraTiltSigned(
 export function computeTrunkLateralFlexionFromNeutralSigned(
   landmarks: LM[],
   neutralUncorrectedDeg: number,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(landmarks, frameAspect);
   if (uncorrected === null) return null;
@@ -1488,7 +1509,7 @@ export function computeShoulderHorizAbduction(
   landmarks: LM[],
   tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   return computeShoulderAbduction(landmarks, tiltRef, side, frameAspect);
 }
@@ -1549,7 +1570,7 @@ export function computeElbowFlexion(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const shoulder = side === "left" ? landmarks[11] : landmarks[12];
   const elbow    = side === "left" ? landmarks[13] : landmarks[14];
@@ -1637,7 +1658,7 @@ export function computeWristShoulderVertical(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -1710,7 +1731,7 @@ export function computeWristShoulderLateral(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -1831,7 +1852,7 @@ export function computeShoulderElbowDistance(
   landmarks: LM[],
   _tiltRef: TiltReference,
   side: "left" | "right",
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   const leftShoulder  = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -1919,6 +1940,13 @@ export type ExerciseFrameMetrics = {
   };
   /** 0–100 compensation-quality score, or null if no compensation data. */
   compensationScore: number | null;
+  /**
+   * The reference the primary metric was measured against when it has its
+   * own: ex_004 counts from the ear line frozen in the neutral calibration
+   * (D-49). Absent when the primary used `tiltReference` like every other
+   * metric.
+   */
+  primaryReference?: TiltReference;
 };
 
 /**
@@ -1937,20 +1965,24 @@ export type ExerciseFrameMetrics = {
 export function computePoseMetricsForExercise(
   landmarks: LM[],
   definition: ExerciseDefinition,
-  // Optional pre-resolved tilt reference. The camera supplies its frozen
+  // Pre-resolved tilt reference. The camera supplies its frozen
   // neutral-calibration reference so display, coaching, rule aggregates, and
-  // raw feature traces all use the same correction. Omit only for callers that
-  // intentionally want the current frame's consensus tilt.
-  tiltOverride?: TiltReference,
-  // Frame aspect (W/H). Defaults to 1, i.e. the historical uncorrected
-  // behaviour. See the FRAME ASPECT block at the top of this file: the
-  // registry's thresholds were all fitted against uncorrected readings, so
-  // switching the live path over belongs with the threshold re-derivation.
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  // raw feature traces all use the same correction. Pass `undefined` only for
+  // callers that intentionally want the current frame's consensus tilt.
+  tiltOverride: TiltReference | undefined,
+  // Frame aspect (W/H), required: see the FRAME ASPECT block at the top of
+  // this file. The frozen tilt must have been measured with the same aspect.
+  frameAspect: number,
+  // The dynamic primary metric's own reference, when its definition counts
+  // from one: ex_004 counts from the ear line frozen in the neutral
+  // calibration (D-49; `primaryReferenceFor` in neckCalibrationReference.ts).
+  // Compensation metrics always keep the tilt reference above.
+  primaryReference?: TiltReference,
 ): ExerciseFrameMetrics {
   // The tilt reference is SUBTRACTED from angles measured in this space, so it
   // has to be measured in the same space or the correction is inconsistent.
   const tiltReference = tiltOverride ?? computeTiltReference(landmarks, frameAspect);
+  const primaryTilt = primaryReference ?? tiltReference;
   const metrics: Partial<Record<MetricName, number | null>> = {};
   let perSideMetrics: { left: number | null; right: number | null } | undefined;
   let perSideCompensationMetrics:
@@ -1969,7 +2001,7 @@ export function computePoseMetricsForExercise(
       // its own half of the range, so a return stroke past neutral can never
       // read as a repetition on the side it came from. The signed value stays
       // in the main map for the trace, diagnostics and display that expect it.
-      const signed = computeMetricByName(landmarks, tiltReference, p.name, undefined, frameAspect);
+      const signed = computeMetricByName(landmarks, primaryTilt, p.name, undefined, frameAspect);
       metrics[p.name] = signed;
       perSideMetrics = splitSignedBySide(signed);
     } else if (definition.bilateral && definition.bilateralMode === "per-limb") {
@@ -1977,13 +2009,13 @@ export function computePoseMetricsForExercise(
       // perSideMetrics for the rep counters; the left value is also placed
       // in the main metrics map so compensation-score and UI code that
       // expects a single entry still works without changes.
-      const leftVal  = computeMetricByName(landmarks, tiltReference, p.name, "left", frameAspect);
-      const rightVal = computeMetricByName(landmarks, tiltReference, p.name, "right", frameAspect);
+      const leftVal  = computeMetricByName(landmarks, primaryTilt, p.name, "left", frameAspect);
+      const rightVal = computeMetricByName(landmarks, primaryTilt, p.name, "right", frameAspect);
       metrics[p.name] = leftVal;
       perSideMetrics = { left: leftVal, right: rightVal };
     } else {
       // Bidirectional-alternating or unilateral: single value, no per-side split.
-      metrics[p.name] = computeMetricByName(landmarks, tiltReference, p.name, p.side, frameAspect);
+      metrics[p.name] = computeMetricByName(landmarks, primaryTilt, p.name, p.side, frameAspect);
     }
   } else {
     const i = definition.isometric;
@@ -2053,6 +2085,7 @@ export function computePoseMetricsForExercise(
     perSideMetrics,
     perSideCompensationMetrics,
     compensationScore,
+    ...(primaryReference && definition.kind === "dynamic" ? { primaryReference } : {}),
   };
 }
 
@@ -2130,7 +2163,7 @@ function computeMetricByName(
   tiltRef: TiltReference,
   metricName: MetricName,
   side: "left" | "right" | undefined,
-  frameAspect: number = NO_ASPECT_CORRECTION,
+  frameAspect: number,
 ): number | null {
   switch (metricName) {
     case "neckTilt": {

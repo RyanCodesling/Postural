@@ -444,9 +444,11 @@ test("continuity gate: rep refused when ascent starts after a long gap (simulate
   counter.update(0, 133);
   counter.update(0, 166);
   // Simulate ~1.5s during which the metric returned null (cross-body sweep),
-  // so the caller skipped update() entirely. Then the arm reappears at lateral
-  // overhead and descends through the lateral region to rest. This is the
-  // exact bogus trajectory the production bug exhibits.
+  // so the caller skipped update() and marked each frame instead (D-50). Then
+  // the arm reappears at lateral overhead and descends through the lateral
+  // region to rest. This is the exact bogus trajectory the production bug
+  // exhibits.
+  for (let t = 200; t < 1700; t += 33) counter.noteMissing();
   const seq: Array<[number, number]> = [
     [170, 1700],
     [130, 1733],
@@ -461,6 +463,43 @@ test("continuity gate: rep refused when ascent starts after a long gap (simulate
       throw new Error(`cross-body trajectory wrongly emitted rep at angle=${a}`);
     }
   }
+});
+
+// D-50: a gap with no frame processed at all (a camera-loop stall) keeps the
+// rest evidence for up to 1 s; frames processed without a reading still clear
+// it after 300 ms.
+const gateThresholds = { startThreshold: 20, repCompleteThreshold: 10, minimumPeakThreshold: 60, targetROM: 90 };
+const raiseAfter = (counter: RepCounter, fromMs: number) =>
+  [[40, fromMs], [80, fromMs + 33], [95, fromMs + 66], [60, fromMs + 99], [30, fromMs + 132], [5, fromMs + 165]]
+    .map(([angle, t]) => counter.update(angle, t)).filter((e) => e !== null);
+
+test("continuity gate: a camera stall under 1 s across the start line still starts the rep (D-50)", () => {
+  const counter = new RepCounter(gateThresholds);
+  counter.update(0, 100); counter.update(5, 133);
+  // No frame for 600 ms; the arm is already above the start line when frames resume.
+  const reps = raiseAfter(counter, 733);
+  assertEqual(reps.length, 1, "rep counted across the stall");
+  assertEqual(reps[0]!.peakValue, 95, "peak");
+});
+
+test("continuity gate: a stall over 1 s still clears the rest evidence (D-50)", () => {
+  const counter = new RepCounter(gateThresholds);
+  counter.update(0, 100); counter.update(5, 133);
+  assertEqual(raiseAfter(counter, 1200).length, 0, "no rep after a 1067 ms stall");
+});
+
+test("continuity gate: frames without a reading clear the rest evidence after 300 ms (D-50)", () => {
+  const counter = new RepCounter(gateThresholds);
+  counter.update(0, 100); counter.update(5, 133);
+  for (let t = 166; t < 466; t += 33) counter.noteMissing();
+  assertEqual(raiseAfter(counter, 466).length, 0, "no rep after 333 ms holding unread frames");
+});
+
+test("continuity gate: a brief run of frames without a reading keeps the rest evidence", () => {
+  const counter = new RepCounter(gateThresholds);
+  counter.update(0, 100); counter.update(5, 133);
+  counter.noteMissing(); counter.noteMissing();
+  assertEqual(raiseAfter(counter, 400).length, 1, "rep counted after 267 ms holding unread frames");
 });
 
 test("continuity gate: back-to-back reps after a clean rest work normally", () => {

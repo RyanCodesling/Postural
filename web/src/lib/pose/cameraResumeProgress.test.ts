@@ -15,6 +15,8 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { cameraDeclarations, transpile } from "../../../scripts/lib/cameraReplayHarness";
 import { getExerciseDefinition } from "../exercises/registry";
+import { EXERCISE_CONFIG_VERSIONS, exerciseVersionPayload, sha256Version } from "../exercises/versioning";
+import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
 
 let passed = 0;
 let failed = 0;
@@ -31,6 +33,9 @@ function test(name: string, fn: () => void) {
 }
 
 const store = new Map<string, string>();
+// What the page hashed from its own code (versionPayload.ts); the same strings
+// as the server's, which coachingMeasurement.test.ts checks.
+let pageVersions: Readonly<Record<string, string>> | null = EXERCISE_CONFIG_VERSIONS;
 const ref = (current: any) => ({ current });
 const rep = (peakValue: number, classification: "complete" | "partial", i: number) => ({
   index: i, startTimeMs: 1000 + i * 3000, peakTimeMs: 2000 + i * 3000, endTimeMs: 3000 + i * 3000, peakValue,
@@ -49,7 +54,8 @@ const context: any = vm.createContext({
     removeItem: (k: string) => void store.delete(k),
   } },
   performance: { now: () => 50_000 },
-  Date, JSON, Math, Number, Array,
+  Date, JSON, Math, Number, Array, POSE_METRIC_ALGORITHM_VERSION,
+  computedExerciseConfigVersions: () => pageVersions,
   useCallback: (fn: any) => fn,
   prescriptionRef: ref({ patientExerciseId: 77 }),
   sessionIdRef: ref(218),
@@ -97,6 +103,47 @@ test("a snapshot written after a completed set restores its sets, reps and captu
     "the frame sizes measured before the disruption come back, both of them");
   assert.deepEqual(progress.neckRest, { epochs: [{ from: "2026-10-19T10:00:00.000Z", readings: [1.5, -0.5, 2] }] },
     "the neck rest readings taken before the disruption come back with their calibration");
+});
+
+test("a snapshot from another measurement is not offered for Resume (D-48)", () => {
+  api.writeResumeSnapshot();
+  const key = "postural.resume.v1.77";
+  const saved = JSON.parse(store.get(key)!);
+  assert.equal(saved.poseMetricAlgorithm, POSE_METRIC_ALGORITHM_VERSION, "the writer records the measurement");
+  assert(api.readResumeSnapshot(77), "this measurement's snapshot resumes");
+  store.set(key, JSON.stringify({ ...saved, poseMetricAlgorithm: "pose_metrics_v2_frozen_neutral_tilt" }));
+  assert.equal(api.readResumeSnapshot(77), null, "a snapshot from before the aspect correction does not");
+  const { poseMetricAlgorithm: _dropped, ...unversioned } = saved;
+  void _dropped;
+  store.set(key, JSON.stringify(unversioned));
+  assert.equal(api.readResumeSnapshot(77), null, "nor one written before the field existed");
+  store.set(key, JSON.stringify(saved));
+});
+
+test("nor is one from another version of its exercise, under the same measurement (D-49)", () => {
+  api.writeResumeSnapshot();
+  const key = "postural.resume.v1.77";
+  const saved = JSON.parse(store.get(key)!);
+  assert.equal(saved.exerciseConfigVersion, EXERCISE_CONFIG_VERSIONS.ex_001, "the writer records the exercise's version");
+  const neck = structuredClone(getExerciseDefinition("ex_004")!);
+  assert(neck.kind === "dynamic");
+  delete neck.primaryMetric.reference;
+  const beforeEarLine = sha256Version(exerciseVersionPayload(neck));
+  assert.notEqual(beforeEarLine, EXERCISE_CONFIG_VERSIONS.ex_004);
+  const neckSnap = { ...saved, exerciseId: "ex_004", exerciseConfigVersion: EXERCISE_CONFIG_VERSIONS.ex_004 };
+  store.set(key, JSON.stringify(neckSnap));
+  assert(api.readResumeSnapshot(77), "a neck snapshot of this version resumes");
+  store.set(key, JSON.stringify({ ...neckSnap, exerciseConfigVersion: beforeEarLine }));
+  assert.equal(api.readResumeSnapshot(77), null, "one from before the calibration ear line does not");
+  const { exerciseConfigVersion: _dropped, ...unversioned } = neckSnap;
+  void _dropped;
+  store.set(key, JSON.stringify(unversioned));
+  assert.equal(api.readResumeSnapshot(77), null, "nor one written before the field existed");
+  store.set(key, JSON.stringify(saved));
+  pageVersions = null;
+  assert.equal(api.readResumeSnapshot(77), null, "nothing is offered before the page has hashed its exercises");
+  pageVersions = EXERCISE_CONFIG_VERSIONS;
+  assert(api.readResumeSnapshot(77), "and the snapshot is offered once it has");
 });
 
 test("a second disruption keeps the restored outcomes plus the new ones", () => {

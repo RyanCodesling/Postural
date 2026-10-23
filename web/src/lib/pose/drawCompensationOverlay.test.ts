@@ -33,7 +33,7 @@ import {
   limbSideIsOverlayDirection,
   lowerArrowShoulder,
 } from "./drawCompensationOverlay";
-import { computeShoulderSymmetry, type TiltReference } from "./poseMetrics";
+import { computeShoulderSymmetry, type TiltReference, NO_ASPECT_CORRECTION } from "./poseMetrics";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MICRO ASSERTION HELPER
@@ -164,7 +164,7 @@ function seenShoulders(y11: number, y12: number): NormalizedLandmark[] {
 test("the tilt-corrected reading names the same shoulder as raw image height", () => {
   for (const [y11, y12, expected] of [[0.33, 0.37, 11], [0.37, 0.33, 12]] as const) {
     const lm = seenShoulders(y11, y12);
-    const reading = computeShoulderSymmetry(lm, LEVEL_CAMERA);
+    const reading = computeShoulderSymmetry(lm, LEVEL_CAMERA, NO_ASPECT_CORRECTION);
     if (reading === null) throw new Error("no shoulder reading");
     assertEq(elevatedShoulderLandmarkIndex(reading.elevatedSide), expected, `elevated ${expected}`);
     assertEq(higherShoulderLandmarkIndex(lm), expected, `higher on screen ${expected}`);
@@ -174,7 +174,7 @@ test("the tilt-corrected reading names the same shoulder as raw image height", (
 
 test("the arrow keeps its shoulder unless the other reads above the switch-off level", () => {
   const otherHigher = seenShoulders(0.37, 0.33); // 12 higher: about 11 on the reading
-  const reading = computeShoulderSymmetry(otherHigher, LEVEL_CAMERA);
+  const reading = computeShoulderSymmetry(otherHigher, LEVEL_CAMERA, NO_ASPECT_CORRECTION);
   if (reading === null) throw new Error("no shoulder reading");
   assertEq(lowerArrowShoulder(null, otherHigher, null, 5), 12, "first pick: the higher shoulder");
   assertEq(lowerArrowShoulder(11, otherHigher, reading, 5), 12, "a clear reversal moves the arrow");
@@ -182,7 +182,7 @@ test("the arrow keeps its shoulder unless the other reads above the switch-off l
   assertEq(lowerArrowShoulder(11, otherHigher, { angleDeg: 9, elevatedSide: "level" }, 5), 11, "a level reading never moves it");
   assertEq(lowerArrowShoulder(11, otherHigher, null, 5), 11, "no reading keeps it");
   const slightlyOther = seenShoulders(0.355, 0.345); // 12 higher by under 3
-  const small = computeShoulderSymmetry(slightlyOther, LEVEL_CAMERA);
+  const small = computeShoulderSymmetry(slightlyOther, LEVEL_CAMERA, NO_ASPECT_CORRECTION);
   assertEq(lowerArrowShoulder(11, slightlyOther, small, 5), 11, "a small reversal keeps it");
 });
 

@@ -201,6 +201,11 @@ export class BidirectionalRepCounter {
     };
   }
 
+  /** A processed frame with no reading, for the wrapped counter's continuity gate (D-50). */
+  noteMissing(): void {
+    this.counter.noteMissing();
+  }
+
   reset(): void {
     this.counter.reset();
     this.clearPeakTracking();

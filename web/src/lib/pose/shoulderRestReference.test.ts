@@ -7,7 +7,7 @@
  *   npx tsx src/lib/pose/shoulderRestReference.test.ts
  */
 import { coachingConfiguration, validCoachingProvenance, COACHING_ALGORITHM_VERSION } from "./coachingConfig";
-import { computeShoulderSymmetry, shoulderLineAngleDeg } from "./poseMetrics";
+import { computeShoulderSymmetry, shoulderLineAngleDeg, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import { SHOULDER_CUE_REFERENCE, restReferencedShoulderSymmetry, restingShoulderLineDeg } from "./shoulderRestReference";
 import { EXERCISE_REGISTRY } from "../exercises/registry";
 
@@ -40,30 +40,38 @@ function shoulders(deg: number, visibility = 1) {
 console.log("\nLOWER cue: resting shoulder reference\n");
 
 test("the raw shoulder line has the sign computeShoulderSymmetry corrects", () => {
-  const line = shoulderLineAngleDeg(shoulders(6));
+  const line = shoulderLineAngleDeg(shoulders(6), NO_ASPECT_CORRECTION);
   assert(line !== null && Math.abs(line - 6) < 1e-9, `line ${line}`);
-  const sym = computeShoulderSymmetry(shoulders(6), { cameraTiltDeg: 0, confidence: "high", divergenceDeg: null });
+  const sym = computeShoulderSymmetry(shoulders(6), { cameraTiltDeg: 0, confidence: "high", divergenceDeg: null }, NO_ASPECT_CORRECTION);
   assert(sym?.angleDeg === 6 && sym.elevatedSide === "right", JSON.stringify(sym));
-  assert(shoulderLineAngleDeg(shoulders(6, 0.2)) === null, "hidden shoulders give none");
+  assert(shoulderLineAngleDeg(shoulders(6, 0.2), NO_ASPECT_CORRECTION) === null, "hidden shoulders give none");
 });
 
 test("the resting line is the median over the calibration's samples", () => {
-  const samples = [shoulders(-5), shoulders(-6), shoulders(-7), shoulders(-6.2), shoulders(30, 0.1)];
+  const samples = [shoulders(-5), shoulders(-6), shoulders(-7), shoulders(-6.2), shoulders(30, 0.1)]
+    .map((landmarks) => ({ landmarks, frameAspect: NO_ASPECT_CORRECTION }));
   const rest = restingShoulderLineDeg(samples);
   assert(rest !== null && Math.abs(rest - -6.1) < 1e-9, `rest ${rest}`);
   assert(restingShoulderLineDeg([]) === null, "no samples: none");
 });
 
+test("each sample is read in its own frame's corrected plane (D-48)", () => {
+  // On a 16:9 frame a line reading 6 in normalized units is atan(tan 6 / k) in the picture.
+  const rest = restingShoulderLineDeg([{ landmarks: shoulders(6), frameAspect: 16 / 9 }]);
+  const expected = (Math.atan(Math.tan((6 * Math.PI) / 180) / (16 / 9)) * 180) / Math.PI;
+  assert(rest !== null && Math.abs(rest - expected) < 1e-9, `rest ${rest} expected ${expected}`);
+});
+
 test("against the resting line, a still body reads 0 and only the change counts", () => {
-  const still = restReferencedShoulderSymmetry(shoulders(-6), -6);
+  const still = restReferencedShoulderSymmetry(shoulders(-6), -6, NO_ASPECT_CORRECTION);
   assert(still !== null && still.angleDeg === 0 && still.elevatedSide === "level", JSON.stringify(still));
-  const raised = restReferencedShoulderSymmetry(shoulders(-15), -6);
+  const raised = restReferencedShoulderSymmetry(shoulders(-15), -6, NO_ASPECT_CORRECTION);
   assert(raised !== null && raised.angleDeg === 9 && raised.elevatedSide === "left", JSON.stringify(raised));
-  assert(restReferencedShoulderSymmetry(shoulders(-6), null) === null, "no resting line: none");
+  assert(restReferencedShoulderSymmetry(shoulders(-6), null, NO_ASPECT_CORRECTION) === null, "no resting line: none");
 });
 
 test("the coaching configuration records the reference and stays valid", () => {
-  assert(COACHING_ALGORITHM_VERSION === "coaching_v12_shoulder_rest_reference", COACHING_ALGORITHM_VERSION);
+  assert(COACHING_ALGORITHM_VERSION === "coaching_v13_aspect_corrected", COACHING_ALGORITHM_VERSION);
   const configuration = coachingConfiguration(EXERCISE_REGISTRY.ex_004);
   assert(configuration.shoulderReference === SHOULDER_CUE_REFERENCE, "recorded");
   const version = `sha256:${"0".repeat(64)}`;

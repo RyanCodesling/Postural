@@ -14,6 +14,10 @@
  * side, a poorly tracked repetition is left out, a poorly tracked session is not
  * exported, and a neck side bend's peaks and completion are measured from the
  * resting head position, leaving out repetitions without a resting reading.
+ *
+ * Angles are exported in the aspect-corrected unit the app measures in since
+ * 2026-10-21 (D-48). Sessions measured before then are converted, each angle
+ * on its own geometry at the session's frame shape (see `sessionUnit`).
  */
 import { Client } from "pg";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,6 +33,8 @@ import {
   sessionPoorlyTracked,
 } from "../src/lib/analytics/trendRules";
 import { parseNeckRestRecord } from "../src/lib/sessionReadModels";
+import { POSE_METRIC_ALGORITHM_VERSION } from "../src/lib/pose/metricVersion";
+import { frameAspectOf } from "../src/lib/pose/poseMetrics";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -62,8 +68,51 @@ type SessionOut = {
   configVersion: string;
   prescribedSide: string;
   resistance: unknown;
+  /** The measurement the angles were taken with, and how they were brought to the corrected unit. */
+  measurement: { poseMetrics: string | null; converted: boolean; frameAspect: number; frameSource: string };
   units: Record<string, SideUnits | { card: number[] }>;
 };
+
+/**
+ * Sessions measured before the aspect correction (2026-10-21, D-48) hold their
+ * angles in pipeline units, normalised separately by frame width and height.
+ * Each is converted on its own geometry at the session's frame shape: its
+ * recorded frame sizes (the size with the most frames), or 1280x720, the
+ * laptop webcam every pilot session used before sizes were recorded (D-23,
+ * 2026-10-12 and 10-14).
+ *   a  the neck's ear line against the tilt (near-horizontal):  atan(tan r / k)
+ *   b  the side bend's head lean from neutral (near-vertical):  atan(k tan r)
+ *   c  the arm against the trunk (abduction):                    atan2(k sin r, cos r)
+ * The press reads a trunk-length ratio and is left as stored. Converting a
+ * stored peak this way lands within 0.05 +/- 1.07 of recomputing it from the
+ * landmarks on the traced pilot repetitions
+ * (Review_Artifacts/2026-10-21_aspect_lift/conversion_error.txt).
+ */
+const ANGLE_GEOMETRY: Record<string, "a" | "b" | "c"> = {
+  ex_001: "c", ex_002: "c", ex_004: "a", ex_005: "b", ex_006: "c", ex_008: "c",
+};
+const RAD = Math.PI / 180;
+function sessionUnit(row: { exercise_id: string; pose_metrics: string | null; frame_sizes: unknown }) {
+  const sizes = Array.isArray(row.frame_sizes)
+    ? (row.frame_sizes as { width?: unknown; height?: unknown; frames?: unknown }[])
+      .filter((f) => finite(f.width) && finite(f.height) && finite(f.frames))
+    : [];
+  const top = sizes.sort((x, y) => (y.frames as number) - (x.frames as number))[0];
+  const k = top ? frameAspectOf(top.width as number, top.height as number) : frameAspectOf(1280, 720);
+  const converted = row.pose_metrics !== POSE_METRIC_ALGORITHM_VERSION;
+  const geometry = converted ? ANGLE_GEOMETRY[row.exercise_id] : undefined;
+  const convert = geometry === "a" ? (r: number) => Math.atan(Math.tan(r * RAD) / k) / RAD
+    : geometry === "b" ? (r: number) => Math.atan(k * Math.tan(r * RAD)) / RAD
+    : geometry === "c" ? (r: number) => Math.atan2(k * Math.sin(r * RAD), Math.cos(r * RAD)) / RAD
+    : null;
+  // The abduction conversion's slope at r: a hold's spread and drift scale by it.
+  const slope = geometry === "c" ? (r: number) => k / (Math.cos(r * RAD) ** 2 + k * k * Math.sin(r * RAD) ** 2) : null;
+  return {
+    convert, slope,
+    measurement: { poseMetrics: row.pose_metrics, converted: convert !== null, frameAspect: k,
+      frameSource: top ? `${top.width}x${top.height} (recorded)` : "1280x720 (assumed)" },
+  };
+}
 
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
@@ -83,7 +132,9 @@ async function main() {
              COALESCE(s.exercise_config_version, 'legacy-unversioned') AS cfg,
              COALESCE(s.context_snapshot->'prescription'->>'prescribedSide', 'both') AS prescribed_side,
              s.context_snapshot->'prescription'->'resistance' AS resistance,
-             s.capture_quality_summary->'neckRest' AS neck_rest
+             s.capture_quality_summary->'neckRest' AS neck_rest,
+             s.context_snapshot->'versions'->>'poseMetrics' AS pose_metrics,
+             s.capture_quality_summary->'frameSizes' AS frame_sizes
         FROM sessions s
        WHERE s.device_info IS NOT NULL
        ORDER BY s.started_at, s.id`)).rows;
@@ -100,12 +151,15 @@ async function main() {
     await client.query("ROLLBACK");
 
     const bySession = new Map<number, SessionOut>();
+    const units = new Map<number, ReturnType<typeof sessionUnit>>();
     // Trend data rule 4: each neck session's still-head readings, per calibration.
     const neckRest = new Map<number, ReturnType<typeof parseNeckRestRecord>>();
     for (const row of sessions) {
       if (NECK_REST_EXERCISES.has(row.exercise_id)) neckRest.set(row.id, parseNeckRestRecord(row.neck_rest));
     }
     for (const row of sessions) {
+      const unit = sessionUnit(row);
+      units.set(row.id, unit);
       bySession.set(row.id, {
         sessionId: row.id,
         patientId: row.patient_id,
@@ -115,6 +169,7 @@ async function main() {
         configVersion: row.cfg,
         prescribedSide: row.prescribed_side,
         resistance: row.resistance ?? { type: "unknown", value: null, unit: null, label: null },
+        measurement: unit.measurement,
         units: {},
       });
     }
@@ -149,19 +204,23 @@ async function main() {
       if (heldOut.has(rep.session_id) || repPoorlyTracked(rep.compensations)) continue;
       session.kind = "dynamic";
       const side = rep.side as Side;
+      const convert = units.get(rep.session_id)?.convert ?? null;
       if (NECK_REST_EXERCISES.has(session.exerciseId)) {
         // Rule 4: the peak and completion from the resting position; a
-        // repetition without a resting reading counts in neither.
+        // repetition without a resting reading counts in neither. Completion
+        // compares the peak with the target in the session's own unit; the
+        // exported peak converts the reading and the rest offset first.
         const start = rep.start_ts ? new Date(rep.start_ts).getTime() : null;
         const offset = neckRestOffsetAt(neckRest.get(rep.session_id)?.epochs ?? null, start);
         if (offset !== null) {
-          const peak = finite(rep.peak_value) ? neckRestPeak(side, rep.peak_value, offset) : null;
+          const recorded = finite(rep.peak_value) ? neckRestPeak(side, rep.peak_value, offset) : null;
+          const peak = convert && finite(rep.peak_value) ? neckRestPeak(side, convert(rep.peak_value), convert(offset)) : recorded;
           if (peak !== null) sideUnits(session, "peak")[side].push(peak);
-          const complete = peak !== null && finite(rep.target_rom) ? peak >= rep.target_rom : rep.classification === "complete";
+          const complete = recorded !== null && finite(rep.target_rom) ? recorded >= rep.target_rom : rep.classification === "complete";
           sideUnits(session, "complete")[side].push(complete ? 1 : 0);
         }
       } else {
-        if (finite(rep.peak_value)) sideUnits(session, "peak")[side].push(rep.peak_value);
+        if (finite(rep.peak_value)) sideUnits(session, "peak")[side].push(convert ? convert(rep.peak_value) : rep.peak_value);
         sideUnits(session, "complete")[side].push(rep.classification === "complete" ? 1 : 0);
       }
       if (!firstOfSet) {
@@ -190,14 +249,23 @@ async function main() {
       session.kind = "isometric";
       const quality = set.hold_quality ?? {};
       const target = Number(set.target_hold_ms);
+      const unit = units.get(set.session_id);
       for (const side of ["left", "right"] as const) {
         const inBand = quality[`${side}InBandMs`];
         if (finite(inBand) && target > 0) sideUnits(session, "inBandPct")[side].push((100 * inBand) / target);
         const arm = quality[side];
         if (arm && typeof arm === "object") {
-          if (finite(arm.sdDeg)) sideUnits(session, "holdSteadiness")[side].push(arm.sdDeg);
-          if (finite(arm.meanErrorDeg)) sideUnits(session, "holdError")[side].push(Math.abs(arm.meanErrorDeg));
-          if (finite(arm.droopSlopeDegPerSec)) sideUnits(session, "holdDroop")[side].push(arm.droopSlopeDegPerSec);
+          // Before the correction (D-48), a hold's spread and drift scale by the
+          // conversion's slope at the hold's mean, and its distance from the
+          // target is taken after converting the mean (the target, 90, maps to 90).
+          const mean = finite(arm.meanDeg) ? arm.meanDeg : finite(arm.meanErrorDeg) ? 90 + arm.meanErrorDeg : null;
+          const scale = unit?.slope && mean !== null ? unit.slope(mean) : 1;
+          if (finite(arm.sdDeg)) sideUnits(session, "holdSteadiness")[side].push(arm.sdDeg * scale);
+          if (finite(arm.meanErrorDeg)) {
+            sideUnits(session, "holdError")[side].push(
+              unit?.convert && mean !== null ? Math.abs(unit.convert(mean) - 90) : Math.abs(arm.meanErrorDeg));
+          }
+          if (finite(arm.droopSlopeDegPerSec)) sideUnits(session, "holdDroop")[side].push(arm.droopSlopeDegPerSec * scale);
         }
       }
       if (finite(quality.meanCompensationScore)) {
@@ -215,6 +283,7 @@ async function main() {
         exportedAt: new Date().toISOString(),
         source: "app-recorded sessions (device info present)",
         trendRules: TREND_RULES_VERSION,
+        angleUnit: "aspect-corrected (D-48); sessions measured before 2026-10-21 converted, see each session's measurement",
         sessions: withOutcome,
       }, null, 1),
     );

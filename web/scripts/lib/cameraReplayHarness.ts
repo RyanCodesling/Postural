@@ -57,6 +57,9 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   firstTickMs?: number;
   /** For a caller-equivalence check against a preserved earlier camera source. */
   cameraSource?: string;
+  /** The recorded frame size; the camera loop measures in its aspect (D-48). Defaults to 1280x720. */
+  videoWidth?: number;
+  videoHeight?: number;
 } = {}) {
   let time = 1_000;
   let landmarks: any[] = [];
@@ -94,8 +97,8 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
     endSessionPersistence: async () => "saved", showSessionPersistenceToast: noop,
     clearResumeSnapshot: noop,
     perfToIso: (t: number) => new Date(t).toISOString(),
-    videoRef: ref({ readyState: 4, videoWidth: 1280, videoHeight: 720 }),
-    canvasRef: ref({ width: 1280, height: 720, getContext: () => canvasContext }),
+    videoRef: ref({ readyState: 4, videoWidth: options.videoWidth ?? 1280, videoHeight: options.videoHeight ?? 720 }),
+    canvasRef: ref({ width: options.videoWidth ?? 1280, height: options.videoHeight ?? 720, getContext: () => canvasContext }),
     landmarkerRef: ref({ detectForVideo: () => ({ landmarks: noPerson ? [] : [landmarks] }) }),
     activeDefinitionRef: ref(definition), sessionStateRef: ref("active"),
     baselinePhaseRef: ref("captured"), frozenTiltDegRef: ref(0),
@@ -127,6 +130,9 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   // Replays start from a stored baseline without its calibration samples, so
   // no resting shoulder line: the LOWER cue reads as it did when recorded.
   context.shoulderRestLineDegRef = ref(null);
+  // Likewise no calibration ear line (D-49) unless a caller supplies one
+  // (`tick({ earLine })`): ex_004 then reads against the frozen tilt.
+  context.calibrationEarLineDegRef = ref(null);
   context.cueCompensationFiltersRef = ref(new Map());
   context.steadinessRef = ref(globals.newSteadinessState());
   context.trackingMessageRef = ref(globals.NO_TRACKING_MESSAGE);
@@ -153,7 +159,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   return {
     context, emitted, sets, frames,
     end() { context.subject.handleSessionEnd("user"); },
-    tick(input: { tMs: number; landmarks?: any[]; accepted?: boolean; noPerson?: boolean; baselines?: any; frozenTilt?: number }) {
+    tick(input: { tMs: number; landmarks?: any[]; accepted?: boolean; noPerson?: boolean; baselines?: any; frozenTilt?: number; earLine?: number | null }) {
       time = input.tMs; landmarks = input.landmarks ?? landmarks;
       accepted = input.accepted ?? true; noPerson = input.noPerson ?? false;
       if (input.baselines) {
@@ -162,6 +168,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
         context.bidirectionalBaselineRef.current.value = input.baselines.bidirectionalPrimary ?? null;
       }
       if (input.frozenTilt !== undefined) context.frozenTiltDegRef.current = input.frozenTilt;
+      if (input.earLine !== undefined) context.calibrationEarLineDegRef.current = input.earLine;
       textDraws.length = 0;
       context.subject.predictWebcam();
       const f = { tMs: time, renderedTexts: [...textDraws], selected: structuredClone(context.coachingDecisionRef.current),

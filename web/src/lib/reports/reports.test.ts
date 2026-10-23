@@ -13,6 +13,7 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import assert from "node:assert/strict";
+import { POSE_METRIC_ALGORITHM_VERSION } from "../pose/metricVersion";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getExerciseDefinition } from "../exercises/registry";
@@ -249,6 +250,8 @@ async function run() {
     assert(!text.includes(" ID "), "no patient ID without a record");
   });
 
+  // Sessions measured with the current measurement (D-48), as saved sessions carry it.
+  const CURRENT_CONTEXT = { versions: { poseMetrics: POSE_METRIC_ALGORITHM_VERSION } };
   const trend = (i: number, peak: number, extra: Partial<ProgressReportSession> = {}): ProgressReportSession => ({
     exerciseId: "ex_001", exerciseName: "Lateral Arm Raises", exerciseKind: "dynamic",
     startedAt: `2026-09-${String(10 + i).padStart(2, "0")}T03:00:00.000Z`,
@@ -256,7 +259,7 @@ async function run() {
     completeLeftReps: 8 + i, completeRightReps: 7 + i, leftReps: 12, rightReps: 12,
     totalPairedHoldMs: null, setCount: 2, totalReps: 24, prescribedSide: "both",
     resistance: { type: "none", value: null, unit: null, label: null }, exerciseConfigVersion: "sha256:x",
-    endReason: "completed", context: null,
+    endReason: "completed", context: CURRENT_CONTEXT,
     painReport: { status: "reported", score: 1, timing: null, bodyArea: null }, ...extra,
   });
   const iso = getExerciseDefinition("ex_006")!;
@@ -281,8 +284,8 @@ async function run() {
 
   await test("progress report: trend, charts, pain columns and every group", () => {
     const sessions: ProgressReportSession[] = [
-      trend(3, 97, { context: { preSessionPain: { status: "reported", score: 7, bodyArea: "neck" } } }),
-      trend(2, 94, { context: { preSessionPain: { status: "declined" } } }),
+      trend(3, 97, { context: { ...CURRENT_CONTEXT, preSessionPain: { status: "reported", score: 7, bodyArea: "neck" } } }),
+      trend(2, 94, { context: { ...CURRENT_CONTEXT, preSessionPain: { status: "declined" } } }),
       trend(1, 91, { painReport: { status: "declined", score: null, timing: null, bodyArea: null } }),
       trend(0, 88, { endReason: "user" }),
       { ...trend(0, 0), exerciseId: iso.id, exerciseName: iso.name, exerciseKind: "isometric", avgPeakValue: null,

@@ -10,6 +10,7 @@
 import { TREND_MODEL } from "@/lib/analytics/trendModel";
 import {
   BAND_WITHHELD,
+  BEFORE_CORRECTION_NOTE,
   changeText,
   extraTrendMeasures,
   groupModelSeries,
@@ -76,6 +77,7 @@ function modelRow(series: ModelSeries, measure: string, format: (value: number) 
   const side = series.side === "card" ? "—" : sideLabel(series.side);
   const start = [measure, side, String(series.counted)];
   if (!series.spec) return [...start, "no trend model for this exercise", "—"];
+  if (series.beforeCorrection) return [...start, `measured values only (${BEFORE_CORRECTION_NOTE})`, "—"];
   if (!series.fit || series.counted < TREND_MODEL.minSessions) {
     return [...start, `too few counted sessions so far (needs ${TREND_MODEL.minSessions})`, "—"];
   }
@@ -258,7 +260,9 @@ export function progressReportPdf(
             def.title,
             s.side === "card" ? "—" : sideLabel(s.side),
             String(s.counted),
-            s.spec?.band === false
+            s.beforeCorrection
+              ? `measured values only (${BEFORE_CORRECTION_NOTE}): ${measured(s, def.format, def.unit)}`
+              : s.spec?.band === false
               ? `measured values only (${BAND_WITHHELD.has(`${s.spec.exercise}:${s.spec.measure}`)
                 ? "the target changed after the trend model learned this measure"
                 : "the trend model has no range for this measure yet"}): ${measured(s, def.format, def.unit)}`

@@ -99,14 +99,18 @@ def main() -> None:
     parser.add_argument("--sessions", default=str(ML_ROOT / "data" / "trend" / "tier1_sessions.json"))
     parser.add_argument("--base-config", required=True)
     parser.add_argument("--base-fixtures", required=True)
+    # v2.1 reproduces amendment v3; v4 is amendment v4 (the corrected unit and
+    # the neck sessions, session 226 excluded).
+    parser.add_argument("--rules", choices=("v2.1", "v4"), default="v2.1")
     args = parser.parse_args()
 
     protocol_hash = hashlib.sha256(PROTOCOL.read_bytes()).hexdigest().upper()
-    out_dir = HERE / "out" / time.strftime("protocol_v3_%Y%m%d-%H%M%S")
+    run_name = "protocol_v3" if args.rules == "v2.1" else "protocol_v4_extra"
+    out_dir = HERE / "out" / time.strftime(f"{run_name}_%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=False)
     sessions = load_sessions(Path(args.sessions))
-    exclude = SETTINGS["v2.1"].exclude
-    assert exclude == FAULT_TEST_SESSIONS
+    exclude = SETTINGS[args.rules].exclude
+    assert FAULT_TEST_SESSIONS <= exclude
 
     learned: dict[str, dict] = {}
     pending: list[tuple[str, str, float, bool]] = []
@@ -199,8 +203,9 @@ def main() -> None:
     for spec in measures.values():
         spec.setdefault("band", True)
         spec.setdefault("sessionLevel", False)
+    amendments = "v2, v2.1 and v3" if args.rules == "v2.1" else "v2, v2.1, v3 and v4"
     config = {**base, "measures": measures, "protocolSha256": protocol_hash,
-              "protocol": "trend evaluation protocol v1, deviations 1-3, amendments v2, v2.1 and v3"}
+              "protocol": f"trend evaluation protocol v1, deviations 1-3, amendments {amendments}"}
     body = json.dumps(config, sort_keys=True, separators=(",", ":"))
     config["version"] = "trend-model-" + hashlib.sha256(body.encode()).hexdigest()[:12]
     (out_dir / "trendModelConfig.json").write_text(json.dumps(config, indent=1, sort_keys=True) + "\n", encoding="utf-8")

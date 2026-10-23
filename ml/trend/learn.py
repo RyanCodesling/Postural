@@ -61,6 +61,10 @@ RULES_V1_1_HOLDS = DataRules(respect_prescribed_side=True, min_units=1)
 # head tilt, shoulder lift, bent endpoint) are excluded from learning.
 FAULT_TEST_SESSIONS = frozenset({193, 194, 197, 199, 208, 212, 213, 214})
 
+# Amendment v4: session 226 was replaced by the same-day redo 227, which has
+# trace and video (decided 2026-10-17, by cause, before any v4 result).
+REPLACED_SESSIONS = frozenset({226})
+
 
 # Amendment v3: measures derived from exported units. peakSpread is session level
 # (one value per session and side, the SD of that side's repetition peaks).

@@ -15,6 +15,10 @@ import {
   type TrendModelSession,
 } from "./trendSeries";
 import { fitTrend, trendMeasureSpec, type TrendFit } from "./trendModel";
+import { POSE_METRIC_ALGORITHM_VERSION } from "../pose/metricVersion";
+
+/** A session measured with the current measurement (D-48); fixtures default to it. */
+const CURRENT = { versions: { poseMetrics: POSE_METRIC_ALGORITHM_VERSION } };
 
 let passed = 0;
 let failed = 0;
@@ -34,7 +38,7 @@ function assert(cond: unknown, msg: string): asserts cond {
 }
 
 const rep = (left: number, right: number, reps = 12, extra: Partial<TrendModelSession> = {}): TrendModelSession => ({
-  exerciseKind: "dynamic", setCount: 2,
+  exerciseKind: "dynamic", setCount: 2, context: CURRENT,
   avgLeftPeakValue: left, avgRightPeakValue: right, leftReps: reps, rightReps: reps,
   avgLeftFormScore: 95, avgRightFormScore: 96, leftFormReps: reps, rightFormReps: reps, ...extra,
 });
@@ -121,8 +125,11 @@ test("a measure without a checked band shows measured values only", () => {
   const lowering = modelSeries("ex_001", sessions, "loweringS", "left");
   assert(lowering.spec?.band === false, "lateral-raise lowering time failed its band check");
   assert(lowering.fit === null && lowering.label === null && lowering.values.every((v) => v !== null), "values without a band");
-  const sideBends = modelSeries("ex_005", sessions, "loweringS", "left");
-  assert(sideBends.spec?.band !== false && sideBends.fit !== null && sideBends.label === null, "side-bend lowering has a band, no label");
+  // Amendment v4: the side bend's timing is borrowed, so with a failing timing
+  // measure it has no band; the neck's timing is learned and passes.
+  assert(modelSeries("ex_005", sessions, "loweringS", "left").spec?.band === false, "side-bend lowering is borrowed: no band");
+  const neck = modelSeries("ex_004", sessions, "loweringS", "left");
+  assert(neck.spec?.band !== false && neck.fit !== null && neck.label === null, "neck lowering has a band, no label");
 });
 
 test("rep-to-rep spread is session level and needs 3 repetitions", () => {
@@ -181,6 +188,22 @@ test("the side-bend and arm-hold form scores show measured values only after the
   // The excluded measures are still recorded, so their exposure charts keep their bands.
   assert(displayMeasureSpec("ex_005", "exposure:neckTilt")?.band === true, "side-bend neck-tilt exposure keeps its band");
   assert(displayMeasureSpec("ex_001", "formScore")?.band === true, "the arm raise's form score keeps its band");
+});
+
+test("a history measured before the aspect correction shows its angle measures without the model (D-48)", () => {
+  const old = { versions: { poseMetrics: "pose_metrics_v2_frozen_neutral_tilt" } };
+  const history = [rep(80, 81), rep(82, 83), rep(84, 85, 12, { context: old }), rep(86, 87)];
+  const peak = modelSeries("ex_001", history, "peak", "left");
+  assert(peak.beforeCorrection === true && peak.spec?.band === false && peak.spec.labelled === false, "peak drawn without the model");
+  assert(peak.fit === null && peak.label === null && peak.values.join(",") === "80,82,84,86", `points kept: ${peak.values}`);
+  const legacy = modelSeries("ex_001", [rep(80, 81, 12, { context: null }), rep(82, 83), rep(84, 85)], "peak", "left");
+  assert(legacy.beforeCorrection === true, "a session without a saved context counts as before the correction");
+  const form = modelSeries("ex_001", history, "formScore", "left");
+  assert(!form.beforeCorrection && form.fit !== null, "a score is unit-free and keeps its band");
+  const press = modelSeries("ex_007", history, "peak", "left");
+  assert(!press.beforeCorrection, "the press reads a trunk-length ratio the correction leaves unchanged");
+  const now = modelSeries("ex_001", [rep(80, 81), rep(82, 83), rep(84, 85)], "peak", "left");
+  assert(!now.beforeCorrection && now.fit !== null, "a history measured now keeps the model");
 });
 
 test("compensation charts use the app's own labels", () => {

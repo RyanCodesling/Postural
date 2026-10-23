@@ -10,7 +10,8 @@ export type LegacyHoldQuality = {
 };
 export type HoldQualityV2 = LegacyHoldQuality & {
   version: "hold_quality_v2";
-  primaryUnits: "pipeline-units";
+  /** "pipeline-units" before the aspect correction (2026-10-21, D-48), then "aspect-corrected". */
+  primaryUnits: "pipeline-units" | "aspect-corrected";
   compensationScoreSource: "smoothed-live-rule";
   streakMode: "simultaneous" | "either-side";
   coaching?: CoachingAudit;
@@ -43,7 +44,7 @@ export function readHoldQuality(value: unknown): LegacyHoldQuality | HoldQuality
     const s = value[key];
     if (s !== null && (!object(s) || !finite(s.meanDeg) || !positive(s.sdDeg) || !finite(s.meanErrorDeg) || !finite(s.droopSlopeDegPerSec))) return null;
   }
-  if (value.version === "hold_quality_v2" && (value.primaryUnits !== "pipeline-units" || value.compensationScoreSource !== "smoothed-live-rule" ||
+  if (value.version === "hold_quality_v2" && (!["pipeline-units", "aspect-corrected"].includes(String(value.primaryUnits)) || value.compensationScoreSource !== "smoothed-live-rule" ||
       !["simultaneous", "either-side"].includes(String(value.streakMode)) || value.coaching !== undefined && !validCoachingAudit(value.coaching))) return null;
   return value as unknown as LegacyHoldQuality | HoldQualityV2;
 }

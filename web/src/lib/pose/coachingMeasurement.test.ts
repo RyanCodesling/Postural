@@ -9,6 +9,7 @@ import ts from "typescript";
 import { createCameraReplay, cameraDeclarations, transpile } from "../../../scripts/lib/cameraReplayHarness";
 import * as config from "./coachingConfig";
 import * as versioning from "../exercises/versioning";
+import { bundleExerciseConfigVersions } from "../exercises/versionPayload";
 import * as contextContract from "../prescriptionContext";
 import * as readModels from "../sessionReadModels";
 import { getExerciseDefinition, EXERCISE_REGISTRY } from "../exercises/registry";
@@ -60,8 +61,8 @@ async function run() {
   c.update(70, 500); assert.equal(c.getMovementSnapshot().state, "DESCENDING");
   assert(c.update(0, 600)); c.reset();
   assert.equal(c.getRepCount(), 1); assert.equal(c.getMovementSnapshot().runningPeak, null);
-  c.update(0, 1000); c.update(50, 1301);
-  assert.equal(c.getState(), "WAITING_FOR_REP_START", "301 ms still clears rest evidence");
+  c.update(0, 1000); c.noteMissing(); c.update(50, 1301);
+  assert.equal(c.getState(), "WAITING_FOR_REP_START", "301 ms holding an unread frame still clears rest evidence (D-50)");
   const b = new BidirectionalRepCounter(thresholds);
   b.update(0, 100); b.update(-50, 200);
   assert.equal(b.getMovementSnapshot().activeSide, "right");
@@ -203,6 +204,9 @@ async function run() {
     return lm;
   };
   const bendProfile = [0, 6, 12, 18, 24, 30, 34, 36, 36, 36, 34, 30, 24, 18, 12, 6, 0];
+  // The cue's switch-on level, in the corrected unit since 2026-10-21 (D-48);
+  // the figure's 10 turn reads 5.7 at 1280x720.
+  const lowerOn = neckDefinition.compensationMetrics.find((c) => c.name === "shoulderSymmetry")!.cue!.trigger!.on;
   const neckBend = async (definition: typeof neckDefinition, turn: boolean) => {
     const neck = createCameraReplay(definition, await config.captureCoachingProvenance(definition));
     now = 950;
@@ -210,7 +214,7 @@ async function run() {
     let flagged = false;
     for (const head of bendProfile) {
       neck.tick({ tMs: now += 60, landmarks: neckPose(head, turn && head >= 18 ? 10 : 0) });
-      flagged ||= (neck.context.repWindowStatesRef.current.get("shoulderSymmetry")?.left.heldValue ?? 0) >= 7;
+      flagged ||= (neck.context.repWindowStatesRef.current.get("shoulderSymmetry")?.left.heldValue ?? 0) >= lowerOn;
     }
     for (let i = 0; i < 20; i++) neck.tick({ tMs: now += 60, landmarks: neckPose(0, 0) });
     return { neck, flagged };
@@ -318,6 +322,7 @@ async function run() {
     if (name === "@/lib/exercises/versioning") return versioning;
     if (name === "@/lib/prescriptionContext") return contextContract;
     if (name === "@/lib/recording/storage") return { hasRecording: async () => false };
+    if (name === "@/lib/pose/metricVersion") return { POSE_METRIC_ALGORITHM_VERSION };
     throw new Error(`Unexpected session route import ${name}`);
   } });
   vm.runInContext(transpile(readFileSync(new URL("../../app/api/sessions/route.ts", import.meta.url), "utf8")), sessionRouteContext);
@@ -330,14 +335,19 @@ async function run() {
     const invalidPain = await sessionRequest({ patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, preSessionPain });
     assert.equal(invalidPain.status, 400, `malformed pre-session pain is refused: ${JSON.stringify(preSessionPain)}`);
   }
+  assert.deepEqual({ ...(await bundleExerciseConfigVersions()) }, versioning.EXERCISE_CONFIG_VERSIONS,
+    "the browser's SHA-256 of every exercise's payload is the server's version (D-49)");
   const noop = () => undefined;
-  const sessionClient: any = { console, performance: { now: () => 1000 }, resetSessionPersistence: noop,
+  const sessionClient: any = { console, performance: { now: () => 1000 }, resetSessionPersistence: noop, POSE_METRIC_ALGORITHM_VERSION,
+    bundleExerciseConfigVersions,
     setTraceUploadLoss: noop, setPendingCompletionNavigation: noop, setScheduleNotice: noop,
     setPrescriptionRaw: noop, flushSetEvents: noop, flushRepEvents: noop, flushRawFrames: noop, writeResumeSnapshot: noop,
     fetch: async (url: string, init: any) => {
       assert.equal(url, "/api/sessions");
       const body = JSON.parse(init.body);
       assert.deepEqual(body.coaching, provenance, "executing browser provenance is sent by actual session writer");
+      assert.equal(body.exerciseConfigVersion, versioning.EXERCISE_CONFIG_VERSIONS[definition.id],
+        "the page sends the exercise version it hashed from its own code, which is the server's (D-49)");
       return sessionRequest(body);
     },
     prescriptionRef: { current: { patientExerciseId: 1, occurrenceId: 1 } }, activeDefinitionRef: { current: definition },
@@ -418,13 +428,34 @@ async function run() {
 
   // Video consent counts only for the notice the page showed: a page from
   // before a notice change (or one that sends no notice) is refused.
-  const consentStart = { patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, videoConsent: true };
+  const consentStart = { patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, videoConsent: true,
+    poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION, exerciseConfigVersion: versioning.EXERCISE_CONFIG_VERSIONS[definition.id] };
   for (const videoNotice of [undefined, "session_video_notice_v1"]) {
     const stale = await sessionRequest({ ...consentStart, videoNotice });
     assert.equal(stale.status, 409, `consent under notice ${videoNotice} is refused`);
     assert.equal((await stale.json()).code, "video_notice_changed");
   }
   assert.equal((await sessionRequest({ ...consentStart, videoConsent: false })).status, 200, "declining needs no notice");
+  // A page that measures differently from the server (loaded before an update
+  // that changed the measurement, D-48) is sent back to reload.
+  for (const poseMetricAlgorithm of [undefined, "pose_metrics_v2_frozen_neutral_tilt"]) {
+    const stale = await sessionRequest({ ...consentStart, videoConsent: false, poseMetricAlgorithm });
+    assert.equal(stale.status, 409, `a page measuring under ${poseMetricAlgorithm} is refused`);
+    assert.equal((await stale.json()).code, "app_updated");
+  }
+  // So is one whose version of the exercise differs under the same global
+  // measurement, such as a neck page from before the calibration ear line
+  // (D-49), or one that sends none.
+  const neck = structuredClone(getExerciseDefinition("ex_004")!);
+  assert(neck.kind === "dynamic" && neck.primaryMetric.reference === "calibration-ear-line");
+  delete neck.primaryMetric.reference;
+  const neckBeforeEarLine = versioning.sha256Version(versioning.exerciseVersionPayload(neck));
+  assert.notEqual(neckBeforeEarLine, versioning.EXERCISE_CONFIG_VERSIONS.ex_004);
+  for (const [exerciseId, exerciseConfigVersion] of [["ex_004", neckBeforeEarLine], [definition.id, undefined]]) {
+    const stale = await sessionRequest({ ...consentStart, videoConsent: false, exerciseId, exerciseConfigVersion });
+    assert.equal(stale.status, 409, `${exerciseId} with exercise version ${exerciseConfigVersion} is refused`);
+    assert.equal((await stale.json()).code, "app_updated");
+  }
   assert(!("videoConsent" in storedSession.context_snapshot));
   sessionClient.videoConsentRef.current = true;
   sessionClient.videoConsentRememberedRef = { current: true };

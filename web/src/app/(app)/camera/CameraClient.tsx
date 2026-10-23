@@ -26,6 +26,7 @@ import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureRe
 import { buildCaptureQualitySummary, type NeckRestTally } from "@/lib/sessionReadModels";
 import { NECK_REST_EXERCISES } from "@/lib/analytics/trendRules";
 import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/pose/shoulderRestReference";
+import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "@/lib/pose/neckCalibrationReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
 import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
@@ -51,6 +52,7 @@ import {
   computeShoulderHorizAbduction,
   computeWristShoulderLateral,
   computeWristShoulderVertical,
+  frameAspectOf,
   type ExerciseFrameMetrics,
   type TiltReference,
 } from "@/lib/pose/poseMetrics";
@@ -104,6 +106,7 @@ import {
   type RepQualityChannel,
 } from "@/lib/pose/repQuality";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { bundleExerciseConfigVersions, computedExerciseConfigVersions } from "@/lib/exercises/versionPayload";
 import {
   applyTraceSyncReadout,
   formatTraceSyncReadout,
@@ -381,6 +384,18 @@ type ResumeSnapshot = {
   neckRest?: NeckRestTally;
   /** The patient opted in to video for this session and has not stopped it. */
   recordVideo?: boolean;
+  /**
+   * The measurement the session's readings were taken with (D-48). A snapshot
+   * from another one, or from before this field, is not offered for Resume:
+   * its session is filed under that measurement, and new readings would be
+   * stored there in a different unit.
+   */
+  poseMetricAlgorithm?: string;
+  /**
+   * The exercise's own measurement version, which changes when only that
+   * exercise's measurement does (D-49). Checked the same way.
+   */
+  exerciseConfigVersion?: string;
 };
 
 /** What the end-of-session card needs from each counted repetition. */
@@ -406,6 +421,10 @@ function readResumeSnapshot(
     if (!raw) return null;
     const snap = JSON.parse(raw) as ResumeSnapshot;
     if (snap?.v !== 1 || typeof snap.sessionId !== "number") return null;
+    if (snap.poseMetricAlgorithm !== POSE_METRIC_ALGORITHM_VERSION) return null;
+    // None until the page has hashed its exercises, so nothing is offered before then.
+    const exerciseConfigVersion = computedExerciseConfigVersions()?.[snap.exerciseId];
+    if (!exerciseConfigVersion || snap.exerciseConfigVersion !== exerciseConfigVersion) return null;
     return snap;
   } catch {
     return null;
@@ -748,7 +767,11 @@ type UpperBodyTraceMetrics = {
   /** Abs ear-line tilt (deg) + side, as the neckTilt compensation reads it. */
   neckTiltDeg: number | null;
   neckTiltDirection: "left" | "right" | "center" | null;
-  /** Signed ear-line angle (positive = patient's LEFT), pre-abs. */
+  /**
+   * Signed ear-line angle (positive = patient's LEFT), pre-abs, against the
+   * reference the exercise counts it from: the calibration's ear line for
+   * ex_004 since D-49 (`calibration.earLineDeg`), the frozen tilt otherwise.
+   */
   neckLateralFlexionSignedDeg: number | null;
   /** ex_005 signed head-lean, NOT camera-roll corrected (baseline domain). */
   trunkLateralFlexionUncorrectedSignedDeg: number | null;
@@ -766,7 +789,10 @@ type UpperBodyTraceMetrics = {
   };
   baselinePhase: "not-needed" | "capturing" | "captured";
   tiltReference: {
-    /** Frozen neutral correction used to derive every metric in this frame. */
+    /**
+     * Frozen neutral correction used to derive every metric in this frame,
+     * except a primary measured from its own reference (`calibration.earLineDeg`).
+     */
     cameraTiltDeg: number;
     /** Per-frame hip/ear observation retained only for confidence analysis. */
     observedCameraTiltDeg: number;
@@ -777,6 +803,11 @@ type UpperBodyTraceMetrics = {
     sampleCount: number;
     validElapsedMs: number;
     frozenCameraTiltDeg: number;
+    /**
+     * The ear line frozen in this calibration, present when the primary metric
+     * is measured from it (ex_004, D-49). Absent otherwise and on earlier traces.
+     */
+    earLineDeg?: number;
     /**
      * V4. Present on exactly ONE frame per set — the first captured frame after
      * calibration finalizes — and absent on every other frame. Consumers must
@@ -1524,70 +1555,71 @@ function upperBodyTraceMetrics(
   frame: UpperBodyTraceMetrics["frame"],
   calibrationSamples: CalibrationSample[] | undefined,
   worldLandmarks: UpperBodyTraceMetrics["worldLandmarks"],
+  frameAspect: number,
 ): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
-  const trunkLean = computeTrunkLateralLean(landmarks, tilt);
-  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt);
-  const neckTilt = computeLateralNeckTilt(landmarks, tilt);
+  const trunkLean = computeTrunkLateralLean(landmarks, tilt, frameAspect);
+  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt, frameAspect);
+  const neckTilt = computeLateralNeckTilt(landmarks, tilt, frameAspect);
   return {
     metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION,
     exerciseId,
     wristShoulderVertical: {
       left: finiteNumberOrNull(
         raw.perSideMetrics?.left ??
-          computeWristShoulderVertical(landmarks, tilt, "left"),
+          computeWristShoulderVertical(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
         raw.perSideMetrics?.right ??
-          computeWristShoulderVertical(landmarks, tilt, "right"),
+          computeWristShoulderVertical(landmarks, tilt, "right", frameAspect),
       ),
     },
     wristShoulderLateral: {
       left: finiteNumberOrNull(
-        computeWristShoulderLateral(landmarks, tilt, "left"),
+        computeWristShoulderLateral(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeWristShoulderLateral(landmarks, tilt, "right"),
+        computeWristShoulderLateral(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderAbductionDeg: {
       left: finiteNumberOrNull(
-        computeShoulderAbduction(landmarks, tilt, "left"),
+        computeShoulderAbduction(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderAbduction(landmarks, tilt, "right"),
+        computeShoulderAbduction(landmarks, tilt, "right", frameAspect),
       ),
     },
     elbowFlexionDeg: {
       left: finiteNumberOrNull(
-        computeElbowFlexion(landmarks, tilt, "left"),
+        computeElbowFlexion(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeElbowFlexion(landmarks, tilt, "right"),
+        computeElbowFlexion(landmarks, tilt, "right", frameAspect),
       ),
     },
     scapularElevationRaw: {
       left: finiteNumberOrNull(
-        computeScapularElevation(landmarks, tilt, "left"),
+        computeScapularElevation(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeScapularElevation(landmarks, tilt, "right"),
+        computeScapularElevation(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderElbowDistance: {
       left: finiteNumberOrNull(
-        computeShoulderElbowDistance(landmarks, tilt, "left"),
+        computeShoulderElbowDistance(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderElbowDistance(landmarks, tilt, "right"),
+        computeShoulderElbowDistance(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderHorizAbdDeg: {
       left: finiteNumberOrNull(
-        computeShoulderHorizAbduction(landmarks, tilt, "left"),
+        computeShoulderHorizAbduction(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderHorizAbduction(landmarks, tilt, "right"),
+        computeShoulderHorizAbduction(landmarks, tilt, "right", frameAspect),
       ),
     },
     trunkLeanDeg: finiteNumberOrNull(trunkLean?.angleDeg),
@@ -1598,11 +1630,13 @@ function upperBodyTraceMetrics(
     neckTiltDirection: neckTilt?.direction ?? null,
     // Side parameter is ignored by the signed neck metric (single
     // bidirectional signal); "left" is passed for signature compatibility.
+    // Against the primary's own reference when it has one (ex_004's
+    // calibration ear line, D-49), so the trace reads what was counted.
     neckLateralFlexionSignedDeg: finiteNumberOrNull(
-      computeNeckLateralFlexionSigned(landmarks, tilt, "left"),
+      computeNeckLateralFlexionSigned(landmarks, raw.primaryReference ?? tilt, "left", frameAspect),
     ),
     trunkLateralFlexionUncorrectedSignedDeg: finiteNumberOrNull(
-      computeTrunkLateralFlexionUncorrectedSigned(landmarks),
+      computeTrunkLateralFlexionUncorrectedSigned(landmarks, frameAspect),
     ),
     trunkLateralFlexionFromNeutralSignedDeg:
       baselines.bidirectionalPrimary !== null
@@ -1610,6 +1644,7 @@ function upperBodyTraceMetrics(
             computeTrunkLateralFlexionFromNeutralSigned(
               landmarks,
               baselines.bidirectionalPrimary,
+              frameAspect,
             ),
           )
         : null,
@@ -1625,6 +1660,7 @@ function upperBodyTraceMetrics(
       sampleCount: calibrationClock.sampleCount,
       validElapsedMs: Math.round(calibrationClock.validElapsedMs),
       frozenCameraTiltDeg: tilt.cameraTiltDeg,
+      ...(raw.primaryReference ? { earLineDeg: raw.primaryReference.cameraTiltDeg } : {}),
       ...(calibrationSamples ? { samples: calibrationSamples } : {}),
     },
     frame,
@@ -1914,6 +1950,9 @@ export default function CameraClient() {
   // line from the calibration, smoothed by its own filter so the score's
   // filters above keep the frozen-tilt reading. Null until a calibration.
   const shoulderRestLineDegRef = useRef<number | null>(null);
+  // The ear line frozen in the calibration (D-49): the zero the neck side bend
+  // counts from. Every calibration takes it; null until one has.
+  const calibrationEarLineDegRef = useRef<number | null>(null);
   const cueCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
   // the metricFiltersRef map because per-limb exercises need TWO filters for
@@ -1938,6 +1977,9 @@ export default function CameraClient() {
   type NeutralCalibrationSample = {
     landmarks: NormalizedLandmark[];
     observedTilt: TiltReference;
+    // The shape of the frame the sample came from: its baselines are
+    // measured in that frame's aspect-corrected image plane (D-48).
+    frameAspect: number;
   };
   const neutralCalibrationClockRef = useRef<NeutralCalibrationClock>(
     newNeutralCalibrationClock(),
@@ -3063,6 +3105,17 @@ export default function CameraClient() {
         console.warn(`${kind}-events delivery failed (will retry):`, message),
     }),
   );
+  // The page hashes its exercises' measurement versions once, asynchronously
+  // (D-49). Resume snapshots are checked against them, so the resume prompt
+  // and outbox recovery wait until that has settled.
+  const [exerciseVersionsSettled, setExerciseVersionsSettled] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const settle = () => { if (live) setExerciseVersionsSettled(true); };
+    bundleExerciseConfigVersions().then(settle, settle);
+    return () => { live = false; };
+  }, []);
+
   // A session that ends before its outcome events are delivered leaves them in
   // localStorage (see endSessionPersistence), and only resuming used to read
   // them back, so an ended session's events never left the device. Send them
@@ -3071,7 +3124,7 @@ export default function CameraClient() {
   // patients' sessions, and anything refused stays stored.
   const outboxRecoveryStartedRef = useRef(false);
   useEffect(() => {
-    if (user?.role !== "patient" || outboxRecoveryStartedRef.current) return;
+    if (user?.role !== "patient" || !exerciseVersionsSettled || outboxRecoveryStartedRef.current) return;
     outboxRecoveryStartedRef.current = true;
     let storageKeys: string[];
     try {
@@ -3104,7 +3157,7 @@ export default function CameraClient() {
         }
       })
       .catch((err) => console.warn("outbox recovery failed:", err));
-  }, [user?.role, showToast]);
+  }, [user?.role, showToast, exerciseVersionsSettled]);
   const rawFrameIndexRef = useRef<number>(0);
   const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
   /** Trace batches abandoned after exhausting retries, for honest reporting. */
@@ -3236,6 +3289,7 @@ export default function CameraClient() {
     sessionWallStartMsRef.current = Date.now();
     sessionPerfStartMsRef.current = performance.now();
     try {
+      const exerciseVersions = await bundleExerciseConfigVersions();
       const response = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3248,6 +3302,11 @@ export default function CameraClient() {
           videoConsent: videoConsentRef.current || undefined,
           videoConsentRemembered: videoConsentRef.current && videoConsentRememberedRef.current ? true : undefined,
           videoNotice: videoConsentRef.current ? videoConsentNoticeRef.current ?? undefined : undefined,
+          // The server files the session under its own measurement version and
+          // refuses a page that measures differently (D-48), this exercise's
+          // own version included (D-49).
+          poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION,
+          exerciseConfigVersion: exerciseVersions[exerciseId],
           deviceInfo:
             typeof navigator !== "undefined"
               ? { userAgent: navigator.userAgent }
@@ -3368,6 +3427,7 @@ export default function CameraClient() {
     raw: ExerciseFrameMetrics,
     observedTilt: TiltReference,
     tNow: number,
+    frameAspect: number,
   ) => {
     if (!tuningTraceEnabledRef.current) return;
     if (prescriptionRef.current.patientExerciseId === undefined) return;
@@ -3443,6 +3503,7 @@ export default function CameraClient() {
           : null,
         calibrationSamples,
         upperBodyTraceWorldLandmarks(worldLandmarks),
+        frameAspect,
       ),
       landmarks: upperBodyTraceLandmarks(landmarks),
     });
@@ -3599,7 +3660,7 @@ export default function CameraClient() {
     };
     return {
       version: "hold_quality_v2",
-      primaryUnits: "pipeline-units",
+      primaryUnits: "aspect-corrected",
       compensationScoreSource: "smoothed-live-rule",
       streakMode: activeDefinitionRef.current?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
       sampleCount: a.sampleCount,
@@ -3639,7 +3700,7 @@ export default function CameraClient() {
       const coaching = coachingAuditRef.current.snapshot(provenance, endPerfMs, perfToIso(0));
       if (holdQuality) holdQuality = { ...holdQuality, coaching };
       else if (exerciseKind === "dynamic") holdQuality = { version: "coaching_set_v1", coaching };
-      else holdQuality = { version: "hold_quality_v2", primaryUnits: "pipeline-units",
+      else holdQuality = { version: "hold_quality_v2", primaryUnits: "aspect-corrected",
         compensationScoreSource: "smoothed-live-rule", streakMode: def?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
         sampleCount: 0, leftInBandMs: 0, rightInBandMs: 0, outOfPositionMs: 0,
         dropCount: 0, longestPairedStreakMs: 0, settleMs: null, left: null, right: null,
@@ -3941,6 +4002,8 @@ export default function CameraClient() {
     const snapshot: ResumeSnapshot = {
       v: 1,
       sessionId,
+      poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION,
+      exerciseConfigVersion: computedExerciseConfigVersions()?.[def.id],
       exerciseId: def.id,
       patientExerciseId,
       kind: def.kind,
@@ -5241,21 +5304,24 @@ export default function CameraClient() {
   function lineAngleDebug(
     a: { x: number; y: number } | undefined,
     b: { x: number; y: number } | undefined,
+    frameAspect: number,
   ): number | null {
     if (!a || !b) return null;
-    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+    return Math.atan2(b.y - a.y, (b.x - a.x) * frameAspect) * 180 / Math.PI;
   }
 
   function bodyPairAngleDebug(
     subjectLeft: { x: number; y: number } | undefined,
     subjectRight: { x: number; y: number } | undefined,
+    frameAspect: number,
   ): number | null {
-    return lineAngleDebug(subjectRight, subjectLeft);
+    return lineAngleDebug(subjectRight, subjectLeft, frameAspect);
   }
 
   function headLeanFromVerticalDebug(
     hipMid: Ex005DebugPoint,
     earMid: Ex005DebugPoint,
+    frameAspect: number,
   ): number | null {
     if (
       hipMid.x === null ||
@@ -5268,6 +5334,7 @@ export default function CameraClient() {
     const rawLine = lineAngleDebug(
       { x: hipMid.x, y: hipMid.y },
       { x: earMid.x, y: earMid.y },
+      frameAspect,
     );
     return rawLine === null ? null : angleDiffDebug(rawLine, -90);
   }
@@ -5300,6 +5367,7 @@ export default function CameraClient() {
     calibrationTraceSamplesRef.current = null;
     frozenTiltDegRef.current = null;
     shoulderRestLineDegRef.current = null;
+    calibrationEarLineDegRef.current = null;
     cueCompensationFiltersRef.current.clear();
     ex004FaceShadowRoiRef.current = null;
     ex004FaceShadowBaselineSamplesRef.current = [];
@@ -5356,6 +5424,10 @@ export default function CameraClient() {
         .map((sample) => sample.observedTilt.cameraTiltDeg),
     );
     if (frozenTiltDeg === null) return false;
+    // The neck side bend counts from the ear line over the same samples (D-49);
+    // an exercise that counts from it cannot calibrate without one.
+    const earLineDeg = restingEarLineDeg(samples);
+    if (earLineDeg === null && countsFromCalibrationEarLine(definition)) return false;
 
     const fixedReference: TiltReference = {
       cameraTiltDeg: frozenTiltDeg,
@@ -5374,7 +5446,7 @@ export default function CameraClient() {
     if (needsPrimaryBaseline && definition.kind === "dynamic") {
       if (definition.bilateralMode === "bidirectional-alternating") {
         const values = samples.map((sample) =>
-          computeTrunkLateralFlexionUncorrectedSigned(sample.landmarks),
+          computeTrunkLateralFlexionUncorrectedSigned(sample.landmarks, sample.frameAspect),
         );
         const baseline = medianFinite(
           values.filter((value): value is number => value !== null),
@@ -5390,6 +5462,7 @@ export default function CameraClient() {
             sample.landmarks,
             definition,
             fixedReference,
+            sample.frameAspect,
           ).perSideMetrics,
         );
         const left = perFrame
@@ -5413,6 +5486,7 @@ export default function CameraClient() {
             sample.landmarks,
             fixedReference,
             "left",
+            sample.frameAspect,
           ),
         )
         .filter((value): value is number => value !== null);
@@ -5422,6 +5496,7 @@ export default function CameraClient() {
             sample.landmarks,
             fixedReference,
             "right",
+            sample.frameAspect,
           ),
         )
         .filter((value): value is number => value !== null);
@@ -5454,10 +5529,9 @@ export default function CameraClient() {
     }
 
     frozenTiltDegRef.current = frozenTiltDeg;
+    calibrationEarLineDegRef.current = earLineDeg;
     // The LOWER cue's resting shoulder line (D-47), from the same samples.
-    shoulderRestLineDegRef.current = restingShoulderLineDeg(
-      samples.map((sample) => sample.landmarks),
-    );
+    shoulderRestLineDegRef.current = restingShoulderLineDeg(samples);
     cueCompensationFiltersRef.current.clear();
     // Snapshot BEFORE the ring is freed on the next line. Order matters: the
     // trace writer only runs once the phase below flips to "captured", by
@@ -5611,6 +5685,7 @@ export default function CameraClient() {
     kind,
     tNow,
     landmarks,
+    frameAspect,
     framingMode,
     captureOk,
     captureMessage,
@@ -5625,6 +5700,7 @@ export default function CameraClient() {
     kind: Ex005DebugRecord["kind"];
     tNow: number;
     landmarks: Array<{ x: number; y: number; visibility?: number }>;
+    frameAspect: number;
     framingMode: FramingMode;
     captureOk: boolean;
     captureMessage: string | null;
@@ -5657,9 +5733,9 @@ export default function CameraClient() {
       earMid.x !== null && hipMid.x !== null
         ? roundDebugNumber(earMid.x - hipMid.x)
         : null;
-    const uncorrectedHeadLeanDeg = headLeanFromVerticalDebug(hipMid, earMid);
-    const hipLineDeg = bodyPairAngleDebug(leftHip, rightHip);
-    const earLineDeg = bodyPairAngleDebug(leftEar, rightEar);
+    const uncorrectedHeadLeanDeg = headLeanFromVerticalDebug(hipMid, earMid, frameAspect);
+    const hipLineDeg = bodyPairAngleDebug(leftHip, rightHip, frameAspect);
+    const earLineDeg = bodyPairAngleDebug(leftEar, rightEar, frameAspect);
     const visibleSigned =
       typeof smoothedSignedDeg === "number" ? smoothedSignedDeg : rawSignedDeg;
 
@@ -6475,6 +6551,9 @@ export default function CameraClient() {
         videoResolutionRef.current = { width: video.videoWidth, height: video.videoHeight };
         setVideoResolution({ width: video.videoWidth, height: video.videoHeight });
       }
+      // The frame's shape (W/H). Every angle below is measured in the
+      // aspect-corrected image plane (D-48), so each metric call is given it.
+      const frameAspect = frameAspectOf(video.videoWidth, video.videoHeight);
       const nowFrame = performance.now();
       fpsFrameCountRef.current += 1;
       if (fpsWindowStartMsRef.current === 0) {
@@ -6621,6 +6700,13 @@ export default function CameraClient() {
             if (captureDropoutStartedAtRef.current === null) {
               captureDropoutStartedAtRef.current = now;
             }
+            // A rejected frame gives the counters no reading: lost tracking,
+            // not a camera stall (D-50).
+            if (sessionStateRef.current === "active") {
+              leftRepCounterRef.current?.noteMissing();
+              rightRepCounterRef.current?.noteMissing();
+              bidirectionalRepCounterRef.current?.noteMissing();
+            }
             commitCaptureState(false, r.message);
             if (
               activeDefinition?.id === "ex_005" &&
@@ -6631,6 +6717,7 @@ export default function CameraClient() {
                 kind: "not-ready",
                 tNow: now,
                 landmarks,
+                frameAspect,
                 framingMode,
                 captureOk: false,
                 captureMessage: r.message,
@@ -6665,7 +6752,7 @@ export default function CameraClient() {
               });
             } else {
               const tNow = performance.now();
-              const observedTilt = computeTiltReference(landmarks);
+              const observedTilt = computeTiltReference(landmarks, frameAspect);
               const ex004FaceShadowInference = inferEx004FaceShadow(
                 video,
                 landmarks,
@@ -6684,6 +6771,7 @@ export default function CameraClient() {
                 neutralCalibrationSamplesRef.current.push({
                   landmarks: landmarks.map((landmark) => ({ ...landmark })),
                   observedTilt,
+                  frameAspect,
                 });
                 if (neutralCalibrationSamplesRef.current.length > 300) {
                   neutralCalibrationSamplesRef.current.shift();
@@ -6717,6 +6805,10 @@ export default function CameraClient() {
                 landmarks,
                 activeDefinition,
                 effectiveTilt,
+                frameAspect,
+                // ex_004 counts from the calibration's ear line (D-49); every
+                // other primary, and every compensation, from the frozen tilt.
+                primaryReferenceFor(activeDefinition, calibrationEarLineDegRef.current),
               );
               // Trend data rule 4: in the rests between sets, a neck side bend
               // records what the still head reads under the current
@@ -6757,6 +6849,7 @@ export default function CameraClient() {
                 raw,
                 observedTilt,
                 tNow,
+                frameAspect,
               );
 
               // Direction strings for compensation overlay labels.
@@ -6768,6 +6861,7 @@ export default function CameraClient() {
                 const neckDir = computeLateralNeckTilt(
                   landmarks,
                   raw.tiltReference,
+                  frameAspect,
                 )?.direction;
                 if (neckDir && neckDir !== "center") {
                   metricDirections.neckTilt = neckDir;
@@ -6778,6 +6872,7 @@ export default function CameraClient() {
                 const leanDir = computeTrunkLateralLean(
                   landmarks,
                   raw.tiltReference,
+                  frameAspect,
                 )?.direction;
                 if (leanDir && leanDir !== "center") {
                   metricDirections.trunkLean = leanDir;
@@ -6801,6 +6896,7 @@ export default function CameraClient() {
                     ? computeTrunkLateralFlexionFromNeutralSigned(
                         landmarks,
                         neutralBaseline,
+                        frameAspect,
                       )
                     : null;
               }
@@ -6826,8 +6922,8 @@ export default function CameraClient() {
               );
 
               if (needsScapCompBaseline) {
-                const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left");
-                const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right");
+                const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left", frameAspect);
+                const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right", frameAspect);
 
                 // Override metricInputs with baseline-adjusted delta.
                 // (baseline − raw) is positive when shrugging; worst side
@@ -7075,6 +7171,7 @@ export default function CameraClient() {
               const restShoulder = restReferencedShoulderSymmetry(
                 landmarks,
                 shoulderRestLineDegRef.current,
+                frameAspect,
               );
               const shoulderSpec = activeDefinition.compensationMetrics.find(
                 (c) => c.name === "shoulderSymmetry",
@@ -7216,11 +7313,11 @@ export default function CameraClient() {
                   {
                     left: {
                       primary: smoothedPrimaryLeft,
-                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "left"),
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "left", frameAspect),
                     },
                     right: {
                       primary: smoothedPrimaryRight,
-                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "right"),
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "right", frameAspect),
                     },
                     sides: prescribedOutcomeSides(prescriptionRef.current.prescribedSide),
                     nowMs: tNow,
@@ -7342,6 +7439,10 @@ export default function CameraClient() {
                           checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} left`, event);
                         }
+                      } else if (sessionStateRef.current === "active") {
+                        // Processed, but no reading for this side: lost
+                        // tracking, not a camera stall (D-50).
+                        leftRepCounterRef.current?.noteMissing();
                       }
                       if (
                         sessionIsActive &&
@@ -7361,6 +7462,8 @@ export default function CameraClient() {
                           checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} right`, event);
                         }
+                      } else if (sessionStateRef.current === "active") {
+                        rightRepCounterRef.current?.noteMissing();
                       }
                   }
                 } else {
@@ -7394,6 +7497,7 @@ export default function CameraClient() {
                       kind: "frame",
                       tNow,
                       landmarks,
+                      frameAspect,
                       framingMode,
                       captureOk: true,
                       captureMessage: null,
@@ -7474,6 +7578,7 @@ export default function CameraClient() {
                             kind: "rep",
                             tNow,
                             landmarks,
+                            frameAspect,
                             framingMode,
                             captureOk: true,
                             captureMessage: null,
@@ -7591,6 +7696,11 @@ export default function CameraClient() {
                         }
                       }
                     }
+                  } else if (sessionStateRef.current === "active") {
+                    // Processed, but no reading: lost tracking, not a camera
+                    // stall (D-50).
+                    leftRepCounterRef.current?.noteMissing();
+                    bidirectionalRepCounterRef.current?.noteMissing();
                   }
                 }
               } else if (activeDefinition.kind === "isometric") {
@@ -7937,7 +8047,7 @@ export default function CameraClient() {
                 lockedShoulderIndexRef.current = lowerArrowShoulder(
                   lockedShoulderIndexRef.current,
                   landmarks,
-                  restShoulder ?? computeShoulderSymmetry(landmarks, raw.tiltReference),
+                  restShoulder ?? computeShoulderSymmetry(landmarks, raw.tiltReference, frameAspect),
                   cueClearLevel(lowerSpec),
                 );
               } else if (selectedCoachingCueMetricRef.current !== "shoulderSymmetry") {
@@ -8060,6 +8170,11 @@ export default function CameraClient() {
             captureFramesTotalRef.current += 1;
             const rejected = captureRejectedByStatusRef.current;
             rejected.NOT_VISIBLE = (rejected.NOT_VISIBLE ?? 0) + 1;
+            // Nor do the counters get a reading: lost tracking, not a camera
+            // stall (D-50).
+            leftRepCounterRef.current?.noteMissing();
+            rightRepCounterRef.current?.noteMissing();
+            bidirectionalRepCounterRef.current?.noteMissing();
           }
           trackingMarksRef.current = addTrackingMark(trackingMarksRef.current, {
             t: performance.now(), captureOk: false, checked: [], unsteady: [],
@@ -8275,9 +8390,10 @@ export default function CameraClient() {
   // exercise-switch (row closed) even though both also read "in_progress".
   const openSession = openSessions.get(selectedExercise) ?? null;
   // Only read localStorage when idle — avoids parsing it on every frame of an
-  // active session (the prompt/pill only matter at idle anyway).
+  // active session (the prompt/pill only matter at idle anyway). It is read
+  // again once the page's exercise versions have settled (D-49).
   const resumeSnap =
-    sessionState === "idle"
+    sessionState === "idle" && exerciseVersionsSettled
       ? readResumeSnapshot(selectedExerciseObj?.patientExerciseId)
       : null;
   const resumeEligible =

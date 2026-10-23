@@ -18,10 +18,14 @@ import { EXERCISE_REGISTRY, type ExerciseDefinition } from "../exercises/registr
 import {
   computeNeckLateralFlexionSigned,
   computePoseMetricsForExercise,
+  earLineAngleDeg,
+  frameAspectOf,
   splitSignedBySide,
+  NO_ASPECT_CORRECTION,
 } from "./poseMetrics";
 import { RepCounter } from "./repCounter";
 import { captureCoachingProvenance } from "./coachingConfig";
+import { restingShoulderLineDeg } from "./shoulderRestReference";
 import { createCameraReplay } from "../../../scripts/lib/cameraReplayHarness";
 
 let passed = 0;
@@ -63,8 +67,20 @@ function rawHead(deg: number): any[] {
 }
 // Orient the construction so a positive request reads as a positive signed
 // angle (patient's LEFT under the convention neckSideAgreement.test.ts pins).
-const orientation = Math.sign(computeNeckLateralFlexionSigned(rawHead(20), level, "left") ?? 0);
+const orientation = Math.sign(computeNeckLateralFlexionSigned(rawHead(20), level, "left", NO_ASPECT_CORRECTION) ?? 0);
 const head = (signedDeg: number) => rawHead(orientation * signedDeg);
+
+// The motion scripts below were written in pipeline units, the near-horizontal
+// ear line's reading on a 16:9 frame before the aspect correction (D-48). The
+// counters now read the corrected tilt, so each scripted sample is converted on
+// the way in; the camera-loop runs convert by themselves, since their figures are
+// laid out in normalised coordinates and the loop measures them at 1280x720.
+const WIDE = frameAspectOf(1280, 720);
+const corrected = (pipelineDeg: number) =>
+  (Math.atan(Math.tan((pipelineDeg * Math.PI) / 180) / WIDE) * 180) / Math.PI;
+// The other way: a figure whose ear line the camera loop reads at `correctedDeg`.
+const headAt = (correctedDeg: number) =>
+  head((Math.atan(Math.tan((correctedDeg * Math.PI) / 180) * WIDE) * 180) / Math.PI);
 
 // ── Motion scripts: ramps sampled at ~30 fps ────────────────────────────────
 const FRAME_MS = 33;
@@ -86,7 +102,7 @@ function countSigned(series: number[]): Counted[] {
   let t = 1000;
   for (const v of series) {
     t += FRAME_MS;
-    const s = splitSignedBySide(v);
+    const s = splitSignedBySide(corrected(v));
     const l = left.update(s.left as number, t);
     const r = right.update(s.right as number, t);
     if (l) out.push({ side: "left", peak: l.peakValue, classification: l.classification });
@@ -103,13 +119,14 @@ async function main() {
     assertEq(ex004.kind, "dynamic", "kind");
     assertEq(ex004.bilateralMode, "per-limb", "bilateralMode");
     assertEq(ex004.primaryMetric.name, "neckLateralFlexion", "primary metric");
-    assert(thresholds.startThreshold >= 12, "start threshold must clear the ~11° resting noise band");
+    // About 11 peak-to-peak at rest in pipeline units (D-30).
+    assert(thresholds.startThreshold >= corrected(11), "start threshold must clear the resting noise band");
   });
 
   await test("metric split: positive tilt feeds only the left side, negative only the right", () => {
     assert(orientation !== 0, "fixture must produce a nonzero signed angle");
     for (const deg of [25, -25, 0]) {
-      const m = computePoseMetricsForExercise(head(deg), ex004, level);
+      const m = computePoseMetricsForExercise(head(deg), ex004, level, NO_ASPECT_CORRECTION);
       const signed = m.metrics.neckLateralFlexion;
       assert(typeof signed === "number" && Math.abs(signed - deg) < 0.01, `signed ${deg}° reads ${signed}`);
       assertEq(m.perSideMetrics?.left, Math.max(0, signed), `left at ${deg}°`);
@@ -117,7 +134,7 @@ async function main() {
     }
     const missing = rawHead(10);
     missing[7] = { ...missing[7], visibility: 0 };
-    const m = computePoseMetricsForExercise(missing, ex004, level);
+    const m = computePoseMetricsForExercise(missing, ex004, level, NO_ASPECT_CORRECTION);
     assertEq(m.perSideMetrics?.left, null, "occluded ear leaves the left side unavailable");
     assertEq(m.perSideMetrics?.right, null, "occluded ear leaves the right side unavailable");
   });
@@ -139,7 +156,7 @@ async function main() {
 
   await test("I1: an overshoot that crosses the start threshold but not the minimum peak is discarded", () => {
     const reps = countSigned([...hold(0, 400), ...stroke(0, 40, -15), ...ramp(-15, 0, 400), ...hold(0, 600)]);
-    assertEq(sides(reps), "left", "15° overshoot (start 12, minimum peak 18)");
+    assertEq(sides(reps), "left", "15 overshoot (start 12, minimum peak 18, all in pipeline units)");
   });
 
   await test("I2: loose returns to neutral (3/5/7/8°) still count every alternating repetition", () => {
@@ -228,8 +245,9 @@ async function main() {
     assert(replay.context.neutralCalibrationSamplesRef.current.length > 0, "samples once the countdown has run out");
   });
 
-  // A figure whose shoulders rest tilted by `restDeg` (shoulder line, pipeline
-  // units) and tilt `followDeg` further while the head bends to the right.
+  // A figure whose shoulders rest tilted by `restDeg` (the shoulder line in
+  // normalised coordinates, i.e. pipeline units) and tilt `followDeg` further
+  // while the head bends to the right.
   const withShoulders = (headDeg: number, restDeg: number, followDeg: number) => {
     const lm = head(headDeg);
     const tilt = restDeg + (headDeg < 0 ? (followDeg * -headDeg) / 40 : 0);
@@ -253,15 +271,18 @@ async function main() {
   };
 
   await test("camera loop: LOWER judged against the resting shoulder line ignores a resting tilt (D-47)", async () => {
-    // Against the frozen tilt (0) the resting shoulders already read 6 and the
-    // bends add 3 more, past the switch-on level of 7. Against their resting
-    // line (-6) only the 3 added in each bend count.
+    // At 1280x720 the resting shoulders (6 in pipeline units) read 3.4 against
+    // the frozen tilt (0), and the bends (3 more) take them to 5.1, past the
+    // switch-on level of 4. Against their resting line, which the calibration
+    // measures from the still figure, only the part added in each bend counts.
+    const restLine = restingShoulderLineDeg([{ landmarks: withShoulders(0, -6, 0), frameAspect: WIDE }]);
+    assert(restLine !== null && Math.abs(restLine - corrected(-6)) < 1e-9, `rest line ${restLine}`);
     const frozen = await lowerDrawn(null);
-    const resting = await lowerDrawn(-6);
+    const resting = await lowerDrawn(restLine);
     assert(frozen > 0, `against the frozen tilt the cue is drawn (${frozen} frames)`);
     assertEq(resting, 0, "against the resting shoulder line it is not");
-    // A shoulder that rises 9 from its resting line during the bends still draws it.
-    assert((await lowerDrawn(-6, -9)) > 0, "a real hike past the switch-on level still draws LOWER");
+    // A shoulder that rises 9 pipeline units (5.2 here) from its resting line still draws it.
+    assert((await lowerDrawn(restLine, -9)) > 0, "a real hike past the switch-on level still draws LOWER");
   });
 
   await test("camera loop: in the rests, a neck side bend records what the still head reads", async () => {
@@ -276,6 +297,49 @@ async function main() {
     const readings: number[] = replay.context.neckRestTallyRef.current.epochs[0].readings;
     assert(readings.length > 20, `readings during the rest: ${readings.length}`);
     assert(readings.every((v) => Math.abs(v + 2) < 1e-6), "a level head under a frozen tilt of 2 reads -2");
+  });
+
+  // D-49: ex_004 counts from the ear line frozen in the calibration. A head
+  // resting 5 off the frozen tilt (uneven hips, an angled stance) bends 22
+  // each way. From the frozen tilt the left reads 27 and the right 17, short of
+  // the target (18); from the calibration's ear line both read 22.
+  const restingBends = async (earLine: number | null) => {
+    const provenance = await captureCoachingProvenance(ex004);
+    const replay = createCameraReplay(ex004, provenance);
+    let t = 1000;
+    const script = [...hold(5, 1000), ...stroke(5, 27, 5), ...hold(5, 300), ...stroke(5, -17, 5), ...hold(5, 1000)];
+    for (const deg of script) replay.tick({ tMs: (t += FRAME_MS), landmarks: headAt(deg), frozenTilt: 0, earLine });
+    const one = (side: string) => {
+      const reps = replay.emitted.filter((r: any) => r.side === side);
+      assertEq(reps.length, 1, `${side} repetitions (earLine ${earLine})`);
+      return reps[0];
+    };
+    return { left: one("left"), right: one("right") };
+  };
+
+  await test("camera loop: counted from the calibration ear line, a resting head tilt is the zero (D-49)", async () => {
+    const restLine = earLineAngleDeg(headAt(5), WIDE);
+    assert(restLine !== null && Math.abs(restLine - 5) < 1e-9, `the resting figure's ear line reads ${restLine}`);
+    const frozen = await restingBends(null);
+    assert(frozen.left.peakValue - frozen.right.peakValue > 8, `from the frozen tilt: left ${frozen.left.peakValue}, right ${frozen.right.peakValue}`);
+    assertEq(frozen.right.classification, "partial", "a full right bend falls short of the target");
+    const fromRest = await restingBends(restLine);
+    assert(Math.abs(fromRest.left.peakValue - fromRest.right.peakValue) < 1, `from the ear line: left ${fromRest.left.peakValue}, right ${fromRest.right.peakValue}`);
+    assert(Math.abs(fromRest.left.peakValue - 22) < 1, `the bend itself: ${fromRest.left.peakValue}`);
+    assertEq(fromRest.left.classification, "complete", "left complete");
+    assertEq(fromRest.right.classification, "complete", "right complete");
+  });
+
+  await test("camera loop: from the calibration ear line, the still head reads 0 in the rests (D-49)", async () => {
+    const provenance = await captureCoachingProvenance(ex004);
+    const replay = createCameraReplay(ex004, provenance);
+    let t = 1000;
+    replay.context.neckRestTallyRef.current = { epochs: [{ from: new Date(t).toISOString(), readings: [] }] };
+    replay.context.sessionStateRef.current = "resting";
+    for (const deg of hold(0, 1_000)) replay.tick({ tMs: (t += FRAME_MS), landmarks: head(deg), frozenTilt: 2, earLine: 0 });
+    const readings: number[] = replay.context.neckRestTallyRef.current.epochs[0].readings;
+    assert(readings.length > 20, `readings during the rest: ${readings.length}`);
+    assert(readings.every((v) => Math.abs(v) < 1e-6), "the head at its calibration posture reads 0, whatever the frozen tilt");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

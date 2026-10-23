@@ -14,7 +14,7 @@
  * without a baseline.
  */
 
-import { computeScapularElevation } from "./poseMetrics";
+import { computeScapularElevation, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 import { RepCounter } from "./repCounter";
 import { EXERCISE_REGISTRY } from "../exercises/registry";
@@ -97,8 +97,8 @@ console.log("\ncomputeScapularElevation — synthetic data tests\n");
 
 test("rest pose → finite positive value on both sides (ear above shoulder along trunk axis)", () => {
   const lms = neutralPose();
-  const left  = computeScapularElevation(lms, TILT_REF, "left");
-  const right = computeScapularElevation(lms, TILT_REF, "right");
+  const left  = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeScapularElevation(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNotNull(left,  "left rest");
   assertNotNull(right, "right rest");
   if (left  <= 0) throw new Error(`left rest projection should be positive, got ${left}`);
@@ -109,14 +109,14 @@ test("rest pose → finite positive value on both sides (ear above shoulder alon
 
 test("left shoulder hiked up toward ear → smaller projection than rest", () => {
   const rest = neutralPose();
-  const restLeft = computeScapularElevation(rest, TILT_REF, "left");
+  const restLeft = computeScapularElevation(rest, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(restLeft, "rest left");
 
   // Hike: move left shoulder UP (smaller y) by ~one third of the rest
   // ear-to-shoulder gap. Don't move the ear.
   const shrug = neutralPose();
   shrug[11] = { x: 0.60, y: 0.26, visibility: 1 };
-  const shrugLeft = computeScapularElevation(shrug, TILT_REF, "left");
+  const shrugLeft = computeScapularElevation(shrug, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(shrugLeft, "shrug left");
 
   assertLessThan(shrugLeft, restLeft, "shrug should reduce projection vs rest");
@@ -124,12 +124,12 @@ test("left shoulder hiked up toward ear → smaller projection than rest", () =>
 
 test("only LEFT shoulder hikes → right side projection essentially unchanged", () => {
   const rest = neutralPose();
-  const restRight = computeScapularElevation(rest, TILT_REF, "right");
+  const restRight = computeScapularElevation(rest, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNotNull(restRight, "rest right");
 
   const asymShrug = neutralPose();
   asymShrug[11] = { x: 0.60, y: 0.26, visibility: 1 };
-  const asymRight = computeScapularElevation(asymShrug, TILT_REF, "right");
+  const asymRight = computeScapularElevation(asymShrug, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNotNull(asymRight, "asym right");
 
   // Right side uses RIGHT shoulder for its ear-offset, so moving the LEFT
@@ -158,7 +158,7 @@ test("symmetric forward lean → projection roughly preserved (no false shrug)",
   // DOWN toward the hips), and ALSO shortening the ear-to-shoulder distance
   // by the same fraction (the head leans WITH the trunk).
   const rest = neutralPose();
-  const restLeft = computeScapularElevation(rest, TILT_REF, "left");
+  const restLeft = computeScapularElevation(rest, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(restLeft, "rest left");
 
   const leanFactor = 0.7; // trunk and head both foreshorten by 30%
@@ -173,7 +173,7 @@ test("symmetric forward lean → projection roughly preserved (no false shrug)",
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  const leanLeft = computeScapularElevation(lean, TILT_REF, "left");
+  const leanLeft = computeScapularElevation(lean, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(leanLeft, "lean left");
 
   // The whole point: the projection should be roughly preserved despite the
@@ -188,7 +188,7 @@ test("scaled-up patient (further from camera) → same projection value", () => 
   // Patient further from camera: all landmarks compress toward image center.
   // Trunk-length normalization should make this invariant.
   const rest = neutralPose();
-  const restLeft = computeScapularElevation(rest, TILT_REF, "left");
+  const restLeft = computeScapularElevation(rest, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(restLeft, "rest left");
 
   const scaled = makeLandmarks({
@@ -199,7 +199,7 @@ test("scaled-up patient (further from camera) → same projection value", () => 
     leftHip:       { x: 0.54, y: 0.46 },
     rightHip:      { x: 0.46, y: 0.46 },
   });
-  const scaledLeft = computeScapularElevation(scaled, TILT_REF, "left");
+  const scaledLeft = computeScapularElevation(scaled, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNotNull(scaledLeft, "scaled left");
 
   assertCloseTo(scaledLeft, restLeft, 0.05, "projection should be scale-invariant");
@@ -210,8 +210,8 @@ test("scaled-up patient (further from camera) → same projection value", () => 
 test("low-vis left ear → left null, right still computable", () => {
   const lms = neutralPose();
   lms[7] = { x: 0.58, y: 0.18, visibility: 0.2 };
-  const left  = computeScapularElevation(lms, TILT_REF, "left");
-  const right = computeScapularElevation(lms, TILT_REF, "right");
+  const left  = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeScapularElevation(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left, "left with low-vis ear");
   assertNotNull(right, "right unaffected");
 });
@@ -219,8 +219,8 @@ test("low-vis left ear → left null, right still computable", () => {
 test("low-vis hip → both sides null (trunk axis broken)", () => {
   const lms = neutralPose();
   lms[24] = { x: 0.42, y: 0.55, visibility: 0.2 };
-  const left  = computeScapularElevation(lms, TILT_REF, "left");
-  const right = computeScapularElevation(lms, TILT_REF, "right");
+  const left  = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeScapularElevation(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left,  "left null with low-vis hip");
   assertNull(right, "right null with low-vis hip");
 });
@@ -287,8 +287,8 @@ test("synthetic single shrug counts as 1 rep on each side after baseline capture
   const rightSamples: number[] = [];
   for (let i = 0; i < 60; i++) {
     const lms = frameLandmarks(i);
-    const l = computeScapularElevation(lms, TILT_REF, "left");
-    const r = computeScapularElevation(lms, TILT_REF, "right");
+    const l = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+    const r = computeScapularElevation(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
     if (l !== null) leftSamples.push(l);
     if (r !== null) rightSamples.push(r);
   }
@@ -309,8 +309,8 @@ test("synthetic single shrug counts as 1 rep on each side after baseline capture
   for (let i = 60; i < TOTAL_FRAMES; i++) {
     const tMs = i * (1000 / 30);
     const lms = frameLandmarks(i);
-    const l = computeScapularElevation(lms, TILT_REF, "left");
-    const r = computeScapularElevation(lms, TILT_REF, "right");
+    const l = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+    const r = computeScapularElevation(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
 
     if (l !== null) {
       const adjusted = leftBaseline - l;
@@ -361,7 +361,7 @@ test("with no baseline subtraction (raw projection fed in directly), rep counter
       leftHip:      { x: 0.58, y: 0.55 },
       rightHip:     { x: 0.42, y: 0.55 },
     });
-    const raw = computeScapularElevation(lms, TILT_REF, "left");
+    const raw = computeScapularElevation(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
     if (raw !== null) counter.update(raw, tMs);
   }
   if (counter.getRepCount() !== 0) {

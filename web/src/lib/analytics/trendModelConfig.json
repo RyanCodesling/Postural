@@ -10,9 +10,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 33.60386,
-   "tauHat": 5.313237,
-   "tauSource": "learned (MLE 0.0336 from 2 series)"
+   "sigmaU": 31.209132,
+   "tauHat": 4.934597,
+   "tauSource": "learned (MLE 0.03121 from 2 series)"
   },
   "ex_001:exposure:scapularElevation": {
    "band": true,
@@ -23,9 +23,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 9.118998,
-   "tauHat": 5.713992,
-   "tauSource": "learned (MLE 5.714 from 2 series)"
+   "sigmaU": 11.174717,
+   "tauHat": 4.952826,
+   "tauSource": "learned (MLE 4.953 from 2 series)"
   },
   "ex_001:exposure:shoulderSymmetry": {
    "band": true,
@@ -36,9 +36,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 5.094487,
-   "tauHat": 0.805509,
-   "tauSource": "learned (MLE 0.005094 from 2 series)"
+   "sigmaU": 9.970408,
+   "tauHat": 1.57646,
+   "tauSource": "learned (MLE 0.00997 from 2 series)"
   },
   "ex_001:exposure:trunkLean": {
    "band": true,
@@ -49,9 +49,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 2.20545,
-   "tauHat": 0.348712,
-   "tauSource": "learned (MLE 0.002205 from 2 series)"
+   "sigmaU": 1.886539,
+   "tauHat": 0.298288,
+   "tauSource": "learned (MLE 0.001887 from 2 series)"
   },
   "ex_001:formScore": {
    "band": true,
@@ -61,10 +61,10 @@
    "measure": "formScore",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "own (5 sessions with >= 2 units)",
-   "sigmaU": 1.88969,
-   "tauHat": 2.846658,
-   "tauSource": "learned (MLE 2.847 from 2 series)"
+   "sigmaSource": "own (7 sessions with >= 2 units)",
+   "sigmaU": 3.377275,
+   "tauHat": 1.679996,
+   "tauSource": "learned (MLE 1.68 from 2 series)"
   },
   "ex_001:loweringS": {
    "band": false,
@@ -75,9 +75,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.067357,
-   "tauHat": 0.062489,
-   "tauSource": "learned (MLE 0.06249 from 2 series)"
+   "sigmaU": 0.092401,
+   "tauHat": 0.076378,
+   "tauSource": "learned (MLE 0.07638 from 2 series)"
   },
   "ex_001:peak": {
    "band": true,
@@ -87,10 +87,10 @@
    "measure": "peak",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "own (7 sessions with >= 2 units)",
-   "sigmaU": 4.275621,
-   "tauHat": 1.895029,
-   "tauSource": "learned (MLE 1.895 from 2 series)"
+   "sigmaSource": "own (9 sessions with >= 2 units)",
+   "sigmaU": 2.865377,
+   "tauHat": 0.857773,
+   "tauSource": "learned (MLE 0.8578 from 2 series)"
   },
   "ex_001:peakSpread": {
    "band": true,
@@ -102,8 +102,8 @@
    "sessionLevel": true,
    "sigmaSource": "own",
    "sigmaU": 0.0,
-   "tauHat": 0.705676,
-   "tauSource": "learned (MLE 0.7057 from 2 series)"
+   "tauHat": 0.66132,
+   "tauSource": "learned (MLE 0.6613 from 2 series)"
   },
   "ex_001:raisingS": {
    "band": true,
@@ -114,22 +114,22 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.578962,
-   "tauHat": 0.091542,
-   "tauSource": "learned (MLE 0.000579 from 2 series)"
+   "sigmaU": 0.075198,
+   "tauHat": 0.085872,
+   "tauSource": "learned (MLE 0.08587 from 2 series)"
   },
   "ex_004:completionPct": {
-   "band": true,
+   "band": false,
    "deltaMin": 0.0,
    "exercise": "ex_004",
    "labelled": false,
    "measure": "completionPct",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/completionPct",
-   "sigmaU": 33.60386,
-   "tauHat": 16.228102,
-   "tauSource": "borrowed from completion (2 learned)"
+   "sigmaSource": "own",
+   "sigmaU": 0.0,
+   "tauHat": 0.0,
+   "tauSource": "borrowed from completion (2 learned); no observed variation (deviation 3)"
   },
   "ex_004:exposure:shoulderSymmetry": {
    "band": true,
@@ -139,10 +139,10 @@
    "measure": "exposure:shoulderSymmetry",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/exposure:shoulderSymmetry",
-   "sigmaU": 5.094487,
-   "tauHat": 3.192221,
-   "tauSource": "borrowed from exposure (5 learned)"
+   "sigmaSource": "own",
+   "sigmaU": 15.5555,
+   "tauHat": 12.564701,
+   "tauSource": "learned (MLE 12.56 from 2 series)"
   },
   "ex_004:exposure:trunkLean": {
    "band": true,
@@ -152,10 +152,10 @@
    "measure": "exposure:trunkLean",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/exposure:trunkLean",
-   "sigmaU": 2.20545,
-   "tauHat": 1.381942,
-   "tauSource": "borrowed from exposure (5 learned)"
+   "sigmaSource": "own",
+   "sigmaU": 0.304069,
+   "tauHat": 3.040688,
+   "tauSource": "learned (MLE 3.041 from 2 series)"
   },
   "ex_004:formScore": {
    "band": true,
@@ -165,10 +165,10 @@
    "measure": "formScore",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/formScore",
-   "sigmaU": 1.88969,
-   "tauHat": 2.846658,
-   "tauSource": "borrowed (median tau/sigma_u 1.506 of B)"
+   "sigmaSource": "own (4 sessions with >= 2 units)",
+   "sigmaU": 3.461477,
+   "tauHat": 5.852368,
+   "tauSource": "learned (MLE 5.852 from 2 series)"
   },
   "ex_004:holdDroop": {
    "band": true,
@@ -179,8 +179,8 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "donor ex_006/holdDroop",
-   "sigmaU": 0.411977,
-   "tauHat": 2.479257,
+   "sigmaU": 0.234495,
+   "tauHat": 1.905061,
    "tauSource": "borrowed from holdQuality (3 learned)"
   },
   "ex_004:holdError": {
@@ -192,8 +192,8 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "donor ex_006/holdError",
-   "sigmaU": 2.159282,
-   "tauHat": 12.994454,
+   "sigmaU": 1.242835,
+   "tauHat": 10.096897,
    "tauSource": "borrowed from holdQuality (3 learned)"
   },
   "ex_004:holdFormScore": {
@@ -205,9 +205,9 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/formScore",
-   "sigmaU": 1.88969,
-   "tauHat": 2.846658,
-   "tauSource": "borrowed (median tau/sigma_u 1.506 of B)"
+   "sigmaU": 3.377275,
+   "tauHat": 1.679996,
+   "tauSource": "borrowed (median tau/sigma_u 0.4974 of B)"
   },
   "ex_004:holdSteadiness": {
    "band": true,
@@ -218,8 +218,8 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "donor ex_006/holdSteadiness",
-   "sigmaU": 5.777543,
-   "tauHat": 34.768967,
+   "sigmaU": 3.326495,
+   "tauHat": 27.024728,
    "tauSource": "borrowed from holdQuality (3 learned)"
   },
   "ex_004:inBandPct": {
@@ -236,17 +236,17 @@
    "tauSource": "borrowed (median tau/sigma_u 0.3536 of D)"
   },
   "ex_004:loweringS": {
-   "band": false,
+   "band": true,
    "deltaMin": 0.0,
    "exercise": "ex_004",
    "labelled": false,
    "measure": "loweringS",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/loweringS",
-   "sigmaU": 0.067357,
-   "tauHat": 0.069704,
-   "tauSource": "borrowed from timing (4 learned)"
+   "sigmaSource": "own",
+   "sigmaU": 0.126488,
+   "tauHat": 0.019999,
+   "tauSource": "learned (MLE 0.0001265 from 2 series)"
   },
   "ex_004:peak": {
    "band": true,
@@ -256,10 +256,10 @@
    "measure": "peak",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_005/peak",
-   "sigmaU": 1.369749,
-   "tauHat": 0.785195,
-   "tauSource": "borrowed (median tau/sigma_u 0.5732 of A/C)"
+   "sigmaSource": "own (4 sessions with >= 2 units)",
+   "sigmaU": 2.072916,
+   "tauHat": 1.879209,
+   "tauSource": "learned (MLE 1.879 from 2 series)"
   },
   "ex_004:peakSpread": {
    "band": true,
@@ -269,23 +269,23 @@
    "measure": "peakSpread",
    "minUnits": 3,
    "sessionLevel": true,
-   "sigmaSource": "session level",
+   "sigmaSource": "own",
    "sigmaU": 0.0,
-   "tauHat": 0.591374,
-   "tauSource": "borrowed from spread (2 learned)"
+   "tauHat": 0.230887,
+   "tauSource": "learned (MLE 0.2309 from 2 series)"
   },
   "ex_004:raisingS": {
-   "band": false,
+   "band": true,
    "deltaMin": 0.0,
    "exercise": "ex_004",
    "labelled": false,
    "measure": "raisingS",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "donor ex_001/raisingS",
-   "sigmaU": 0.578962,
-   "tauHat": 0.599129,
-   "tauSource": "borrowed from timing (4 learned)"
+   "sigmaSource": "own",
+   "sigmaU": 0.177841,
+   "tauHat": 0.058388,
+   "tauSource": "learned (MLE 0.05839 from 2 series)"
   },
   "ex_005:completionPct": {
    "band": true,
@@ -296,9 +296,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 14.048787,
-   "tauHat": 11.347678,
-   "tauSource": "learned (MLE 11.35 from 2 series)"
+   "sigmaU": 12.632279,
+   "tauHat": 11.99293,
+   "tauSource": "learned (MLE 11.99 from 2 series)"
   },
   "ex_005:exposure:neckTilt": {
    "band": true,
@@ -309,9 +309,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.50798,
-   "tauHat": 0.40095,
-   "tauSource": "learned (MLE 0.4009 from 2 series)"
+   "sigmaU": 0.687812,
+   "tauHat": 0.108753,
+   "tauSource": "learned (MLE 0.0006878 from 2 series)"
   },
   "ex_005:exposure:scapularElevation": {
    "band": true,
@@ -322,9 +322,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 3.667932,
-   "tauHat": 2.962712,
-   "tauSource": "learned (MLE 2.963 from 2 series)"
+   "sigmaU": 4.029001,
+   "tauHat": 2.833448,
+   "tauSource": "learned (MLE 2.833 from 2 series)"
   },
   "ex_005:formScore": {
    "band": true,
@@ -334,13 +334,13 @@
    "measure": "formScore",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "own (4 sessions with >= 2 units)",
-   "sigmaU": 10.39142,
-   "tauHat": 3.039767,
-   "tauSource": "learned (MLE 3.04 from 2 series)"
+   "sigmaSource": "own (6 sessions with >= 2 units)",
+   "sigmaU": 9.40997,
+   "tauHat": 3.235408,
+   "tauSource": "learned (MLE 3.235 from 2 series)"
   },
   "ex_005:loweringS": {
-   "band": true,
+   "band": false,
    "deltaMin": 0.0,
    "exercise": "ex_005",
    "labelled": false,
@@ -348,9 +348,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.07284,
-   "tauHat": 0.083179,
-   "tauSource": "learned (MLE 0.08318 from 2 series)"
+   "sigmaU": 0.085964,
+   "tauHat": 0.04964,
+   "tauSource": "borrowed from timing (4 learned)"
   },
   "ex_005:peak": {
    "band": true,
@@ -360,10 +360,10 @@
    "measure": "peak",
    "minUnits": 3,
    "sessionLevel": false,
-   "sigmaSource": "own (5 sessions with >= 2 units)",
-   "sigmaU": 1.369749,
-   "tauHat": 0.963294,
-   "tauSource": "learned (MLE 0.9633 from 2 series)"
+   "sigmaSource": "own (7 sessions with >= 2 units)",
+   "sigmaU": 2.199288,
+   "tauHat": 1.044657,
+   "tauSource": "learned (MLE 1.045 from 2 series)"
   },
   "ex_005:peakSpread": {
    "band": true,
@@ -375,11 +375,11 @@
    "sessionLevel": true,
    "sigmaSource": "own",
    "sigmaU": 0.0,
-   "tauHat": 0.477072,
-   "tauSource": "learned (MLE 0.4771 from 2 series)"
+   "tauHat": 0.773869,
+   "tauSource": "learned (MLE 0.7739 from 2 series)"
   },
   "ex_005:raisingS": {
-   "band": true,
+   "band": false,
    "deltaMin": 0.0,
    "exercise": "ex_005",
    "labelled": false,
@@ -387,9 +387,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.110553,
-   "tauHat": 0.182649,
-   "tauSource": "learned (MLE 0.1826 from 2 series)"
+   "sigmaU": 0.101471,
+   "tauHat": 0.058595,
+   "tauSource": "borrowed from timing (4 learned)"
   },
   "ex_006:holdDroop": {
    "band": true,
@@ -400,9 +400,9 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 0.411977,
-   "tauHat": 2.479257,
-   "tauSource": "learned (MLE 2.479 from 1 series)"
+   "sigmaU": 0.234495,
+   "tauHat": 2.344954,
+   "tauSource": "learned (MLE 2.345 from 1 series)"
   },
   "ex_006:holdError": {
    "band": true,
@@ -413,9 +413,9 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 2.159282,
-   "tauHat": 15.629984,
-   "tauSource": "learned (MLE 15.63 from 1 series)"
+   "sigmaU": 1.242835,
+   "tauHat": 10.096897,
+   "tauSource": "learned (MLE 10.1 from 1 series)"
   },
   "ex_006:holdFormScore": {
    "band": true,
@@ -439,9 +439,9 @@
    "minUnits": 1,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 5.777543,
-   "tauHat": 6.751688,
-   "tauSource": "learned (MLE 6.752 from 1 series)"
+   "sigmaU": 3.326495,
+   "tauHat": 8.136883,
+   "tauSource": "learned (MLE 8.137 from 1 series)"
   },
   "ex_006:inBandPct": {
    "band": true,
@@ -465,8 +465,8 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/completionPct",
-   "sigmaU": 33.60386,
-   "tauHat": 16.228102,
+   "sigmaU": 31.209132,
+   "tauHat": 17.282082,
    "tauSource": "borrowed from completion (2 learned)"
   },
   "ex_007:exposure:trunkLean": {
@@ -478,9 +478,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/exposure:trunkLean",
-   "sigmaU": 2.20545,
-   "tauHat": 1.381942,
-   "tauSource": "borrowed from exposure (5 learned)"
+   "sigmaU": 1.886539,
+   "tauHat": 0.836147,
+   "tauSource": "borrowed from exposure (7 learned)"
   },
   "ex_007:formScore": {
    "band": true,
@@ -491,9 +491,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/formScore",
-   "sigmaU": 1.88969,
-   "tauHat": 2.846658,
-   "tauSource": "borrowed (median tau/sigma_u 1.506 of B)"
+   "sigmaU": 3.377275,
+   "tauHat": 1.679996,
+   "tauSource": "borrowed (median tau/sigma_u 0.4974 of B)"
   },
   "ex_007:loweringS": {
    "band": false,
@@ -504,8 +504,8 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/loweringS",
-   "sigmaU": 0.067357,
-   "tauHat": 0.069704,
+   "sigmaU": 0.092401,
+   "tauHat": 0.053357,
    "tauSource": "borrowed from timing (4 learned)"
   },
   "ex_007:peak": {
@@ -518,8 +518,8 @@
    "sessionLevel": false,
    "sigmaSource": "own, single session (deviation 2)",
    "sigmaU": 0.022435,
-   "tauHat": 0.01286,
-   "tauSource": "borrowed (median tau/sigma_u 0.5732 of A/C)"
+   "tauHat": 0.008686,
+   "tauSource": "borrowed (median tau/sigma_u 0.3872 of A/C)"
   },
   "ex_007:peakSpread": {
    "band": true,
@@ -531,8 +531,8 @@
    "sessionLevel": true,
    "sigmaSource": "session level",
    "sigmaU": 0.0,
-   "tauHat": 0.591374,
-   "tauSource": "borrowed from spread (2 learned)"
+   "tauHat": 0.66132,
+   "tauSource": "borrowed from spread (3 learned)"
   },
   "ex_007:raisingS": {
    "band": false,
@@ -543,8 +543,8 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/raisingS",
-   "sigmaU": 0.578962,
-   "tauHat": 0.599129,
+   "sigmaU": 0.075198,
+   "tauHat": 0.043423,
    "tauSource": "borrowed from timing (4 learned)"
   },
   "ex_008:completionPct": {
@@ -569,9 +569,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/exposure:trunkLean",
-   "sigmaU": 2.20545,
-   "tauHat": 1.381942,
-   "tauSource": "borrowed from exposure (5 learned)"
+   "sigmaU": 1.886539,
+   "tauHat": 0.836147,
+   "tauSource": "borrowed from exposure (7 learned)"
   },
   "ex_008:formScore": {
    "band": true,
@@ -582,9 +582,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "donor ex_001/formScore",
-   "sigmaU": 1.88969,
-   "tauHat": 2.846658,
-   "tauSource": "borrowed (median tau/sigma_u 1.506 of B)"
+   "sigmaU": 3.377275,
+   "tauHat": 1.679996,
+   "tauSource": "borrowed (median tau/sigma_u 0.4974 of B)"
   },
   "ex_008:loweringS": {
    "band": false,
@@ -595,8 +595,8 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 1.253065,
-   "tauHat": 1.296713,
+   "sigmaU": 0.151074,
+   "tauHat": 0.087238,
    "tauSource": "borrowed from timing (4 learned)"
   },
   "ex_008:peak": {
@@ -608,9 +608,9 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own (2 sessions with >= 2 units)",
-   "sigmaU": 1.961171,
-   "tauHat": 1.124222,
-   "tauSource": "borrowed (median tau/sigma_u 0.5732 of A/C)"
+   "sigmaU": 2.705193,
+   "tauHat": 1.047391,
+   "tauSource": "borrowed (median tau/sigma_u 0.3872 of A/C)"
   },
   "ex_008:peakSpread": {
    "band": true,
@@ -622,8 +622,8 @@
    "sessionLevel": true,
    "sigmaSource": "session level",
    "sigmaU": 0.0,
-   "tauHat": 0.591374,
-   "tauSource": "borrowed from spread (2 learned)"
+   "tauHat": 0.66132,
+   "tauSource": "borrowed from spread (3 learned)"
   },
   "ex_008:raisingS": {
    "band": false,
@@ -634,21 +634,21 @@
    "minUnits": 3,
    "sessionLevel": false,
    "sigmaSource": "own",
-   "sigmaU": 3.350746,
-   "tauHat": 3.467462,
+   "sigmaU": 0.224887,
+   "tauHat": 0.129862,
    "tauSource": "borrowed from timing (4 learned)"
   }
  },
  "minSessions": 3,
  "model": "gaussian-process-trend",
  "pStar": 0.985,
- "protocol": "trend evaluation protocol v1, deviations 1-3, amendments v2, v2.1 and v3",
- "protocolSha256": "C82CD6DA3EEC71D741EF6D53E8D21475C5F692A2069596FC8FECCE6483155F2C",
+ "protocol": "trend evaluation protocol v1, deviations 1-3, amendments v2, v2.1, v3 and v4",
+ "protocolSha256": "701D7097BA328255320708577EFF725C905F782F61A62DA80AA913AD18B300EB",
  "rbfLength": 3.0,
  "smooth": true,
  "smoothFraction": 0.5,
  "tauLogSd": 0.75,
  "vague": 10.0,
  "variant": "V2",
- "version": "trend-model-b6fd2b64ed52"
+ "version": "trend-model-a318495d08c5"
 }

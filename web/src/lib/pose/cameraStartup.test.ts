@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
+import { frameAspectOf } from "./poseMetrics";
 
 const filename = fileURLToPath(new URL("../../app/(app)/camera/CameraClient.tsx", import.meta.url));
 const source = readFileSync(filename, "utf8");
@@ -44,7 +45,7 @@ const state = {
   streamRef: ref<unknown>(null), requestRef: ref(null),
   sessionStartPendingRef: ref(false), cameraStartEpochRef: ref(0),
   cameraReadyRef: ref(false),
-  setTimeout, clearTimeout,
+  setTimeout, clearTimeout, frameAspectOf,
   videoResolutionRef: ref<{ width: number; height: number } | null>(null),
   fpsFrameCountRef: ref(0), fpsWindowStartMsRef: ref(0), perfSampleCountRef: ref(0),
   inferMsSumRef: ref(0), frameMsSumRef: ref(0),

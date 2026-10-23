@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from .baselines import b0_current_rule, b1_slope_t_test, b2_fixed_cutoff, tune_b2_cutoff
-from .learn import (FAULT_TEST_SESSIONS, RULES_V1, RULES_V1_1_HOLDS, RULES_V1_1_REPS, DataRules,
+from .learn import (FAULT_TEST_SESSIONS, REPLACED_SESSIONS, RULES_V1, RULES_V1_1_HOLDS, RULES_V1_1_REPS, DataRules,
                     Learned, learn, load_sessions, pooled_unit_sd, sessions_with_units)
 from .model import (GRID_POINTS, RBF_LENGTH, SMOOTH_FRACTION, VAGUE, VARIANTS, batch_posterior,
                     labels, series_posterior)
@@ -70,8 +70,12 @@ SETTINGS = {
     "v2": RunSettings("v2", (0.975, 0.98, 0.985, 0.99, 0.995), 2, ("A", "C", "D"), FAULT_TEST_SESSIONS),
     "v2.1": RunSettings("v2.1", (0.975, 0.98, 0.985, 0.99, 0.995), 2, ("A", "C", "D"), FAULT_TEST_SESSIONS,
                         gate_aware_p_star=True),
+    # Amendment v4: the aspect-corrected unit (the export converts older
+    # sessions) and the neck sessions since the freeze; v2.1 otherwise.
+    "v4": RunSettings("v4", (0.975, 0.98, 0.985, 0.99, 0.995), 2, ("A", "C", "D"),
+                      FAULT_TEST_SESSIONS | REPLACED_SESSIONS, gate_aware_p_star=True),
 }
-APP_CONFIG_RULES = frozenset({"v2", "v2.1"})
+APP_CONFIG_RULES = frozenset({"v2", "v2.1", "v4"})
 
 
 def rules_for(rules_version: str, measure: str) -> DataRules:

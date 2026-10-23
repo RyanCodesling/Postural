@@ -32,7 +32,7 @@
  *     y=0.60   left wrist ─────── right wrist    (arms-at-sides default)
  */
 
-import { computeElbowFlexion } from "./poseMetrics";
+import { computeElbowFlexion, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ test("LEFT arm straight at side → ~180° (extended)", () => {
     leftElbow:    { x: 0.62, y: 0.45 },
     leftWrist:    { x: 0.62, y: 0.60 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "left");
+  const result = computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 180, 1, "LEFT straight");
 });
 
@@ -142,7 +142,7 @@ test("RIGHT arm straight at side → ~180° (extended)", () => {
     rightElbow:    { x: 0.38, y: 0.45 },
     rightWrist:    { x: 0.38, y: 0.60 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "right");
+  const result = computeElbowFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 180, 1, "RIGHT straight");
 });
 
@@ -154,7 +154,7 @@ test("LEFT elbow at 90° (forearm horizontal, pointing toward body midline) → 
     leftElbow:    { x: 0.62, y: 0.45 },
     leftWrist:    { x: 0.50, y: 0.45 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "left");
+  const result = computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 90, 1, "LEFT 90° flexion");
 });
 
@@ -164,7 +164,7 @@ test("RIGHT elbow at 90° → ~90°", () => {
     rightElbow:    { x: 0.38, y: 0.45 },
     rightWrist:    { x: 0.50, y: 0.45 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "right");
+  const result = computeElbowFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 90, 1, "RIGHT 90° flexion");
 });
 
@@ -180,7 +180,7 @@ test("LEFT full flexion (forearm 30° from anti-parallel to upper-arm) → ~30°
     leftElbow:    { x: 0.62, y: 0.45 },
     leftWrist:    { x: 0.695, y: 0.32 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "left");
+  const result = computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 30, 2, "LEFT 30° flexion");
 });
 
@@ -195,8 +195,8 @@ test("Sign-invariance: LEFT and RIGHT at 90° both return ~90°", () => {
     rightElbow:    { x: 0.38, y: 0.45 },
     rightWrist:    { x: 0.50, y: 0.45 },
   });
-  const left  = computeElbowFlexion(lms, TILT_REF, "left");
-  const right = computeElbowFlexion(lms, TILT_REF, "right");
+  const left  = computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeElbowFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(left,  90, 1, "LEFT in bilateral 90°");
   assertCloseTo(right, 90, 1, "RIGHT in bilateral 90°");
 });
@@ -221,7 +221,7 @@ test("Camera-roll invariance: 10° rotation of landmarks does not change flexion
   // but computeElbowFlexion ignores tiltRef — the rotation invariance must
   // come from the geometry itself, not from tilt subtraction.
   const tiltedRef: TiltReference = { cameraTiltDeg: 10, confidence: "high", divergenceDeg: 0 };
-  const result = computeElbowFlexion(lms, tiltedRef, "left");
+  const result = computeElbowFlexion(lms, tiltedRef, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 180, 1, "rotated straight arm");
 });
 
@@ -234,7 +234,7 @@ test("±180° boundary: straight arm returns exactly 180° (not -180° or 0°)",
     leftElbow:    { x: 0.50, y: 0.50 },
     leftWrist:    { x: 0.50, y: 0.80 },
   });
-  const result = computeElbowFlexion(lms, TILT_REF, "left");
+  const result = computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(result, 180, 0.5, "exact-anti-parallel boundary");
 });
 
@@ -247,8 +247,8 @@ test("Missing wrist → null on that side; other side still computes", () => {
     rightElbow:    { x: 0.38, y: 0.45 },
     rightWrist:    { x: 0.38, y: 0.60 },
   });
-  assertNull(computeElbowFlexion(lms, TILT_REF, "left"),  "left with low-vis wrist");
-  assertCloseTo(computeElbowFlexion(lms, TILT_REF, "right"), 180, 1, "right unaffected");
+  assertNull(computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "left with low-vis wrist");
+  assertCloseTo(computeElbowFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 180, 1, "right unaffected");
 });
 
 test("Off-frame wrist with good visibility → null", () => {
@@ -257,7 +257,7 @@ test("Off-frame wrist with good visibility → null", () => {
     leftElbow:    { x: 0.62, y: 0.45 },
     leftWrist:    { x: 0.62, y: -0.05, visibility: 1 }, // extrapolated above frame
   });
-  assertNull(computeElbowFlexion(lms, TILT_REF, "left"), "left with off-frame wrist");
+  assertNull(computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left with off-frame wrist");
 });
 
 test("Missing elbow → null on that side", () => {
@@ -266,7 +266,7 @@ test("Missing elbow → null on that side", () => {
     leftElbow:    { x: 0.62, y: 0.45, visibility: 0 },  // below MIN_VIS
     leftWrist:    { x: 0.62, y: 0.60 },
   });
-  assertNull(computeElbowFlexion(lms, TILT_REF, "left"), "left with missing elbow");
+  assertNull(computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left with missing elbow");
 });
 
 test("Off-frame elbow with good visibility → null", () => {
@@ -275,7 +275,7 @@ test("Off-frame elbow with good visibility → null", () => {
     leftElbow:    { x: 1.05, y: 0.45, visibility: 1 }, // extrapolated outside frame
     leftWrist:    { x: 0.62, y: 0.60 },
   });
-  assertNull(computeElbowFlexion(lms, TILT_REF, "left"), "left with off-frame elbow");
+  assertNull(computeElbowFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left with off-frame elbow");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

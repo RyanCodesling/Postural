@@ -4,9 +4,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname, join, relative } from "node:path";
-import { getExerciseDefinition } from "../src/lib/exercises/registry";
+import { getExerciseDefinition, type ExerciseDefinition } from "../src/lib/exercises/registry";
 import { captureCoachingProvenance } from "../src/lib/pose/coachingConfig";
 import { validSetMeasurement } from "../src/lib/pose/holdQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "../src/lib/pose/metricVersion";
+import { restingEarLineDeg } from "../src/lib/pose/neckCalibrationReference";
+import { medianFinite } from "../src/lib/pose/neutralCalibration";
+import {
+  computeScapularElevation, computeTiltReference, computeTrunkLateralFlexionUncorrectedSigned, frameAspectOf,
+} from "../src/lib/pose/poseMetrics";
 import { createCameraReplay, cameraPath } from "./lib/cameraReplayHarness";
 
 const indices: Record<string, number> = { leftEar: 7, rightEar: 8, leftShoulder: 11, rightShoulder: 12,
@@ -15,6 +21,76 @@ export function traceLandmarks(record: Record<string, any>) {
   const landmarks: any[] = [];
   for (const [name, index] of Object.entries(indices)) if (record[name]) landmarks[index] = { ...record[name] };
   return landmarks;
+}
+const RAD = Math.PI / 180;
+const finiteOrNull = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/**
+ * The calibration a trace row was measured against, in the CURRENT measurement.
+ * Traces recorded before the aspect correction (2026-10-21, D-48) store the
+ * frozen tilt and baselines in the old unit. When the row carries the
+ * calibration's samples they are recomputed from them at the trace's frame
+ * shape, as `finalizeNeutralCalibration` does live; otherwise each value is
+ * converted on its own line (the tilt is a near-horizontal line, the side-bend
+ * neutral a near-vertical one, and the scapular ratio is left as stored).
+ * The calibration's ear line (D-49, ex_004's zero) follows one policy whatever
+ * the trace's unit: the replay runs the current code, so it is the line the
+ * trace recorded, else the line the camera now freezes from the samples, else
+ * absent (then ex_004 reads against the frozen tilt, as it did before D-49).
+ */
+export function replayCalibration(row: Record<string, any>, frameAspect: number) {
+  const m = row.metrics;
+  const samples = m.calibration?.samples as { landmarks: Record<string, any> }[] | undefined;
+  const earLine = finiteOrNull(m.calibration?.earLineDeg)
+    ?? (samples?.length ? restingEarLineDeg(samples.map((s) => ({ landmarks: traceLandmarks(s.landmarks), frameAspect }))) : null);
+  const stored = { baselines: m.baselines ?? {}, frozenTilt: m.tiltReference.cameraTiltDeg as number, earLine };
+  if (m.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION) return { ...stored, source: "stored" as const };
+  if (samples?.length) {
+    const lms = samples.map((s) => traceLandmarks(s.landmarks));
+    const tilt = medianFinite(lms.map((lm) => computeTiltReference(lm, frameAspect))
+      .filter((t) => t.confidence !== "insufficient").map((t) => t.cameraTiltDeg));
+    assert(tilt !== null, "calibration samples give no usable tilt");
+    const reference = { cameraTiltDeg: tilt, confidence: "high" as const, divergenceDeg: null };
+    const median = (values: (number | null)[]) => medianFinite(values.filter((v): v is number => v !== null));
+    const b = stored.baselines;
+    return {
+      frozenTilt: tilt,
+      baselines: {
+        scapLeft: b.scapLeft == null ? null : median(lms.map((lm) => computeScapularElevation(lm, reference, "left", frameAspect))),
+        scapRight: b.scapRight == null ? null : median(lms.map((lm) => computeScapularElevation(lm, reference, "right", frameAspect))),
+        bidirectionalPrimary: b.bidirectionalPrimary == null ? null
+          : median(lms.map((lm) => computeTrunkLateralFlexionUncorrectedSigned(lm, frameAspect))),
+      },
+      earLine,
+      source: "recomputed-from-samples" as const,
+    };
+  }
+  const k = frameAspect;
+  const tilt = Math.atan(Math.tan(stored.frozenTilt * RAD) / k) / RAD;
+  const neutral = finiteOrNull(stored.baselines.bidirectionalPrimary);
+  return {
+    frozenTilt: tilt,
+    baselines: {
+      ...stored.baselines,
+      bidirectionalPrimary: neutral === null ? null : Math.atan(k * Math.tan(neutral * RAD)) / RAD,
+    },
+    earLine,
+    source: "converted" as const,
+  };
+}
+
+/** What-if runs only: dotted-path values set on a clone of the definition (recorded in results.json). */
+function withOverrides(definition: ExerciseDefinition, overrides?: Record<string, unknown>): ExerciseDefinition {
+  if (!overrides) return definition;
+  const clone: any = structuredClone(definition);
+  for (const [path, value] of Object.entries(overrides)) {
+    const keys = path.split(".");
+    let node = clone;
+    for (const key of keys.slice(0, -1)) node = node[key];
+    assert(node && keys.at(-1)! in node, `unknown definition path ${path}`);
+    node[keys.at(-1)!] = value;
+  }
+  return clone;
 }
 const hash = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 const arg = (name: string) => process.argv[process.argv.indexOf(name) + 1];
@@ -30,6 +106,7 @@ async function main() {
   const baselineCamera = manifest.baselineCamera ? read(manifest.baselineCamera) : undefined;
   assert.equal(manifest.evidenceUse, "pilot-tuning");
   assert(Array.isArray(manifest.recordings) && manifest.recordings.length);
+  if (manifest.definitionOverrides) console.log(`WHAT-IF RUN: definition overrides ${JSON.stringify(manifest.definitionOverrides)}`);
   const outputs: any[] = [];
   for (const entry of manifest.recordings) {
     const snapshot = JSON.parse(read(entry.snapshot));
@@ -37,8 +114,9 @@ async function main() {
     const labels = labelSource && entry.labelFormat !== "windows" ? JSON.parse(labelSource) : null;
     const rows = snapshot.rows.filter((r: any) => r.session_id === entry.sessionId);
     assert(rows.length, `No frames for ${entry.id}`);
-    const definition = getExerciseDefinition(entry.exerciseId);
-    assert(definition);
+    const registered = getExerciseDefinition(entry.exerciseId);
+    assert(registered);
+    const definition = withOverrides(registered, manifest.definitionOverrides?.[entry.exerciseId]);
     const provenance = await captureCoachingProvenance(definition);
     const storedReps = (snapshot.reps ?? []).filter((r: any) => r.session_id === entry.sessionId);
     const sessions = snapshot.sessions ?? [];
@@ -62,6 +140,10 @@ async function main() {
       validRows.push(row);
     }
     assert(validRows.length, `No reconstructable frames for ${entry.id}`);
+    // The camera loop measures in the recorded frame's aspect (D-48).
+    const frame = validRows[0].metrics.frame ?? { width: 1280, height: 720 };
+    const frameAspect = frameAspectOf(frame.width, frame.height);
+    const calibrationSources: Record<string, number> = {};
     // Keep original labels verbatim. Joining does not reinterpret intended
     // conditions as actual faults, or derive normal labels from model scores.
     const labelFor = (row: any): string => {
@@ -81,6 +163,7 @@ async function main() {
       const replay = createCameraReplay(definition, provenance, {
         prescribedSide: session?.context_snapshot?.prescription?.prescribedSide ?? "both",
         firstTickMs: validRows[0].elapsed_ms - 151 + phase,
+        videoWidth: frame.width, videoHeight: frame.height,
       });
       const baselineReplay: ReturnType<typeof createCameraReplay> | null = baselineCamera ? createCameraReplay(definition, provenance, {
         prescribedSide: session?.context_snapshot?.prescription?.prescribedSide ?? "both",
@@ -88,6 +171,7 @@ async function main() {
       }) : null;
       const groups: Record<string, any> = {};
       let priorBaseline: string | null = null;
+      let calibration: ReturnType<typeof replayCalibration> | null = null;
       const baselineBoundaries: number[] = [];
       for (const row of validRows) {
         const key = JSON.stringify([row.metrics.baselines, row.metrics.tiltReference.cameraTiltDeg]);
@@ -102,9 +186,13 @@ async function main() {
             run.context.leftPrimaryFilterRef.current.reset(); run.context.rightPrimaryFilterRef.current.reset();
           }
         }
+        if (priorBaseline !== key || row.metrics.calibration?.samples?.length || calibration === null) {
+          calibration = replayCalibration(row, frameAspect);
+          if (phase === (manifest.tickOffsetsMs ?? [0])[0]) calibrationSources[calibration.source] = (calibrationSources[calibration.source] ?? 0) + 1;
+        }
         priorBaseline = key;
         const frame = replay.tick({ tMs: row.elapsed_ms, landmarks: traceLandmarks(row.landmarks),
-          baselines: row.metrics.baselines, frozenTilt: row.metrics.tiltReference.cameraTiltDeg });
+          baselines: calibration.baselines, frozenTilt: calibration.frozenTilt, earLine: calibration.earLine });
         if (baselineReplay) {
           const before = baselineReplay.tick({ tMs: row.elapsed_ms, landmarks: traceLandmarks(row.landmarks),
             baselines: row.metrics.baselines, frozenTilt: row.metrics.tiltReference.cameraTiltDeg });
@@ -137,6 +225,7 @@ async function main() {
         setMeasurement: set.holdQuality, repEvents: replay.emitted });
     }
     outputs.push({ id: entry.id, sessionId: entry.sessionId, exerciseId: definition.id,
+      frame, calibrationSources,
       labels: labelSource, labelJoin: entry.labelFormat, originalFrames: rows.length,
       replayedFrames: validRows.length, rejected, missingFrameIndices, gapsOver300Ms: gaps,
       provenance, phaseRuns,
@@ -157,7 +246,9 @@ async function main() {
   // Ensure nothing changed under us before publishing the run.
   for (const [path, expected] of Object.entries(inputHashes)) assert.equal(hash(readFileSync(path)), expected);
   mkdirSync(out, { recursive: true });
-  writeFileSync(join(out, "results.json"), JSON.stringify({ schema: "coaching_replay_v1", evidenceUse: "pilot-tuning", inputHashes, sourceHashes, recordings: outputs }, null, 2) + "\n");
+  writeFileSync(join(out, "results.json"), JSON.stringify({ schema: "coaching_replay_v1", evidenceUse: "pilot-tuning",
+    ...(manifest.definitionOverrides ? { definitionOverrides: manifest.definitionOverrides } : {}),
+    inputHashes, sourceHashes, recordings: outputs }, null, 2) + "\n");
   const summary = outputs.map(o => ({ id: o.id, frames: o.replayedFrames, rejected: o.rejected.length,
     missingFrameIndices: o.missingFrameIndices, gapsOver300Ms: o.gapsOver300Ms.length,
     runs: o.phaseRuns.map((r: any) => ({ tickOffsetMs: r.initialTickOffsetMs, counts: r.counts, groups: r.groups })) }));

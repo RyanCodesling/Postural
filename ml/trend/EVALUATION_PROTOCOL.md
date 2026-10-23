@@ -210,3 +210,28 @@ This checks that the displayed 95 % range is honest. A measure that fails is cha
 **Change.** A non-session-level measure whose resolved σ_u or τ̂ is 0 is charted without a band, as having no observed variation.
 
 **Scope.** No check result and no other value changes.
+## Amendment v4 (recorded 2026-10-21, before any v4 run): the aspect-corrected unit, and the neck sessions
+
+**Why.** Since 2026-10-21 the app measures every angle in the aspect-corrected image plane (D-48): coordinates normalised separately by frame width and height are put back on one scale before an angle is taken. The values learned under v2.1 and v3 are in the earlier pipeline units, and a model in one unit cannot be applied to readings in another. The user approved one re-learning run (2026-10-21) that also brings in the neck sessions recorded since the freeze. Everything not listed here is unchanged: the model, variants, simulation grid, seeds, baselines, G1, G2, G3, the v2.1 p\* rule and the v3 band check.
+
+1. **Unit.** Angle measures are in the corrected unit. The export converts the sessions measured before the change, each angle on its own geometry at the session's frame shape (its recorded frame sizes, else the 1280 × 720 every pilot session used):
+   - neck peaks and their rest offsets: atan(tan r / k);
+   - side-bend peaks (head lean from neutral): atan(k tan r);
+   - arm peaks (abduction): atan2(k sin r, cos r);
+   - hold spread and drift scale by the arm conversion's slope at the hold's mean, and the distance from the target is taken after converting the mean.
+
+   Unit-free measures (completion, form scores, times, time over threshold, time in band) are exported as recorded, because every threshold was converted to keep its decisions. On the 48 traced pilot repetitions, converting a stored peak lands within 0.05 ± 1.07 (largest 2.4) of recomputing it from the landmarks (`Review_Artifacts/2026-10-21_aspect_lift/conversion_error.txt`).
+2. **Minimum change.** δ_min stays 3 for angle peaks, now in the corrected unit.
+3. **Neck sessions.** ex_004's sessions recorded since the freeze are included under trend rules v2, which take each peak from the resting head (D-45): 227, 228 and 229, with 225 from before. Session 226 is excluded because the same-day redo 227, recorded with trace and video, replaced it (decided 2026-10-17, by cause, before any v4 result). With these sessions ex_004 may meet the own-σ_u rule instead of borrowing from ex_005.
+4. **Run.** `trend.evaluate --rules v4` (the v2.1 settings with session 226 added to the excluded sessions), then `trend.extra --rules v4` on its output.
+
+**Output.** A new app configuration and fixtures, whose hash is recorded in D-35. A measure that fails its check is charted as measured values only (the v3 rule). In the app, histories measured before the change show their angle measures as measured values only (D-48).
+## Deviation 4 (recorded 2026-10-21, after the v4 run)
+
+**What was found.** Item 3 of amendment v4 names trend rules v2 for the neck sessions. In fact the export applies the app's trend data rules v2 to every session: D-39's rules 1–3 (each set's first repetition out of the timing measures, poorly tracked repetitions and sessions out) and D-45's rule 4 (neck peaks from the resting head). These are the rules the app's charts have used since 2026-10-09; the v3 configuration was learned before them. They change the timing measures:
+- the side bend's lowering and raising times no longer have enough qualifying series and are borrowed;
+- the lateral raise's lowering time again narrowly fails its band check (12.7 % against 12.5 % at twice the learned variation), so every borrowed timing measure is charted without a band, as v3's rule requires;
+- the neck's lowering and raising times are now learned from its own sessions and pass;
+- the neck's completion share shows no variation and has no band (deviation 3).
+
+**Scope.** No gate, setting or model choice changed. The run returned GO with V2 at p\* = 0.985, as v2.1 did.

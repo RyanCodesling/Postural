@@ -20,14 +20,16 @@
  *
  * HAND-DERIVED EXPECTATIONS
  * ─────────────────────────
- * GLOBAL deduction bands (per metric, linear within band, clamped past last):
- *   trunkLean:          2°→0   5°→35    10°→75   20°→100
- *   shoulderSymmetry:   3°→0   7°→35    12°→75   20°→100
- *   neckTilt:           5°→0   10°→35   20°→75   30°→100
- *   scapularElevation:  0.02→0 0.04→35  0.06→75  0.10→100
+ * GLOBAL deduction bands (per metric, linear within band, clamped past last),
+ * in the aspect-corrected unit since 2026-10-21 (D-48; the pipeline-unit knots
+ * they were converted from are in brackets):
+ *   trunkLean:          3.6→0  8.8→35   17.4→75  32.9→100   [2, 5, 10, 20]
+ *   shoulderSymmetry:   1.7→0  4→35     6.8→75   11.6→100   [3, 7, 12, 20]
+ *   neckTilt:           2.8→0  5.7→35   11.6→75  18→100     [5, 10, 20, 30]
+ *   scapularElevation:  0.02→0 0.04→35  0.06→75  0.10→100   (unchanged)
  * PER-EXERCISE band overrides (Stage-2 scoring retune):
- *   trunkLean (ex_001, ex_004):        6°→0  10°→35  15°→75  25°→100
- *   shoulderSymmetry (ex_001, ex_006): 7°→0  12°→35  17°→75  25°→100
+ *   trunkLean (ex_001, ex_004):        10.6→0  17.4→35  25.5→75  39.7→100   [6, 10, 15, 25]
+ *   shoulderSymmetry (ex_001, ex_006): 4→0     6.8→35   9.8→75   14.7→100   [7, 12, 17, 25]
  * Several metrics are now `primary-coupled` (ex_001/ex_006 scap, ex_005
  * neckTilt+scap): with NO primaryValue passed they fall back to static |value|,
  * so the by-name knot pins below still exercise the global knots.
@@ -83,37 +85,37 @@ const ex008 = EXERCISE_REGISTRY.ex_008;
 // unavailable, so trunkLean's deduction is the whole score.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("ex_004 trunkLean override knots: 6°→100, 10°→65, 15°→25, 25°→0, clamp past 25°", () => {
-  // ex_004 uses the per-exercise trunkLean override [0,6,10,15,25]→[0,0,35,75,100].
+test("ex_004 trunkLean override knots: 10.6→100, 17.4→65, 25.5→25, 39.7→0, clamp past 39.7", () => {
+  // ex_004 uses the per-exercise trunkLean override [0,10.6,17.4,25.5,39.7]→[0,0,35,75,100].
   const score = (v: number) =>
     computeCompensationScore(ex004, { trunkLean: v, shoulderSymmetry: null });
-  assertEq(score(6), 100, "6° (dead-band edge)");
-  assertEq(score(10), 65, "10°");
-  assertEq(score(15), 25, "15°");
-  assertEq(score(25), 0, "25°");
-  assertEq(score(50), 0, "50° (clamped)");
+  assertEq(score(10.6), 100, "10.6 (dead-band edge)");
+  assertEq(score(17.4), 65, "17.4");
+  assertEq(score(25.5), 25, "25.5");
+  assertEq(score(39.7), 0, "39.7");
+  assertEq(score(60), 0, "60 (clamped)");
 });
 
-test("ex_004 weights trunkLean and shoulderSymmetry equally: 10° + 12° → 65", () => {
-  // trunkLean 10° → override deduction 35; shoulderSymmetry 12° → asymmetric
+test("ex_004 weights trunkLean and shoulderSymmetry equally: 17.4 + 6.8 → 65", () => {
+  // trunkLean 17.4 → override deduction 35; shoulderSymmetry 6.8 → asymmetric
   // override deduction 35. Each carries half the weight: 100 − 17.5 − 17.5.
-  assertEq(computeCompensationScore(ex004, { trunkLean: 10, shoulderSymmetry: 12 }), 65, "both metrics");
-  assertEq(computeCompensationScore(ex004, { trunkLean: 0, shoulderSymmetry: 7 }), 100, "resting asymmetry is free");
+  assertEq(computeCompensationScore(ex004, { trunkLean: 17.4, shoulderSymmetry: 6.8 }), 65, "both metrics");
+  assertEq(computeCompensationScore(ex004, { trunkLean: 0, shoulderSymmetry: 4 }), 100, "resting asymmetry is free");
 });
 
-test("ex_004 trunkLean override mid-band: 8° → deduction 17.5 → score 83", () => {
+test("ex_004 trunkLean override mid-band: 14 → deduction 17.5 → score 83", () => {
   assertEq(
-    computeCompensationScore(ex004, { trunkLean: 8, shoulderSymmetry: null }),
+    computeCompensationScore(ex004, { trunkLean: 14, shoulderSymmetry: null }),
     83,
-    "8° (round(82.5) = 83, half-up)",
+    "14, halfway from 10.6 to 17.4 (round(82.5) = 83, half-up)",
   );
 });
 
-test("negative values are scored by magnitude: −10° trunkLean → 65", () => {
+test("negative values are scored by magnitude: −17.4 trunkLean → 65", () => {
   assertEq(
-    computeCompensationScore(ex004, { trunkLean: -10, shoulderSymmetry: null }),
+    computeCompensationScore(ex004, { trunkLean: -17.4, shoulderSymmetry: null }),
     65,
-    "−10° (override knot at 10°)",
+    "−17.4 (override knot at 17.4)",
   );
 });
 
@@ -138,27 +140,27 @@ test("primary-coupled scapular elevation is unavailable without a primary value"
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("three metrics each at their 35-deduction knot → score 65", () => {
-  // scap 0.04 (coupled→static fallback, no primary) → 35; trunkLean 5 (ex_006
-  // keeps GLOBAL trunkLean) → 35; shoulderSymmetry 12 (ex_006 uses the floor-7
-  // override [0,7,12,17,25], whose 35-knot is at 12°) → 35.
+  // scap 0.04 (coupled→static fallback, no primary) → 35; trunkLean 8.8 (ex_006
+  // keeps GLOBAL trunkLean) → 35; shoulderSymmetry 6.8 (ex_006 uses the floor-4
+  // override [0,4,6.8,9.8,14.7], whose 35-knot is at 6.8) → 35.
   assertEq(
     computeCompensationScore(ex006, {
       scapularElevation: 0.04,
-      trunkLean: 5,
-      shoulderSymmetry: 12,
+      trunkLean: 8.8,
+      shoulderSymmetry: 6.8,
     }),
     65,
     "35 across all three at weight 1/3 each",
   );
 });
 
-test("null metric redistributes weight: trunkLean 10° + shoulderSym 3° (scap null) → 63", () => {
+test("null metric redistributes weight: trunkLean 17.4 + shoulderSym 1.7 (scap null) → 63", () => {
   // active = 2 → 50 weight each; deductions 75 and 0 → total 37.5 → round(62.5) = 63
   assertEq(
     computeCompensationScore(ex006, {
       scapularElevation: null,
-      trunkLean: 10,
-      shoulderSymmetry: 3,
+      trunkLean: 17.4,
+      shoulderSymmetry: 1.7,
     }),
     63,
     "two-metric redistribution",
@@ -203,15 +205,15 @@ test("exercise with no compensation metrics → null", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("ex_008: elbowFlexion never deducts and never dilutes (trunkLean keeps full weight)", () => {
-  // Badly bent elbows (120° interior, well under the 150° warning threshold)
-  // must not move the score; trunkLean 5° at FULL weight → 65, not 83.
+  // Badly bent elbows (120 interior, well under the warning line) must not
+  // move the score; trunkLean 8.8 at FULL weight → 65, not 83.
   assertEq(
-    computeCompensationScore(ex008, { trunkLean: 5, elbowFlexion: 120 }),
+    computeCompensationScore(ex008, { trunkLean: 8.8, elbowFlexion: 120 }),
     65,
     "trunkLean undiluted",
   );
   assertEq(
-    computeCompensationScore(ex008, { trunkLean: 2, elbowFlexion: 30 }),
+    computeCompensationScore(ex008, { trunkLean: 3.6, elbowFlexion: 30 }),
     100,
     "clean trunk, fully bent elbows → still 100",
   );
@@ -219,7 +221,7 @@ test("ex_008: elbowFlexion never deducts and never dilutes (trunkLean keeps full
 
 test("ex_007: same warning-only exclusion as ex_008", () => {
   assertEq(
-    computeCompensationScore(ex007, { trunkLean: 5, elbowFlexion: 90 }),
+    computeCompensationScore(ex007, { trunkLean: 8.8, elbowFlexion: 90 }),
     65,
     "trunkLean undiluted",
   );
@@ -301,7 +303,7 @@ const coupledDef: ExerciseDefinition = {
 
 test("primary-coupled: value at the expected line → no deduction", () => {
   // value 10 = expected at primary 50 → residual 0 → score 100, even though
-  // a static reading of 10° trunkLean would deduct 75.
+  // a static reading of 10 trunkLean would deduct about 41.
   assertEq(
     computeCompensationScore(coupledDef, { trunkLean: 10 }, 50),
     100,
@@ -310,11 +312,11 @@ test("primary-coupled: value at the expected line → no deduction", () => {
 });
 
 test("primary-coupled: deduction runs on the residual, not the raw value", () => {
-  // value 15, expected 10 → residual 5 → trunkLean deduction 35 → score 65.
+  // value 18.8, expected 10 → residual 8.8 → trunkLean deduction 35 → score 65.
   assertEq(
-    computeCompensationScore(coupledDef, { trunkLean: 15 }, 50),
+    computeCompensationScore(coupledDef, { trunkLean: 18.8 }, 50),
     65,
-    "residual 5°",
+    "residual 8.8",
   );
 });
 
@@ -340,10 +342,10 @@ test("primary-coupled: missing primary is unavailable instead of using a static 
 });
 
 test("static metrics ignore primaryValue entirely", () => {
-  // ex_004 trunkLean is static (override bands, no coupling). 10° → override
+  // ex_004 trunkLean is static (override bands, no coupling). 17.4 → override
   // 35 deduction → 65, with a primary passed the static mode must not consult it.
   assertEq(
-    computeCompensationScore(ex004, { trunkLean: 10, shoulderSymmetry: null }, 25),
+    computeCompensationScore(ex004, { trunkLean: 17.4, shoulderSymmetry: null }, 25),
     65,
     "static unaffected by primary",
   );
@@ -353,26 +355,26 @@ test("static metrics ignore primaryValue entirely", () => {
 // PER-EXERCISE BAND OVERRIDE
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("per-exercise band override: 4° trunk lean deducts under global floor, not under ex_001's", () => {
-  // 4° sits above the GLOBAL 2° trunkLean floor (ex_006 still deducts) but
-  // below ex_001's overridden 6° floor (no deduction). Isolate trunkLean.
+test("per-exercise band override: 7 trunk lean deducts under global floor, not under ex_001's", () => {
+  // 7 sits above the GLOBAL 3.6 trunkLean floor (ex_006 still deducts) but
+  // below ex_001's overridden 10.6 floor (no deduction). Isolate trunkLean.
   assertEq(
     computeCompensationScore(ex001, {
-      trunkLean: 4,
+      trunkLean: 7,
       scapularElevation: null,
       shoulderSymmetry: null,
     }),
     100,
-    "ex_001 override floor 6° → 4° clean",
+    "ex_001 override floor 10.6 → 7 clean",
   );
   assertEq(
     computeCompensationScore(ex006, {
-      trunkLean: 4,
+      trunkLean: 7,
       scapularElevation: null,
       shoulderSymmetry: null,
     }),
     77,
-    "ex_006 global floor 2° → 4° deducts (round(76.67))",
+    "ex_006 global floor 3.6 → 7 deducts (round(77.12))",
   );
 });
 
@@ -383,20 +385,20 @@ test("per-exercise band override: 4° trunk lean deducts under global floor, not
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("worstSideCompensationScore: returns the worse (min) of the two sides", () => {
-  // left on its coupled line (residual 0 → 100); right residual 5° → 65.
+  // left on its coupled line (residual 0 → 100); right residual 8.8 → 65.
   assertEq(
-    worstSideCompensationScore(coupledDef, { trunkLean: 10 }, 50, { trunkLean: 15 }, 50),
+    worstSideCompensationScore(coupledDef, { trunkLean: 10 }, 50, { trunkLean: 18.8 }, 50),
     65,
     "right side governs",
   );
 });
 
 test("worstSideCompensationScore: each side uses its OWN primary", () => {
-  // Same 12° trunkLean on both, but right's lower primary lowers its expected
-  // value (8° vs 12°), so the identical reading scores worse on the right.
-  // residual 4° → deduction round((4-2)/(5-2)·35)=23.33 → score 77.
+  // Same 15 trunkLean on both, but right's lower primary lowers its expected
+  // value (8 vs 15), so the identical reading scores worse on the right.
+  // residual 7 → deduction (7-3.6)/(8.8-3.6)·35 = 22.88 → score 77.
   assertEq(
-    worstSideCompensationScore(coupledDef, { trunkLean: 12 }, 60, { trunkLean: 12 }, 40),
+    worstSideCompensationScore(coupledDef, { trunkLean: 15 }, 75, { trunkLean: 15 }, 40),
     77,
     "lower primary makes the same value look worse",
   );
@@ -404,7 +406,7 @@ test("worstSideCompensationScore: each side uses its OWN primary", () => {
 
 test("worstSideCompensationScore: a null side is ignored; both null → null", () => {
   assertEq(
-    worstSideCompensationScore(coupledDef, { trunkLean: null }, 50, { trunkLean: 15 }, 50),
+    worstSideCompensationScore(coupledDef, { trunkLean: null }, 50, { trunkLean: 18.8 }, 50),
     65,
     "left null → right governs",
   );
@@ -445,11 +447,11 @@ test("ex_005 has no scored measure left: null even with a primary and large read
 });
 
 test("ex_006 shoulder height neither deducts nor dilutes: any value scores as if it were null", () => {
-  // trunkLean 10 (global band, 75) and shoulderSymmetry 3 (override floor 7, 0)
+  // trunkLean 17.4 (global band, 75) and shoulderSymmetry 1.7 (override floor 4, 0)
   // at 50 weight each: total 37.5, round(62.5) = 63, the two-metric value pinned above.
   for (const scap of [null, 0, 0.04, 0.1, 0.3]) {
     assertEq(
-      computeCompensationScore(ex006, { scapularElevation: scap, trunkLean: 10, shoulderSymmetry: 3 }, 90),
+      computeCompensationScore(ex006, { scapularElevation: scap, trunkLean: 17.4, shoulderSymmetry: 1.7 }, 90),
       63,
       `scap ${scap}`,
     );

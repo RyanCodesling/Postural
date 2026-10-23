@@ -26,7 +26,7 @@
  *     y=0.60   wrists at rest (arms hanging)
  */
 
-import { computeWristShoulderVertical } from "./poseMetrics";
+import { computeWristShoulderVertical, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 import { RepCounter, type RepEvent } from "./repCounter";
 import { EXERCISE_REGISTRY } from "../exercises/registry";
@@ -131,8 +131,8 @@ test("Arms at sides → NEGATIVE value (not null) — the critical sign-discipli
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNegative(computeWristShoulderVertical(lms, TILT_REF, "left"),  "LEFT arms-at-sides");
-  assertNegative(computeWristShoulderVertical(lms, TILT_REF, "right"), "RIGHT arms-at-sides");
+  assertNegative(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "LEFT arms-at-sides");
+  assertNegative(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), "RIGHT arms-at-sides");
 });
 
 test("Arms horizontal (wrist at shoulder level) → ~0", () => {
@@ -144,8 +144,8 @@ test("Arms horizontal (wrist at shoulder level) → ~0", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left"),  0, 0.02, "LEFT horizontal");
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right"), 0, 0.02, "RIGHT horizontal");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0, 0.02, "LEFT horizontal");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0, 0.02, "RIGHT horizontal");
 });
 
 test("Arms fully overhead → positive ~1.0+ trunk-length units", () => {
@@ -159,8 +159,8 @@ test("Arms fully overhead → positive ~1.0+ trunk-length units", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left"),  1.0, 0.1, "LEFT overhead");
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right"), 1.0, 0.1, "RIGHT overhead");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  1.0, 0.1, "LEFT overhead");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 1.0, 0.1, "RIGHT overhead");
 });
 
 test("Arms partially overhead → positive ~0.5 trunk-length units (ex_007 minPeak band)", () => {
@@ -174,7 +174,7 @@ test("Arms partially overhead → positive ~0.5 trunk-length units (ex_007 minPe
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left"),  0.5, 0.05, "LEFT half-overhead");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0.5, 0.05, "LEFT half-overhead");
 });
 
 test("Scale invariance: 2× scaled pose → same ratio", () => {
@@ -191,7 +191,7 @@ test("Scale invariance: 2× scaled pose → same ratio", () => {
   // shoulder y=0.20, wrist y=0.45 → numerator = -0.25.
   // trunk length = sqrt((0.62-0.42)/... wait, midpoints. shoulder-mid (0.5, 0.20), hip-mid (0.5, 0.70). Trunk len = 0.50.
   // result = -0.25 / 0.50 = -0.5.
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left"), -0.5, 0.01, "LEFT 2x scale");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), -0.5, 0.01, "LEFT 2x scale");
 });
 
 test("Hip degeneracy (shoulder-mid ≈ hip-mid, below TRUNK_LEN_EPSILON) → null", () => {
@@ -203,8 +203,8 @@ test("Hip degeneracy (shoulder-mid ≈ hip-mid, below TRUNK_LEN_EPSILON) → nul
     leftHip:       { x: 0.58, y: 0.51 },  // shoulder-mid (0.5, 0.50), hip-mid (0.5, 0.51) → trunk len ~0.01 < 0.05 epsilon
     rightHip:      { x: 0.42, y: 0.51 },
   });
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left"),  "trunk too short");
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "right"), "trunk too short");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "trunk too short");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), "trunk too short");
 });
 
 test("Missing wrist → null on that side; other side still computes", () => {
@@ -216,8 +216,8 @@ test("Missing wrist → null on that side; other side still computes", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left"), "LEFT low-vis wrist");
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right"), 1.0, 0.1, "RIGHT unaffected");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "LEFT low-vis wrist");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 1.0, 0.1, "RIGHT unaffected");
 });
 
 test("Off-frame wrist with good visibility → null on that side", () => {
@@ -229,8 +229,8 @@ test("Off-frame wrist with good visibility → null on that side", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left"), "LEFT off-frame wrist");
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right"), 1.0, 0.1, "RIGHT unaffected");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "LEFT off-frame wrist");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 1.0, 0.1, "RIGHT unaffected");
 });
 
 test("Camera-roll invariance: 30° rotated overhead pose still reports ~1.0", () => {
@@ -274,8 +274,8 @@ test("Camera-roll invariance: 30° rotated overhead pose still reports ~1.0", ()
   });
   // Same expected ~1.0 as the un-rotated overhead test — projection along
   // trunkUp cancels the rotation.
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left"),  1.0, 0.05, "LEFT rotated overhead");
-  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right"), 1.0, 0.05, "RIGHT rotated overhead");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  1.0, 0.05, "LEFT rotated overhead");
+  assertCloseTo(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 1.0, 0.05, "RIGHT rotated overhead");
 });
 
 test("Missing one hip → null on BOTH sides (shared trunk reference)", () => {
@@ -287,8 +287,8 @@ test("Missing one hip → null on BOTH sides (shared trunk reference)", () => {
     leftHip:       { x: 0.58, y: 0.55, visibility: 0.2 },  // below MIN_VIS
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left"),  "LEFT lost trunk");
-  assertNull(computeWristShoulderVertical(lms, TILT_REF, "right"), "RIGHT lost trunk");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "LEFT lost trunk");
+  assertNull(computeWristShoulderVertical(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), "RIGHT lost trunk");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

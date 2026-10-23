@@ -6,7 +6,7 @@
  *   npx tsx web/src/lib/pose/wristShoulderLateral.test.ts
  */
 
-import { computeWristShoulderLateral } from "./poseMetrics";
+import { computeWristShoulderLateral, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 
 let testsPassed = 0;
@@ -93,8 +93,8 @@ test("Wrists vertically aligned with shoulders -> ~0 on both sides", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left"), 0, 0.01, "left");
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right"), 0, 0.01, "right");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 0, 0.01, "left");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0, 0.01, "right");
 });
 
 test("Outward wrist drift is positive on both sides", () => {
@@ -106,8 +106,8 @@ test("Outward wrist drift is positive on both sides", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left"), 0.4, 0.01, "left");
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right"), 0.4, 0.01, "right");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 0.4, 0.01, "left");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.4, 0.01, "right");
 });
 
 test("Inward wrist drift is negative on both sides", () => {
@@ -119,8 +119,8 @@ test("Inward wrist drift is negative on both sides", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left"), -0.4, 0.01, "left");
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right"), -0.4, 0.01, "right");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), -0.4, 0.01, "left");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), -0.4, 0.01, "right");
 });
 
 test("Camera-roll invariance: rotated outward drift stays positive and equal", () => {
@@ -141,8 +141,8 @@ test("Camera-roll invariance: rotated outward drift stays positive and equal", (
     leftHip:       r(base.leftHip),
     rightHip:      r(base.rightHip),
   });
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left"), 0.4, 0.01, "left");
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right"), 0.4, 0.01, "right");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 0.4, 0.01, "left");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.4, 0.01, "right");
 });
 
 test("Off-frame wrist -> null on that side", () => {
@@ -154,8 +154,8 @@ test("Off-frame wrist -> null on that side", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeWristShoulderLateral(lms, TILT_REF, "left"), "left");
-  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right"), 0, 0.01, "right");
+  assertNull(computeWristShoulderLateral(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left");
+  assertCloseTo(computeWristShoulderLateral(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0, 0.01, "right");
 });
 
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);

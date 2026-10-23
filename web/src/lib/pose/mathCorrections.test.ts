@@ -82,7 +82,12 @@ async function main() {
   // Actual camera caller, with deterministic metric inputs.
   const def = EXERCISE_REGISTRY.ex_005;
   const replay = createCameraReplay(def, await captureCoachingProvenance(def));
-  const primary = 21, scap = -.023 + .01306 * primary, neck = 11.7093 + 1.50466 * primary;
+  // Readings on the registry's own coupled lines (refitted for the corrected unit, D-48).
+  const line = (name: string) => def.compensationMetrics.find((c) => c.name === name)!.scoring as
+    { intercept: number; slopePerPrimaryUnit: number };
+  const primary = 21;
+  const scap = line("scapularElevation").intercept + line("scapularElevation").slopePerPrimaryUnit * primary;
+  const neck = line("neckTilt").intercept + line("neckTilt").slopePerPrimaryUnit * primary;
   replay.context.computePoseMetricsForExercise = () => ({ tiltReference: { cameraTiltDeg: 0, confidence: "high", divergenceDeg: 0 },
     metrics: { trunkLateralFlexion: primary, neckTilt: neck }, perSideMetrics: null, compensationScore: null });
   replay.context.computeTrunkLateralFlexionFromNeutralSigned = () => primary;

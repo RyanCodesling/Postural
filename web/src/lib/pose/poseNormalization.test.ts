@@ -46,6 +46,7 @@
  * 11.7. `computeShoulderAbduction` is the exception and returns unrounded.
  */
 
+import { readFileSync } from "node:fs";
 import {
   computeTiltReference,
   computeLateralNeckTilt,
@@ -59,6 +60,7 @@ import {
   computeShoulderElbowDistance,
   computePoseMetricsForExercise,
   frameAspectOf,
+  NO_ASPECT_CORRECTION,
 } from "./poseMetrics";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 
@@ -331,15 +333,15 @@ function shiftX(lms: LMArr, dx: number): LMArr {
 
 /** Reading of a metric, with the tilt reference resolved from the same frame. */
 function readNeckTilt(lms: LMArr): number | null {
-  const r = computeLateralNeckTilt(lms, computeTiltReference(lms));
+  const r = computeLateralNeckTilt(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), NO_ASPECT_CORRECTION);
   return r ? r.angleDeg : null;
 }
 function readShoulderSymmetry(lms: LMArr): number | null {
-  const r = computeShoulderSymmetry(lms, computeTiltReference(lms));
+  const r = computeShoulderSymmetry(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), NO_ASPECT_CORRECTION);
   return r ? r.angleDeg : null;
 }
 function readTrunkLean(lms: LMArr): number | null {
-  const r = computeTrunkLateralLean(lms, computeTiltReference(lms));
+  const r = computeTrunkLateralLean(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), NO_ASPECT_CORRECTION);
   return r ? r.angleDeg : null;
 }
 
@@ -373,7 +375,7 @@ test("control: arm elevation reads true on a square frame", () => {
   for (const trueDeg of [60, 80, 90, 100]) {
     const lms = toLandmarks(buildBody(W, H, { armElevDeg: trueDeg }), W, H);
     assertCloseTo(
-      computeShoulderAbduction(lms, computeTiltReference(lms), "left"),
+      computeShoulderAbduction(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
       trueDeg, 0.06, `square abduction @ true ${trueDeg}`,
     );
   }
@@ -446,7 +448,7 @@ function bandTrueSpan(W: number, H: number, lo: number, hi: number): [number, nu
   let foundHi: number | null = null;
   for (let t = 20; t < 160; t += 0.05) {
     const lms = toLandmarks(buildBody(W, H, { armElevDeg: t }), W, H);
-    const v = computeShoulderAbduction(lms, computeTiltReference(lms), "left");
+    const v = computeShoulderAbduction(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
     if (v !== null && v >= lo && v <= hi) {
       if (foundLo === null) foundLo = t;
       foundHi = t;
@@ -478,12 +480,12 @@ test("90° is the only exact point — arm-horizontal and trunk-vertical align",
   const { W, H } = FRAMES.wide;
   const at90 = toLandmarks(buildBody(W, H, { armElevDeg: 90 }), W, H);
   assertCloseTo(
-    computeShoulderAbduction(at90, computeTiltReference(at90), "left"),
+    computeShoulderAbduction(at90, computeTiltReference(at90, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     90, 0.02, "16:9 abduction @ true 90",
   );
   const at80 = toLandmarks(buildBody(W, H, { armElevDeg: 80 }), W, H);
   assertCloseTo(
-    computeShoulderAbduction(at80, computeTiltReference(at80), "left"),
+    computeShoulderAbduction(at80, computeTiltReference(at80, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     72.6, 0.06, "16:9 abduction @ true 80",
   );
 });
@@ -514,7 +516,7 @@ test("a shelf-propped webcam (3–6° roll) already crosses the 5° threshold", 
 test("the leaked lean is reported as a direction, not merely a magnitude", () => {
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { cameraRollDeg: 10 }), W, H);
-  const r = computeTrunkLateralLean(lms, computeTiltReference(lms));
+  const r = computeTrunkLateralLean(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), NO_ASPECT_CORRECTION);
   if (!r) throw new Error("expected a trunk-lean result");
   assertEqual(r.direction, "left", "leaked lean direction");
   assertEqual(r.severity !== "normal", true, "leaked lean is above the noise floor");
@@ -526,9 +528,12 @@ test("the leaked lean is reported as a direction, not merely a magnitude", () =>
 
 console.log("\nE — neckTilt halving inside the tilt-reference agreement window");
 
-test("control: neckTilt reads HALF its true value below the 3° agreement bound", () => {
+// The agreement bound is 1.7 since 2026-10-21 (D-48): the 3 it was set at in
+// pipeline units on 16:9, re-derived for the corrected tilt. These square-frame
+// controls read true tilts, so they meet the new bound.
+test("control: neckTilt reads HALF its true value below the 1.7° agreement bound", () => {
   const { W, H } = FRAMES.square;
-  const expected: Array<[number, number]> = [[1, 0.5], [2, 1.0], [3, 1.5]];
+  const expected: Array<[number, number]> = [[0.5, 0.25], [1, 0.5], [1.6, 0.8]];
   for (const [trueDeg, reading] of expected) {
     const lms = toLandmarks(buildBody(W, H, { neckTiltDeg: trueDeg }), W, H);
     assertCloseTo(readNeckTilt(lms), reading, 0.06, `square neckTilt @ true ${trueDeg}`);
@@ -537,10 +542,12 @@ test("control: neckTilt reads HALF its true value below the 3° agreement bound"
 
 test("control: the transfer function is DISCONTINUOUS at the boundary", () => {
   const { W, H } = FRAMES.square;
-  const below = toLandmarks(buildBody(W, H, { neckTiltDeg: 3.0 }), W, H);
-  const above = toLandmarks(buildBody(W, H, { neckTiltDeg: 3.01 }), W, H);
-  assertCloseTo(readNeckTilt(below), 1.5, 0.06, "square neckTilt @ true 3.00");
-  assertCloseTo(readNeckTilt(above), 3.0, 0.06, "square neckTilt @ true 3.01");
+  // 1.7 itself sits on the bound within floating-point error, so the pair
+  // straddles it.
+  const below = toLandmarks(buildBody(W, H, { neckTiltDeg: 1.69 }), W, H);
+  const above = toLandmarks(buildBody(W, H, { neckTiltDeg: 1.71 }), W, H);
+  assertCloseTo(readNeckTilt(below), 0.845, 0.06, "square neckTilt @ true 1.69");
+  assertCloseTo(readNeckTilt(above), 1.71, 0.06, "square neckTilt @ true 1.71");
 });
 
 test("control: above the boundary the reading is correct again", () => {
@@ -553,10 +560,10 @@ test("control: above the boundary the reading is correct again", () => {
 
 test("the tilt reference reports which regime it is in", () => {
   const { W, H } = FRAMES.square;
-  const below = toLandmarks(buildBody(W, H, { neckTiltDeg: 2 }), W, H);
+  const below = toLandmarks(buildBody(W, H, { neckTiltDeg: 1 }), W, H);
   const above = toLandmarks(buildBody(W, H, { neckTiltDeg: 5 }), W, H);
-  assertEqual(computeTiltReference(below).confidence, "high", "confidence inside window");
-  assertEqual(computeTiltReference(above).confidence, "low", "confidence outside window");
+  assertEqual(computeTiltReference(below, NO_ASPECT_CORRECTION).confidence, "high", "confidence inside window");
+  assertEqual(computeTiltReference(above, NO_ASPECT_CORRECTION).confidence, "low", "confidence outside window");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -570,7 +577,7 @@ test("a declared 'warn below 150' fires well above true 150 on 16:9", () => {
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 90, elbowFlexDeg: 150 }), W, H);
   assertCloseTo(
-    computeElbowFlexion(lms, computeTiltReference(lms), "left"),
+    computeElbowFlexion(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     134.2, 0.15, "16:9 elbowFlexion @ true 150",
   );
 });
@@ -582,7 +589,7 @@ test("control: elbowFlexion reads true on a square frame", () => {
   for (const trueDeg of [150, 170]) {
     const lms = toLandmarks(buildBody(W, H, { armElevDeg: 90, elbowFlexDeg: trueDeg }), W, H);
     assertCloseTo(
-      computeElbowFlexion(lms, computeTiltReference(lms), "left"),
+      computeElbowFlexion(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
       trueDeg, 0.15, `square elbowFlexion @ true ${trueDeg}`,
     );
   }
@@ -595,7 +602,7 @@ test("a T-pose wrist genuinely leaves a 720-wide square frame", () => {
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 90, elbowFlexDeg: 150 }), W, H);
   assertCloseTo(lms[15]!.x, 1.0675, 0.001, "square T-pose wrist x");
   assertNull(
-    computeElbowFlexion(lms, computeTiltReference(lms), "left"),
+    computeElbowFlexion(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     "square elbowFlexion nulled by out-of-frame wrist",
   );
 });
@@ -612,8 +619,8 @@ test("scapularElevation matches the square control when the trunk is vertical", 
     const wd = FRAMES.wide;
     const sqLms = toLandmarks(buildBody(sq.W, sq.H, { neckTiltDeg }), sq.W, sq.H);
     const wdLms = toLandmarks(buildBody(wd.W, wd.H, { neckTiltDeg }), wd.W, wd.H);
-    const sqVal = computeScapularElevation(sqLms, computeTiltReference(sqLms), "left");
-    const wdVal = computeScapularElevation(wdLms, computeTiltReference(wdLms), "left");
+    const sqVal = computeScapularElevation(sqLms, computeTiltReference(sqLms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
+    const wdVal = computeScapularElevation(wdLms, computeTiltReference(wdLms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
     if (sqVal === null || wdVal === null) throw new Error("expected a scapular value");
     assertCloseTo(wdVal, sqVal, 1e-9, `scapularElevation aspect invariance @ neckTilt ${neckTiltDeg}`);
   }
@@ -632,7 +639,7 @@ test("a T-pose elbow is well inside the frame today on 16:9", () => {
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 90 }), W, H);
   // Subject-perspective LEFT is image-right, so it carries the larger x.
   assertCloseTo(lms[13]!.x, 0.7109, 0.001, "T-pose left elbow x");
-  const v = computeShoulderAbduction(lms, computeTiltReference(lms), "left");
+  const v = computeShoulderAbduction(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
   assertCloseTo(v, 90, 0.02, "T-pose left abduction is measured, not nulled");
 });
 
@@ -641,7 +648,7 @@ test("an elbow past x = 1 nulls the primary, on every aspect", () => {
     const lms = toLandmarks(buildBody(f.W, f.H, { armElevDeg: 90 }), f.W, f.H);
     lms[13] = { x: 1.0001, y: lms[13]!.y, visibility: 1 };
     assertNull(
-      computeShoulderAbduction(lms, computeTiltReference(lms), "left"),
+      computeShoulderAbduction(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
       `${f.label}: abduction nulled by out-of-frame elbow`,
     );
   }
@@ -650,11 +657,11 @@ test("an elbow past x = 1 nulls the primary, on every aspect", () => {
 test("the guard is shared by elbowFlexion and gates on the wrist too", () => {
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 90, elbowFlexDeg: 150 }), W, H);
-  const baseline = computeElbowFlexion(lms, computeTiltReference(lms), "left");
+  const baseline = computeElbowFlexion(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
   if (baseline === null) throw new Error("expected a baseline elbow angle");
   lms[15] = { x: 1.0001, y: lms[15]!.y, visibility: 1 };
   assertNull(
-    computeElbowFlexion(lms, computeTiltReference(lms), "left"),
+    computeElbowFlexion(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     "elbowFlexion nulled by out-of-frame wrist",
   );
 });
@@ -677,7 +684,7 @@ test("the whole normalized width is currently usable — nothing is rejected bel
     const probe = shiftX(base, targetX - NATIVE_ELBOW_X);
     assertCloseTo(probe[13]!.x, targetX, 0.001, `elbow placed at x=${targetX}`);
     assertCloseTo(
-      computeShoulderAbduction(probe, computeTiltReference(probe), "left"),
+      computeShoulderAbduction(probe, computeTiltReference(probe, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
       90, 0.02, `abduction measured with elbow at x=${targetX}`,
     );
   }
@@ -693,11 +700,11 @@ test("the guard bites exactly at x = 1, not before", () => {
   const justInside = shiftX(base, 0.99999 - nativeElbowX);
   const justOutside = shiftX(base, 1.00001 - nativeElbowX);
   assertCloseTo(
-    computeShoulderAbduction(justInside, computeTiltReference(justInside), "left"),
+    computeShoulderAbduction(justInside, computeTiltReference(justInside, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     90, 0.02, "elbow just inside x = 1 is measured",
   );
   assertNull(
-    computeShoulderAbduction(justOutside, computeTiltReference(justOutside), "left"),
+    computeShoulderAbduction(justOutside, computeTiltReference(justOutside, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     "elbow just outside x = 1 is nulled",
   );
 });
@@ -842,7 +849,7 @@ test("REGRESSION: correcting the geometry must NOT shrink the usable frame", () 
   const nativeElbowX = base[13]!.x;
   for (const targetX of [0.5625, 0.7109, 0.85, 0.9999]) {
     const probe = shiftX(base, targetX - nativeElbowX);
-    const plain = computeShoulderAbduction(probe, computeTiltReference(probe), "left");
+    const plain = computeShoulderAbduction(probe, computeTiltReference(probe, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
     const corrected = correctedAbduction(probe, K_WIDE);
     if (plain === null) throw new Error(`fixture broken: uncorrected nulled at x=${targetX}`);
     if (corrected === null) {
@@ -875,8 +882,8 @@ test("the correction does NOT fix the neckTilt halving — that is a separate de
   // from `computeTiltReference` averaging the hip and ear lines, and it
   // reproduces in the square control, so it is not an aspect effect at all.
   const { W, H } = FRAMES.wide;
-  const lms = toLandmarks(buildBody(W, H, { neckTiltDeg: 2 }), W, H);
-  assertCloseTo(correctedNeckTilt(lms, K_WIDE), 1.0, 0.06, "corrected neckTilt @ true 2 still halved");
+  const lms = toLandmarks(buildBody(W, H, { neckTiltDeg: 1 }), W, H);
+  assertCloseTo(correctedNeckTilt(lms, K_WIDE), 0.5, 0.06, "corrected neckTilt @ true 1 still halved");
 });
 
 test("scapularElevation stays invariant under correction with a vertical trunk", () => {
@@ -884,7 +891,7 @@ test("scapularElevation stays invariant under correction with a vertical trunk",
   const wd = FRAMES.wide;
   const sqLms = toLandmarks(buildBody(sq.W, sq.H, { neckTiltDeg: 3 }), sq.W, sq.H);
   const wdLms = toLandmarks(buildBody(wd.W, wd.H, { neckTiltDeg: 3 }), wd.W, wd.H);
-  const sqVal = computeScapularElevation(sqLms, computeTiltReference(sqLms), "left");
+  const sqVal = computeScapularElevation(sqLms, computeTiltReference(sqLms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
   const wdVal = computeScapularElevation(wdLms, computeTiltReference(wdLms, K_WIDE), "left", K_WIDE);
   if (sqVal === null || wdVal === null) throw new Error("expected a scapular value");
   assertCloseTo(wdVal, sqVal, 1e-9, "corrected scapularElevation matches the square control");
@@ -926,7 +933,7 @@ test("wristShoulderVertical: corrected path matches the square control UNDER LEA
         `corrected wristShoulderVertical @ arm ${armElevDeg}, lean ${trunkLeanDeg}`,
       );
       const b = requireFinite(
-        computeWristShoulderVertical(sqL, computeTiltReference(sqL), "left"),
+        computeWristShoulderVertical(sqL, computeTiltReference(sqL, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
         `square control wristShoulderVertical @ arm ${armElevDeg}, lean ${trunkLeanDeg}`,
       );
       assertCloseTo(a, b, 1e-9, `wristShoulderVertical @ arm ${armElevDeg}, lean ${trunkLeanDeg}`);
@@ -940,7 +947,7 @@ test("wristShoulderVertical: the UNCORRECTED wide reading differs under lean", (
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 45, trunkLeanDeg: 8 }), W, H);
   const plain = requireFinite(
-    computeWristShoulderVertical(lms, computeTiltReference(lms), "left"),
+    computeWristShoulderVertical(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     "uncorrected wristShoulderVertical",
   );
   const fixed = requireFinite(
@@ -965,7 +972,7 @@ test("wristShoulderLateral: corrected path matches the square control UNDER LEAN
       `corrected wristShoulderLateral @ lean ${trunkLeanDeg}`,
     );
     const b = requireFinite(
-      computeWristShoulderLateral(sqL, computeTiltReference(sqL), "left"),
+      computeWristShoulderLateral(sqL, computeTiltReference(sqL, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
       `square control wristShoulderLateral @ lean ${trunkLeanDeg}`,
     );
     assertCloseTo(a, b, 1e-9, `wristShoulderLateral @ lean ${trunkLeanDeg}`);
@@ -973,7 +980,7 @@ test("wristShoulderLateral: corrected path matches the square control UNDER LEAN
   // Non-vacuity: uncorrected must differ.
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 30, trunkLeanDeg: 8 }), W, H);
   const plain = requireFinite(
-    computeWristShoulderLateral(lms, computeTiltReference(lms), "left"),
+    computeWristShoulderLateral(lms, computeTiltReference(lms, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION),
     "uncorrected wristShoulderLateral",
   );
   const fixed = requireFinite(
@@ -991,9 +998,9 @@ test("shoulderElbowDistance: uncorrected reads SHORT on a wide frame, corrected 
   const sq = FRAMES.square;
   const wd = toLandmarks(buildBody(W, H, { armElevDeg: 90 }), W, H);
   const sqL = toLandmarks(buildBody(sq.W, sq.H, { armElevDeg: 90 }), sq.W, sq.H);
-  const plain = computeShoulderElbowDistance(wd, computeTiltReference(wd), "left");
+  const plain = computeShoulderElbowDistance(wd, computeTiltReference(wd, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
   const fixed = computeShoulderElbowDistance(wd, computeTiltReference(wd, K_WIDE), "left", K_WIDE);
-  const control = computeShoulderElbowDistance(sqL, computeTiltReference(sqL), "left");
+  const control = computeShoulderElbowDistance(sqL, computeTiltReference(sqL, NO_ASPECT_CORRECTION), "left", NO_ASPECT_CORRECTION);
   if (plain === null || fixed === null || control === null) throw new Error("expected distances");
   assertEqual(plain < control, true, "uncorrected wide reads shorter than the square control");
   assertCloseTo(fixed, control, 1e-9, "corrected wide matches the square control");
@@ -1005,7 +1012,7 @@ test("computePoseMetricsForExercise threads the aspect to every metric it dispat
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { armElevDeg: 80, shoulderTiltDeg: 4 }), W, H);
 
-  const plain = computePoseMetricsForExercise(lms, def);
+  const plain = computePoseMetricsForExercise(lms, def, undefined, NO_ASPECT_CORRECTION);
   const fixed = computePoseMetricsForExercise(lms, def, undefined, K_WIDE);
 
   // The primary is shoulderAbduction: true 80 reads 72.6 uncorrected, 80 corrected.
@@ -1039,8 +1046,8 @@ test("ENTRY POINT: COMPENSATIONS are corrected too, not just the primary", () =>
   const square = toLandmarks(buildBody(sq.W, sq.H, shape), sq.W, sq.H);
 
   const fixed = computePoseMetricsForExercise(wide, def, undefined, K_WIDE);
-  const control = computePoseMetricsForExercise(square, def);
-  const plain = computePoseMetricsForExercise(wide, def);
+  const control = computePoseMetricsForExercise(square, def, undefined, NO_ASPECT_CORRECTION);
+  const plain = computePoseMetricsForExercise(wide, def, undefined, NO_ASPECT_CORRECTION);
 
   let checked = 0;
   for (const comp of def.compensationMetrics) {
@@ -1082,6 +1089,8 @@ test("ENTRY POINT: the isometric and bidirectional dispatch branches are correct
   );
   const isoControl = computePoseMetricsForExercise(
     toLandmarks(buildBody(sq.W, sq.H, isoShape), sq.W, sq.H), iso,
+    undefined,
+    NO_ASPECT_CORRECTION,
   );
   assertCloseTo(
     isoFixed.perSideMetrics?.left ?? null,
@@ -1099,9 +1108,13 @@ test("ENTRY POINT: the isometric and bidirectional dispatch branches are correct
   );
   const bidiControl = computePoseMetricsForExercise(
     toLandmarks(buildBody(sq.W, sq.H, bidiShape), sq.W, sq.H), bidi,
+    undefined,
+    NO_ASPECT_CORRECTION,
   );
   const bidiPlain = computePoseMetricsForExercise(
     toLandmarks(buildBody(W, H, bidiShape), W, H), bidi,
+    undefined,
+    NO_ASPECT_CORRECTION,
   );
   const want = requireFinite(bidiControl.metrics.trunkLateralFlexion ?? null, "ex_005 square control");
   assertCloseTo(
@@ -1129,15 +1142,13 @@ test("a frozen tilt override is used verbatim and is NOT re-derived", () => {
 });
 
 test("SWITCH-OVER HAZARD: a tilt frozen at aspect 1 does not match corrected geometry", () => {
-  // Pins the trap rather than fixing it. The live loop currently computes its
-  // neutral tilt with no aspect. If the correction is enabled for the metrics
-  // but that frozen tilt is still captured uncorrected, a horizontal-reference
-  // tilt is subtracted from corrected geometry and the two disagree. The live
-  // switch has to move BOTH together; this test fails loudly if someone wires
-  // only one side.
+  // Pins the trap. If the correction is enabled for the metrics but the frozen
+  // tilt is captured uncorrected, a horizontal-reference tilt is subtracted
+  // from corrected geometry and the two disagree. Since 2026-10-21 (D-48) the
+  // live loop moves BOTH together; the next test checks that it does.
   const { W, H } = FRAMES.wide;
   const lms = toLandmarks(buildBody(W, H, { cameraRollDeg: 6 }), W, H);
-  const staleTilt = computeTiltReference(lms);            // captured uncorrected
+  const staleTilt = computeTiltReference(lms, NO_ASPECT_CORRECTION);            // captured uncorrected
   const properTilt = computeTiltReference(lms, K_WIDE);   // captured corrected
   const gap = Math.abs(staleTilt.cameraTiltDeg - properTilt.cameraTiltDeg);
   assertEqual(
@@ -1146,6 +1157,20 @@ test("SWITCH-OVER HAZARD: a tilt frozen at aspect 1 does not match corrected geo
     `a stale uncorrected tilt differs from the corrected one by ${gap.toFixed(2)}deg — ` +
       `they are not interchangeable and must be switched together`,
   );
+});
+
+test("the live loop takes the observed tilt and the metrics with the same frame aspect (D-48)", () => {
+  // Source check on the camera loop: one `frameAspect` per frame, from the
+  // video's own size, feeds the observed tilt (and so the frozen tilt the
+  // calibration takes from it) and the per-exercise metrics.
+  const camera = readFileSync(new URL("../../app/(app)/camera/CameraClient.tsx", import.meta.url), "utf8");
+  const loop = camera.replace(/\r\n/g, "\n");
+  assertEqual(loop.includes("const frameAspect = frameAspectOf(video.videoWidth, video.videoHeight);"), true, "one aspect per frame");
+  assertEqual(loop.includes("const observedTilt = computeTiltReference(landmarks, frameAspect);"), true, "observed tilt corrected");
+  // The fifth argument is ex_004's own reference, the calibration ear line (D-49).
+  assertEqual(/computePoseMetricsForExercise\(\s*landmarks,\s*activeDefinition,\s*effectiveTilt,\s*frameAspect,\s*(?:\/\/[^\n]*\n\s*)*primaryReferenceFor\(activeDefinition, calibrationEarLineDegRef\.current\),\s*\)/.test(loop), true,
+    "metrics corrected with the same aspect");
+  assertEqual(/observedTilt,\s*frameAspect,\s*\}\);/.test(loop), true, "each calibration sample keeps its frame's aspect");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

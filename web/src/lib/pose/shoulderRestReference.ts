@@ -22,10 +22,15 @@ export const SHOULDER_CUE_REFERENCE = "resting_shoulder_line_v1" as const;
 
 type Landmarks = Parameters<typeof shoulderLineAngleDeg>[0];
 
+/** A calibration sample: its landmarks and the shape (W/H) of the frame they came from. */
+export type RestSample = { landmarks: Landmarks; frameAspect: number };
+
 /** The resting shoulder line: the median shoulder line over the calibration's samples, or null. */
-export function restingShoulderLineDeg(samples: readonly Landmarks[]): number | null {
+export function restingShoulderLineDeg(samples: readonly RestSample[]): number | null {
   return medianFinite(
-    samples.map((landmarks) => shoulderLineAngleDeg(landmarks)).filter((v): v is number => v !== null),
+    samples
+      .map((sample) => shoulderLineAngleDeg(sample.landmarks, sample.frameAspect))
+      .filter((v): v is number => v !== null),
   );
 }
 
@@ -37,7 +42,12 @@ export function restingShoulderLineDeg(samples: readonly Landmarks[]): number | 
 export function restReferencedShoulderSymmetry(
   landmarks: Landmarks,
   restLineDeg: number | null,
+  frameAspect: number,
 ): ShoulderSymmetryResult | null {
   if (restLineDeg === null || !Number.isFinite(restLineDeg)) return null;
-  return computeShoulderSymmetry(landmarks, { cameraTiltDeg: restLineDeg, confidence: "high", divergenceDeg: null });
+  return computeShoulderSymmetry(
+    landmarks,
+    { cameraTiltDeg: restLineDeg, confidence: "high", divergenceDeg: null },
+    frameAspect,
+  );
 }

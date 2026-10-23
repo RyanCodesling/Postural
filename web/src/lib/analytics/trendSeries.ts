@@ -17,6 +17,7 @@
  */
 import type { MetricName } from "@/lib/exercises/registry";
 import { OVERLAY_LABELS } from "@/lib/pose/drawCompensationOverlay";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import type { PrescribedSide } from "@/lib/prescriptionContext";
 import { prescribedOutcomeSides } from "@/lib/sessionOutcomePresentation";
 import { measureFromDetail, type SessionRepsDetail } from "./trendBreakdown";
@@ -73,6 +74,8 @@ export interface TrendModelSession {
    * read before the rules) the fields above are used and every repetition counts.
    */
   trend?: TrendRepSummary | null;
+  /** The saved session context; its `versions.poseMetrics` names the measurement the angles were taken with. */
+  context?: unknown;
 }
 
 /** A session's repetition summary under the trend data rules (`trendRules.ts`). */
@@ -196,6 +199,8 @@ export interface ModelSeries {
   bandMean: (number | null)[];
   bandLow: (number | null)[];
   bandHigh: (number | null)[];
+  /** True when the history's angles were measured before the aspect correction: drawn, but without the model. */
+  beforeCorrection?: boolean;
 }
 
 const finite = (value: number | null | undefined): value is number =>
@@ -274,6 +279,10 @@ export function minUnitsFor(exerciseId: string, measure: TrendMeasureName, confi
  * and shoulder height, and the hold's shoulder height. Their bands were learned
  * while those measures still cost correct movements points. The side bend now
  * has no scored measure, so new sessions record no form score for it.
+ *
+ * The re-learning of 2026-10-21 (D-35 amendment v4, D-48) kept all four
+ * withheld: it learned from the classifications and scores as recorded, which
+ * still mix the old and new targets and scoring.
  */
 export const BAND_WITHHELD: ReadonlySet<string> = new Set([
   "ex_005:completionPct",
@@ -281,6 +290,32 @@ export const BAND_WITHHELD: ReadonlySet<string> = new Set([
   "ex_005:formScore",
   "ex_006:holdFormScore",
 ]);
+
+/**
+ * Measures read in angle units, whose numbers changed meaning when the aspect
+ * correction was switched on (2026-10-21, D-48). The trend model's settings are
+ * in the corrected unit, so a history with any session measured before then
+ * keeps its points but is shown without the model's band and label. The app
+ * already starts a new history at a measurement change, so this concerns only
+ * the histories recorded before it. The press (ex_007) reads a trunk-length
+ * ratio, which the correction leaves unchanged; the other measures are counts,
+ * shares, times and scores.
+ */
+const ANGLE_MEASURES: ReadonlySet<string> = new Set(["peak", "peakSpread", "holdSteadiness", "holdError", "holdDroop"]);
+
+export function measuredBeforeAspectCorrection(
+  exerciseId: string,
+  measure: TrendMeasureName,
+  sessions: readonly TrendModelSession[],
+): boolean {
+  if (exerciseId === "ex_007" || !ANGLE_MEASURES.has(measure)) return false;
+  return sessions.some((session) =>
+    (session.context as { versions?: { poseMetrics?: unknown } } | null | undefined)?.versions?.poseMetrics !==
+      POSE_METRIC_ALGORITHM_VERSION);
+}
+
+/** Why such a history has no band or label, for the cards and the PDF. */
+export const BEFORE_CORRECTION_NOTE = "measured before the measurement correction of 21 October 2026";
 
 /** The measure's settings as the charts use them: a withheld band reads as no band. */
 export function displayMeasureSpec(
@@ -344,7 +379,9 @@ export function prepareModelSeries(
   side: TrendSide,
   config: TrendModelConfig = TREND_MODEL,
 ): ModelSeries {
-  const spec = displayMeasureSpec(exerciseId, measure, config);
+  const beforeCorrection = measuredBeforeAspectCorrection(exerciseId, measure, sessions);
+  const modelSpec = displayMeasureSpec(exerciseId, measure, config);
+  const spec = modelSpec && beforeCorrection ? { ...modelSpec, band: false, labelled: false } : modelSpec;
   const minUnits = minUnitsFor(exerciseId, measure, config);
   const values: (number | null)[] = [];
   const units: (number | null)[] = [];
@@ -376,12 +413,13 @@ export function prepareModelSeries(
     measure, side, spec, values, units, heldOut, counted: countedIndex.length,
     fit: null, label: spec?.labelled ? "collecting" : null,
     bandMean: empty(), bandLow: empty(), bandHigh: empty(),
+    ...(beforeCorrection ? { beforeCorrection } : {}),
   };
 }
 
 /** Same fitted values and display bounds for synchronous callers and the worker. */
 export function fitModelSeries(series: ModelSeries, config: TrendModelConfig = TREND_MODEL): ModelSeries {
-  const { measure, side, spec, values, units, heldOut } = series;
+  const { measure, side, spec, values, units, heldOut, beforeCorrection } = series;
   const countedIndex = values.flatMap((v, i) => (v === null ? [] : [i]));
   const empty = () => values.map(() => null as number | null);
   const bandMean = empty();
@@ -409,7 +447,10 @@ export function fitModelSeries(series: ModelSeries, config: TrendModelConfig = T
   if (spec?.labelled) {
     label = fit ? fit.label : "collecting";
   }
-  return { measure, side, spec, values, units, heldOut, counted: countedIndex.length, fit, label, bandMean, bandLow, bandHigh };
+  return {
+    measure, side, spec, values, units, heldOut, counted: countedIndex.length, fit, label, bandMean, bandLow, bandHigh,
+    ...(beforeCorrection ? { beforeCorrection } : {}),
+  };
 }
 
 export function modelSeries(

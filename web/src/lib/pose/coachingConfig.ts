@@ -6,7 +6,7 @@ import { SHOULDER_CUE_REFERENCE } from "./shoulderRestReference";
 import { TRACKING_CHECK_VERSION, trackingCheckConfiguration } from "./trackingSteadiness";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v12_shoulder_rest_reference";
+export const COACHING_ALGORITHM_VERSION = "coaching_v13_aspect_corrected";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {

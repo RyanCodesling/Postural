@@ -389,5 +389,23 @@ test("restSettleBand must remain below minimumPeakThreshold", () => {
   assertEqual(threw, true, "expected constructor to throw");
 });
 
+// D-50: the wrapped RepCounter keeps its rest evidence across a camera stall
+// under 1 s; unread frames forwarded by noteMissing() still clear it after 300 ms.
+const bendAfter = (counter: BidirectionalRepCounter, fromMs: number) =>
+  feed(counter, [[8, fromMs], [16, fromMs + 33], [24, fromMs + 66], [24, fromMs + 99], [10, fromMs + 132], [0, fromMs + 165]]);
+
+test("a camera stall under 1 s as a bend starts keeps the rest evidence (D-50)", () => {
+  const counter = new BidirectionalRepCounter(NECK_THRESHOLDS);
+  feed(counter, [[0, 0], [0, 33]]);
+  assertEqual(bendAfter(counter, 633).length, 1, "bend counted across a 600 ms stall");
+});
+
+test("frames without a reading, forwarded by noteMissing(), still refuse the start (D-50)", () => {
+  const counter = new BidirectionalRepCounter(NECK_THRESHOLDS);
+  feed(counter, [[0, 0], [0, 33]]);
+  for (let t = 66; t < 400; t += 33) counter.noteMissing();
+  assertEqual(bendAfter(counter, 400).length, 0, "no bend after 367 ms holding unread frames");
+});
+
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);
 process.exit(testsFailed > 0 ? 1 : 0);

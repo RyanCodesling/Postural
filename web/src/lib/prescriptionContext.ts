@@ -1,4 +1,4 @@
-import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { POSE_METRIC_ALGORITHM_VERSION, PRE_ASPECT_POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 
 export const PRESCRIPTION_SNAPSHOT_VERSION = 2 as const;
 export const SESSION_CONTEXT_VERSION = 3 as const;
@@ -117,7 +117,8 @@ export type SessionContextSnapshotV2 = SessionContextSnapshotBase & {
     registry: string;
     exerciseConfig: string;
     appRevision: string;
-    poseMetrics: typeof POSE_METRIC_ALGORITHM_VERSION;
+    // Sessions started before 2026-10-21 carry the pre-correction identifier (D-48).
+    poseMetrics: typeof POSE_METRIC_ALGORITHM_VERSION | typeof PRE_ASPECT_POSE_METRIC_ALGORITHM_VERSION;
     repQuality: "dynamic_rep_quality_v2";
     model: null;
   };

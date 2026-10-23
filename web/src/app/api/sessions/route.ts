@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
-import { sha256Version } from "@/lib/exercises/versioning";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { EXERCISE_CONFIG_VERSIONS, sha256Version } from "@/lib/exercises/versioning";
 import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
 import { hasRecording } from "@/lib/recording/storage";
 import {
@@ -109,6 +110,26 @@ export async function POST(request: NextRequest) {
         {
           error: "The video notice has been updated. Reload this page to read it, then start again.",
           code: "video_notice_changed",
+        },
+        { status: 409 },
+      );
+    }
+    // The session is filed under this server's measurement version. A page
+    // loaded before an update that changed how angles are measured (D-48)
+    // would store its readings under the wrong one, so it is sent back to
+    // reload. Pages from before this field existed send nothing. The same
+    // holds for the exercise's own measurement version, which changes when
+    // only that exercise's measurement does (D-49); the page sends the one it
+    // computed from its own code.
+    const exerciseConfigVersion = EXERCISE_CONFIG_VERSIONS[exerciseId];
+    if (
+      body?.poseMetricAlgorithm !== POSE_METRIC_ALGORITHM_VERSION ||
+      (typeof exerciseConfigVersion === "string" && body?.exerciseConfigVersion !== exerciseConfigVersion)
+    ) {
+      return NextResponse.json(
+        {
+          error: "The app has been updated. Reload this page, then start again.",
+          code: "app_updated",
         },
         { status: 409 },
       );

@@ -94,7 +94,7 @@ function composedShouldWarn(
 }
 
 const ex007 = EXERCISE_REGISTRY.ex_007; // primary wristShoulderVertical, targetROM 0.85
-const ex008 = EXERCISE_REGISTRY.ex_008; // primary shoulderAbduction,     targetROM 150
+const ex008 = EXERCISE_REGISTRY.ex_008; // primary shoulderAbduction,     targetROM 134.3
 const ex001 = EXERCISE_REGISTRY.ex_001; // control: no peakRelevant comps
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,11 +151,11 @@ test("ex_007: gate is exactly PEAK_GATE_FRACTION × targetROM (inclusive)", () =
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TESTS — isNearPeak (ex_008, gate = 0.9 × 150 = 135°)
+// TESTS — isNearPeak (ex_008, gate = 0.9 × 134.3 = 120.9; D-48)
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("ex_008: arms overhead (140°/140°) → near peak", () => {
-  assertEq(isNearPeak(ex008, { left: 140, right: 140 }, null), true, "140/140");
+test("ex_008: arms overhead (125/125) → near peak", () => {
+  assertEq(isNearPeak(ex008, { left: 125, right: 125 }, null), true, "125/125");
 });
 
 test("ex_008: mid-slide (90°/100°) → not near peak", () => {
@@ -168,7 +168,7 @@ test("ex_008: mid-slide (90°/100°) → not near peak", () => {
 
 test("ex_007: bent elbow at the BOTTOM of the press → no 'Straighten arms'", () => {
   const elbow = comp(ex007, "elbowFlexion");
-  // arms low (max 0.2 < 0.765 gate), elbow bent 90° (< 150 threshold)
+  // arms low (max 0.2 < 0.765 gate), elbow bent 90 (< 134.3 line)
   assertEq(composedShouldWarn(ex007, elbow, { left: 0.2, right: 0.2 }, 90), false, "bent + low");
 });
 
@@ -180,21 +180,21 @@ test("ex_007: bent elbow at the TOP of the press → warns (incomplete extension
 
 test("ex_007: straight elbow at the TOP → no warning", () => {
   const elbow = comp(ex007, "elbowFlexion");
-  // arms high (0.8 >= 0.765 gate), elbow straight 175° (>= 150) → no flag
+  // arms high (0.8 >= 0.765 gate), elbow straight 175 (>= 134.3) → no flag
   assertEq(composedShouldWarn(ex007, elbow, { left: 0.8, right: 0.8 }, 175), false, "straight + high");
 });
 
 test("ex_008: bent elbow in the W-position → no warning; bent at Y-position → warns", () => {
   const elbow = comp(ex008, "elbowFlexion");
   assertEq(composedShouldWarn(ex008, elbow, { left: 90, right: 90 }, 95), false, "W-position bent");
-  assertEq(composedShouldWarn(ex008, elbow, { left: 140, right: 140 }, 95), true, "Y-position bent");
+  assertEq(composedShouldWarn(ex008, elbow, { left: 125, right: 125 }, 95), true, "Y-position bent");
 });
 
 test("ex_007: trunkLean (non-peakRelevant) warns regardless of peak position", () => {
-  const trunk = comp(ex007, "trunkLean"); // warningThreshold 5, direction "above"
+  const trunk = comp(ex007, "trunkLean"); // warningThreshold 8.8, direction "above"
   // Low arms (not near peak) — a real trunk lean must STILL flag.
-  assertEq(composedShouldWarn(ex007, trunk, { left: 0.0, right: 0.0 }, 8), true, "lean + low");
-  assertEq(composedShouldWarn(ex007, trunk, { left: 0.0, right: 0.0 }, 2), false, "no lean + low");
+  assertEq(composedShouldWarn(ex007, trunk, { left: 0.0, right: 0.0 }, 12), true, "lean + low");
+  assertEq(composedShouldWarn(ex007, trunk, { left: 0.0, right: 0.0 }, 3.6), false, "no lean + low");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -189,6 +189,9 @@ export class VelocityBidirectionalRepCounter {
     return event;
   }
 
+  /** No rest-gap rule here (D-50 changes RepCounter's); nothing to note. */
+  noteMissing(): void {}
+
   reset(): void {
     this.phase = "WAITING_FOR_LAUNCH";
     this.armedForStroke = false;

@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { TREND_MODEL } from "./trendModel";
+import { POSE_METRIC_ALGORITHM_VERSION } from "../pose/metricVersion";
 import { fitModelSeries, modelSeries, prepareModelSeries, type TrendModelSession } from "./trendSeries";
 import { TrendFitRunner, type TrendFitInput, type TrendFitJob, type TrendFitSnapshot, type TrendFitWork, type TrendFitWorker } from "./trendFitRunner";
 
@@ -18,7 +19,7 @@ class FakeWorker implements TrendFitWorker {
 }
 
 const sessions: TrendModelSession[] = Array.from({ length: 5 }, (_, i) => ({
-  exerciseKind: "dynamic", setCount: 1, leftReps: i === 1 ? 2 : 12,
+  exerciseKind: "dynamic", setCount: 1, leftReps: i === 1 ? 2 : 12, context: { versions: { poseMetrics: POSE_METRIC_ALGORITHM_VERSION } },
   avgLeftPeakValue: 82 + i, sdLeftPeakValue: 2 + i / 10,
 }));
 const input = (): TrendFitInput => ({

@@ -2,13 +2,13 @@
 
 ## 📌 Update-10-23-26 | *RyanCodesling*
 
-- Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic squeezed angles near the horizontal and stretched those near the vertical; against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high
-- Converted every angle threshold to the corrected measurement so that counting and cues behave as before, except that a lateral raise peaking between a real 45 and 60 degrees now counts as partial instead of being dropped
-- Counted neck side bends from the head's own resting line, taken during the 3-second baseline, instead of the camera's tilt
+- Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic exaggerated how far a line tilts from horizontal and shrank how far it tilts from vertical (a real 5 degrees read about 8.8 and 2.8); against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high
+- Converted every angle threshold to the corrected measurement so that counting and cues behave as before, except that a lateral raise peaking between 45 and about 60 in the corrected measurement now counts as partial instead of being dropped
+- Counted neck side bends from the head's own ear line, taken during the 3-second baseline, instead of the camera's tilt
 - Kept counting when the camera briefly stalls, for under a second, just as a limb leaves its resting position; this had lost a repetition in three recordings
 - Re-learned the trend model in the corrected measurement, now including the neck sessions
 - Showed angle trends recorded before the correction as measured values only, with a note, and started a new trend history at the change
-- Refused to start or resume a session from a page or saved progress measured under an older version, and asked the patient to reload instead
+- Refused to start a session from a page measured under an older version, asking the patient to reload, and stopped offering saved progress from an older version
 - Upgraded Next.js from 16.4.0 to 16.4.2, which fixes two critical remote code execution advisories and one denial-of-service advisory
 - Built this update on top of Enah's 10-19 update
 
@@ -21,7 +21,7 @@
 ### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\compensationWarningState.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\lib\pose\holdQuality.ts*
 
 - Converted each angle threshold from its old value by the shape of the line it measures, on the 16:9 frames it was tuned on: the lateral raise's start, return, and full-range lines of 20, 15, and 85 became 32.9, 25.5, and 87.2; the side bend's 5, 2, 15, and 17 became 8.8, 3.6, 25.5, and 28.5; the neck's 12, 6, 18, and 30 became 6.8, 3.4, 10.4, and 18; the wall angels' 85, 70, 110, and 150 became 87.2, 78.4, 101.6, and 134.3; the arm hold's band of 10 became 5.7; and the cue and warning lines followed
-- Set the lateral raise's minimum peak to a real 45; the old 45 sat at about 65 degrees on a body
+- Set the lateral raise's minimum peak to 45 in the corrected measurement, about 51 degrees on a body; the old 45 sat at about 65
 - Refitted the four shoulder-linked expected lines on the corrected pilot data, and converted the elbow checks at the arm position where each one runs
 - Corrected two registry comments that called the thresholds clinical norms; they are engineering settings
 - Recorded the coaching version coaching_v13_aspect_corrected, and marked hold records as measured in the corrected unit

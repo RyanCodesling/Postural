@@ -9,6 +9,7 @@ import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/Dashboa
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
+import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
@@ -2183,12 +2184,7 @@ export default function AdminDashboard() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="text-sm font-semibold text-gray-700">Reference video unavailable</p>
-                <p className="mt-1 text-xs text-gray-500">
-                  Use the written instructions below. No verified demonstration video is published yet.
-                </p>
-              </div>
+              <ExerciseReferenceVideo key={viewingExercise.id} exerciseId={viewingExercise.id} isCustom={viewingExercise.is_custom} />
 
               {/* Description */}
               <div>

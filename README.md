@@ -9,6 +9,7 @@
 - Counted only the active exercises on the admin dashboard, so archived and retired exercises no longer raise its total
 - Limited new or edited prescriptions to whole numbers of 1–4 sets and 1–20 reps per set, and hold exercises to 1–10 sets, each set one hold with the prescription's rest between holds
 - Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed, and counted only finished sets in it
+- Restored the accepted reference videos in Manage Exercises for therapist and admin accounts, with the camera page's crop and playback controls
 
 ### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\peakRelevantGating.test.ts*
 
@@ -44,6 +45,11 @@
 - Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed
 - Showed "Sets completed" from the finished sets only, so a set stopped part-way no longer counts as finished, and sets finished before a reload and Resume still count
 
+### *web\src\app\(app)\dashboard\_components\ExerciseReferenceVideo.tsx*, *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Replaced the fixed unavailable-video message in both exercise detail windows with the existing guide player for the six active built-in exercises
+- Reused the accepted clips, full-body crop, detail view, pause, half speed and full screen; custom or unknown exercises keep written guidance, and a clip that fails to load shows a separate message
+
 ### *Validation*
 
 - 83 framework-free TypeScript suites pass, including new cases for the trace default, the readout switch, the loss toast, the hold display, and the prescription limits
@@ -51,6 +57,7 @@
 - The admin count's query, run on temporary tables, counts the active built-in and custom exercises and leaves out archived and retired ones
 - The end-of-session summary, rendered for seven endings including a stop during the countdown or a rest and a partial final set, always titles and counts the finished sets
 - On the local app, the assign and program forms show "Sets (1–10)" for the hold, and "Sets (1–4)" and "Reps (1–20)" for the other exercises
+- All six guide videos played in each of the local therapist and admin accounts (12 previews); pause, half speed and detail framing worked, the 13 clip checks passed, and all six video files stayed unchanged
 - Type check, lint (no errors), and a production build pass
 - Undoing each part of the trace change makes its own test fail
 - The trace adds about 0.07 to 0.08 ms per camera frame on the laptop, timed on stored traces
@@ -60,12 +67,11 @@
 
 ### *Remaining boundaries*
 
-- Not pushed or deployed; the evaluation server still runs Update-10-23-26, with the trace off by default
 - After deploying, check that the first session's trace reaches the server; no trace has been saved there yet
 - The wall angels' 125 and 98.8 are provisional engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
 - The hold display has not been tried in a live camera session
+- Staff video playback was checked on the local app; a signed-in check on the evaluation server remains
 - The prescription limits are prototype input ranges, not recommended or safe doses; the thesis manuscript's methods still need them
-- The admin count on the server has not been checked, since this update is not deployed
 - The 3D builder's files (assets\blender and tools\blender) and the email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
 
 ---

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../../_components/DashboardKit";
+import ExerciseReferenceVideo from "../../_components/ExerciseReferenceVideo";
 
 interface Exercise {
   id: string;
@@ -252,12 +253,7 @@ export default function ManageExercisesPage() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="text-sm font-semibold text-gray-700">Reference video unavailable</p>
-                <p className="mt-1 text-xs text-gray-500">
-                  Use the written instructions below. No demonstration video is published for this exercise yet.
-                </p>
-              </div>
+              <ExerciseReferenceVideo key={viewingExercise.id} exerciseId={viewingExercise.id} isCustom={viewingExercise.is_custom} />
 
               {/* Description */}
               <div>

@@ -390,6 +390,46 @@ test("the readout is not rendered outside a patient tuning session", () => {
   );
 });
 
+test("the trace is recorded by default", () => {
+  // Since 2026-10-24 every patient session is traced unless the staff panel
+  // switches it off, so a counting problem reported from any session can be
+  // replayed offline. The camera loop reads the ref, not the state, so a ref
+  // that starts off would leave the first frames of every page load untraced.
+  assert(
+    /\[tuningTraceEnabled, setTuningTraceEnabledState\] = useState\(true\)/.test(camera),
+    "the trace toggle must start on",
+  );
+  assert(
+    /tuningTraceEnabledRef = useRef\(true\)/.test(camera),
+    "the ref the camera loop reads must start on too",
+  );
+});
+
+test("the readout needs its own staff switch, which starts off", () => {
+  // With the trace on by default, the trace toggle alone would put a
+  // debugging readout, and a warning to check the server, in front of every
+  // patient and evaluator.
+  const marker = camera.indexOf("ref={traceSyncElRef}");
+  assert(marker !== -1, "the readout element was not found in the rendered tree");
+  const preceding = camera.slice(Math.max(0, marker - 1400), marker);
+  assert(
+    /tuningTraceEnabled && traceSyncReadoutShown &&/.test(preceding),
+    "the readout must also be gated on the staff panel's readout switch",
+  );
+  assert(
+    /\[traceSyncReadoutShown, setTraceSyncReadoutShownState\] = useState\(false\)/.test(camera),
+    "the readout switch must start off",
+  );
+  assert(
+    /traceSyncReadoutShownRef = useRef\(false\)/.test(camera),
+    "the readout switch's ref must start off too",
+  );
+  assert(
+    camera.includes("setTraceSyncReadoutShown(e.target.checked)"),
+    "the staff panel must offer the readout switch",
+  );
+});
+
 test("a frame that is not traced BLANKS the readout", () => {
   // The defect this closes: the readout was written only on traced frames, so
   // a gap left the last good reading on screen. Pausing a screen recording

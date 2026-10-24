@@ -201,6 +201,7 @@ import {
   shouldShowOutcomeAsymmetry,
   sideLabel,
 } from "@/lib/sessionOutcomePresentation";
+import { perArmHoldDisplay, type HoldArmDisplay } from "@/lib/holdDisplay";
 
 type CamDevice = MediaDeviceInfo;
 
@@ -3167,15 +3168,28 @@ export default function CameraClient() {
   // the state is what draws the warning.
   const traceUploadLossRef = useRef<TraceUploadLoss | null>(null);
   const [traceUploadLoss, setTraceUploadLoss] = useState<TraceUploadLoss | null>(null);
-  // Opt-in tuning-trace recording (patient mode only, default OFF). The ref
-  // mirrors the state for the rAF loop — same stale-closure pattern as
-  // lastCaptureOkRef. Flipping mid-session simply starts/stops buffering;
-  // frame_index stays monotonic, and gaps are an expected trace property.
-  const [tuningTraceEnabled, setTuningTraceEnabledState] = useState(false);
-  const tuningTraceEnabledRef = useRef(false);
+  // Tuning-trace recording (patient sessions only persist). On by default
+  // since 2026-10-24, so any patient session can be replayed through the
+  // counter offline; the staff panel can still switch it off for the page
+  // load. The ref mirrors the state for the rAF loop — same stale-closure
+  // pattern as lastCaptureOkRef. Flipping mid-session simply starts/stops
+  // buffering; frame_index stays monotonic, and gaps are an expected trace
+  // property.
+  const [tuningTraceEnabled, setTuningTraceEnabledState] = useState(true);
+  const tuningTraceEnabledRef = useRef(true);
   const setTuningTraceEnabled = useCallback((on: boolean) => {
     tuningTraceEnabledRef.current = on;
     setTuningTraceEnabledState(on);
+  }, []);
+  // The trace sync readout and the trace-loss toast are for the person
+  // recording a tuning session, so they stay hidden until the staff panel
+  // shows them. With the trace on by default, every patient would otherwise
+  // see a debugging readout and be told to check the server.
+  const [traceSyncReadoutShown, setTraceSyncReadoutShownState] = useState(false);
+  const traceSyncReadoutShownRef = useRef(false);
+  const setTraceSyncReadoutShown = useCallback((on: boolean) => {
+    traceSyncReadoutShownRef.current = on;
+    setTraceSyncReadoutShownState(on);
   }, []);
   // Serial upload chain for raw-frame batches. Each queued request captures its
   // session id + rows, so an end/auto-advance reset cannot redirect an in-flight
@@ -3405,8 +3419,9 @@ export default function CameraClient() {
   /**
    * Buffer one valid active frame for patient-session threshold/scoring
    * tuning. Inputs are raw/unsmoothed metric values and selected normalized
-   * landmarks only — never image data. Opt-in: gated on the "Record tuning
-   * trace" toggle (default OFF), so ordinary patient sessions write nothing.
+   * landmarks only — never image data. Gated on the "Record tuning trace"
+   * toggle, which is on by default since 2026-10-24, so every patient session
+   * writes the trace unless the staff panel switches it off.
    * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
    * now covers every active exercise with the versioned V4 payload.
    */
@@ -3517,7 +3532,7 @@ export default function CameraClient() {
    * Queue pending raw-frame batches for upload, serializing them so a long set
    * cannot fire a burst of concurrent large JSON requests.
    *
-   * Unlike rep/set outcomes these are opt-in tuning traces, not clinical
+   * Unlike rep/set outcomes these are tuning traces, not clinical
    * outcome data, so they are retried a bounded number of times and then given
    * up on rather than persisted across reloads — a trace batch is large enough
    * that queueing it in localStorage risks the storage quota. Dropped batches
@@ -3570,7 +3585,10 @@ export default function CameraClient() {
                 traceUploadLossRef.current = loss;
                 setTraceUploadLoss(loss);
                 // Toast once per session; the line under the readout keeps count.
-                if (loss.droppedBatches === 1) {
+                // Only while the staff panel shows the readout: the toast tells
+                // the person recording to check the server, which a patient
+                // cannot do. The loss still goes to the console above.
+                if (loss.droppedBatches === 1 && traceSyncReadoutShownRef.current) {
                   showToast({ variant: "error", message: traceUploadLossToast(loss) });
                 }
                 return;
@@ -6837,7 +6855,7 @@ export default function CameraClient() {
               );
               let ex005PerFrameCorrectedSignedDeg: number | null = null;
 
-              // Durable tuning trace (opt-in, any active exercise): record
+              // Durable tuning trace (on by default, any active exercise): record
               // RAW/unsmoothed values before any One Euro filtering or
               // rep-state-machine processing. This block is already inside
               // capture-readiness `r.ok`, so unreliable frames remain
@@ -8567,13 +8585,15 @@ export default function CameraClient() {
   };
 
   // Trace sync readout — the join key between a screen recording and the
-  // exported trace. Gated on a patient with tracing switched on; the toggle
-  // defaults OFF, so an ordinary session never shows it. The session card of
-  // whichever state is showing renders it, with the label stacked above the
-  // reading so the reading keeps its full width in a narrow column.
+  // exported trace. Gated on a patient with tracing switched on AND the staff
+  // panel's "Show trace sync readout", which defaults OFF: the trace itself is
+  // on by default, so this is what keeps it off an ordinary session. The
+  // session card of whichever state is showing renders it, with the label
+  // stacked above the reading so the reading keeps its full width in a narrow
+  // column.
   // `bufferTuningRawFrame` writes the text directly to this node from the same
   // values it persists.
-  const traceSyncReadout = user?.role === "patient" && tuningTraceEnabled && (
+  const traceSyncReadout = user?.role === "patient" && tuningTraceEnabled && traceSyncReadoutShown && (
     <div style={{
       padding: "10px 12px",
       borderRadius: 10,
@@ -8876,7 +8896,7 @@ export default function CameraClient() {
                   </div>
                 </div>
 
-                {/* Opt-in tuning-trace recording (patient sessions only persist) */}
+                {/* Tuning-trace recording, on by default (patient sessions only persist) */}
                 {user?.role === "patient" && (
                   <div style={{ ...CARD_STYLE, flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 16px" }}>
                     <input
@@ -8889,7 +8909,26 @@ export default function CameraClient() {
                     <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
                       <div style={STAFF_HEADING_STYLE}>Record tuning trace</div>
                       <div style={{ marginTop: 2, fontSize: 11, color: "oklch(0.50 0.01 240)" }}>
-                        Saves raw movement metrics (no video) for threshold tuning.
+                        Saves raw movement metrics (no video) with every session. On by default.
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {/* The readout for screen-recorded tuning sessions, off by default */}
+                {user?.role === "patient" && tuningTraceEnabled && (
+                  <div style={{ ...CARD_STYLE, flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 16px" }}>
+                    <input
+                      type="checkbox"
+                      id="trace-sync-readout-toggle"
+                      checked={traceSyncReadoutShown}
+                      onChange={(e) => setTraceSyncReadoutShown(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="trace-sync-readout-toggle" style={{ cursor: "pointer" }}>
+                      <div style={STAFF_HEADING_STYLE}>Show trace sync readout</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "oklch(0.50 0.01 240)" }}>
+                        Frame number and time for screen recordings, and a warning if the server misses trace batches.
                       </div>
                     </label>
                   </div>
@@ -12827,7 +12866,44 @@ function CameraSetHud({
   );
 
   let primary: React.ReactNode;
-  if (activeDefinition.kind === "isometric" && activeDefinition.bilateral) {
+  if (activeDefinition.kind === "isometric" && activeDefinition.bilateral && activeDefinition.bilateralMode === "per-limb") {
+    // Per-arm hold: one main number, the credited hold that ends the set, with
+    // each arm's own seconds beneath it, greyed while that arm is out of
+    // position. Two big per-arm numbers drift out of step whenever the arms
+    // reach the band at different moments, which reads as a counting fault.
+    const hold = perArmHoldDisplay(holdState, prescription);
+    const pausedColor = "oklch(0.58 0.01 240)";
+    const armNumSt: CSSProperties = {
+      fontFamily: "var(--mono)",
+      fontSize: compact ? 16 : 22,
+      fontWeight: 600,
+      fontVariantNumeric: "tabular-nums",
+    };
+    const armCell = (arm: HoldArmDisplay) => (
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span style={{ ...sideSt, color: arm.tone === "paused" ? pausedColor : sideSt.color }}>
+          {arm.label}{arm.observation ? " · observation" : ""}
+        </span>
+        <span style={{ ...armNumSt, color: arm.tone === "done" ? NEON.hex : arm.tone === "paused" ? pausedColor : "white" }}>
+          {arm.seconds}s
+        </span>
+      </div>
+    );
+    primary = (
+      <>
+        <div style={labelSt}>
+          <span>Hold</span>
+          <span style={suffixSt}>/ {prescription.holdSeconds}s</span>
+        </div>
+        <div style={{ ...numSt, color: hold.done ? NEON.hex : "white" }}>{seconds(hold.seconds)}</div>
+        <div style={{ ...rowSt, marginTop: 6 }}>
+          {armCell(hold.arms[0])}
+          <span style={{ fontSize: compact ? 14 : 18, fontWeight: 300, color: "oklch(0.62 0.01 240)" }}>·</span>
+          {armCell(hold.arms[1])}
+        </div>
+      </>
+    );
+  } else if (activeDefinition.kind === "isometric" && activeDefinition.bilateral) {
     const leftSec = Math.floor(holdState.leftSec);
     const rightSec = Math.floor(holdState.rightSec);
     primary = (

@@ -965,9 +965,9 @@ export function worstSideCompensationScore(
  * STARTING value — live-tunable, same status as the ex_007 / ex_008 thresholds
  * it gates. At 0.9 the gate lands at:
  *   ex_007 Overhead Press → 0.9 × 0.85  = 0.765 trunk-lengths (just below full extension)
- *   ex_008 Wall Angels     → 0.9 × 134.3 = 120.9 (just below the Y-position;
- *     the corrected target since 2026-10-21, D-48; it was 0.9 × 150 = 135 in
- *     pipeline units, where 135 corresponds to a corrected 119.4)
+ *   ex_008 Wall Angels     → 0.9 × 125 = 112.5 (below the Y-position; the
+ *     target since 2026-10-23, D-51; with D-48's corrected 134.3 it was 120.9,
+ *     and 0.9 × 150 = 135 in pipeline units, where 135 is a corrected 119.4)
  * i.e. only flag "Straighten arms" very near the top of the movement, where
  * straight elbows are actually the expected posture.
  *

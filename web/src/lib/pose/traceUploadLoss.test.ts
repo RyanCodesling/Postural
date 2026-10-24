@@ -164,5 +164,18 @@ test("a new session clears the warning, and ending a session does not", () => {
   assert(!/setTraceUploadLoss\(/.test(reset), "the reset that also runs at End must leave the warning");
 });
 
+test("the loss toast is raised only while the staff panel shows the readout", () => {
+  // The toast tells the person recording to check the server. The trace is on
+  // by default, so without this gate a patient would get it on a flaky upload.
+  const body = functionBody("const flushRawFrames = () => {");
+  const toast = body.indexOf("showToast(");
+  assert(toast !== -1, "could not locate the loss toast");
+  const guard = body.slice(body.lastIndexOf("if (", toast), toast);
+  assert(
+    /traceSyncReadoutShownRef\.current/.test(guard),
+    "the toast must be gated on the readout being shown",
+  );
+});
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

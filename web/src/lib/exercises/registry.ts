@@ -1682,7 +1682,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // clean Y-peaks ran 146–167°, so 110 keeps deliberate partial
         // slides countable while arm settles near the W (≤ ~50°) stay
         // discarded.
-        minimumPeakThreshold: 101.6, // was 110; D-48
+        // Since 2026-10-23 (D-51) the minimum keeps its place between the
+        // start line and the lowered full-range line below:
+        // 87.2 + (125 - 87.2) × (101.6 - 87.2) / (134.3 - 87.2) = 98.8.
+        minimumPeakThreshold: 98.8, // was 101.6 (D-48), 110 before; D-51
         // 150° ≈ arms-overhead position at full extension along the wall.
         // Foreshortening at full overhead is an accepted thesis limitation
         // (known foreshortening limitation in computeShoulderAbduction).
@@ -1691,7 +1694,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // straddles 150 the same way ex_001's clean peaks straddle its 90°
         // target. All degree figures here are pipeline units; on 16:9 the
         // aspect-corrected reading compresses this overhead range.
-        targetROM: 134.3, // was 150; D-48
+        // Lowered 2026-10-23 (D-51), as D-41 did for the arm raise: a line at
+        // the median of correct repetitions rates half of them partial. 125 is
+        // the 5th percentile of the researcher's 24 repetitions following the
+        // guide (session 236, 123.7-135.9), and the guide figure's own top
+        // reads 137.4-141.2, 12-16 above it.
+        targetROM: 125, // was 134.3 (D-48), 150 before; D-51
       },
       // No descentEpsilon override (degree-scale, global 0.5 is fine).
       // No smoothing override (global degree-scale default fine).

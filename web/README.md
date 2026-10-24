@@ -83,7 +83,7 @@ To synchronize the offline ML registry after an exercise-definition change:
 npx tsx scripts/export-registry.ts
 ```
 
-The generated `../ml/config/registry.json` must be reviewed and committed with the registry change. Raw tuning traces are opt-in and are not a substitute for a newly collected untouched validation set.
+The generated `../ml/config/registry.json` must be reviewed and committed with the registry change. Raw tuning traces are recorded by default in patient sessions (the camera's staff panel can switch them off) and are not a substitute for a newly collected untouched validation set.
 
 ## Architecture boundaries
 

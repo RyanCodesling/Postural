@@ -94,7 +94,7 @@ function composedShouldWarn(
 }
 
 const ex007 = EXERCISE_REGISTRY.ex_007; // primary wristShoulderVertical, targetROM 0.85
-const ex008 = EXERCISE_REGISTRY.ex_008; // primary shoulderAbduction,     targetROM 134.3
+const ex008 = EXERCISE_REGISTRY.ex_008; // primary shoulderAbduction,     targetROM 125 (D-51)
 const ex001 = EXERCISE_REGISTRY.ex_001; // control: no peakRelevant comps
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ test("ex_007: gate is exactly PEAK_GATE_FRACTION × targetROM (inclusive)", () =
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TESTS — isNearPeak (ex_008, gate = 0.9 × 134.3 = 120.9; D-48)
+// TESTS — isNearPeak (ex_008, gate = 0.9 × 125 = 112.5; D-51)
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("ex_008: arms overhead (125/125) → near peak", () => {

@@ -1,5 +1,50 @@
 # Sprint Updates 
 
+## 📌 Update-10-24-26 | *RyanCodesling*
+
+- Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because most correct repetitions that followed the guide video were rated partial
+- Recorded the tuning trace in every patient session by default, so a reported counting problem can be replayed through the counter afterwards; the staff panel can still switch it off
+- Moved the trace's frame readout and its "check the server" warning behind a new staff switch, so patients and evaluators do not see them
+- Showed the arm hold (Arm Abduction at 90°) as one main timer, the slower arm's time that ends the set, with each arm's own seconds beneath it, greyed while that arm is out of position
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\peakRelevantGating.test.ts*
+
+- Set the wall angels' full-range line to 125, the 5th percentile of 24 repetitions that followed the guide video (only 2 of them reached 134.3), as was done for the lateral raise
+- Set the minimum peak to 98.8 so it keeps its place between the start line and the lowered full-range line
+- Changed only the wall angels' measurement version, so their trend history starts again; the hidden elbow check's near-peak gate moved from 120.9 to 112.5 with the full-range line
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\tuningTraceV4.test.ts*, *web\src\lib\pose\traceUploadLoss.test.ts*, and *web\README.md*
+
+- Started "Record tuning trace" ticked on every page load; only patient sessions with a prescription save a trace, as before
+- Added a "Show trace sync readout" switch to the staff panel, off by default; the frame readout, its warning line, and the toast about lost trace batches now appear only with it on
+- Noted in web\README.md that traces are recorded by default
+
+### *web\src\lib\holdDisplay.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Showed the credited hold, the slower arm or the prescribed arm when only one is prescribed, as the main number; the session progress bar already used the same value
+- Kept each arm's seconds beneath it, grey while that arm is out of the target band and highlighted once it reaches the hold
+- Changed the display only: each arm still has its own timer, and when a set ends and what is saved are unchanged; the side-split hold display is unchanged
+
+### *Validation*
+
+- 82 framework-free TypeScript suites pass, including new cases for the trace default, the readout switch, the loss toast, and the hold display
+- Type check, lint (no errors), and a production build pass
+- Undoing each part of the trace change makes its own test fail
+- The trace adds about 0.07 to 0.08 ms per camera frame on the laptop, timed on stored traces
+- Replaying the pilot hold sessions through the camera code showed the arms' timers starting up to 0.64 s apart and brief slips out of the band putting them a further second apart; the main number no longer shows that difference
+- The real hold display, rendered for five states, shows the main number, each arm's seconds, and a grey arm while it is out of position
+- The guide video's wall angels count 6 of 6 complete on each side at 125, and 22 of the 24 recorded wall angels would be complete
+
+### *Remaining boundaries*
+
+- Not pushed or deployed; the evaluation server still runs Update-10-23-26, with the trace off by default
+- After deploying, check that the first session's trace reaches the server; no trace has been saved there yet
+- The wall angels' 125 and 98.8 are engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
+- The hold display has not been tried in a live camera session
+- The 3D builder's files (assets\blender and tools\blender) and the email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
+
+---
+
 ## 📌 Update-10-23-26 | *RyanCodesling*
 
 - Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic exaggerated how far a line tilts from horizontal and shrank how far it tilts from vertical (a real 5 degrees read about 8.8 and 2.8); against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high

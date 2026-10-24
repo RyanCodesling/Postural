@@ -10261,7 +10261,7 @@ export default function CameraClient() {
                   <div style={MODAL_BACKDROP_STYLE}>
                     <div style={MODAL_CARD_STYLE}>
                       <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.38 0.07 145)", marginBottom: 8 }}>
-                        Session complete
+                        {completedSets >= prescription.sets ? "Session complete" : "Session ended early"}
                       </div>
                       <div style={{ marginBottom: 22, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {def?.name ?? "Exercise"}
@@ -10305,7 +10305,7 @@ export default function CameraClient() {
                         {showAsymmetry && (
                           <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Asymmetry</span><span style={MODAL_VALUE_STYLE}>{asymLabel}</span></div>
                         )}
-                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets</span><span style={MODAL_VALUE_STYLE}>{setsDone} / {prescription.sets}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets completed</span><span style={MODAL_VALUE_STYLE}>{completedSets} / {prescription.sets}</span></div>
                       </div>
 
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>

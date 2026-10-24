@@ -14,6 +14,7 @@ import {
   type PartialDayPatient,
 } from "./email";
 import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
+import { DEPRECATED_EXERCISE_IDS } from "./exercises/deprecated";
 import {
   deriveAssignmentStatus,
   generateSchedule,
@@ -3470,11 +3471,9 @@ export async function getAdminDashboardData(adminId: string) {
   const archivedUsers = await pool.query(
     "SELECT COUNT(*)::integer FROM users WHERE is_archived = TRUE"
   );
-  const systemExercises = await pool.query(
-    "SELECT COUNT(*)::integer FROM exercises WHERE is_custom = FALSE"
-  );
-  const customExercises = await pool.query(
-    "SELECT COUNT(*)::integer FROM exercises WHERE is_custom = TRUE"
+  // Match the active catalog: retired rows stay stored for history only.
+  const exercises = (await getExercises()).filter(
+    (exercise) => !DEPRECATED_EXERCISE_IDS.has(exercise.id),
   );
   const totalSessions = await pool.query(
     "SELECT COUNT(*)::integer FROM sessions"
@@ -3508,8 +3507,8 @@ export async function getAdminDashboardData(adminId: string) {
       activePatients: activePatients.rows[0].count,
       activeTherapists: activeTherapists.rows[0].count,
       archivedUsers: archivedUsers.rows[0].count,
-      systemExercises: systemExercises.rows[0].count,
-      customExercises: customExercises.rows[0].count,
+      systemExercises: exercises.filter((exercise) => !exercise.is_custom).length,
+      customExercises: exercises.filter((exercise) => exercise.is_custom).length,
       totalSessions: totalSessions.rows[0].count,
       activeAssignments: activeAssignments.rows[0].count,
     },

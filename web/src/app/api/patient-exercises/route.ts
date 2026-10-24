@@ -25,6 +25,7 @@ import {
   removedExercisesMessage,
 } from "@/lib/notificationText";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { maxPrescriptionSets, prescriptionCountError } from "@/lib/prescriptionLimits";
 import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
   MAX_RECURRENCE_SPAN_DAYS,
@@ -264,16 +265,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const invalidCounts = normalizedExercises
+      .map((exercise) =>
+        prescriptionCountError(exercise.sets, exercise.reps, {
+          maxSets: maxPrescriptionSets(exercise.exerciseId),
+        }),
+      )
+      .find((error) => error !== null);
+    if (invalidCounts) {
+      return NextResponse.json({ error: invalidCounts }, { status: 400 });
+    }
+
     const invalidExercise = normalizedExercises.find(
       (exercise) =>
         typeof exercise.exerciseId !== "string" ||
         exercise.exerciseId.trim().length === 0 ||
-        typeof exercise.sets !== "number" ||
-        !Number.isFinite(exercise.sets) ||
-        exercise.sets < 1 ||
-        typeof exercise.reps !== "number" ||
-        !Number.isFinite(exercise.reps) ||
-        exercise.reps < 1 ||
         !Number.isInteger(exercise.sequenceIndex) ||
         exercise.sequenceIndex < 1,
     );
@@ -340,8 +346,8 @@ export async function POST(request: NextRequest) {
       patientId,
       normalizedExercises.map((exercise) => ({
         exerciseId:    exercise.exerciseId    as string,
-        sets:          Math.floor(exercise.sets as number),
-        reps:          Math.floor(exercise.reps as number),
+        sets:          exercise.sets as number,
+        reps:          exercise.reps as number,
         restSeconds:   exercise.restSeconds,
         scheduledDate: exercise.scheduledDate as string | undefined,
         holdSeconds: exercise.holdSeconds,

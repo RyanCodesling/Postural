@@ -23,6 +23,12 @@ import {
   type ResistanceContext,
 } from "@/lib/prescriptionContext";
 import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import {
+  MAX_PRESCRIPTION_REPS,
+  isPrescriptionCount,
+  maxPrescriptionSets,
+  prescriptionCountError,
+} from "@/lib/prescriptionLimits";
 import MovementContextFields, {
   type MovementContextForm,
 } from "../_components/MovementContextFields";
@@ -483,13 +489,11 @@ export default function AssignExercisePage() {
         setShowAssignError(true);
         return;
       }
-      if (!p.sets || p.sets < 1) {
-        setAssignErrorMsg(`Please enter valid sets for "${ex?.name ?? exId}".`);
-        setShowAssignError(true);
-        return;
-      }
-      if (!isIsometric && (!p.reps || p.reps < 1)) {
-        setAssignErrorMsg(`Please enter valid sets and reps for "${ex?.name ?? exId}".`);
+      const countError = prescriptionCountError(p.sets, isIsometric ? 1 : p.reps, {
+        maxSets: maxPrescriptionSets(exId),
+      });
+      if (countError) {
+        setAssignErrorMsg(`${ex?.name ?? exId}: ${countError}`);
         setShowAssignError(true);
         return;
       }
@@ -557,7 +561,7 @@ export default function AssignExercisePage() {
           : p.holdSeconds;
       // Isometric exercises carry a placeholder rep value to satisfy the NOT
       // NULL column; the camera page uses holdSeconds, not reps, for them.
-      const reps = isIsometric ? p.reps ?? 1 : p.reps!;
+      const reps = isIsometric ? 1 : p.reps!;
       let resistance: ResistanceContext;
       try {
         resistance = parseResistanceContext(p);
@@ -572,7 +576,7 @@ export default function AssignExercisePage() {
       }
       payload.push({
         exerciseId: exId,
-        sets: p.sets,
+        sets: p.sets!,
         reps,
         restSeconds,
         holdSeconds,
@@ -1374,13 +1378,15 @@ function AssignRow({
   // Isometric exercises (e.g. ex_006 T-pose) are timed holds, not rep-counted —
   // show a per-side "Hold (sec)" input instead of Reps.
   const isIsometric = getExerciseDefinition(exercise.id)?.kind === "isometric";
+  // A hold takes up to 10 sets (one hold each), a repetition exercise up to 4.
+  const maxSets = maxPrescriptionSets(exercise.id);
   const recurrence: Recurrence = params.recurrence ?? "interval";
   const weekdays = params.weekdays ?? [];
   const presetId = presetIdFor(params);
   const showWeekdayPicker = recurrence === "weekly";
   const orderInvalid = showValidationErrors && checked && params.sequenceIndex == null;
-  const setsInvalid = showValidationErrors && checked && params.sets == null;
-  const repsInvalid = showValidationErrors && checked && !isIsometric && params.reps == null;
+  const setsInvalid = showValidationErrors && checked && !isPrescriptionCount(params.sets, maxSets);
+  const repsInvalid = showValidationErrors && checked && !isIsometric && !isPrescriptionCount(params.reps, MAX_PRESCRIPTION_REPS);
   const startDateInvalid = showValidationErrors && checked && !params.scheduledDate;
   const endDateInvalid = showValidationErrors && checked && !params.endDate;
   const repeatInvalid = showValidationErrors && checked && recurrence === "interval" && params.intervalDays == null;
@@ -1473,9 +1479,9 @@ function AssignRow({
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Sets <span className="text-red-500">*</span></label>
+              <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets}) <span className="text-red-500">*</span></label>
               <input
-                type="number" min={1} value={params.sets ?? ""}
+                type="number" min={1} max={maxSets} step={1} title={`1–${maxSets} sets`} value={params.sets ?? ""}
                 onChange={(e) => onParam("sets", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="e.g. 3"
                 disabled={locked}
@@ -1496,9 +1502,9 @@ function AssignRow({
               </div>
             ) : (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Reps <span className="text-red-500">*</span></label>
+                <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS}) <span className="text-red-500">*</span></label>
                 <input
-                  type="number" min={1} value={params.reps ?? ""}
+                  type="number" min={1} max={MAX_PRESCRIPTION_REPS} step={1} title={`1–${MAX_PRESCRIPTION_REPS} reps`} value={params.reps ?? ""}
                   onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
                   placeholder="e.g. 12"
                   disabled={locked}

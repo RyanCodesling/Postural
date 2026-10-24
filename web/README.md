@@ -42,6 +42,17 @@ This check copies the `public.users` structure into a private temporary table,
 runs the real writers and the migration DDL there, and rolls back. It never copies
 patient rows or migrates the real table, and sends no mail or notifications.
 
+### Prescription inputs
+
+New or edited assignments accept whole numbers of **1–4 sets** and **1–20 reps
+per set**. Hold exercises accept **1–10 sets** instead: each set is one hold,
+with the prescription's rest between holds, so a hold can be repeated with short
+rests. Program templates use the same bounds when a dose is entered; their
+dose fields can remain blank until assignment. Forms and APIs reject values
+outside these ranges and fractional counts. These are prototype input limits;
+the therapist chooses the dose. Isometric exercises use a separate hold-duration
+target. Existing prescriptions and session history are not rewritten.
+
 ### Session report prototype
 
 The standalone `/pt_session_summary_printable_report.html` and the direct therapist

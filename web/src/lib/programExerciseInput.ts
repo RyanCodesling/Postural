@@ -1,4 +1,5 @@
 import type { ProgramExerciseInput } from "@/lib/db";
+import { maxPrescriptionSets, prescriptionCountError } from "@/lib/prescriptionLimits";
 import {
   parsePrescribedSide,
   parseResistanceContext,
@@ -22,6 +23,11 @@ export function parseProgramExerciseInputs(values: unknown[]): ProgramExerciseIn
       throw new Error("Every program exercise must be an object.");
     }
     const exercise = value as Record<string, unknown>;
+    const countError = prescriptionCountError(exercise.sets, exercise.reps, {
+      allowMissing: true,
+      maxSets: maxPrescriptionSets(exercise.exerciseId),
+    });
+    if (countError) throw new Error(countError);
     if (typeof exercise.name !== "string" || exercise.name.trim() === "") {
       throw new Error("Every program exercise requires a name.");
     }

@@ -84,5 +84,40 @@ test("new exercise order follows the highest retained order instead of set size"
   assert(nextExerciseSequenceIndex([]) === 1, "an empty program should start at 1");
 });
 
+test("template doses accept the supported bounds and remain optional", () => {
+  for (const [sets, reps] of [[1, 1], [4, 20]]) {
+    const [parsed] = parseProgramExerciseInputs([{ ...input(), sets, reps }]);
+    assert(parsed.sets === sets && parsed.reps === reps, "supported dose must survive unchanged");
+  }
+  const [blank] = parseProgramExerciseInputs([input()]);
+  assert(blank.sets === undefined && blank.reps === undefined, "templates may leave the dose for assignment");
+});
+
+test("template doses reject out-of-range, fractional and non-numeric values", () => {
+  for (const sets of [0, -1, 5, 1.5, Infinity, NaN, "3"]) {
+    assertThrows(() => parseProgramExerciseInputs([{ ...input(), sets, reps: 10 }]), `invalid sets ${sets} must fail`);
+  }
+  for (const reps of [0, -1, 21, 1.5, Infinity, NaN, "10"]) {
+    assertThrows(() => parseProgramExerciseInputs([{ ...input(), sets: 3, reps }]), `invalid reps ${reps} must fail`);
+  }
+});
+
+test("hold templates take up to 10 sets; repetition exercises and custom tasks stay at 4", () => {
+  const [hold] = parseProgramExerciseInputs([{ ...input(), exerciseId: "ex_006", sets: 10 }]);
+  assert(hold.sets === 10, "a hold template must keep 10 sets");
+  assertThrows(
+    () => parseProgramExerciseInputs([{ ...input(), exerciseId: "ex_006", sets: 11 }]),
+    "a hold template must refuse 11 sets",
+  );
+  assertThrows(
+    () => parseProgramExerciseInputs([{ ...input(), exerciseId: "ex_001", sets: 5 }]),
+    "a repetition template must still refuse 5 sets",
+  );
+  assertThrows(
+    () => parseProgramExerciseInputs([{ ...input(), exerciseId: undefined, isCustom: true, sets: 5 }]),
+    "a custom task must still refuse 5 sets",
+  );
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exitCode = 1;

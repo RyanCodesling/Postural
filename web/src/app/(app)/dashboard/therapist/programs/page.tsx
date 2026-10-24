@@ -15,6 +15,11 @@ import {
   type ResistanceContext,
 } from "@/lib/prescriptionContext";
 import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import {
+  MAX_PRESCRIPTION_REPS,
+  maxPrescriptionSets,
+  prescriptionCountError,
+} from "@/lib/prescriptionLimits";
 import MovementContextFields, {
   type MovementContextForm,
 } from "../_components/MovementContextFields";
@@ -247,6 +252,11 @@ export default function ExerciseProgramsPage() {
       if (!ex) return;
       const p = exerciseParams[exId] ?? {};
       const isIsometric = isIsometricExercise(ex.id);
+      const countError = prescriptionCountError(p.sets, isIsometric ? undefined : p.reps, {
+        allowMissing: true,
+        maxSets: maxPrescriptionSets(ex.id),
+      });
+      if (countError) throw new Error(`${ex.name}: ${countError}`);
       const restSeconds = p.restSeconds == null || p.restSeconds < 0 ? 60 : p.restSeconds;
       const resistance = parseResistanceContext(p);
       result.push({
@@ -281,7 +291,7 @@ export default function ExerciseProgramsPage() {
     try {
       exPayload = buildExercisePayload();
     } catch (error) {
-      setErrorTitle("Invalid Movement Context");
+      setErrorTitle("Invalid Exercise Details");
       setErrorMsg(
         error instanceof Error ? error.message : "Check the resistance details.",
       );
@@ -528,6 +538,7 @@ export default function ExerciseProgramsPage() {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
                   const isIsometric = isIsometricExercise(ex.id);
+                  const maxSets = maxPrescriptionSets(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -573,11 +584,13 @@ export default function ExerciseProgramsPage() {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Sets</label>
+                            <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets})</label>
                             <input
                               type="number"
                               min={1}
                               value={p.sets ?? ""}
+                              max={maxSets}
+                              step={1}
                               onChange={(e) =>
                                 setExerciseParams((prev) => ({
                                   ...prev,
@@ -613,11 +626,13 @@ export default function ExerciseProgramsPage() {
                             </div>
                           ) : (
                             <div>
-                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS})</label>
                               <input
                                 type="number"
                                 min={1}
                                 value={p.reps ?? ""}
+                                max={MAX_PRESCRIPTION_REPS}
+                                step={1}
                                 onChange={(e) =>
                                   setExerciseParams((prev) => ({
                                     ...prev,
@@ -682,6 +697,7 @@ export default function ExerciseProgramsPage() {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
                   const isIsometric = isIsometricExercise(ex.id);
+                  const maxSets = maxPrescriptionSets(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -730,11 +746,13 @@ export default function ExerciseProgramsPage() {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Sets</label>
+                            <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets})</label>
                             <input
                               type="number"
                               min={1}
                               value={p.sets ?? ""}
+                              max={maxSets}
+                              step={1}
                               onChange={(e) =>
                                 setExerciseParams((prev) => ({
                                   ...prev,
@@ -770,11 +788,13 @@ export default function ExerciseProgramsPage() {
                             </div>
                           ) : (
                             <div>
-                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS})</label>
                               <input
                                 type="number"
                                 min={1}
                                 value={p.reps ?? ""}
+                                max={MAX_PRESCRIPTION_REPS}
+                                step={1}
                                 onChange={(e) =>
                                   setExerciseParams((prev) => ({
                                     ...prev,

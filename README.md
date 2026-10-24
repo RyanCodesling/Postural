@@ -6,6 +6,9 @@
 - Recorded the tuning trace in every patient session by default, so a reported counting problem can be replayed through the counter afterwards; the staff panel can still switch it off
 - Moved the trace's frame readout and its "check the server" warning behind a new staff switch, so patients and evaluators do not see them
 - Showed the arm hold (Arm Abduction at 90°) as one main timer, the slower arm's time that ends the set, with each arm's own seconds beneath it, greyed while that arm is out of position
+- Counted only the active exercises on the admin dashboard, so archived and retired exercises no longer raise its total
+- Limited new or edited prescriptions to whole numbers of 1–4 sets and 1–20 reps per set, and hold exercises to 1–10 sets, each set one hold with the prescription's rest between holds
+- Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed, and counted only finished sets in it
 
 ### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\peakRelevantGating.test.ts*
 
@@ -25,9 +28,29 @@
 - Kept each arm's seconds beneath it, grey while that arm is out of the target band and highlighted once it reaches the hold
 - Changed the display only: each arm still has its own timer, and when a set ends and what is saved are unchanged; the side-split hold display is unchanged
 
+### *web\src\lib\db.ts*
+
+- Counted the admin dashboard's system and custom exercises from the active catalog, leaving out archived exercises and the two retired ones (ex_002 and ex_003)
+
+### *web\src\lib\prescriptionLimits.ts*, *web\src\app\api\patient-exercises\route.ts*, *web\src\lib\programExerciseInput.ts*, *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, and *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+
+- Accepted whole numbers of 1–4 sets and 1–20 reps per set on new or edited assignments and program templates, and refused fractions instead of rounding them down; a template's dose can still stay blank until assignment
+- Gave hold exercises 1–10 sets, each set one hold with the prescription's rest between holds, so a hold can be repeated with short rests; custom tasks keep 1–4
+- Showed each exercise's own range on the assign and program forms; holds send a placeholder of 1 rep and keep their own hold duration
+- Left existing prescriptions and session history unchanged, and noted the limits in web\README.md
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed
+- Showed "Sets completed" from the finished sets only, so a set stopped part-way no longer counts as finished, and sets finished before a reload and Resume still count
+
 ### *Validation*
 
-- 82 framework-free TypeScript suites pass, including new cases for the trace default, the readout switch, the loss toast, and the hold display
+- 83 framework-free TypeScript suites pass, including new cases for the trace default, the readout switch, the loss toast, the hold display, and the prescription limits
+- The real assignment and program routes, run against a test database, refuse out-of-range, fractional, and text doses, and any batch containing one, before anything is saved; 10 hold sets are accepted and 11 refused
+- The admin count's query, run on temporary tables, counts the active built-in and custom exercises and leaves out archived and retired ones
+- The end-of-session summary, rendered for seven endings including a stop during the countdown or a rest and a partial final set, always titles and counts the finished sets
+- On the local app, the assign and program forms show "Sets (1–10)" for the hold, and "Sets (1–4)" and "Reps (1–20)" for the other exercises
 - Type check, lint (no errors), and a production build pass
 - Undoing each part of the trace change makes its own test fail
 - The trace adds about 0.07 to 0.08 ms per camera frame on the laptop, timed on stored traces
@@ -41,6 +64,8 @@
 - After deploying, check that the first session's trace reaches the server; no trace has been saved there yet
 - The wall angels' 125 and 98.8 are provisional engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
 - The hold display has not been tried in a live camera session
+- The prescription limits are prototype input ranges, not recommended or safe doses; the thesis manuscript's methods still need them
+- The admin count on the server has not been checked, since this update is not deployed
 - The 3D builder's files (assets\blender and tools\blender) and the email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
 
 ---

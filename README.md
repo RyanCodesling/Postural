@@ -2,7 +2,7 @@
 
 ## 📌 Update-10-24-26 | *RyanCodesling*
 
-- Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because most correct repetitions that followed the guide video were rated partial
+- Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because 22 of the 24 repetitions done following the guide video were rated partial
 - Recorded the tuning trace in every patient session by default, so a reported counting problem can be replayed through the counter afterwards; the staff panel can still switch it off
 - Moved the trace's frame readout and its "check the server" warning behind a new staff switch, so patients and evaluators do not see them
 - Showed the arm hold (Arm Abduction at 90°) as one main timer, the slower arm's time that ends the set, with each arm's own seconds beneath it, greyed while that arm is out of position
@@ -39,7 +39,7 @@
 
 - Not pushed or deployed; the evaluation server still runs Update-10-23-26, with the trace off by default
 - After deploying, check that the first session's trace reaches the server; no trace has been saved there yet
-- The wall angels' 125 and 98.8 are engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
+- The wall angels' 125 and 98.8 are provisional engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
 - The hold display has not been tried in a live camera session
 - The 3D builder's files (assets\blender and tools\blender) and the email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
 

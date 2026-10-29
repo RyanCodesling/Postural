@@ -38,11 +38,20 @@ CREATE INDEX IF NOT EXISTS idx_therapist_id ON users (therapist_id);
 CREATE INDEX IF NOT EXISTS idx_is_archived  ON users (is_archived);
 
 
+-- Passwords are stored only as bcrypt hashes (pgcrypto's 'bf' produces the $2a$ format bcryptjs verifies).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 INSERT INTO users (id, email, password, name, first_name, last_name, role, "clinicId") VALUES
-('patient_001',   'patient@example.com',           'patient123',   'John Patient',    'John',  'Patient',   'patient',   NULL),
-('therapist_001', 'therapist@clinic.com',          'therapist123', 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
-('admin_001',     'accbpostural.noreply@gmail.com', 'admin123',     'Admin User',      'Admin', 'User',      'admin',     NULL)
+('patient_001',   'patient@example.com',           crypt('patient123',   gen_salt('bf', 10)), 'John Patient',    'John',  'Patient',   'patient',   NULL),
+('therapist_001', 'therapist@clinic.com',          crypt('therapist123', gen_salt('bf', 10)), 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
+('admin_001',     'accbpostural.noreply@gmail.com', crypt('admin123',     gen_salt('bf', 10)), 'Admin User',      'Admin', 'User',      'admin',     NULL)
 ON CONFLICT (id) DO NOTHING;
+
+-- Hash any password still stored as plaintext (earlier seeds); the account keeps the same password.
+-- The app no longer accepts plaintext passwords, so rerun this file on existing databases.
+UPDATE users
+SET password = crypt(password, gen_salt('bf', 10))
+WHERE password !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$';
 
 -- Sync admin email to the system address on re-runs
 UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001';

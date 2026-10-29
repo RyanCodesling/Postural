@@ -185,7 +185,7 @@ scripts/
 The `users` table includes:
 - `id` - Primary key
 - `email` - User email (unique)
-- `password` - bcrypt hash for created/updated accounts; the three local demo seeds retain a temporary plaintext compatibility fallback
+- `password` - bcrypt hash (cost 10) for every account; plaintext is never accepted. Rerun `scripts/user_credentials_pg.sql` on an existing database to hash any password still stored as plaintext (it enables the `pgcrypto` extension)
 - `name` - User full name
 - `role` - User role (`patient`, `therapist`, `admin`)
 - `clinicId` - Clinic identifier (therapists only)

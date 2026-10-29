@@ -30,7 +30,7 @@ export async function POST(
       return NextResponse.json({ error: "Password is required to view this image." }, { status: 400 });
     }
     const rawUser = await getUserRawById(user.id);
-    if (!rawUser || !comparePassword(body.password, rawUser.password)) {
+    if (!rawUser || !(await comparePassword(body.password, rawUser.password))) {
       return NextResponse.json({ error: "The password is incorrect." }, { status: 401 });
     }
 

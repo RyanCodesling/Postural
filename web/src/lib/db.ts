@@ -307,7 +307,7 @@ export async function createUser(data: {
   const clinicalKeys = userClinicalKeys.filter(key => key in writable);
   const clinicalColumns = clinicalKeys.map(key => `, "${key}"`).join("");
   const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 14}`).join("");
-  const hashedPassword = hashPassword(data.password);
+  const hashedPassword = await hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
@@ -579,7 +579,7 @@ export async function restoreUser(id: string) {
 }
 
 export async function updateUserPassword(userId: string, newPassword: string) {
-  const hashedPassword = hashPassword(newPassword);
+  const hashedPassword = await hashPassword(newPassword);
   await pool.query(
     "UPDATE users SET password = $1, must_change_password = FALSE WHERE id = $2",
     [hashedPassword, userId]

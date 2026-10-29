@@ -164,7 +164,7 @@ const PATIENTS: PatientPlan[] = [
 ];
 
 async function seedDemoAccounts(client: Client) {
-  const passwordHash = hashPassword(DEMO_PASSWORD);
+  const passwordHash = await hashPassword(DEMO_PASSWORD);
   await client.query(
     `INSERT INTO users
        (id, email, password, name, first_name, last_name, role, "clinicId", therapist_id_num, specialty)

@@ -1,21 +1,23 @@
 import bcrypt from "bcryptjs";
 
+const BCRYPT_COST = 10;
+const BCRYPT_HASH = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
 /**
  * Hashes a plaintext password using bcryptjs.
  */
-export function hashPassword(password: string): string {
-  const salt = bcrypt.genSaltSync(10);
-  return bcrypt.hashSync(password, salt);
+export function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, BCRYPT_COST);
 }
 
 /**
- * Compares a plaintext password with a hash.
- * If the hash is a bcrypt hash (starts with $2), uses bcryptjs.
- * Otherwise, falls back to plaintext comparison (for demo credentials).
+ * Compares a plaintext password with a stored bcrypt hash.
+ * Anything that is not a bcrypt hash never matches; stored plaintext passwords are
+ * converted by scripts/user_credentials_pg.sql.
  */
-export function comparePassword(password: string, hash: string): boolean {
-  if (hash && (hash.startsWith("$2a$") || hash.startsWith("$2b$") || hash.startsWith("$2y$"))) {
-    return bcrypt.compareSync(password, hash);
+export async function comparePassword(password: string, hash: string): Promise<boolean> {
+  if (typeof password !== "string" || typeof hash !== "string" || !BCRYPT_HASH.test(hash)) {
+    return false;
   }
-  return password === hash;
+  return bcrypt.compare(password, hash);
 }

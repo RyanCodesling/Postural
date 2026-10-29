@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (comparePassword(newPassword, user.password)) {
+    if (await comparePassword(newPassword, user.password)) {
       return NextResponse.json(
         { error: "New password must be different from your current password." },
         { status: 400 }

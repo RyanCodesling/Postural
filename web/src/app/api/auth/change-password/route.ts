@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     const wasFirstLoginPasswordChange = rawUser.must_change_password;
 
     // Hashed or plaintext password comparison
-    if (!comparePassword(currentPassword, rawUser.password)) {
+    if (!(await comparePassword(currentPassword, rawUser.password))) {
       return NextResponse.json(
         { error: "Current password is incorrect" },
         { status: 401 }

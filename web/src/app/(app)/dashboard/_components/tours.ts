@@ -343,9 +343,16 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       placement: "left",
       lines: [
         "Manual tasks you created. The camera does not monitor them, and the patient marks them done.",
-        "You can edit a custom exercise's description or delete it. A deleted exercise is archived, not erased.",
+        "Custom exercises added by the admin and other therapists are listed too. You can edit or archive only the ones you added.",
         "Create new custom exercises on the Exercise Program page.",
       ],
+    },
+    {
+      targetId: "tour-archived",
+      title: "Archived",
+      placement: "above",
+      optional: true,
+      lines: ["Custom exercises you archived. Restore puts one back with its details and video. Only an admin can permanently delete one."],
     },
   ],
 
@@ -398,12 +405,12 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
   ],
 
   programs: [
-    therapistNav("/dashboard/therapist/programs", "Exercise program", "Reusable programs and your own custom exercises."),
+    therapistNav("/dashboard/therapist/programs", "Exercise program", "Reusable programs and the shared custom exercises."),
     {
       targetId: "tour-tiles",
       title: "Summary",
       placement: "below",
-      lines: ["How many programs and custom exercises you have, and how many exercises are inside your programs."],
+      lines: ["How many programs you have, how many custom exercises are shared with you, and how many exercises are inside your programs."],
     },
     {
       targetId: "tour-actions",
@@ -412,7 +419,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       optional: true,
       lines: [
         "Create New Program bundles exercises with their sets, repetitions, side and resistance so you can assign them in one step.",
-        "Add New Custom Exercise creates a manual exercise that you describe yourself.",
+        "Add New Custom Exercise creates a manual exercise that you describe yourself, with an optional guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. The admin and every therapist can use it.",
       ],
     },
     {
@@ -426,9 +433,12 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
     },
     {
       targetId: "tour-custom",
-      title: "Your custom exercises",
+      title: "Custom exercises",
       placement: "left",
-      lines: ["Edit a description or delete a custom exercise. Deleting archives it, and history is kept."],
+      lines: [
+        "Custom exercises added by you, the admin and other therapists. Edit the description of, or archive, one you added; the others are view only.",
+        "Archiving keeps its history and moves it to Archived on Manage Exercises, where you can restore it. Only an admin can permanently delete a custom exercise.",
+      ],
     },
   ],
 
@@ -564,13 +574,16 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-tiles",
       title: "Summary",
       placement: "below",
-      lines: ["How many system, custom and total exercises there are."],
+      lines: ["How many system, custom, archived and total active exercises there are."],
     },
     {
       targetId: "tour-add-exercise",
       title: "Add an exercise",
       placement: "below",
-      lines: ["Press + Add Exercise, enter a name and a description, and press Add Exercise to create a custom exercise."],
+      lines: [
+        "Press + Add Exercise, enter a name and a description, and press Add Exercise to create a custom exercise.",
+        "You can attach a guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. Patients see it on the exercise in their schedule.",
+      ],
     },
     {
       targetId: "tour-search",
@@ -583,14 +596,21 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       title: "System exercises",
       placement: "right",
       optional: true,
-      lines: ["The built-in exercises. Press View to read one, or Edit to change its description."],
+      lines: ["The built-in exercises. Press View to read one, or Edit to change its description. They cannot be archived or deleted."],
     },
     {
       targetId: "tour-custom",
       title: "Custom exercises",
       placement: "left",
       optional: true,
-      lines: ["Exercises added by you or by therapists. View or edit the description, or delete one. A deleted exercise is archived, not erased."],
+      lines: ["Exercises added by you or by therapists. View one, edit its description, or archive it. An archived exercise keeps its name, description and video."],
+    },
+    {
+      targetId: "tour-archived",
+      title: "Archived exercises",
+      placement: "above",
+      optional: true,
+      lines: ["Restore puts an exercise back with its details and video. Permanently delete removes it, and is only allowed for one that was never prescribed."],
     },
     bell,
   ],

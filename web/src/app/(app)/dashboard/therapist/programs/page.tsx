@@ -1,6 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useAuth } from "@/lib/AuthContext";
+import ExerciseVideoField, {
+  NO_EXERCISE_VIDEO,
+  createCustomExercise,
+  exerciseVideoChoiceError,
+  type ExerciseVideoChoice,
+} from "../../_components/ExerciseVideoField";
 import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../../_components/DashboardKit";
 import {
   DEFAULT_DISPLAY_HOLD_SECONDS,
@@ -29,6 +36,7 @@ interface Exercise {
   name: string;
   description: string;
   is_custom: boolean;
+  owner_therapist_id?: string | null;
 }
 
 interface ProgramExercise {
@@ -84,6 +92,7 @@ function programResistance(exercise: ProgramExercise): ResistanceContext {
 }
 
 export default function ExerciseProgramsPage() {
+  const { user } = useAuth();
   const [programs, setPrograms] = useState<ExerciseProgram[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,6 +109,8 @@ export default function ExerciseProgramsPage() {
   // Custom exercise form state
   const [customName, setCustomName] = useState("");
   const [customDesc, setCustomDesc] = useState("");
+  const [customVideo, setCustomVideo] = useState<ExerciseVideoChoice>(NO_EXERCISE_VIDEO);
+  const [customVideoError, setCustomVideoError] = useState<string | null>(null);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [showSuccessModal,  setShowSuccessModal]  = useState(false);
   const [successMsg,        setSuccessMsg]        = useState("");
@@ -156,6 +167,8 @@ export default function ExerciseProgramsPage() {
   const resetCustomForm = () => {
     setCustomName("");
     setCustomDesc("");
+    setCustomVideo(NO_EXERCISE_VIDEO);
+    setCustomVideoError(null);
   };
 
   const handleToggleExercise = (exerciseId: string) => {
@@ -198,24 +211,23 @@ export default function ExerciseProgramsPage() {
       setErrorTitle("Required Fields"); setErrorMsg("Description is required."); setShowErrorModal(true); return;
     }
 
+    const videoError = exerciseVideoChoiceError(customVideo);
+    if (videoError) {
+      setCustomVideoError(videoError);
+      return;
+    }
+
     setAddingCustom(true);
     try {
-      const res = await fetch("/api/exercises", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: customName.trim(),
-          description: customDesc.trim(),
-          isCustom: true,
-        }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json();
-        setErrorTitle("Something Went Wrong"); setErrorMsg(d.error ?? "Failed to add custom exercise."); setShowErrorModal(true); return;
+      const result = await createCustomExercise<Exercise>(
+        { name: customName.trim(), description: customDesc.trim() },
+        customVideo,
+      );
+      if ("error" in result) {
+        setErrorTitle("Something Went Wrong"); setErrorMsg(result.error); setShowErrorModal(true); return;
       }
 
-      const { exercise } = await res.json();
+      const { exercise } = result;
       setExercises((prev) => [...prev, exercise]);
       resetCustomForm();
       setShowCustomForm(false);
@@ -468,15 +480,15 @@ export default function ExerciseProgramsPage() {
           next.delete(confirmDeleteCustomId);
           return next;
         });
-        setSuccessMsg(`"${confirmDeleteCustomName}" deleted successfully.`);
+        setSuccessMsg(`"${confirmDeleteCustomName}" archived. You can restore it from Manage Exercises.`);
         setShowSuccessModal(true);
       } else {
         const d = await res.json();
-        setErrorTitle("Failed to Delete"); setErrorMsg(d.error ?? "Could not delete custom exercise."); setShowErrorModal(true);
+        setErrorTitle("Failed to Archive"); setErrorMsg(d.error ?? "Could not archive custom exercise."); setShowErrorModal(true);
       }
     } catch (err) {
       console.error("Error deleting custom exercise:", err);
-      setErrorTitle("Something Went Wrong"); setErrorMsg("Failed to delete custom exercise."); setShowErrorModal(true);
+      setErrorTitle("Something Went Wrong"); setErrorMsg("Failed to archive custom exercise."); setShowErrorModal(true);
     } finally {
       setConfirmDeleteCustomId(null);
       setConfirmDeleteCustomName(null);
@@ -911,6 +923,12 @@ export default function ExerciseProgramsPage() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
               />
             </div>
+            <ExerciseVideoField value={customVideo} onChange={setCustomVideo} onError={setCustomVideoError} />
+            {customVideoError && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {customVideoError}
+              </p>
+            )}
             <div className="flex gap-3">
               <button
                 type="button"
@@ -918,7 +936,9 @@ export default function ExerciseProgramsPage() {
                 disabled={addingCustom}
                 className="w-48 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
               >
-                {addingCustom ? "Saving..." : "Add Custom Exercise"}
+                {addingCustom
+                  ? customVideo.source === "file" && customVideo.file ? "Uploading video..." : "Saving..."
+                  : "Add Custom Exercise"}
               </button>
               <button
                 type="button"
@@ -1018,7 +1038,7 @@ export default function ExerciseProgramsPage() {
       {/* Your Custom Exercises */}
       <div id="tour-custom" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
         <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
-          Your Custom Exercises ({customExercises.length})
+          Custom Exercises ({customExercises.length})
         </h2>
         {customExercises.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-6">
@@ -1028,6 +1048,9 @@ export default function ExerciseProgramsPage() {
           <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
             {customExercises.map((ex) => {
               const isEditingCustom = editingCustomId === ex.id;
+              // Only the therapist who added it edits or archives it; the admin
+              // manages the rest from Manage Exercises.
+              const own = !!user?.id && ex.owner_therapist_id === user.id;
               return (
                 <div key={ex.id} className="flex flex-col justify-between rounded-lg border border-green-50 bg-[#fafcfa] p-4">
                   {isEditingCustom ? (
@@ -1062,23 +1085,34 @@ export default function ExerciseProgramsPage() {
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="font-semibold text-gray-900 text-sm">{ex.name}</h3>
                           <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium">custom</span>
+                          {own ? (
+                            <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+                              Added by you
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full font-medium">
+                              Added by {ex.owner_therapist_id ? "another therapist" : "admin"} · view only
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-500 mt-1">{ex.description}</p>
                       </div>
-                      <div className="flex gap-2 ml-4 shrink-0">
-                        <button
-                          onClick={() => startEditCustom(ex)}
-                          className="px-3 py-1.5 text-sm border border-green-700 text-green-700 rounded-lg hover:bg-green-50 transition"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCustomExerciseClick(ex.id, ex.name)}
-                          className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      {own && (
+                        <div className="flex gap-2 ml-4 shrink-0">
+                          <button
+                            onClick={() => startEditCustom(ex)}
+                            className="px-3 py-1.5 text-sm border border-green-700 text-green-700 rounded-lg hover:bg-green-50 transition"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomExerciseClick(ex.id, ex.name)}
+                            className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition"
+                          >
+                            Archive
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1179,9 +1213,9 @@ export default function ExerciseProgramsPage() {
                   <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
                 </svg>
               </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Are you sure you want to delete <span className="font-semibold text-gray-900">{confirmDeleteCustomName}</span>? This will also remove it from any programs.
+                Archive <span className="font-semibold text-gray-900">{confirmDeleteCustomName}</span>? It is removed from your programs and future pending tasks are ended, while prescriptions and session history remain. You can restore it from Manage Exercises; only an admin can permanently delete it.
               </p>
               <div className="flex gap-3 justify-center">
                 <button
@@ -1194,7 +1228,7 @@ export default function ExerciseProgramsPage() {
                   onClick={handleConfirmDeleteCustomExercise}
                   className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
                 >
-                  Delete
+                  Archive
                 </button>
               </div>
             </div>

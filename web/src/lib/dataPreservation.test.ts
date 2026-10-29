@@ -34,7 +34,19 @@ console.log("\ndataPreservation - archive and ownership contracts\n");
 test("application code contains no hard delete for prescriptions or exercises", () => {
   const db = source("./db.ts");
   assert(!/DELETE\s+FROM\s+patient_exercises/i.test(db), "patient exercises must archive, not delete");
-  assert(!/DELETE\s+FROM\s+exercises\b/i.test(db), "exercises must archive, not delete");
+  // The one exercise delete is deleteArchivedExercise: an archived custom
+  // exercise that was never prescribed and has no sessions.
+  const exerciseDeletes = db.match(/DELETE\s+FROM\s+exercises\b/gi) ?? [];
+  assert(exerciseDeletes.length <= 1, "exercises must archive, not delete");
+  if (exerciseDeletes.length === 1) {
+    const start = db.indexOf("export async function deleteArchivedExercise");
+    const end = db.indexOf("\nexport ", start + 1);
+    const body = start >= 0 ? db.slice(start, end) : "";
+    assert(/DELETE\s+FROM\s+exercises\b/i.test(body), "only deleteArchivedExercise may delete an exercise");
+    assert(body.includes("is_custom = TRUE AND archived_at IS NOT NULL"), "only archived custom exercises may be deleted");
+    assert(/FROM patient_exercises WHERE exercise_id/.test(body), "a prescribed exercise must not be deleted");
+    assert(/FROM sessions WHERE exercise_id/.test(body), "an exercise with sessions must not be deleted");
+  }
   assert(db.includes("export async function archivePatientExercises"), "archivePatientExercises is required");
   assert(db.includes("export async function archiveExercise"), "archiveExercise is required");
 });

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getExercises, createExercise, getNextExerciseId } from "@/lib/db";
+import { getExercises, createExercise, getNextExerciseId, isMissingColumnError } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { parseYouTubeVideoId } from "@/lib/exercises/customVideo";
 
 /**
  * Exercise IDs that are deprecated and should not appear in catalog-listing
@@ -27,9 +28,17 @@ export async function GET(request: NextRequest) {
     const includeDeprecated =
       request.nextUrl.searchParams.get("includeDeprecated") === "true";
 
-    const all = await getExercises({
-      therapistId: authenticatedUser.role === "therapist" ? authenticatedUser.id : undefined,
-    });
+    // With includeArchived, the Archived column's rows come too: every archived
+    // exercise for an admin, and a therapist's own archived custom exercises.
+    const includeArchived =
+      (authenticatedUser.role === "admin" || authenticatedUser.role === "therapist") &&
+      request.nextUrl.searchParams.get("includeArchived") === "true";
+    const all = (await getExercises({ includeArchived })).filter(
+      (e) =>
+        !e.archived_at ||
+        authenticatedUser.role === "admin" ||
+        e.owner_therapist_id === authenticatedUser.id,
+    );
     const exercises = includeDeprecated
       ? all
       : all.filter((e) => !DEPRECATED_EXERCISE_IDS.has(e.id));
@@ -52,10 +61,25 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, description, isCustom } = body;
+    const { name, description, isCustom, youtubeEmbed } = body;
 
     if (!name?.trim() || !description?.trim()) {
       return NextResponse.json({ error: "name and description are required" }, { status: 400 });
+    }
+
+    const custom = authenticatedUser.role === "therapist" || isCustom === true;
+    let youtubeVideoId: string | null = null;
+    if (typeof youtubeEmbed === "string" && youtubeEmbed.trim() !== "") {
+      if (!custom) {
+        return NextResponse.json({ error: "Only custom exercises can have a video." }, { status: 400 });
+      }
+      youtubeVideoId = parseYouTubeVideoId(youtubeEmbed);
+      if (!youtubeVideoId) {
+        return NextResponse.json(
+          { error: "Paste a YouTube embed code or a YouTube video link." },
+          { status: 400 },
+        );
+      }
     }
 
     const id = await getNextExerciseId();
@@ -63,13 +87,19 @@ export async function POST(request: NextRequest) {
       id,
       name: name.trim(),
       description: description.trim(),
-      isCustom: authenticatedUser.role === "therapist" ? true : isCustom ?? false,
+      isCustom: custom,
       ownerTherapistId: authenticatedUser.role === "therapist" ? authenticatedUser.id : null,
-      monitoringMode:
-        authenticatedUser.role === "therapist" || isCustom === true ? "manual" : "camera",
+      monitoringMode: custom ? "manual" : "camera",
+      youtubeVideoId,
     });
     return NextResponse.json({ exercise }, { status: 201 });
   } catch (error) {
+    if (isMissingColumnError(error)) {
+      return NextResponse.json(
+        { error: "Exercise videos need scripts/exercises_pg.sql to be run on the database first." },
+        { status: 503 },
+      );
+    }
     console.error("POST /api/exercises error:", error);
     return NextResponse.json({ error: "Failed to create exercise" }, { status: 500 });
   }

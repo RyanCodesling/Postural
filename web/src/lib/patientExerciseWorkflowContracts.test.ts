@@ -55,9 +55,20 @@ test("dashboard and session creation pass one exact occurrence id", () => {
   const route = source("../app/api/sessions/route.ts");
   const db = source("./db.ts");
   assert(dashboard.includes("/camera?occurrenceId="), "dashboard link must identify the occurrence");
+  // Manual (custom) tasks open the camera page too, but run the untracked
+  // guided session there and complete through the manual-completion route,
+  // never through a tracked session.
   assert(
-    dashboard.includes('o.monitoring_mode === "camera" ?') && dashboard.includes("/camera?occurrenceId="),
-    "dashboard camera shortcut must exclude manual tasks",
+    camera.includes('(monitoringMode !== "camera" && !isCustom)'),
+    "the patient camera queue may add only camera and manual tasks",
+  );
+  assert(
+    camera.includes("selectedExerciseObj?.isCustom ? (") && camera.includes("<CustomGuidedSession"),
+    "a manual task must show the guided session instead of the tracked Start session",
+  );
+  assert(
+    camera.includes("fetch(`/api/exercise-occurrences/${occurrenceId}`, { method: \"PATCH\" })"),
+    "a manual task must complete through the manual-completion route",
   );
   assert(route.includes("const occurrenceId = Number(body?.occurrenceId)"), "session API must require occurrence id");
   assert(

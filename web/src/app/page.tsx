@@ -132,7 +132,7 @@ export default function HomePage() {
             <div className="flex items-center gap-3">
               <Image src={logo} alt="ACC Bacoor" width={88} height={88} className="h-11 w-11 rounded-full ring-2 ring-white/40" />
               <div className="leading-tight">
-                <p className="font-bold">ACC Bacoor</p>
+                <p className="font-bold">ACC+ Bacoor</p>
                 <p className="text-xs text-green-100">Orthopaedic and Physical Therapy Clinic</p>
               </div>
             </div>
@@ -249,14 +249,14 @@ export default function HomePage() {
           <div className="flex items-center gap-3">
             <Image src={logo} alt="" width={88} height={88} className="h-10 w-10 rounded-full" />
             <div className="leading-tight">
-              <p className="font-bold text-white">ACC Bacoor</p>
+              <p className="font-bold text-white">ACC+ Bacoor</p>
               <p className="text-xs">Orthopaedic and Physical Therapy Clinic, Accelerate and Comprehensive Care</p>
             </div>
           </div>
           <div className="space-y-1 md:text-right">
             <p>(046) 416 7479 / 0939-719-1892</p>
             <p>accptclinic_2019@yahoo.com</p>
-            <p>Ground Floor GPI Bldg. Tirona Highway Habay I, Bacoor City, Cavite</p>
+            <p>Unit 1, L-1F, Tirona Highway, Habay 1, Bacoor City, Cavite</p>
           </div>
         </div>
       </footer>

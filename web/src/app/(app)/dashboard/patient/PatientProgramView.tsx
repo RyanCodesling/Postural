@@ -292,7 +292,6 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
   today,
   tagFor,
   isActionable,
-  onStart,
   calendar,
   onShowProgress,
 }: {
@@ -302,7 +301,6 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
   today: string;
   tagFor: (occurrence: T) => { label: string; classes: string };
   isActionable: (occurrence: T) => boolean;
-  onStart: (occurrence: T) => void;
   calendar: ReactNode;
   /** Opens My Progress, from the Last Session card. */
   onShowProgress?: () => void;
@@ -427,7 +425,14 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
                         return (
                           <li key={o.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-semibold text-green-800">{o.name}</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-green-800">{o.name}</p>
+                                {o.monitoring_mode === "manual" && (
+                                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    Manual · no Machine Learning
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-gray-500">
                                 {o.sets} sets × {prescriptionTargetText({ exerciseId: o.exercise_id, reps: o.reps, holdSeconds: o.hold_seconds })}
                               </p>
@@ -437,22 +442,13 @@ export default function PatientProgramView<T extends ProgramOccurrence>({
                             ) : actionable ? (
                               <>
                                 <span className={`rounded-full px-3 py-1 text-xs font-medium ${tag.classes}`}>{tag.label}</span>
-                                {o.monitoring_mode === "camera" ? (
-                                  <Link
-                                    href={`/camera?occurrenceId=${o.id}&exerciseId=${encodeURIComponent(o.exercise_id)}`}
-                                    className="rounded-lg bg-green-700 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-green-800"
-                                  >
-                                    Start
-                                  </Link>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => onStart(o)}
-                                    className="rounded-lg border border-green-300 px-4 py-1.5 text-sm font-medium text-green-800 transition hover:bg-green-50"
-                                  >
-                                    Mark done
-                                  </button>
-                                )}
+                                {/* A custom exercise opens the camera page too, for its guide video and guided sets. */}
+                                <Link
+                                  href={`/camera?occurrenceId=${o.id}&exerciseId=${encodeURIComponent(o.exercise_id)}`}
+                                  className="rounded-lg bg-green-700 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-green-800"
+                                >
+                                  Start
+                                </Link>
                               </>
                             ) : (
                               <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-500">

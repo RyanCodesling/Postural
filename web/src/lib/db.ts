@@ -658,17 +658,13 @@ export async function invalidateOTPs(email: string) {
 
 // ── Exercises ─────────────────────────────────────────────────────────────────
 
-export async function getExercises(options: {
-  includeArchived?: boolean;
-  therapistId?: string;
-} = {}) {
+export async function getExercises(options: { includeArchived?: boolean } = {}) {
+  // Custom exercises are shared: every therapist sees the ones added by the
+  // admin and by other therapists. Only editing and archiving stay with the
+  // exercise's owner (see the exercise API routes).
   const conditions: string[] = [];
   const params: unknown[] = [];
   if (!options.includeArchived) conditions.push("archived_at IS NULL");
-  if (options.therapistId) {
-    params.push(options.therapistId);
-    conditions.push(`(is_custom = FALSE OR owner_therapist_id = $${params.length})`);
-  }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pool.query(`SELECT * FROM exercises ${where} ORDER BY id`, params);
   return result.rows;
@@ -702,22 +698,66 @@ export async function createExercise(data: {
   isCustom?: boolean;
   ownerTherapistId?: string | null;
   monitoringMode?: "camera" | "manual";
+  youtubeVideoId?: string | null;
 }) {
+  const params: unknown[] = [
+    data.id,
+    data.name,
+    data.description,
+    data.isCustom ?? false,
+    data.ownerTherapistId ?? null,
+    data.monitoringMode ?? (data.isCustom ? "manual" : "camera"),
+  ];
+  // The video column is named only when it is used, so exercises can still be
+  // added before scripts/exercises_pg.sql has added it.
+  if (data.youtubeVideoId) params.push(data.youtubeVideoId);
   const result = await pool.query(
     `INSERT INTO exercises
-       (id, name, description, is_custom, owner_therapist_id, monitoring_mode)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (id, name, description, is_custom, owner_therapist_id, monitoring_mode
+        ${data.youtubeVideoId ? ", youtube_video_id" : ""})
+     VALUES ($1, $2, $3, $4, $5, $6 ${data.youtubeVideoId ? ", $7" : ""})
      RETURNING *`,
-    [
-      data.id,
-      data.name,
-      data.description,
-      data.isCustom ?? false,
-      data.ownerTherapistId ?? null,
-      data.monitoringMode ?? (data.isCustom ? "manual" : "camera"),
-    ],
+    params,
   );
   return result.rows[0];
+}
+
+/** Postgres reports a column the schema scripts have not added yet. */
+export function isMissingColumnError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "42703";
+}
+
+/** Records an uploaded file as the exercise's video, replacing a YouTube video. */
+export async function setExerciseVideoFile(id: string, mimeType: "video/mp4" | "video/webm") {
+  const result = await pool.query(
+    `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL
+      WHERE id = $1 AND archived_at IS NULL
+      RETURNING *`,
+    [id, mimeType],
+  );
+  return result.rows[0] ?? null;
+}
+
+let exerciseVideoColumnsReady: boolean | null = null;
+let exerciseVideoColumnsCheckedAt = 0;
+
+/**
+ * Whether scripts/exercises_pg.sql has added the video columns. Readers that
+ * join exercises select them only once they exist; a missing result is
+ * rechecked each minute so running the script needs no restart.
+ */
+export async function hasExerciseVideoColumns(): Promise<boolean> {
+  if (exerciseVideoColumnsReady) return true;
+  if (exerciseVideoColumnsReady === false && Date.now() - exerciseVideoColumnsCheckedAt < 60_000) return false;
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count
+       FROM information_schema.columns
+      WHERE table_name = 'exercises'
+        AND column_name IN ('video_mime_type', 'youtube_video_id')`,
+  );
+  exerciseVideoColumnsReady = Number(result.rows[0]?.count) === 2;
+  exerciseVideoColumnsCheckedAt = Date.now();
+  return exerciseVideoColumnsReady;
 }
 
 export async function updateExercise(id: string, data: { name?: string; description?: string }) {
@@ -788,6 +828,94 @@ export async function archiveExercise(id: string, archivedBy: string): Promise<b
   }
 }
 
+/**
+ * Returns an archived exercise to the catalog with its name, description and
+ * video. Prescriptions ended by the archive stay ended; the therapist
+ * prescribes it again.
+ */
+export async function restoreExercise(id: string) {
+  const result = await pool.query(
+    `UPDATE exercises SET archived_at = NULL, archived_by = NULL
+      WHERE id = $1 AND archived_at IS NOT NULL
+      RETURNING *`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Whether the exercise was added in the last ten minutes. */
+export async function isRecentlyCreatedExercise(id: string): Promise<boolean> {
+  const result = await pool.query(
+    "SELECT created_at > NOW() - INTERVAL '10 minutes' AS recent FROM exercises WHERE id = $1",
+    [id],
+  );
+  return result.rows[0]?.recent === true;
+}
+
+export type DeleteExerciseResult = "deleted" | "not-found" | "has-history";
+
+/**
+ * Permanently deletes an archived custom exercise. One that was ever
+ * prescribed stays, since its prescriptions and sessions are patient history.
+ * Program entries keep their copied name and description.
+ */
+export async function deleteArchivedExercise(id: string): Promise<DeleteExerciseResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exercise = await client.query(
+      `SELECT id FROM exercises
+        WHERE id = $1 AND is_custom = TRUE AND archived_at IS NOT NULL
+        FOR UPDATE`,
+      [id],
+    );
+    if (exercise.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return "not-found";
+    }
+    const history = await client.query(
+      `SELECT EXISTS (SELECT 1 FROM patient_exercises WHERE exercise_id = $1)
+           OR EXISTS (SELECT 1 FROM sessions WHERE exercise_id = $1) AS used`,
+      [id],
+    );
+    if (history.rows[0]?.used) {
+      await client.query("ROLLBACK");
+      return "has-history";
+    }
+    await client.query("UPDATE program_exercises SET exercise_id = NULL WHERE exercise_id = $1", [id]);
+    await client.query("DELETE FROM exercises WHERE id = $1", [id]);
+    await client.query("COMMIT");
+    return "deleted";
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Who may watch an exercise's uploaded video: staff for any active exercise
+ * (admins also archived ones), and a patient only for an exercise prescribed
+ * to them that is still active.
+ */
+export async function canViewExerciseVideo(
+  user: { id: string; role: string },
+  exercise: { id: string; archived_at: unknown },
+): Promise<boolean> {
+  if (user.role === "admin") return true;
+  if (exercise.archived_at) return false;
+  if (user.role === "therapist") return true;
+  if (user.role !== "patient") return false;
+  const result = await pool.query(
+    `SELECT 1 FROM patient_exercises
+      WHERE exercise_id = $1 AND patient_id = $2 AND archived_at IS NULL
+      LIMIT 1`,
+    [exercise.id, user.id],
+  );
+  return result.rows.length > 0;
+}
+
 // ── Patient exercises ─────────────────────────────────────────────────────────
 
 export const DEFAULT_REST_SECONDS = 60;
@@ -856,9 +984,8 @@ export async function assignExercisesToPatient(
       `SELECT id
          FROM exercises
         WHERE id = ANY($1::varchar[])
-          AND archived_at IS NULL
-          AND (is_custom = FALSE OR owner_therapist_id = $2)`,
-      [requestedExerciseIds, therapistId],
+          AND archived_at IS NULL`,
+      [requestedExerciseIds],
     );
     if (allowedExercises.rows.length !== requestedExerciseIds.length) {
       throw new ExerciseAssignmentNotAllowedError();
@@ -1122,6 +1249,9 @@ export async function getPatientExercises(
 // schedule tab and the consistency calendar; per-day display state ('missed' vs
 // 'upcoming') is derived client-side from status + due_date.
 export async function getPatientOccurrences(patientId: string) {
+  const videoColumns = (await hasExerciseVideoColumns())
+    ? "e.video_mime_type, e.youtube_video_id"
+    : "NULL AS video_mime_type, NULL AS youtube_video_id";
   const result = await pool.query(
     `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
             COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
@@ -1139,7 +1269,7 @@ export async function getPatientOccurrences(patientId: string) {
               'unit', pe.resistance_unit,
               'label', pe.resistance_label
             )) AS resistance,
-            e.name, e.description, e.monitoring_mode
+            e.name, e.description, e.monitoring_mode, ${videoColumns}
      FROM exercise_occurrences eo
      JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
      JOIN exercises e ON e.id = pe.exercise_id
@@ -1252,9 +1382,8 @@ async function validateProgramExerciseAccess(
     `SELECT id
        FROM exercises
       WHERE id = ANY($1::varchar[])
-        AND archived_at IS NULL
-        AND (is_custom = FALSE OR owner_therapist_id = $2)`,
-    [exerciseIds, therapistId],
+        AND archived_at IS NULL`,
+    [exerciseIds],
   );
   if (allowed.rows.length !== exerciseIds.length) {
     throw new ProgramExerciseNotAllowedError();

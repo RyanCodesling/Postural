@@ -24,6 +24,8 @@ import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/Exerc
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ReportButton from "../_components/ReportButton";
 import SessionVideo from "../_components/SessionVideo";
+import CustomExerciseVideo from "../_components/CustomExerciseVideo";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
 import { NEW_NOTIFICATIONS_EVENT } from "../_components/NotificationBell";
 import {
@@ -102,6 +104,8 @@ interface PatientOccurrence {
   hold_seconds: number;
   sequence_index: number;
   monitoring_mode: "camera" | "manual";
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 // Per-session summary from /api/sessions. Carries the fields the calendar, the
@@ -230,24 +234,13 @@ export default function PatientDashboardPage() {
     }
   }, [user?.id]);
 
+  // Every exercise starts on the camera page; a custom one runs a guided set-by-set
+  // session there, whose last set marks the day complete.
   const handleOccurrenceStart = async (occurrence: PatientOccurrence) => {
     setScheduleActionError("");
-    if (occurrence.monitoring_mode === "camera") {
-      router.push(
-        `/camera?occurrenceId=${occurrence.id}&exerciseId=${encodeURIComponent(occurrence.exercise_id)}`,
-      );
-      return;
-    }
-
-    const response = await fetch(`/api/exercise-occurrences/${occurrence.id}`, {
-      method: "PATCH",
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setScheduleActionError(body?.error ?? "Could not complete the manual exercise.");
-      return;
-    }
-    await loadData();
+    router.push(
+      `/camera?occurrenceId=${occurrence.id}&exerciseId=${encodeURIComponent(occurrence.exercise_id)}`,
+    );
   };
 
   useEffect(() => {
@@ -346,7 +339,6 @@ export default function PatientDashboardPage() {
                 today,
               )
             }
-            onStart={handleOccurrenceStart}
             calendar={<ConsistencyCalendar sessions={sessions} occurrences={occurrences} compact />}
             onShowProgress={() => setActiveTab("my-progress")}
           />
@@ -771,6 +763,10 @@ function ScheduleOccurrenceCard({
   sessionsByOccurrenceId: Map<number, ScheduleSessionRecord[]>;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
+  // Camera exercises show their guide on the camera page; a manual one shows
+  // the video its custom exercise carries, here where the patient does it.
+  const guideVideo = occurrence.monitoring_mode === "manual" ? exerciseVideoFromRow(occurrence) : null;
   const style = occurrenceCardStyle(
     occurrence.status,
     occurrence.due_date,
@@ -788,7 +784,7 @@ function ScheduleOccurrenceCard({
           <h4 className="text-sm font-semibold text-gray-900 min-w-0">{occurrence.name}</h4>
           {occurrence.monitoring_mode === "manual" && (
             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-              Manual · no camera
+              Manual · no Machine Learning
             </span>
           )}
         </div>
@@ -814,6 +810,16 @@ function ScheduleOccurrenceCard({
         <p className="text-xs text-gray-500">
           Rest <strong className="ml-1 text-gray-900">{occurrence.rest_seconds}s</strong>
         </p>
+        {guideVideo && (
+          <button
+            type="button"
+            onClick={() => setShowVideo((shown) => !shown)}
+            aria-expanded={showVideo}
+            className="text-xs font-semibold text-green-700 hover:text-green-800 underline-offset-2 hover:underline"
+          >
+            {showVideo ? "Hide video" : "▶ Watch video"}
+          </button>
+        )}
 
         {style.action === "done" ? (
           <span className="ml-auto text-xs font-semibold text-green-700">✓ Done</span>
@@ -835,11 +841,7 @@ function ScheduleOccurrenceCard({
             }}
             className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white rounded-lg text-sm font-medium transition"
           >
-            {submitting
-              ? "Saving..."
-              : occurrence.monitoring_mode === "manual"
-                ? "Mark Complete"
-                : "Start Session"}
+            {submitting ? "Opening..." : "Start Session"}
           </button>
         ) : style.action === "upcoming" ? (
           <span className="ml-auto text-xs font-medium text-gray-500">
@@ -849,6 +851,12 @@ function ScheduleOccurrenceCard({
           <span className="ml-auto text-xs font-medium text-red-600">Window closed</span>
         )}
       </div>
+
+      {guideVideo && showVideo && (
+        <div className="mt-3">
+          <CustomExerciseVideo exerciseId={occurrence.exercise_id} exerciseName={occurrence.name} video={guideVideo} />
+        </div>
+      )}
 
       {completedResult && (
         <CompletedSessionSummary

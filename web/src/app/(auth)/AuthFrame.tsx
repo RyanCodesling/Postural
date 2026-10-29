@@ -17,7 +17,7 @@ export const AUTH_TOGGLE =
 export const AUTH_LINK =
   "text-sm font-medium text-green-700 transition-colors hover:text-green-900";
 
-const SERVICES = ["Orthopaedic Consultation", "Rehabilitation Medicine", "Physical Therapy Services"];
+const SERVICES = ["Orthopedic Consultation", "Rehabilitation Medicine", "Physical Therapy Services"];
 
 function Check() {
   return (
@@ -69,7 +69,7 @@ export default function AuthFrame({ children }: { children: ReactNode }) {
         <div className="relative space-y-1 text-sm text-green-100">
           <p>(046) 416 7479 / 0939-719-1892</p>
           <p>accptclinic_2019@yahoo.com</p>
-          <p>Ground Floor GPI Bldg. Tirona Highway Habay I, Bacoor City, Cavite</p>
+          <p>Unit 1, L-1F, Tirona Highway, Habay 1, Bacoor City, Cavite</p>
         </div>
       </aside>
 

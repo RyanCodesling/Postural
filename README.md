@@ -1,5 +1,125 @@
 # Sprint Updates 
 
+## 📌 Update-10-30-26 | *Enah*
+
+- Added an Archived column to the admin's Manage Exercises: archiving a custom exercise moves it there with its name, description and video kept, and it offers only Restore and Permanently delete
+- Kept the six system exercises from being archived or deleted; only their description can be edited, and the server now ignores a changed name
+- Let the admin and therapists attach a guide video to a new custom exercise, an MP4 or WebM file of up to 100 MB or a pasted YouTube embed code or link
+- Played a custom exercise's video in the exercise View windows, in the camera page's Reference Guide, and on the patient's schedule card, and widened the camera page's right column for custom exercises so the video is larger
+- Listed custom exercises on the admin's and therapists' camera page after the six system exercises, with a guided set-by-set session in place of camera tracking
+- Shared every custom exercise with all therapists in Manage Exercises, Assign Exercise, Exercise Program and the camera page; only the therapist who added one can edit or archive it, and only the admin can permanently delete it
+- Added an Archived column with Restore to the therapist's Manage Exercises, for the custom exercises the therapist archived
+- Added Search patient, Search program and Search exercise boxes to Assign Exercise, and made choosing None, or another program, uncheck the exercises the previous program added
+- Labelled custom exercises "Manual · no Machine Learning" and their owner "Added by you", "Added by admin · view only" or "Added by another therapist · view only"
+- Gave the patient's custom exercises a Start button that opens the camera page, where finishing the guided session's last set marks the day complete
+- Moved the Archived column under the System and Custom exercise columns on both Manage Exercises pages
+- Upgraded Next.js and eslint-config-next from 16.4.0 to 16.4.3, updated nodemailer to 10.3.1 for a moderate security advisory, and corrected the clinic's name and address on the landing and sign-in pages
+
+### *scripts\exercises_pg.sql* and *web\.gitignore*
+
+- Added `video_mime_type` (video/mp4 or video/webm) and `youtube_video_id` to `exercises`; the script can be rerun on an existing table
+- Ignored `web\.exercise-videos`, where uploaded videos are kept
+
+### *web\src\lib\exercises\customVideo.ts*, *web\src\lib\exercises\customVideoStorage.ts*, and *web\src\lib\exercises\customVideo.test.ts*
+
+- Accepted only .mp4 and .webm files whose first bytes match the format, up to 100 MB
+- Read the YouTube video id from embed code, watch, youtu.be, shorts and live links, or a bare id, and stored only the id; the player builds its own youtube-nocookie.com address, so pasted code never reaches the page
+- Saved each upload to a temporary file and replaced the exercise's video only once the whole file passed, under `EXERCISE_VIDEOS_DIR` (by default `web\.exercise-videos`), one file per exercise
+
+### *web\src\lib\db.ts*
+
+- Added restoring an archived exercise, and permanently deleting an archived custom exercise only when it was never prescribed and has no sessions, so patient history is kept
+- Removed the rule that limited a therapist to the system exercises and their own custom ones, in the exercise list, in assigning to patients and in saving programs
+- Added the video to the patient's schedule rows once the new columns exist, so the schedule keeps working before the script is run
+- Added the check that lets the add form discard an exercise it made in the last 10 minutes when that exercise's upload fails
+
+### *web\src\app\api\exercises\route.ts*, *web\src\app\api\exercises\[id]\route.ts*, and *web\src\app\api\exercises\[id]\video\route.ts*
+
+- Listed archived exercises with `includeArchived=true`: all of them for the admin, and only a therapist's own for that therapist
+- Added Restore (PATCH with `action: "restore"`) for the admin and the exercise's owner, and permanent delete (`?permanent=true`) for the admin only
+- Refused archiving or deleting a system exercise, and kept a system exercise's name on edit
+- Accepted a YouTube embed when adding a custom exercise, and added uploading the video file (PUT) and streaming it with byte ranges (GET); staff can watch any active exercise's video, the admin also archived ones, and a patient only an exercise prescribed to them
+- Added `?discardNew=true`, which removes only a never-archived exercise added in the last 10 minutes with no history, for the add form's failed uploads
+- Answered "Exercise videos need scripts/exercises_pg.sql to be run on the database first" when the columns are missing
+
+### *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\(app)\dashboard\_components\CustomExerciseVideo.tsx*, and *web\src\app\(app)\dashboard\_components\ExerciseReferenceVideo.tsx*
+
+- Added the shared No video, Attach video file and YouTube embed code field and the add step used by the admin and therapist forms; it uploads the file after the exercise is saved and removes the exercise again if the upload fails
+- Added the 16:9 player for an uploaded video or a YouTube video, with a message when the video cannot load
+- Showed a custom exercise's video in the admin's and therapists' View windows
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Loaded archived exercises, renamed the custom exercise's Delete button to Archive, and moved an archived exercise to the Archived column instead of hiding it
+- Added Restore and Permanently delete with confirmations and result messages, and an Archived count tile; the other tiles count active exercises only
+- Added the guide video to Add Exercise, with the file's name and size, a "Video found" check for YouTube code, and errors shown in the form
+- Placed the Archived column full width under the System and Custom columns, with the buttons under each card's text
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*
+
+- Showed every custom exercise with "Added by you", "Added by admin · view only" or "Added by another therapist · view only", and Edit and Archive only on the therapist's own
+- Added the Archived column, full width under the other two, with Restore only and the note "Only an admin can permanently delete it", and an Archived count tile
+- Labelled custom exercises "Manual · no Machine Learning"
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+
+- Added Search patient, Search program and Search exercise on the right of steps 1, 2 and 3, the same size; the patient search covers only the therapist's assigned patients, and a selected program or exercise stays listed while searching
+- Opened a list of matching programs under Search program; choosing one loads it as the dropdown does
+- Unchecked the exercises a program added when None or another program is chosen, keeping the ones checked before it
+- Labelled custom exercises "Manual · no Machine Learning"
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx* and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Added the guide video to Add New Custom Exercise, the same as the admin's form
+- Showed Edit and Archive only on the therapist's own custom exercises, with the same owner labels, and renamed the list Custom Exercises
+- Renamed the custom exercise's Delete button, its confirmation and its messages to Archive, since it archives the exercise; the confirmation says it can be restored from Manage Exercises and that only an admin can permanently delete it
+- Labelled custom exercises "Manual · no Machine Learning" on the patient's page
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Listed the active custom exercises after the six system exercises for the admin and therapists, and the patient's custom exercises due that day for the patient
+- Replaced Start session for a custom exercise with a guided session: Set done after each set, the rest countdown with Skip rest, End session, and Finish on the last set; nothing is counted or scored
+- Marked the patient's day complete when the last set is finished, through the same route the schedule's Mark Complete used, so the therapist is still notified, then offered Next exercise and Back to schedule, or Try saving again on a failure; the staff session saves nothing
+- Played the custom exercise's video in the Reference Guide and widened the right column for custom exercises to up to 45% of the width, at most 860 px; system exercises keep their layout
+
+### *web\src\app\(app)\dashboard\patient\page.tsx* and *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*
+
+- Replaced Mark done and Mark Complete on custom exercises with Start and Start Session, which open the camera page on that exercise
+- Labelled custom exercises "Manual · no Machine Learning", and added Watch video to a custom exercise's schedule card when it has a video
+
+### *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Described the guide video, the Archived columns, the owner-only edit and archive, and the admin-only permanent delete in the admin and therapist tours, including the Exercise Program page's Summary, Create and Custom exercises steps
+
+### *web\package.json*, *web\package-lock.json*, *web\src\app\page.tsx*, and *web\src\app\(auth)\AuthFrame.tsx*
+
+- Upgraded next and eslint-config-next to 16.4.3, updated nodemailer to 10.3.1 with `npm audit fix`, and approved the install scripts of esbuild and unrs-resolver
+- Changed the clinic name to "ACC+ Bacoor", the service to "Orthopedic Consultation", and the address to "Unit 1, L-1F, Tirona Highway, Habay 1, Bacoor City, Cavite"
+
+### *Changes to earlier updates*
+
+- `dataPreservation.test.ts` allowed no exercise delete; it now allows only the archived, never-prescribed custom exercise delete
+- `patientExerciseWorkflowContracts.test.ts` kept custom exercises off the camera page; it now checks that they open it, run only the guided session and complete through the manual-completion route
+- `PatientProgramView.test.tsx` no longer passes the removed `onStart`
+
+### *Validation*
+
+- Type check and lint pass on the changed files, and the custom video, data preservation, clinical context, workflow, program input and patient dashboard suites pass
+- The custom video suite checks the file types and signatures, the YouTube ids, and the storage's save, replace, size limit and delete on a temporary folder
+- On the local app as admin: the three columns, adding without a video, refusing a non-YouTube embed, archive, restore and permanent delete all worked, and the test exercise was removed
+- An MP4 added on the local app played in the camera page's Reference Guide, the guided session ran through 3 sets with the rest countdown, and the custom column measured 720 px against 340 px for a system exercise at 1600 px wide
+- On the local app, a system exercise's rename was ignored and its archive and permanent delete refused, a just-added exercise was discarded, and an older one's discard refused
+- The patient schedule query ran on the local database before and after the new columns were added
+
+### *Remaining boundaries*
+
+- Before videos are used on a deployment, the database owner runs scripts\exercises_pg.sql
+- Uploaded videos are kept on the server's disk and are not in the nightly backup; on the evaluation server, `EXERCISE_VIDEOS_DIR` can point to `/var/lib/postural/exercise-videos` beside the recordings
+- A custom exercise's guided session is the patient's own report, with no video; the therapist cannot yet verify that it was done correctly
+- Restoring an exercise does not restore the prescriptions its archive ended
+
+---
+
 ## 📌 Update-10-24-26 | *RyanCodesling*
 
 - Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because 22 of the 24 repetitions done following the guide video were rated partial

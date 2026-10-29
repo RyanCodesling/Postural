@@ -43,3 +43,6 @@ next-env.d.ts
 
 # optional session videos, kept only on the local deployment
 /.recordings/
+
+# custom exercise videos uploaded by admins and therapists
+/.exercise-videos/

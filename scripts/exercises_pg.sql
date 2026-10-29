@@ -22,6 +22,20 @@ ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50)
   REFERENCES users(id) ON DELETE SET NULL;
 
+-- A custom exercise's optional guide video: an uploaded MP4/WebM file kept on
+-- the server's disk (see web/src/lib/exercises/customVideoStorage.ts), or a
+-- YouTube video id. Archiving keeps both, so a restored exercise has its video.
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS video_mime_type VARCHAR(20);
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS youtube_video_id VARCHAR(11);
+DO $$
+BEGIN
+  ALTER TABLE exercises
+    ADD CONSTRAINT exercises_video_mime_type_check
+    CHECK (video_mime_type IN ('video/mp4', 'video/webm'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Ownership is durable history. Archive the therapist account while any custom
 -- exercise remains attributed to it; do not silently erase ownership.
 ALTER TABLE exercises DROP CONSTRAINT IF EXISTS exercises_owner_therapist_id_fkey;

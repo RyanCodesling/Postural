@@ -812,7 +812,7 @@ export default function PatientDetailPage() {
                     <h3 className="font-semibold text-green-700">{ex.name}</h3>
                     {ex.monitoring_mode === "manual" && (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                        Manual · no camera
+                        Manual · no Machine Learning
                       </span>
                     )}
                   </div>

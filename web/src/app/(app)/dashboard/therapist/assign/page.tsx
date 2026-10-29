@@ -288,6 +288,12 @@ export default function AssignExercisePage() {
   const [loading, setLoading]     = useState(true);
 
   const [assignPatientIds, setAssignPatientIds] = useState<string[]>([]);
+  const [patientQuery,  setPatientQuery]  = useState("");
+  const [programQuery,  setProgramQuery]  = useState("");
+  const [programResultsOpen, setProgramResultsOpen] = useState(false);
+  // Exercises the loaded program checked, which it unchecks again when it is replaced.
+  const [programAddedIds, setProgramAddedIds] = useState<Set<string>>(new Set());
+  const [exerciseQuery, setExerciseQuery] = useState("");
   const [assignProgramId,   setAssignProgramId]   = useState("");
   const [assignSelected,    setAssignSelected]    = useState<Set<string>>(new Set());
   const [assignParams,      setAssignParams]      = useState<Record<string, AssignmentParams>>({});
@@ -387,16 +393,27 @@ export default function AssignExercisePage() {
   }, [assignPatientIds]);
 
   // ── Program merge ─────────────────────────────────────────────────────────
+  // A program merges into the selection; switching programs or choosing None
+  // unchecks the exercises the previous program added, and keeps the ones the
+  // therapist had checked before it.
   const handleProgramSelect = (programId: string) => {
     setAssignProgramId(programId);
-    if (!programId) return;
-    const tmpl = programs.find((t) => t.id === programId);
-    if (!tmpl) return;
-    setAssignSelected((prev) => {
-      const next = new Set(prev);
-      tmpl.exercises.forEach((ex) => { if (ex.exerciseId) next.add(ex.exerciseId); });
+    const tmpl = programId ? programs.find((t) => t.id === programId) : undefined;
+    const programIds = new Set(
+      (tmpl?.exercises ?? []).flatMap((ex) => (ex.exerciseId ? [ex.exerciseId] : [])),
+    );
+    const removed = Array.from(programAddedIds).filter((id) => !programIds.has(id));
+    const keptSelection = new Set(Array.from(assignSelected).filter((id) => !removed.includes(id)));
+    setProgramAddedIds(new Set(Array.from(programIds).filter((id) => !keptSelection.has(id) || programAddedIds.has(id))));
+    setAssignSelected(new Set([...keptSelection, ...programIds]));
+    setAssignParams((prev) => {
+      const next = { ...prev };
+      for (const id of removed) {
+        if (!existingAssignments.some((e) => e.exercise_id === id)) delete next[id];
+      }
       return next;
     });
+    if (!tmpl) return;
     setAssignParams((prev) => {
       const next = { ...prev };
       tmpl.exercises.forEach((ex, index) => {
@@ -434,6 +451,7 @@ export default function AssignExercisePage() {
     setAssignSelected(new Set());
     setAssignParams({});
     setAssignProgramId("");
+    setProgramAddedIds(new Set());
     setExistingAssignments([]);
     setDeleteSelected(new Set());
     setEditingExercises(new Set());
@@ -714,7 +732,7 @@ export default function AssignExercisePage() {
       });
       setShowValidationErrors(false);
       assignmentRequest.current?.abort();
-      setAssignPatientIds([]); setAssignProgramId("");
+      setAssignPatientIds([]); setAssignProgramId(""); setProgramAddedIds(new Set());
       setAssignSelected(new Set()); setAssignParams({});
       setExistingAssignments([]); setDeleteSelected(new Set());
     } catch {
@@ -777,8 +795,20 @@ export default function AssignExercisePage() {
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
-  const systemExercises = Array.isArray(exercises) ? exercises.filter((e) => !e.is_custom) : [];
-  const customExercises = Array.isArray(exercises) ? exercises.filter((e) => e.is_custom) : [];
+  // Search boxes: patients by name or email, programs by name, exercises by
+  // name or description. A selected program or exercise stays listed while
+  // filtered, so a search never hides what is about to be assigned.
+  const matches = (query: string, ...fields: (string | undefined)[]) => {
+    const q = query.trim().toLowerCase();
+    return q === "" || fields.some((field) => field?.toLowerCase().includes(q));
+  };
+  const visiblePatients = patients.filter((p) => matches(patientQuery, p.name, p.email));
+  const visiblePrograms = programs.filter((p) => p.id === assignProgramId || matches(programQuery, p.name));
+  const visibleExercises = (Array.isArray(exercises) ? exercises : []).filter(
+    (e) => assignSelected.has(e.id) || matches(exerciseQuery, e.name, e.description),
+  );
+  const systemExercises = visibleExercises.filter((e) => !e.is_custom);
+  const customExercises = visibleExercises.filter((e) => e.is_custom);
   const selectedPatient = assignPatientIds.length === 1
     ? patients.find((patient) => patient.id === assignPatientIds[0])
     : undefined;
@@ -850,15 +880,24 @@ export default function AssignExercisePage() {
 
           {/* Step 1 — Select Patients */}
           <div id="tour-assign-patients">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              1. Select Patients <span className="text-red-500">*</span>
-            </label>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-700">
+                1. Select Patients <span className="text-red-500">*</span>
+              </p>
+              {patients.length > 0 && (
+                <SearchBox value={patientQuery} onChange={setPatientQuery} placeholder="Search patient" className="w-full sm:w-60" />
+              )}
+            </div>
             {patients.length === 0 ? (
               <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
             ) : (
+              <>
               <div className={`rounded-lg border ${assignPatientIds.length === 0 && showValidationErrors ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}>
                 <div className="max-h-52 overflow-y-auto divide-y divide-gray-100">
-                  {patients.map((patient) => (
+                  {visiblePatients.length === 0 && (
+                    <p className="px-3 py-4 text-center text-sm text-gray-400">No patients match your search.</p>
+                  )}
+                  {visiblePatients.map((patient) => (
                     <label key={patient.id} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
                       <input
                         type="checkbox"
@@ -875,6 +914,7 @@ export default function AssignExercisePage() {
                   {assignPatientIds.length} selected
                 </div>
               </div>
+              </>
             )}
           </div>
 
@@ -936,21 +976,76 @@ export default function AssignExercisePage() {
 
           {/* Step 2 — Load from Program */}
           <div id="tour-assign-program">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              2. Load from Program{" "}
-              <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
-            </label>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor="assign-program-select" className="text-sm font-semibold text-gray-700">
+                2. Load from Program{" "}
+                <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
+              </label>
+              {programs.length > 0 && (
+                <div
+                  className="relative w-full sm:w-60"
+                  onFocus={() => setProgramResultsOpen(true)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setProgramResultsOpen(false);
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Escape") setProgramResultsOpen(false); }}
+                >
+                  <SearchBox
+                    value={programQuery}
+                    onChange={(value) => { setProgramQuery(value); setProgramResultsOpen(true); }}
+                    placeholder="Search program"
+                  />
+                  {programResultsOpen && programQuery.trim() !== "" && (
+                    <ul
+                      role="listbox"
+                      aria-label="Matching programs"
+                      className="absolute right-0 z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-green-200 bg-white py-1 shadow-lg"
+                    >
+                      {visiblePrograms.filter((p) => matches(programQuery, p.name)).length === 0 ? (
+                        <li className="px-3 py-2 text-sm text-gray-400">No programs match your search.</li>
+                      ) : (
+                        visiblePrograms.filter((p) => matches(programQuery, p.name)).map((p) => (
+                          <li key={p.id}>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={p.id === assignProgramId}
+                              onClick={() => {
+                                handleProgramSelect(p.id);
+                                setProgramQuery("");
+                                setProgramResultsOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-green-50 ${
+                                p.id === assignProgramId ? "font-semibold text-green-800" : "text-gray-700"
+                              }`}
+                            >
+                              <span className="truncate">{p.name}</span>
+                              <span className="shrink-0 text-xs text-gray-400">
+                                {p.exercises.length} exercise{p.exercises.length === 1 ? "" : "s"}
+                              </span>
+                            </button>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
             {programs.length === 0 ? (
               <p className="text-gray-400 text-sm">No programs yet.</p>
             ) : (
               <>
                 <select
+                  id="assign-program-select"
                   value={assignProgramId}
                   onChange={(e) => handleProgramSelect(e.target.value)}
                   className="w-full border border-green-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
                 >
-                  <option value="">— None —</option>
-                  {programs.map((t) => (
+                  <option value="">
+                    {visiblePrograms.length === 0 ? "— No programs match your search —" : "— None —"}
+                  </option>
+                  {visiblePrograms.map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
@@ -989,13 +1084,23 @@ export default function AssignExercisePage() {
 
           {/* Step 3 — Select & Configure Exercises */}
           <div id="tour-assign-exercises">
-            <p className="text-sm font-semibold text-gray-700 mb-3">
-              3. Select Exercises <span className="text-red-500">*</span>
-            </p>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-700">
+                3. Select Exercises <span className="text-red-500">*</span>
+              </p>
+              <SearchBox value={exerciseQuery} onChange={setExerciseQuery} placeholder="Search exercise" className="w-full sm:w-60" />
+            </div>
 
+            {systemExercises.length === 0 && customExercises.length === 0 && (
+              <p className="mb-5 rounded-lg border border-dashed border-gray-200 py-4 text-center text-sm text-gray-400">
+                No exercises match your search.
+              </p>
+            )}
+            {systemExercises.length > 0 && (
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
               System Exercises
             </p>
+            )}
             <div className="space-y-2 mb-5">
               {systemExercises.map((ex) => (
                 <AssignRow
@@ -1425,7 +1530,7 @@ function AssignRow({
             <span className="text-xs text-gray-400 font-mono">{exercise.id}</span>
             {exercise.is_custom && (
               <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full">
-                manual · no camera
+                Manual · no Machine Learning
               </span>
             )}
             {isExisting && (
@@ -1622,5 +1727,28 @@ function TrashIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
     </svg>
+  );
+}
+
+function SearchBox({ value, onChange, placeholder, className = "" }: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="w-full rounded-lg border border-green-200 bg-white py-2 pl-9 pr-3 text-sm text-black outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+      />
+    </div>
   );
 }

@@ -85,7 +85,9 @@ import {
 } from "@/lib/exercises/registry";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
 import { demoClipFor } from "@/lib/exercises/demoClips";
+import { exerciseVideoFromRow, type ExerciseVideo } from "@/lib/exercises/customVideo";
 import DemoClipPlayer from "./DemoClipPlayer";
+import CustomExerciseVideo from "../dashboard/_components/CustomExerciseVideo";
 import {
   compareActionableOccurrences,
   isOccurrenceActionable,
@@ -256,6 +258,12 @@ interface Exercise {
   dueDate?: string;
   makeupUntil?: string;
   sequenceIndex?: number;
+  /**
+   * Staff catalog only: a custom exercise has no camera definition, so it
+   * shows its description and attached guide video but cannot start a session.
+   */
+  isCustom?: boolean;
+  customVideo?: ExerciseVideo | null;
   /**
    * Assignment status from `patient_exercises.status` via
    * `/api/patient-exercises` (patient assignments only). Drives the
@@ -4276,6 +4284,21 @@ export default function CameraClient() {
   };
 
   /**
+   * Marks a patient's custom (manual) exercise complete for the day when its
+   * guided session ends, through the same route the schedule used for Mark
+   * Complete, which also notifies the therapist. Resolves to an error message,
+   * or null when saved.
+   */
+  const completeCustomOccurrence = async (occurrenceId: number): Promise<string | null> => {
+    const response = await fetch(`/api/exercise-occurrences/${occurrenceId}`, { method: "PATCH" });
+    if (response.ok) return null;
+    const body: unknown = await response.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string"
+      ? body.error
+      : "Your session could not be saved. Please try again.";
+  };
+
+  /**
    * Check whether the current set is complete under Model C
    * (`min(left,right) >= targetReps` for bilateral, `left >= targetReps`
    * for unilateral). If complete:
@@ -6126,15 +6149,19 @@ export default function CameraClient() {
           // deprecated — see the @deprecated JSDocs on those entries in
           // `registry.ts`. They remain in the DB and registry for audit,
           // but should not surface in the staff dropdown.
+          // Active custom exercises follow, to preview their guide videos.
           const DEBUG_IDS = ["ex_001", "ex_004", "ex_005", "ex_006", "ex_007", "ex_008"];
           const exercises: Exercise[] = recordsField(data, "exercises")
             .flatMap((row): Exercise[] => {
               const id = stringField(row, "id");
-              if (!id || !DEBUG_IDS.includes(id)) return [];
+              const isCustom = row.is_custom === true;
+              if (!id || (!DEBUG_IDS.includes(id) && !isCustom)) return [];
               return [{
                 id,
                 name: stringField(row, "name") ?? id,
                 description: stringField(row, "description") ?? "",
+                isCustom,
+                customVideo: isCustom ? exerciseVideoFromRow(row) : null,
               // Staff debug catalog has no per-patient prescription —
               // fall back to the patient_exercises DB defaults (3 × 12)
               // so the session lifecycle still has a target to gate
@@ -6147,7 +6174,7 @@ export default function CameraClient() {
                 resistance: DEFAULT_PRESCRIPTION.resistance,
               }];
             })
-            .sort((a, b) => a.id.localeCompare(b.id));
+            .sort((a, b) => Number(a.isCustom) - Number(b.isCustom) || a.id.localeCompare(b.id));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
             setSelectedExercise((prev) => {
@@ -6168,13 +6195,17 @@ export default function CameraClient() {
             const dueDate = stringField(row, "due_date");
             const makeupUntil = stringField(row, "makeup_until") ?? dueDate;
             const status = assignmentStatus(row.status);
+            // Manual (custom) exercises come too: they run the guided session
+            // with their guide video instead of camera tracking.
+            const monitoringMode = stringField(row, "monitoring_mode");
+            const isCustom = monitoringMode === "manual";
             if (
               occurrenceId === undefined ||
               !id ||
               !dueDate ||
               !makeupUntil ||
               !status ||
-              stringField(row, "monitoring_mode") !== "camera" ||
+              (monitoringMode !== "camera" && !isCustom) ||
               !isOccurrenceActionable(
                 { dueDate, makeupUntil, status },
                 effectiveTodayPH,
@@ -6197,6 +6228,8 @@ export default function CameraClient() {
               id,
               name: stringField(row, "name") ?? id,
               description: stringField(row, "description") ?? "",
+              isCustom,
+              customVideo: isCustom ? exerciseVideoFromRow(row) : null,
             // `patient_exercises.reps` is the per-side target: prescription
             // reps = 10 means 10 reps per side. `patient_exercises.sets`
             // is total set count.
@@ -8565,10 +8598,14 @@ export default function CameraClient() {
       : holdState;
   const hudSetIdx = finishedSet ? finishedSet.setIndex : currentSetIdx;
   // A wider right column on tall screens, where the demonstration would otherwise
-  // stay small; the camera view keeps at least 70% of the width.
+  // stay small; the camera view keeps at least 70% of the width. A custom
+  // exercise is followed from its guide video alone, with nothing tracked, so
+  // its column takes up to 45% and the video grows with it.
   const asideWidth = compactLayout
     ? "100%"
-    : Math.round(Math.min(480, viewportWidth * 0.3, Math.max(340, (viewportHeight - 420) * 0.62)));
+    : selectedExerciseObj?.isCustom
+      ? Math.round(Math.min(860, viewportWidth * 0.45))
+      : Math.round(Math.min(480, viewportWidth * 0.3, Math.max(340, (viewportHeight - 420) * 0.62)));
   // A session started with no camera running would count nothing, so bring the
   // camera up first, as resuming already does. Never before the pose model is
   // ready: `predictWebcam` returns without scheduling another frame when the
@@ -11046,6 +11083,22 @@ export default function CameraClient() {
                 {/* Session controls */}
                 <div id="cam-tour-session" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
                   {traceSyncReadout}
+                  {selectedExerciseObj?.isCustom ? (
+                    <CustomGuidedSession
+                      key={selectedExerciseObj.occurrenceId ?? selectedExerciseObj.id}
+                      sets={selectedExerciseObj.sets}
+                      restSeconds={selectedExerciseObj.restSeconds}
+                      onComplete={
+                        user?.role === "patient" && selectedExerciseObj.occurrenceId !== undefined
+                          ? () => completeCustomOccurrence(selectedExerciseObj.occurrenceId as number)
+                          : undefined
+                      }
+                      onNext={hasNextExercise ? () => goToAdjacentExercise(1) : undefined}
+                      onBackToSchedule={
+                        user?.role === "patient" ? () => router.push("/dashboard/patient?tab=session") : undefined
+                      }
+                    />
+                  ) : (
                   <button
                     type="button"
                     onClick={() => void startSessionWithCamera()}
@@ -11067,7 +11120,8 @@ export default function CameraClient() {
                           : "Not scheduled today"
                         : "Start session"}
                   </button>
-                  {rememberedVideoChoice && (
+                  )}
+                  {rememberedVideoChoice && !selectedExerciseObj?.isCustom && (
                     <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
                       Session video: {rememberedVideoChoice.record ? "recorded" : "not recorded"}, as you asked this
                       device to remember.{" "}
@@ -11119,7 +11173,13 @@ export default function CameraClient() {
             )}
 
             {/* Demonstration, under the exercise card */}
-            <DemoCard exerciseId={activeDefinition?.id ?? null} compact={compactLayout} />
+            <DemoCard
+              exerciseId={activeDefinition?.id ?? null}
+              compact={compactLayout}
+              custom={selectedExerciseObj?.isCustom
+                ? { id: selectedExerciseObj.id, name: selectedExerciseObj.name, video: selectedExerciseObj.customVideo ?? null }
+                : undefined}
+            />
           </aside>
         </div>
       </div>
@@ -12976,16 +13036,162 @@ function CameraSetHud({
   );
 }
 
-/** The guide keeps missing-media fallback local to the selected clip. */
-function DemoCard({ exerciseId, compact }: { exerciseId: string | null; compact: boolean }) {
+/**
+ * A custom exercise has no camera definition, so its session is a guide with
+ * no tracking: the person presses Set done after each set, the rest countdown
+ * runs between sets, and it ends after the last set. Nothing is counted or
+ * scored. For a patient, finishing the last set marks that day's exercise
+ * complete (`onComplete`); a staff preview saves nothing.
+ */
+function CustomGuidedSession({ sets, restSeconds, onComplete, onNext, onBackToSchedule }: {
+  sets: number;
+  restSeconds: number;
+  /** Saves the day as complete; resolves to an error message, or null when saved. */
+  onComplete?: () => Promise<string | null>;
+  onNext?: () => void;
+  onBackToSchedule?: () => void;
+}) {
+  const [phase, setPhase] = useState<"idle" | "set" | "rest" | "done">("idle");
+  const [currentSet, setCurrentSet] = useState(1);
+  const [restEndsAt, setRestEndsAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [save, setSave] = useState<{ state: "idle" | "saving" | "saved" } | { state: "error"; message: string }>(
+    { state: "idle" },
+  );
+
+  const saveCompletion = async () => {
+    if (!onComplete) return;
+    setSave({ state: "saving" });
+    const error = await onComplete().catch(() => "Your session could not be saved.");
+    setSave(error ? { state: "error", message: error } : { state: "saved" });
+  };
+
+  useEffect(() => {
+    if (phase !== "rest") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
+  const restRemaining = restEndsAt === null ? 0 : Math.max(0, Math.ceil((restEndsAt - now) / 1000));
+  useEffect(() => {
+    if (phase === "rest" && restRemaining === 0) {
+      setRestEndsAt(null);
+      setCurrentSet((set) => set + 1);
+      setPhase("set");
+    }
+  }, [phase, restRemaining]);
+
+  const start = () => { setCurrentSet(1); setRestEndsAt(null); setPhase("set"); };
+  const finishSet = () => {
+    if (currentSet >= sets) { setPhase("done"); void saveCompletion(); return; }
+    if (restSeconds <= 0) { setCurrentSet((set) => set + 1); return; }
+    const startedAt = Date.now();
+    setNow(startedAt);
+    setRestEndsAt(startedAt + restSeconds * 1000);
+    setPhase("rest");
+  };
+  const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); };
+
+  const status = phase === "set"
+    ? `Set ${currentSet} of ${sets} — do the set, then press Set done.`
+    : phase === "rest"
+      ? `Rest ${restRemaining}s · set ${currentSet + 1} of ${sets} next`
+      : phase === "done"
+        ? onComplete
+          ? save.state === "saved"
+            ? `All ${sets} sets done. Today's exercise is marked complete.`
+            : save.state === "error"
+              ? `All ${sets} sets done, but it was not saved.`
+              : `All ${sets} sets done. Saving...`
+          : `All ${sets} sets done.`
+        : null;
+
+  return (
+    <>
+      {status && (
+        <div role="status" style={{
+          padding: "10px 12px", borderRadius: 8, background: ACCENT.soft, color: ACCENT.text,
+          fontSize: 15, fontWeight: 600, lineHeight: 1.4,
+        }}>
+          {status}
+        </div>
+      )}
+      {phase === "done" && onComplete ? (
+        <>
+          {save.state === "error" && (
+            <>
+              <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+                {save.message}
+              </p>
+              <button type="button" onClick={() => void saveCompletion()}
+                style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+                Try saving again
+              </button>
+            </>
+          )}
+          {save.state === "saved" && onNext && (
+            <button type="button" onClick={onNext}
+              style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+              Next exercise →
+            </button>
+          )}
+          {save.state === "saved" && onBackToSchedule && (
+            <button type="button" onClick={onBackToSchedule}
+              style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600 }}>
+              Back to schedule
+            </button>
+          )}
+        </>
+      ) : phase === "set" ? (
+        <button type="button" onClick={finishSet}
+          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20 }}>
+          {currentSet >= sets ? "Finish" : "Set done"}
+        </button>
+      ) : phase === "rest" ? (
+        <button type="button" onClick={skipRest}
+          style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 16, fontWeight: 600 }}>
+          Skip rest
+        </button>
+      ) : (
+        <button type="button" onClick={start}
+          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20 }}>
+          {phase === "done" ? "Restart" : "Start session"}
+        </button>
+      )}
+      {phase !== "idle" && phase !== "done" && (
+        <button type="button" onClick={() => setPhase("idle")}
+          style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "10px 14px", fontSize: 14 }}>
+          End session
+        </button>
+      )}
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+        {onComplete
+          ? "Custom exercise: no machine learning tracks or counts it. Follow the guide video below and press Set done after each set; finishing the last set marks today's exercise complete."
+          : "Custom exercise: the camera does not track or count it. Follow the guide video below; this session is not saved."}
+      </p>
+    </>
+  );
+}
+
+/**
+ * The guide keeps missing-media fallback local to the selected clip. A custom
+ * exercise plays the video attached to it instead of a rendered clip.
+ */
+function DemoCard({ exerciseId, compact, custom }: {
+  exerciseId: string | null;
+  compact: boolean;
+  custom?: { id: string; name: string; video: ExerciseVideo | null };
+}) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const clip = demoClipFor(exerciseId);
+  const clip = custom ? null : demoClipFor(exerciseId);
   const shownClip = clip !== null && clip.src !== failedSrc ? clip : null;
   return (
     <div id="cam-tour-demo" style={{ ...CARD_STYLE, flex: "0 1 auto", minHeight: 0,
       display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
       <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
-      {shownClip ? (
+      {custom?.video ? (
+        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} />
+      ) : shownClip ? (
         <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
       ) : (
         <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,

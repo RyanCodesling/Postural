@@ -10,6 +10,13 @@ import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
+import ExerciseVideoField, {
+  NO_EXERCISE_VIDEO,
+  createCustomExercise,
+  exerciseVideoChoiceError,
+  type ExerciseVideoChoice,
+} from "../_components/ExerciseVideoField";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
@@ -40,6 +47,9 @@ interface Exercise {
   name: string;
   description: string;
   is_custom: boolean;
+  archived_at?: string | null;
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 async function uploadPatientAttachments(patientId: string, files: File[]) {
@@ -217,6 +227,9 @@ export default function AdminDashboard() {
     description: "",
   });
   const [showExerciseForm, setShowExerciseForm] = useState(false);
+  const [videoChoice, setVideoChoice] = useState<ExerciseVideoChoice>(NO_EXERCISE_VIDEO);
+  const [exerciseFormError, setExerciseFormError] = useState<string | null>(null);
+  const [addingExercise, setAddingExercise] = useState(false);
 
   // Exercise states matching therapist exercises list
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -227,6 +240,12 @@ export default function AdminDashboard() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteTargetName, setDeleteTargetName] = useState<string | null>(null);
+  // Archived custom exercises: restore, or permanently delete after confirming.
+  const [archivedAction, setArchivedAction] = useState<{
+    kind: "restore" | "delete";
+    exercise: Exercise;
+  } | null>(null);
+  const [archivedActionBusy, setArchivedActionBusy] = useState(false);
 
   // Load users and exercises from PostgreSQL on mount
   useEffect(() => {
@@ -235,7 +254,7 @@ export default function AdminDashboard() {
       .then((data) => setUsers(data.users ?? []))
       .catch((err) => console.error("Failed to load users:", err));
 
-    fetch("/api/exercises")
+    fetch("/api/exercises?includeArchived=true")
       .then((r) => r.json())
       .then((data) => setExercises(data.exercises ?? []))
       .catch((err) => console.error("Failed to load exercises:", err));
@@ -556,24 +575,41 @@ export default function AdminDashboard() {
     }
   };
 
+  const resetExerciseForm = () => {
+    setNewExercise({ name: "", description: "" });
+    setVideoChoice(NO_EXERCISE_VIDEO);
+    setExerciseFormError(null);
+  };
+
   const handleAddExercise = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newExercise.name || !newExercise.description) return;
+    if (!newExercise.name || !newExercise.description || addingExercise) return;
 
-    try {
-      const res = await fetch("/api/exercises", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newExercise, isCustom: true }),
-      });
-      const data = await res.json();
-      if (res.ok) setExercises([...exercises, data.exercise]);
-    } catch (err) {
-      console.error("Failed to add exercise:", err);
+    const choiceError = exerciseVideoChoiceError(videoChoice);
+    if (choiceError) {
+      setExerciseFormError(choiceError);
+      return;
     }
 
-    setNewExercise({ name: "", description: "" });
-    setShowExerciseForm(false);
+    setAddingExercise(true);
+    setExerciseFormError(null);
+    try {
+      const result = await createCustomExercise<Exercise>(newExercise, videoChoice);
+      if ("error" in result) {
+        setExerciseFormError(result.error);
+        return;
+      }
+      const created = result.exercise;
+
+      setExercises((prev) => [...prev, created]);
+      resetExerciseForm();
+      setShowExerciseForm(false);
+    } catch (err) {
+      console.error("Failed to add exercise:", err);
+      setExerciseFormError("Unable to add the exercise. Please try again.");
+    } finally {
+      setAddingExercise(false);
+    }
   };
 
   const startEdit = (ex: Exercise) => {
@@ -622,16 +658,57 @@ export default function AdminDashboard() {
         method: "DELETE",
       });
       if (res.ok) {
-        setExercises((prev) => prev.filter((e) => e.id !== deleteTargetId));
+        // The exercise moves to the Archived column with its details and video.
+        const archivedAt = new Date().toISOString();
+        setExercises((prev) => prev.map((e) => (e.id === deleteTargetId ? { ...e, archived_at: archivedAt } : e)));
         setShowDeleteConfirm(false);
       } else {
-        console.error("Failed to delete exercise");
+        console.error("Failed to archive exercise");
       }
     } catch (err) {
-      console.error("Error deleting exercise:", err);
+      console.error("Error archiving exercise:", err);
     } finally {
       setDeleteTargetId(null);
       setDeleteTargetName(null);
+    }
+  };
+
+  const confirmArchivedAction = async () => {
+    if (!archivedAction) return;
+    const { kind, exercise } = archivedAction;
+    setArchivedActionBusy(true);
+    try {
+      const res = kind === "restore"
+        ? await fetch(`/api/exercises/${encodeURIComponent(exercise.id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "restore" }),
+          })
+        : await fetch(`/api/exercises/${encodeURIComponent(exercise.id)}?permanent=true`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatusModalType("error");
+        setStatusModalMsg(data.error || `Unable to ${kind === "restore" ? "restore" : "delete"} the exercise. Please try again.`);
+        setShowStatusModal(true);
+        return;
+      }
+      if (kind === "restore") {
+        setExercises((prev) => prev.map((e) => (e.id === exercise.id ? { ...e, ...data.exercise } : e)));
+      } else {
+        setExercises((prev) => prev.filter((e) => e.id !== exercise.id));
+      }
+      setStatusModalType("success");
+      setStatusModalMsg(
+        kind === "restore"
+          ? `${exercise.name} has been restored to Custom exercises.`
+          : `${exercise.name} has been permanently deleted.`,
+      );
+      setShowStatusModal(true);
+    } catch (err) {
+      console.error(`Failed to ${kind} exercise:`, err);
+    } finally {
+      setArchivedActionBusy(false);
+      setArchivedAction(null);
     }
   };
 
@@ -662,8 +739,10 @@ export default function AdminDashboard() {
     e.description.toLowerCase().includes(exerciseQuery.toLowerCase())
   );
 
-  const systemExercises = filteredExercises.filter((e) => !e.is_custom);
-  const customExercises = filteredExercises.filter((e) => e.is_custom);
+  const activeExercises = exercises.filter((e) => !e.archived_at);
+  const systemExercises = filteredExercises.filter((e) => !e.is_custom && !e.archived_at);
+  const customExercises = filteredExercises.filter((e) => e.is_custom && !e.archived_at);
+  const archivedExercises = filteredExercises.filter((e) => e.is_custom && e.archived_at);
 
   return (
     <AppShell
@@ -1815,17 +1894,21 @@ export default function AdminDashboard() {
               <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage custom ones." />
               <button
                 id="tour-add-exercise"
-                onClick={() => setShowExerciseForm(!showExerciseForm)}
+                onClick={() => {
+                  if (showExerciseForm) resetExerciseForm();
+                  setShowExerciseForm(!showExerciseForm);
+                }}
                 className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg transition"
               >
                 {showExerciseForm ? "Cancel" : "+ Add Exercise"}
               </button>
             </div>
 
-            <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-3">
-              <StatTile label="System exercises" value={exercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
-              <StatTile label="Custom exercises" value={exercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
-              <StatTile label="Total exercises" value={exercises.length} icon={Glyph.pulse} tone="lime" />
+            <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatTile label="System exercises" value={activeExercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
+              <StatTile label="Custom exercises" value={activeExercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
+              <StatTile label="Archived" value={exercises.filter((e) => e.is_custom && e.archived_at).length} icon={Glyph.archive} tone="amber" />
+              <StatTile label="Total exercises" value={activeExercises.length} icon={Glyph.pulse} tone="lime" />
             </div>
 
             {showExerciseForm && (
@@ -1862,11 +1945,22 @@ export default function AdminDashboard() {
                     />
                   </div>
 
+                  <ExerciseVideoField value={videoChoice} onChange={setVideoChoice} onError={setExerciseFormError} />
+
+                  {exerciseFormError && (
+                    <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {exerciseFormError}
+                    </p>
+                  )}
+
                   <button
                     type="submit"
-                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg transition"
+                    disabled={addingExercise}
+                    className="w-full px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white rounded-lg transition"
                   >
-                    Add Exercise
+                    {addingExercise
+                      ? videoChoice.source === "file" && videoChoice.file ? "Uploading video..." : "Adding..."
+                      : "Add Exercise"}
                   </button>
                 </form>
               </div>
@@ -1891,7 +1985,7 @@ export default function AdminDashboard() {
             {exercises.length === 0 ? (
               <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">No exercises found.</div>
             ) : (
-              <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+              <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_minmax(0,13rem)]">
                 <div id="tour-system" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
                   <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">System exercises ({systemExercises.length})</h3>
                   <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
@@ -1933,6 +2027,25 @@ export default function AdminDashboard() {
                         onEditDesc={setEditDesc}
                         onView={() => setViewingExercise(ex)}
                         onDelete={() => handleDeleteClick(ex.id, ex.name)}
+                      />
+                    ))}
+                  </div>
+                </div>
+                {/* Full width under the two lists, with its cards side by side. */}
+                <div id="tour-archived" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-12">
+                  <h3 className="mb-3 shrink-0 text-base font-semibold text-gray-900">Archived exercises ({archivedExercises.length})</h3>
+                  <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+                    {archivedExercises.length === 0 && (
+                      <p className="py-4 text-center text-sm text-gray-400 sm:col-span-2 xl:col-span-3">
+                        {exerciseQuery === "" ? "No archived exercises." : "No archived exercises match your search."}
+                      </p>
+                    )}
+                    {archivedExercises.map((ex) => (
+                      <ArchivedExerciseRow
+                        key={ex.id}
+                        exercise={ex}
+                        onRestore={() => setArchivedAction({ kind: "restore", exercise: ex })}
+                        onDelete={() => setArchivedAction({ kind: "delete", exercise: ex })}
                       />
                     ))}
                   </div>
@@ -2184,7 +2297,13 @@ export default function AdminDashboard() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              <ExerciseReferenceVideo key={viewingExercise.id} exerciseId={viewingExercise.id} isCustom={viewingExercise.is_custom} />
+              <ExerciseReferenceVideo
+                key={viewingExercise.id}
+                exerciseId={viewingExercise.id}
+                isCustom={viewingExercise.is_custom}
+                customVideo={exerciseVideoFromRow(viewingExercise)}
+                exerciseName={viewingExercise.name}
+              />
 
               {/* Description */}
               <div>
@@ -2229,6 +2348,64 @@ export default function AdminDashboard() {
                   className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
                 >
                   Archive
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Restore / Permanently Delete Archived Exercise Modal */}
+      {archivedAction && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { if (!archivedActionBusy) setArchivedAction(null); }} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+              <div className={`flex items-center justify-center w-12 h-12 rounded-full mx-auto mb-4 ${archivedAction.kind === "restore" ? "bg-green-100" : "bg-red-100"}`}>
+                {archivedAction.kind === "restore" ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-green-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18z"/>
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                )}
+              </div>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">
+                {archivedAction.kind === "restore" ? "Restore Custom Exercise" : "Permanently Delete Exercise"}
+              </h2>
+              <p className="text-sm text-gray-500 mb-5">
+                {archivedAction.kind === "restore" ? (
+                  <>
+                    Restore <span className="font-semibold text-gray-900">{archivedAction.exercise.name}</span> with its description and video? Prescriptions ended by the archive stay ended.
+                  </>
+                ) : (
+                  <>
+                    Permanently delete <span className="font-semibold text-gray-900">{archivedAction.exercise.name}</span> and its video? This cannot be undone.
+                  </>
+                )}
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={archivedActionBusy}
+                  onClick={() => setArchivedAction(null)}
+                  className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={archivedActionBusy}
+                  onClick={confirmArchivedAction}
+                  className={`flex-1 px-4 py-2 text-white text-sm font-medium rounded-lg transition disabled:bg-gray-400 ${
+                    archivedAction.kind === "restore" ? "bg-green-700 hover:bg-green-800" : "bg-red-600 hover:bg-red-700"
+                  }`}
+                >
+                  {archivedActionBusy
+                    ? archivedAction.kind === "restore" ? "Restoring..." : "Deleting..."
+                    : archivedAction.kind === "restore" ? "Restore" : "Delete permanently"}
                 </button>
               </div>
             </div>
@@ -2283,12 +2460,12 @@ function AdminExerciseRow({
           </div>
         </div>
       ) : (
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+        <div className="min-w-0">
+          <div>
             <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
             <p className="text-xs text-gray-500 mt-1">{exercise.description}</p>
           </div>
-          <div className="flex gap-2 ml-4 shrink-0">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={onView}
               className="px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-medium rounded-lg transition"
@@ -2306,12 +2483,46 @@ function AdminExerciseRow({
                 onClick={onDelete}
                 className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 transition"
               >
-                Delete
+                Archive
               </button>
             )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** An archived custom exercise: it keeps its details and video, and offers only Restore and Permanently delete. */
+function ArchivedExerciseRow({ exercise, onRestore, onDelete }: {
+  exercise: Exercise;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
+  const video = exerciseVideoFromRow(exercise);
+  return (
+    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4">
+      <p className="text-sm font-semibold text-gray-700">{exercise.name}</p>
+      <p className="mt-1 text-xs text-gray-500">{exercise.description}</p>
+      {video && (
+        <p className="mt-1 text-[11px] font-medium text-gray-400">
+          {video.kind === "file" ? "Video file kept" : "YouTube video kept"}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          onClick={onRestore}
+          className="px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-medium rounded-lg transition"
+        >
+          Restore
+        </button>
+        <button
+          onClick={onDelete}
+          className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded-lg hover:bg-red-50 transition"
+        >
+          Permanently delete
+        </button>
+      </div>
     </div>
   );
 }

@@ -117,7 +117,6 @@ const render = (occurrences: ProgramOccurrence[], sessions: LastSessionRecord[],
       today={TODAY}
       tagFor={() => ({ label: "", classes: "" })}
       isActionable={() => false}
-      onStart={() => {}}
       calendar={null}
       onShowProgress={onShowProgress}
     />,

@@ -4,7 +4,7 @@
 //                                             stores a bcrypt hash (the app's scheme, cost 10)
 //                                             and clears the first-sign-in change flag
 //   node set-password.mjs <user id> --lock   sets a random password nobody knows and archives
-//                                             the account (used for the seeded demo accounts)
+//                                             the account
 //
 // Reads DATABASE_URL from the environment; run it through the service's settings file:
 //   sudo -u postural bash -c 'set -a; . /etc/postural/env; set +a; node /opt/postural/tools/set-password.mjs admin_001'

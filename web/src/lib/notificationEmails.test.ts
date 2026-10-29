@@ -21,6 +21,7 @@ import { transpile } from "../../scripts/lib/cameraReplayHarness";
 import { DAY_MS, manilaDayKey } from "./demoClock";
 import { isIsometricExercise, prescriptionTargetText } from "./exercises/prescriptionDisplay";
 import { describePausedProgress } from "./email";
+import { decryptEmail } from "./emailProtection";
 
 let passed = 0;
 let failed = 0;
@@ -83,7 +84,7 @@ function endSessionHarness(mail: (role: string) => Promise<boolean>, lookupFails
     },
   };
   const context: any = vm.createContext({
-    exports: {}, pool,
+    exports: {}, pool, decryptEmail,
     console: { error: (message: unknown) => state.errors.push(String(message)), warn() {}, log() {} },
     getEffectiveNow: async () => new Date("2026-10-15T12:00:00Z"),
     isIsometricExercise, prescriptionTargetText,
@@ -144,7 +145,7 @@ function digestHarness() {
     },
   };
   const context: any = vm.createContext({
-    exports: {}, pool, console: { error() {} },
+    exports: {}, pool, decryptEmail, console: { error() {} },
     emailConfigured: () => true,
     getEffectiveNow: async () => now,
     manilaDayKey, DAY_MS, prescriptionTargetText, isIsometricExercise, describePausedProgress,
@@ -217,7 +218,7 @@ function reminderHarness() {
     },
   };
   const context: any = vm.createContext({
-    exports: {}, pool, console: { error() {} },
+    exports: {}, pool, decryptEmail, console: { error() {} },
     emailConfigured: () => true,
     getEffectiveNow: async () => now,
     manilaDayKey, DAY_MS, prescriptionTargetText,

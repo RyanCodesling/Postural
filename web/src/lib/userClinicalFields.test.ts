@@ -6,8 +6,10 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { Client } from "pg";
+import { decryptEmail, encryptEmail, hashEmail } from "./emailProtection";
 
 const clinicalKeys = ["diagnosis", "prescription", "condition"];
+process.env.EMAIL_ENCRYPTION_KEY ??= "fixture-email-encryption-key-of-32-bytes-or-more";
 function extract(file: URL, names: string[]) {
   const source = readFileSync(file, "utf8");
   const ast = ts.createSourceFile(file.pathname, source, ts.ScriptTarget.Latest, true);
@@ -31,7 +33,7 @@ type Subject = {
   UserClinicalFieldsUnavailableError: new () => Error;
 };
 function loadDb(query: Query): Subject {
-  const context = vm.createContext({ exports: {}, pool: { query }, hashPassword: () => "fixture-hash" });
+  const context = vm.createContext({ exports: {}, pool: { query }, hashPassword: () => "fixture-hash", decryptEmail, encryptEmail, hashEmail });
   vm.runInContext(dbCode, context);
   return context.subject;
 }
@@ -46,7 +48,10 @@ async function unitChecks() {
     return { rows: sql.includes("pg_attribute") ? available.map(attname => ({ attname })) : [{ id: person.id, name: person.name }] };
   });
   await db.createUser({ ...person, ...blank });
-  assert.equal(queries.at(-1)!.params.length, 13);
+  assert.equal(queries.at(-1)!.params.length, 14);
+  assert.match(String(queries.at(-1)!.params[1]), /^enc:v1:/, "the address is stored encrypted");
+  assert.equal(decryptEmail(queries.at(-1)!.params[1]), person.email);
+  assert.equal(queries.at(-1)!.params[13], hashEmail(person.email), "and looked up by its SHA-256 hash");
   assert.doesNotMatch(queries.at(-1)!.sql, /diagnosis|prescription|condition/);
   const input = { name: "Updated", ...blank };
   await db.updateUser(person.id, input);
@@ -64,18 +69,22 @@ async function unitChecks() {
   }
   available = ["diagnosis"]; // partial migration supports only the column that exists
   await db.createUser({ ...person, diagnosis: "Fictional entry", condition: "" });
-  assert.equal(queries.at(-1)!.params.length, 14);
+  assert.equal(queries.at(-1)!.params.length, 15);
   assert.match(queries.at(-1)!.sql, /"diagnosis"/);
   assert.doesNotMatch(queries.at(-1)!.sql, /"condition"/);
   available = clinicalKeys;
   await db.createUser({ ...person, diagnosis: "D", prescription: "P", condition: "C" });
-  assert.deepEqual(Array.from(queries.at(-1)!.params.slice(13)), ["D", "P", "C"]);
+  assert.deepEqual(Array.from(queries.at(-1)!.params.slice(14)), ["D", "P", "C"]);
   await db.updateUser(person.id, { condition: null });
   assert.match(queries.at(-1)!.sql, /"condition" = \$1/);
   assert.equal(queries.at(-1)!.params[0], null, "migrated fields can be cleared");
   const before = queries.length;
   await db.updateUser(person.id, { name: "Core fields only" });
   assert.equal(queries.length, before + 1, "unrelated updates do not need a metadata query");
+  await db.updateUser(person.id, { email: " New.Address@Example.invalid " });
+  assert.match(queries.at(-1)!.sql, /SET email = \$1, email_hash = \$2 WHERE id = \$3/);
+  assert.equal(decryptEmail(queries.at(-1)!.params[0]), "New.Address@Example.invalid");
+  assert.equal(queries.at(-1)!.params[1], hashEmail("new.address@example.invalid"));
 
   // Rejected create/update must not reach downstream mail or notification effects.
   for (const [name, file] of [["POST", "../app/api/users/route.ts"], ["PUT", "../app/api/users/[id]/route.ts"]]) {

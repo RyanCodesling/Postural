@@ -3,7 +3,8 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id                VARCHAR(50)  PRIMARY KEY,
-  email             VARCHAR(255) NOT NULL UNIQUE,
+  email             TEXT         NOT NULL UNIQUE,
+  email_hash        CHAR(64),
   password          VARCHAR(255) NOT NULL,
   name              VARCHAR(255) NOT NULL,
   role              VARCHAR(20)  NOT NULL CHECK (role IN ('patient', 'therapist', 'admin')),
@@ -15,7 +16,6 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 ); 
 
-CREATE INDEX IF NOT EXISTS idx_email ON users (email);
 CREATE INDEX IF NOT EXISTS idx_role ON users (role);
 
 -- Add missing columns safely
@@ -41,10 +41,24 @@ CREATE INDEX IF NOT EXISTS idx_is_archived  ON users (is_archived);
 -- Passwords are stored only as bcrypt hashes (pgcrypto's 'bf' produces the $2a$ format bcryptjs verifies).
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-INSERT INTO users (id, email, password, name, first_name, last_name, role, "clinicId") VALUES
-('patient_001',   'patient@example.com',           crypt('patient123',   gen_salt('bf', 10)), 'John Patient',    'John',  'Patient',   'patient',   NULL),
-('therapist_001', 'therapist@clinic.com',          crypt('therapist123', gen_salt('bf', 10)), 'Sarah Therapist', 'Sarah', 'Therapist', 'therapist', 'CLINIC_001'),
-('admin_001',     'accbpostural.noreply@gmail.com', crypt('admin123',     gen_salt('bf', 10)), 'Admin User',      'Admin', 'User',      'admin',     NULL)
+-- Email addresses are never stored readable. email_hash is the SHA-256 (hex) of the
+-- lowercased, trimmed address and is what sign-in and duplicate checks look up. email
+-- holds the address encrypted with AES-256-GCM ('enc:v1:' prefix) under EMAIL_ENCRYPTION_KEY;
+-- the app encrypts any readable address left here (such as the admin row below) when it starts.
+ALTER TABLE users ALTER COLUMN email TYPE TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_hash CHAR(64);
+DROP INDEX IF EXISTS idx_email;
+UPDATE users
+SET email_hash = encode(digest(lower(trim(email)), 'sha256'), 'hex')
+WHERE email NOT LIKE 'enc:v1:%'
+  AND email_hash IS DISTINCT FROM encode(digest(lower(trim(email)), 'sha256'), 'hex');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash ON users (email_hash);
+
+-- The only seeded account is the administrator. Create patients and therapists from the admin dashboard.
+INSERT INTO users (id, email, email_hash, password, name, first_name, last_name, role, "clinicId") VALUES
+('admin_001', 'accbpostural.noreply@gmail.com',
+ encode(digest('accbpostural.noreply@gmail.com', 'sha256'), 'hex'),
+ crypt('admin123', gen_salt('bf', 10)), 'Admin User', 'Admin', 'User', 'admin', NULL)
 ON CONFLICT (id) DO NOTHING;
 
 -- Hash any password still stored as plaintext (earlier seeds); the account keeps the same password.
@@ -53,21 +67,18 @@ UPDATE users
 SET password = crypt(password, gen_salt('bf', 10))
 WHERE password !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$';
 
--- Sync admin email to the system address on re-runs
-UPDATE users SET email = 'accbpostural.noreply@gmail.com' WHERE id = 'admin_001';
+-- Sync admin email to the system address on re-runs (left alone while it already matches,
+-- so the encrypted value is kept)
+UPDATE users
+SET email      = 'accbpostural.noreply@gmail.com',
+    email_hash = encode(digest('accbpostural.noreply@gmail.com', 'sha256'), 'hex')
+WHERE id = 'admin_001'
+  AND email_hash IS DISTINCT FROM encode(digest('accbpostural.noreply@gmail.com', 'sha256'), 'hex');
 
 GRANT ALL PRIVILEGES ON TABLE users TO postural;
 
 
--- Insert demo credentials
--- Local demo login reference only; do not use these credentials in production.
--- Seeded below:
---   Patient:   patient@example.com / patient123
---   Therapist: therapist@clinic.com / therapist123
---   Admin:     accbpostural.noreply@gmail.com / admin123
--- Added by `cd web` then `npm run seed:demo:accounts` (not inserted by this SQL):
---   Therapist: demo.therapist@example.com / demo123
---   Patients:  demo.maria@example.com, demo.liam@example.com,
---              demo.aisha@example.com, demo.tomas@example.com,
---              demo.noor@example.com, demo.ethan@example.com,
---              demo.grace@example.com (all use demo123)
+-- Seeded login (local demonstration only; change it at first sign-in and never use it in production):
+--   Admin: accbpostural.noreply@gmail.com / admin123
+-- The former demo patient and therapist (patient_001, therapist_001) and the demo_* accounts
+-- are no longer seeded; scripts/remove_demo_accounts_pg.sql deletes them from existing databases.

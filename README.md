@@ -1,5 +1,59 @@
 # Sprint Updates 
 
+## 📌 Update-10-29-26 | *Ron*
+
+- Accepted only bcrypt password hashes at sign-in; a password stored as plain text no longer matches, and rerunning the user setup SQL hashes any that remain, so each account keeps its password
+- Removed the hardcoded demo patient (patient@example.com) and demo therapist (therapist@clinic.com); the admin account is now the only seeded account, and patients and therapists are created from the admin dashboard
+- Deleted the demo seeder and its three npm commands (`seed:demo`, `seed:demo:accounts`, `remove:demo:accounts`), and added a one-time SQL script that deletes the former demo accounts and their records from existing databases
+- Stopped storing email addresses in readable form: each address is stored as its SHA-256 hash, which sign-in, password reset and duplicate checks look up, together with an AES-256-GCM encrypted copy, so emails can still be sent and staff still see the address
+- Made sign-in and password reset ignore letter case in the email address, since the hash is taken of the lowercased address
+
+### *web\src\lib\crypto.ts*, *web\src\app\api\auth\login\route.ts*, *web\src\app\api\auth\change-password\route.ts*, *web\src\app\api\auth\reset-password\route.ts*, and *web\src\app\api\users\[id]\attachments\[attachmentId]\route.ts*
+
+- Compared passwords only against a well-formed bcrypt hash (cost 10); anything else never matches, where plain text was compared directly before
+- Made hashing and comparing asynchronous so they no longer block the server, and awaited them in every route that checks a password
+
+### *web\src\lib\emailProtection.ts*, *web\src\lib\db.ts*, and *web\src\instrumentation.ts*
+
+- Hashed each address with SHA-256 after trimming and lowercasing it, and looked users up by that hash for sign-in, password reset, the one-time codes and the duplicate-email checks
+- Encrypted each address with AES-256-GCM under the new `EMAIL_ENCRYPTION_KEY` setting before saving it, and decrypted it when reading users, sending the summaries, reminders and pain-pause emails, and checking the signed-in user
+- Stored the hash, not the address, with each password-reset code
+- Encrypted, at server start, any address still stored readable, such as the seeded admin's or those saved before this update; until then such an address still works
+
+### *scripts\user_credentials_pg.sql*, *scripts\email_features.sql*, and *scripts\remove_demo_accounts_pg.sql*
+
+- Seeded only the admin account (admin_001), and removed patient_001 and therapist_001 from the setup SQL
+- Added the `email_hash` column with a unique index, widened `email` to hold the encrypted value, and filled in the hash of every existing address; rerunning the file keeps the admin's encrypted address unless the address itself changes
+- Hashed the address on any existing password-reset code
+- Added remove_demo_accounts_pg.sql, run once on databases set up before this update, which deletes patient_001, therapist_001 and the demo_* accounts with their sessions, prescriptions, programs and custom exercises in one transaction; patients still assigned to a removed therapist become unassigned, and the admin is kept
+
+### *web\scripts\seedDemo.ts*, *web\package.json*, and *web\scripts\export-tuning-traces.ts*
+
+- Deleted the demo seeder and its npm commands, and the comment that pointed to it
+
+### *deploy\server\02_app_db.sh*, *deploy\server\README.md*, *deploy\server\set-password.mjs*, *web\.env.example*, *web\docs\evaluation-deployment.md*, and *AUTHENTICATION_SETUP.md*
+
+- Generated `EMAIL_ENCRYPTION_KEY` once on the server, also into a settings file written before this update, and never replaced it, since a new key would make the stored addresses unreadable
+- Stopped locking the two demo accounts during server setup; the admin is still locked until the researcher sets its password
+- Documented the new setting, the hashed and encrypted email columns, the admin as the only seeded login, and the removal script in the SQL order
+
+### *Validation*
+
+- The new emailProtection.test.ts passes: the hash matches SHA-256 of the lowercased address, the stored value does not contain the address and decrypts to it, each encryption differs, and a changed value or the wrong key fails
+- userClinicalFields.test.ts now checks that a created or edited user's address is saved encrypted with its hash, and notificationEmails.test.ts passes with the summaries and reminders decrypting the address; nine other suites that read db.ts or the SQL scripts pass unchanged
+- Lint shows no errors in the changed files; the type check shows no new errors (only the existing image imports, which it cannot resolve outside the Next.js build), and a production build passes
+
+### *Remaining boundaries*
+
+- The SQL changes have not been run against a database; run them on a copy first
+- Before deploying, set `EMAIL_ENCRYPTION_KEY` in web\.env.local or the server settings, then rerun user_credentials_pg.sql and email_features.sql, then run remove_demo_accounts_pg.sql once; sign-in fails until the hash column exists
+- Keep a copy of `EMAIL_ENCRYPTION_KEY` with the backups: without it no stored address can be read and no email can be sent
+- Email addresses differing only in letter case now count as the same address; if two accounts already have such addresses, the unique index fails and one must be changed first
+- The SHA-256 hash has no secret, so someone holding the database can still test a guessed address against it
+- The seeded admin password (admin123) is still written in the setup SQL and must be changed at first sign-in
+
+---
+
 ## 📌 Update-10-24-26 | *RyanCodesling*
 
 - Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because 22 of the 24 repetitions done following the guide video were rated partial

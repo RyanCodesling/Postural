@@ -37,8 +37,8 @@ for `ssh -i <key file> <admin user>@<server>`):
    - `tar -c -C web/public/demos ex_001-figure-motion.mp4 ex_005-figure-motion.mp4 ex_006-figure-motion.mp4 ex_007-figure-motion.mp4 ex_008-figure-motion.mp4 | <ssh> "sudo mkdir -p /opt/postural/app/web/public/demos && sudo tar -x -C /opt/postural/app/web/public/demos"`
    - `<ssh> "sudo mkdir -p /opt/postural/tools && sudo tee /opt/postural/tools/set-password.mjs >/dev/null" < set-password.mjs`
 3. `<ssh> "sudo bash -s -- <full revision>" < 02_app_db.sh`: the service user, generated
-   secrets, a fresh database with the SQL scripts in the documented order, the seeded demo
-   accounts locked (the demo patient and therapist also archived), the build, and the service.
+   secrets (including `EMAIL_ENCRYPTION_KEY`), a fresh database with the SQL scripts in the
+   documented order, the seeded admin account locked, the build, and the service.
 4. `<ssh> "sudo bash -s" < 03_backup.sh`: the nightly backup, plus one run straight away.
 5. Give the server's public IP a DNS name, then
    `<ssh> "sudo bash -s -- <dns name>" < 04_https.sh`: the Caddy site and a rebuild with

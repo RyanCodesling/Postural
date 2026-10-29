@@ -44,9 +44,12 @@ If you don't have a `.env.local` file inside the `web/` folder, create one and a
 ```
 DATABASE_URL=postgresql://postural:replace-with-your-local-password@localhost:5432/postural
 SESSION_SECRET=replace-with-a-generated-secret-of-at-least-32-random-bytes
+EMAIL_ENCRYPTION_KEY=replace-with-a-generated-secret-of-at-least-32-random-bytes
 NODE_ENV=development
 ```
-Generate `SESSION_SECRET` with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+Generate `SESSION_SECRET` and `EMAIL_ENCRYPTION_KEY` (two different values) with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+
+> `EMAIL_ENCRYPTION_KEY` encrypts every stored email address. Keep a copy with the database backups and never change it once accounts exist: without it the addresses cannot be read and no email can be sent.
 
 > `.env.local` is gitignored and must never be committed. Rotate the previously documented shared database password if it is still active because removing it here does not remove it from Git history.
 
@@ -78,18 +81,7 @@ Then go to `http://localhost:3000`.
 
 ## Login Credentials
 
-### Patient Account
-- **Email:** `patient@example.com`
-- **Password:** `patient123`
-- **Role:** Patient
-- **User ID:** `patient_001`
-
-### Therapist Account
-- **Email:** `therapist@clinic.com`
-- **Password:** `therapist123`
-- **Role:** Therapist
-- **User ID:** `therapist_001`
-- **Clinic ID:** `CLINIC_001`
+The admin is the only seeded account. Patients and therapists are created by the admin from the admin dashboard; there are no hardcoded patient or therapist accounts. On a database set up before they were removed, run `scripts/remove_demo_accounts_pg.sql` once (after rerunning `scripts/user_credentials_pg.sql`) to delete the former `patient_001`, `therapist_001` and `demo_*` accounts with their records.
 
 ### Admin Account
 - **Email:** `accbpostural.noreply@gmail.com`
@@ -130,11 +122,11 @@ The following routes are protected and require authentication:
 ## How to Use
 
 1. Set `DATABASE_URL` in `web/.env.local` with your PostgreSQL connection string
-2. Set a generated `SESSION_SECRET` in `web/.env.local`
+2. Set a generated `SESSION_SECRET` and `EMAIL_ENCRYPTION_KEY` in `web/.env.local`
 3. Run `npm install` in the `web/` directory to install dependencies
 4. Run the required SQL scripts in the order listed below
 5. Navigate to `http://localhost:3000/login`
-6. Enter the email and password for a seeded or administrator-created account
+6. Enter the email and password for the seeded admin or an administrator-created account
 7. After login, the server redirects the user to the dashboard for the role stored in PostgreSQL
 
 ## Admin Dashboard (CMS)
@@ -184,7 +176,8 @@ scripts/
 
 The `users` table includes:
 - `id` - Primary key
-- `email` - User email (unique)
+- `email` - The user's email address encrypted with AES-256-GCM under `EMAIL_ENCRYPTION_KEY` (`enc:v1:` prefix), so emails can still be sent; never stored readable. The app encrypts any readable address left in this column (such as the seeded admin's) when it starts
+- `email_hash` - SHA-256 (hex) of the lowercased, trimmed address (unique); sign-in, password reset and duplicate checks look addresses up by this hash, so sign-in ignores letter case
 - `password` - bcrypt hash (cost 10) for every account; plaintext is never accepted. Rerun `scripts/user_credentials_pg.sql` on an existing database to hash any password still stored as plaintext (it enables the `pgcrypto` extension)
 - `name` - User full name
 - `role` - User role (`patient`, `therapist`, `admin`)
@@ -196,7 +189,7 @@ The `users` table includes:
 The `password_reset_otps` table includes:
 - `id` - Primary key (auto-increment)
 - `user_id` - Foreign key to users(id)
-- `email` - Email the OTP was sent to
+- `email` - SHA-256 hash of the email the OTP was sent to (rerun `scripts/email_features.sql` to hash older rows)
 - `otp` - 6-digit OTP code
 - `expires_at` - When the OTP expires (5 minutes)
 - `used` - Whether the OTP has been consumed
@@ -219,6 +212,7 @@ To bring an existing PostgreSQL database up to the current application schema, r
 9. `scripts/email_features.sql`
 10. `scripts/reset_token_migration.sql`
 11. `scripts/notifications_pg.sql`
+12. `scripts/remove_demo_accounts_pg.sql` (once, only on databases that still have the former demo accounts)
 
 Keep the exercise and clinical-context scripts in the order shown. Exercises must exist before prescriptions and reusable programs, sessions depend on prescriptions, and the occurrence script adds the occurrence link to the existing sessions table. Rerun all five scripts when deploying prescribed side/load, immutable session context, pain-stop reporting, and clinician-review support. Run notifications last because its optional occurrence foreign key depends on `exercise_occurrences`.
 

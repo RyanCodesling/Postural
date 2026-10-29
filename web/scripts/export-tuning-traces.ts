@@ -33,7 +33,7 @@ const TRACE_KINDS = [
   "upper_body_v4",
 ];
 
-// ── DATABASE_URL (from env, else parse web/.env.local — same as seedDemo.ts) ─
+// ── DATABASE_URL (from env, else parse web/.env.local) ─────────────────────
 function resolveDatabaseUrl(): string {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const here = dirname(fileURLToPath(import.meta.url));

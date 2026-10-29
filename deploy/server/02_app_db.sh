@@ -3,12 +3,12 @@
 #   - System user "postural". Code in /opt/postural/app (copied in beforehand from the
 #     repository at the given revision), recordings in /var/lib/postural/recordings,
 #     backups in /var/backups/postural, settings in /etc/postural/env (root:postural, 640).
-#   - The database password and SESSION_SECRET are generated here and written only to that
-#     settings file; neither is printed.
+#   - The database password, SESSION_SECRET and EMAIL_ENCRYPTION_KEY are generated here and
+#     written only to that settings file; none is printed. Keep a copy of the settings file
+#     with the backups: without EMAIL_ENCRYPTION_KEY the stored email addresses cannot be read.
 #   - Database "postural" with the project's SQL scripts in the documented order
-#     (AUTHENTICATION_SETUP.md, "Required SQL order"). The three seeded demo accounts get
-#     random unknown passwords; the demo patient and therapist are also archived. The admin
-#     password is then set by the researcher with set-password.mjs.
+#     (AUTHENTICATION_SETUP.md, "Required SQL order"). The only seeded account, the admin,
+#     gets a random unknown password; the researcher then sets it with set-password.mjs.
 #   - npm ci (with the build tools), npm run build, and a systemd service on 127.0.0.1:3000.
 set -euo pipefail
 REV="${1:?usage: 02_app_db.sh <git revision>}"
@@ -43,6 +43,13 @@ ALTER ROLE postural WITH LOGIN PASSWORD '${DBPASS}';
 SQL
   unset DBPASS SECRET
 fi
+# The email encryption key is generated once (also for settings files written before email
+# encryption) and never replaced: a new key would make the stored addresses unreadable.
+if ! grep -q '^EMAIL_ENCRYPTION_KEY=' "$ENV"; then
+  EMAILKEY=$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')
+  echo "EMAIL_ENCRYPTION_KEY=${EMAILKEY}" >> "$ENV"
+  unset EMAILKEY
+fi
 sed -i '/^APP_REVISION=/d' "$ENV"
 echo "APP_REVISION=${REV}" >> "$ENV"
 
@@ -55,8 +62,6 @@ if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'post
     echo "running $f.sql"
     sudo -u postgres psql -v ON_ERROR_STOP=1 -q -d postural -f "$APP/scripts/$f.sql"
   done
-  as_app "node /opt/postural/tools/set-password.mjs patient_001 --lock"
-  as_app "node /opt/postural/tools/set-password.mjs therapist_001 --lock"
   # The admin stays active, with an unknown password until the researcher sets one.
   as_app "node /opt/postural/tools/set-password.mjs admin_001 --lock"
   sudo -u postgres psql -v ON_ERROR_STOP=1 -q -d postural -c "UPDATE users SET is_archived = FALSE, archived_at = NULL WHERE id = 'admin_001'"

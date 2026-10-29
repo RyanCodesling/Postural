@@ -12,24 +12,19 @@ project's cloud server, so on any other deployment, answer No when the camera
 page asks to record.
 
 The server's setup, updates, backups and logs are described in
-[`../../deploy/server/README.md`](../../deploy/server/README.md). Its seeded demo
-accounts are locked at setup and its admin password is set with the server's
+[`../../deploy/server/README.md`](../../deploy/server/README.md). Its seeded admin
+account is locked at setup and its admin password is set with the server's
 password tool, so step 1 below applies to other deployments. Steps 2 to 4 and
 the session-day steps apply to both.
 
 ## Once, before the first session
 
-1. **Passwords.** Every account whose password is written in this repository
-   must get a new one before any tunnel opens:
-   - the seeded admin, test patient and test therapist in
-     `scripts/user_credentials_pg.sql`;
-   - the demo therapist and demo patients, if `npm run seed:demo:accounts` was
-     run. Remove them with `npm run remove:demo:accounts` if they are not
-     needed; that deletes only those demo accounts and their records.
-
-   Sign in as each account and use the Change password page
-   (`/change-password`). Never run `npm run seed:demo`: it deletes the test
-   patient's sessions.
+1. **Passwords.** The seeded admin in `scripts/user_credentials_pg.sql` is the
+   only account whose password is written in this repository; sign in as the
+   admin and give it a new one on the Change password page
+   (`/change-password`) before any tunnel opens. On a database set up before
+   the demo accounts were removed, run `scripts/remove_demo_accounts_pg.sql`
+   to delete the former test patient, test therapist and demo accounts.
 2. **Participant accounts.** The admin creates them in the app. Each new
    account must change its password at first sign-in, so have each person sign
    in once soon after the account is made.

@@ -1,10 +1,19 @@
-// Runs once when the Next.js server starts. Checks hourly whether the summary
-// emails of the day that just ended, or the patients' exercise reminders, are
-// due; sendDailyTherapistDigests and sendExerciseReminderEmails send each only once.
+// Runs once when the Next.js server starts. Encrypts any email address still
+// stored readable, then checks hourly whether the summary emails of the day that
+// just ended, or the patients' exercise reminders, are due;
+// sendDailyTherapistDigests and sendExerciseReminderEmails send each only once.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const state = globalThis as { __digestTimer?: NodeJS.Timeout };
   if (state.__digestTimer) return;
+
+  try {
+    const { encryptStoredEmails } = await import("@/lib/db");
+    const converted = await encryptStoredEmails();
+    if (converted > 0) console.log(`[email] Encrypted ${converted} stored email address(es).`);
+  } catch (err) {
+    console.error("[email] Encrypting stored email addresses failed:", err);
+  }
 
   const run = async () => {
     try {

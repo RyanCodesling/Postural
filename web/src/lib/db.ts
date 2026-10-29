@@ -1,5 +1,6 @@
 import { Pool, PoolClient, types } from "pg";
 import { hashPassword } from "./crypto";
+import { decryptEmail, encryptEmail, hashEmail, isEncryptedEmail } from "./emailProtection";
 import {
   describePausedProgress,
   emailConfigured,
@@ -152,7 +153,7 @@ async function todayKeyPH(): Promise<string> {
 function mapUser(row: Record<string, unknown>) {
   return {
     id:             row.id,
-    email:          row.email,
+    email:          decryptEmail(row.email),
     name:           row.name,
     firstName:      row.first_name        ?? null,
     middleName:     row.middle_name       ?? null,
@@ -202,35 +203,62 @@ export async function getUserById(id: string) {
   return { ...mapUser(row), therapistName: row.therapist_name ?? null };
 }
 
+// Raw user rows keep every column but carry the readable address in `email`.
+function withReadableEmail<T extends { email?: unknown }>(row: T | undefined): T | null {
+  return row ? { ...row, email: decryptEmail(row.email) } : null;
+}
+
+// Addresses are looked up by their SHA-256 hash (users.email_hash), never by value.
 export async function getUser(email: string, role: string) {
   const result = await pool.query(
-    "SELECT * FROM users WHERE email = $1 AND role = $2 AND (is_archived IS NULL OR is_archived = FALSE)",
-    [email, role]
+    "SELECT * FROM users WHERE email_hash = $1 AND role = $2 AND (is_archived IS NULL OR is_archived = FALSE)",
+    [hashEmail(email), role]
   );
-  return result.rows.length > 0 ? result.rows[0] : null;
+  return withReadableEmail(result.rows[0]);
 }
 
 export async function getUserByEmail(email: string) {
   const result = await pool.query(
-    "SELECT * FROM users WHERE email = $1 AND (is_archived IS NULL OR is_archived = FALSE)",
-    [email]
+    "SELECT * FROM users WHERE email_hash = $1 AND (is_archived IS NULL OR is_archived = FALSE)",
+    [hashEmail(email)]
   );
-  return result.rows.length > 0 ? result.rows[0] : null;
+  return withReadableEmail(result.rows[0]);
 }
 
 export async function getUserByEmailWithArchived(email: string) {
   const result = await pool.query(
-    "SELECT * FROM users WHERE email = $1",
-    [email]
+    "SELECT * FROM users WHERE email_hash = $1",
+    [hashEmail(email)]
   );
-  return result.rows.length > 0 ? result.rows[0] : null;
+  return withReadableEmail(result.rows[0]);
 }
 
 export async function isEmailTaken(email: string, excludeId?: string): Promise<boolean> {
+  const emailHash = hashEmail(email);
   const result = excludeId
-    ? await pool.query("SELECT id FROM users WHERE email = $1 AND id != $2 LIMIT 1", [email, excludeId])
-    : await pool.query("SELECT id FROM users WHERE email = $1 LIMIT 1", [email]);
+    ? await pool.query("SELECT id FROM users WHERE email_hash = $1 AND id != $2 LIMIT 1", [emailHash, excludeId])
+    : await pool.query("SELECT id FROM users WHERE email_hash = $1 LIMIT 1", [emailHash]);
   return result.rows.length > 0;
+}
+
+/**
+ * Encrypts any address still stored readable (rows inserted by the SQL scripts or
+ * written before email encryption) and fills in its hash. Runs at server start.
+ */
+export async function encryptStoredEmails(): Promise<number> {
+  const { rows } = await pool.query(
+    "SELECT id, email FROM users WHERE email IS NOT NULL AND email NOT LIKE 'enc:v1:%'"
+  );
+  let converted = 0;
+  for (const row of rows) {
+    if (isEncryptedEmail(row.email)) continue;
+    const result = await pool.query(
+      "UPDATE users SET email = $1, email_hash = $2 WHERE id = $3 AND email = $4",
+      [encryptEmail(row.email), hashEmail(row.email), row.id, row.email]
+    );
+    converted += result.rowCount ?? 0;
+  }
+  return converted;
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
@@ -306,18 +334,18 @@ export async function createUser(data: {
   const writable = await userDataForSchema(data);
   const clinicalKeys = userClinicalKeys.filter(key => key in writable);
   const clinicalColumns = clinicalKeys.map(key => `, "${key}"`).join("");
-  const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 14}`).join("");
+  const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 15}`).join("");
   const hashedPassword = await hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
         role, date_of_birth, age, gender,
-        therapist_id_num, specialty${clinicalColumns})
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13${clinicalParameters})
+        therapist_id_num, specialty, email_hash${clinicalColumns})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14${clinicalParameters})
      RETURNING *`,
     [
       data.id,
-      data.email ?? null,
+      data.email ? encryptEmail(data.email) : null,
       hashedPassword,
       data.name,
       data.firstName ?? null,
@@ -329,6 +357,7 @@ export async function createUser(data: {
       data.gender ?? null,
       data.therapistIDNum ?? null,
       data.specialty ?? null,
+      data.email ? hashEmail(data.email) : null,
       ...clinicalKeys.map(key => writable[key] ?? null),
     ]
   );
@@ -360,7 +389,6 @@ export async function updateUser(id: string, data: Partial<{
     firstName:      "first_name",
     middleName:     "middle_name",
     lastName:       "last_name",
-    email:          "email",
     therapistId:    "therapist_id",
     dateOfBirth:    "date_of_birth",
     age:            "age",
@@ -377,6 +405,13 @@ export async function updateUser(id: string, data: Partial<{
       params.push(writable[key]);
       fields.push(`${col} = $${params.length}`);
     }
+  }
+  if ("email" in writable) {
+    const email = writable.email as string | null | undefined;
+    params.push(email ? encryptEmail(email) : null);
+    fields.push(`email = $${params.length}`);
+    params.push(email ? hashEmail(email) : null);
+    fields.push(`email_hash = $${params.length}`);
   }
 
   if (fields.length === 0) return userClinicalKeys.some(key => key in data) ? getUserById(id) : null;
@@ -596,9 +631,10 @@ export async function setMustChangePassword(userId: string, value: boolean) {
 /** Returns the raw DB row for a user (including password). Used for password verification. */
 export async function getUserRawById(id: string) {
   const result = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
-  return result.rows.length > 0 ? result.rows[0] : null;
+  return withReadableEmail(result.rows[0]);
 }
 
+// password_reset_otps.email holds the address's SHA-256 hash, like users.email_hash.
 export async function createOTP(
   userId: string,
   email: string,
@@ -608,7 +644,7 @@ export async function createOTP(
   await pool.query(
     `INSERT INTO password_reset_otps (user_id, email, otp, expires_at)
      VALUES ($1, $2, $3, $4)`,
-    [userId, email, otp, expiresAt]
+    [userId, hashEmail(email), otp, expiresAt]
   );
 }
 
@@ -617,7 +653,7 @@ export async function verifyOTP(email: string, otp: string): Promise<string | nu
     `SELECT id FROM password_reset_otps
      WHERE email = $1 AND otp = $2 AND used = FALSE AND expires_at > NOW()
      LIMIT 1`,
-    [email, otp]
+    [hashEmail(email), otp]
   );
   if (result.rows.length === 0) return null;
 
@@ -639,7 +675,7 @@ export async function validateAndConsumeResetToken(email: string, token: string)
     `SELECT id FROM password_reset_otps
      WHERE email = $1 AND reset_token = $2 AND reset_token_expires_at > NOW()
      LIMIT 1`,
-    [email, token]
+    [hashEmail(email), token]
   );
   if (result.rows.length === 0) return false;
   await pool.query(
@@ -652,7 +688,7 @@ export async function validateAndConsumeResetToken(email: string, token: string)
 export async function invalidateOTPs(email: string) {
   await pool.query(
     "UPDATE password_reset_otps SET used = TRUE WHERE email = $1 AND used = FALSE",
-    [email]
+    [hashEmail(email)]
   );
 }
 
@@ -1935,8 +1971,9 @@ async function emailPainPause(
   await Promise.all(recipients.map(async ([id, role]) => {
     try {
       const user = await pool.query("SELECT email, name FROM users WHERE id = $1", [id]);
-      if (user.rows[0]?.email) {
-        await sendExercisePausedEmail(user.rows[0].email, user.rows[0].name, details, role);
+      const email = decryptEmail(user.rows[0]?.email);
+      if (email) {
+        await sendExercisePausedEmail(email, user.rows[0].name, details, role);
       }
     } catch (err) {
       console.error(`Failed to email pain pause to ${role}:`, err);
@@ -2072,6 +2109,7 @@ export async function sendDailyTherapistDigests(): Promise<void> {
       WHERE role IN ('therapist', 'patient') AND email IS NOT NULL
         AND (is_archived IS NULL OR is_archived = FALSE)`,
   );
+  for (const row of recipients.rows) row.email = decryptEmail(row.email);
   const select = (ownerColumn: string) => `
     SELECT u.name AS patient_name, e.name AS exercise_name, eo.due_date::text AS due_date,
            COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
@@ -2226,6 +2264,7 @@ export async function sendExerciseReminderEmails(): Promise<void> {
       WHERE role = 'patient' AND email IS NOT NULL
         AND (is_archived IS NULL OR is_archived = FALSE)`,
   );
+  for (const row of patients.rows) row.email = decryptEmail(row.email);
   for (const patient of patients.rows) {
     for (const { kind, day, statuses } of reminders) {
       try {

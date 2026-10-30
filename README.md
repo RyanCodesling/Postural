@@ -1,5 +1,111 @@
 # Sprint Updates 
 
+## 📌 Update-10-30-26 | *RyanCodesling*
+
+- Added "Stop at shoulder height" on the lateral arm raise when an arm goes past shoulder height, boxed around that arm and cleared once it is corrected in the same raise; saved videos redraw the box as it was shown
+- Coached each arm of the arm hold (Arm Abduction at 90°) on its own, with "Raise this arm" or "Lower to shoulder height" for an arm outside the target band and a raise or lower hint beside each arm's seconds, starting once an arm has earned hold time in the set
+- Showed "Turn to face the camera." once the hips have read a turn of 15° or more for half a second, until they read below 10°, also in place of the message about a hidden hand or knee
+- Added a message for a dark room, named the hand the camera cannot see, and named the arm in the unsteady-tracking message, leaving out "More light" when the picture is already bright
+- Fixed the capture check's hand sides, which were swapped, so a one-sided prescription needs its own hand in view
+- Measured "Keep your torso upright." from the trunk line held during calibration instead of the camera tilt saved there, so a lean already present at calibration no longer counts, and removed the cue's 3-second wait so a lean to the other side straight after is shown too
+- Kept a waiting warning off an empty screen until its reading is back at its switch-on level, and stopped a warning already back past its switch-off level from replacing the cue on screen
+- Made a camera page left open from before an update reload before it starts a session, so every session uses the server's current coaching
+- Refused to archive a custom exercise while a prescription or program still uses it, so one therapist's archive no longer ends another therapist's prescriptions without notice
+- Fixed three problems in the guide video uploads of Enah's update: a failed replacement deleted the working video, an MP4 and a WebM uploaded together could delete each other, and the clean-up after a failed new upload could end prescriptions made in the meantime
+- Sent patients only their own prescribed exercises, and answered malformed exercise input with an error message instead of a server error
+
+### *web\src\lib\pose\overRaiseWarning.ts*, *web\src\lib\pose\drawCompensationOverlay.ts*, *web\src\lib\recording\overlayTrack.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Drew "Stop at shoulder height" on the lateral arm raise once an arm passes shoulder height, and cleared it once the arm is lowered within the same raise
+- Boxed the label around the arm that is too high instead of across both wrists; with both arms too high, it stays on the arm it went to first while that arm is still too high
+- Saved the boxed arm with each frame of the overlay track, so saved videos draw the box where it was shown; recordings made before this update still draw it across both wrists
+
+### *web\src\lib\pose\otherArmDownWarning.ts*, *web\src\lib\pose\holdHint.ts*, *web\src\lib\holdDisplay.ts*, and *web\src\lib\pose\coachingCue.ts*
+
+- On the arm hold with both arms prescribed, cued "Raise this arm" at an arm below the target band and "Lower to shoulder height" at an arm above it, checking each arm that has not finished its hold on its own
+- Showed "raise ↑" or "lower ↓" beside an arm's seconds in the hold panel once that arm has been out of the band for half a second, except while that arm's tracking is unsteady
+- Started these cues and hints only after a prescribed arm has earned hold time in the current set; time restored after a reload counts, and a new set must earn its own
+- Kept the cue on the arm it went to first while that arm is still out of the band, when both arms are
+- Left each arm's hold time, when a set ends, and what is saved unchanged
+
+### *web\src\lib\pose\bodyTurn.ts*, *web\src\lib\pose\captureReadiness.ts*, *web\src\lib\pose\pictureBrightness.ts*, and *web\src\lib\pose\trackingSteadiness.ts*
+
+- Showed "Turn to face the camera." once the hip line has read 15° or more for half a second, and cleared it below 10°; a hand or knee hidden while the body is turned gets the same message instead of its own
+- Read MediaPipe's left wrist as the patient's left hand in the capture check, as the repetition counters already do, so a one-sided prescription needs its own hand, and the message names the hand that is missing
+- Added "The room is too dark for the camera. Turn on a light or face a window." for a dark picture
+- Named the arm in the unsteady-tracking message, and left out "More light" when the picture is already bright
+
+### *web\src\lib\pose\trunkRestReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\lib\exercises\registry.ts*
+
+- Measured the lean for "Keep your torso upright." from the trunk line held during the calibration rather than from the camera tilt saved there; without a calibration it reads as before
+- Removed the cue's 3-second wait after it clears
+- Changed the display only: the form score, stored measurements, and trends keep the earlier reading
+- Named the coaching configuration coaching_v21_trunk_lean_rest_reference
+
+### *web\src\lib\pose\compensationWarningState.ts* and *web\src\lib\pose\coachingAudit.ts*
+
+- Put a waiting warning on an empty screen only once its reading is back at its switch-on level
+- Stopped a warning whose reading has already recovered past its switch-off level from taking over from the cue on screen; a cue already shown is unaffected
+
+### *web\src\app\api\sessions\route.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Checked that a new camera session names the server's current coaching configuration as well as its measurement configuration
+- Told a camera page left open from an older version to reload before it starts a session
+
+### Changes to Enah's Update-10-30-26: *web\src\lib\db.ts* and the archive windows in *therapist\exercises\page.tsx*, *therapist\programs\page.tsx*, and *admin\page.tsx*
+
+- Refused to archive a custom exercise while any unarchived prescription or program still uses it; the server answers with what to do, and the archive windows say to end those prescriptions and remove the program entries first
+- Locked the exercise's row while assignments and program entries are checked and saved, so an archive cannot slip in between
+- This replaces the archive that ended every therapist's prescriptions of the exercise, now that custom exercises are shared
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\[id]\video\route.ts*, *web\src\lib\exercises\customVideo.ts*, *web\src\lib\exercises\customVideoStorage.ts*, and *scripts\exercises_pg.sql*
+
+- Saved each uploaded guide video under its own file name, kept in the new video_file_name column, so a failed replacement keeps the working video and two uploads close together keep the later one
+- Removed only the file a new upload replaced; videos saved under the exercise's id before this update still play
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\[id]\route.ts* and *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*
+
+- Removed a new exercise after its upload failed only if, in one transaction, it has no prescription, session, or program history; otherwise nothing changes
+- Made the add form say whether the exercise was removed, kept, or its removal could not be confirmed
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\route.ts* and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Listed only a patient's own prescribed exercises for that patient, so the YouTube videos of other exercises are no longer sent to them
+- Answered malformed requests, names or descriptions that are not text, and names over 255 characters with an error message instead of a server error
+- Replaced the patient tour's "Mark done" line: a custom exercise opens its guide and manual sets, with Set done after each set and Finish after the last
+
+### *web\src\app\(app)\dashboard\therapist\assign\selection.test.ts*, *web\src\lib\exercises\customExerciseRoutes.test.ts*, *web\scripts\verify-exercise-lifecycle.ts*, and *web\package.json*
+
+- Gave the Assign page's test the setter Enah's update added, which it stopped without, and checks for choosing and clearing a program
+- Added route tests for failed and overlapping uploads, older video files, an unconfirmed save, a refused clean-up, and the patient's exercise list
+- Added npm run verify:exercises:db, which runs the real assignment, program, archive, clean-up, and video queries against connection-private temporary tables
+
+### *README.md*, *web\src\lib\db.ts*, *web\src\lib\email.ts*, and five test files
+
+- Reworded comments, one test name, and two lines of the 10-19 section without changing any code
+
+### *Validation*
+
+- 93 framework-free TypeScript suites pass, including the new route tests and the Assign page's test
+- The exercise database check passes all 13 cases on connection-private temporary tables, including an archive refused for another therapist's prescription and for a program, and the session database check passes
+- Replaying the pilot recordings through the camera code gives the same summary as before the merge with Enah's update
+- Type check, lint (no errors), and a production build on Next.js 16.4.3 pass, and npm audit finds no vulnerabilities
+- In live sessions on the laptop, the box stayed on the named arm in all 118 frames that showed it, and "Keep your torso upright." showed for 7 of 7 leans to both sides, including a left lean on the wall angels that the earlier reading missed, with no cue in the upright controls
+
+### *Remaining boundaries*
+
+- Before uploads are used on the server, scripts\exercises_pg.sql must be run again for the new video_file_name column
+- A therapist cannot archive their exercise while another therapist still prescribes it or keeps it in a program; that therapist has to end it first
+- On the admin page, a refused archive shows no message; the archive window stays open and its text gives the reason
+- Enah's section's last boundary no longer applies, since archiving ends no prescription; her section's Next.js update was from 16.4.2, not 16.4.0
+- The changes to Enah's update were checked by tests and on temporary tables, not yet in a signed-in session
+- Three cues have shown only in tests, not in a live session: "Straighten arms" during the arm hold, the lean cue on the neck side bends, and the box moving to the other arm
+- A hand hidden from the camera can still read as visible, so the hand messages do not detect every hidden hand
+- The coaching lines are engineering lines from pilot recordings, not clinical norms, and the evaluation, already under way or finished, does not cover this update
+- The 3D builder's files (assets\blender and tools\blender), the email setup notes, the demo clock, the session date corrections, and the tracking share in the therapist's session view and report are not in this update
+
+---
+
 ## 📌 Update-10-30-26 | *Enah*
 
 - Added an Archived column to the admin's Manage Exercises: archiving a custom exercise moves it there with its name, description and video kept, and it offers only Restore and Permanently delete

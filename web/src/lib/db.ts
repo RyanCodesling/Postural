@@ -2043,7 +2043,7 @@ export async function endSession(
         );
       }
       // Not awaited: a slow or unreachable mail server must not hold the end of
-      // the session or the therapist's in-app alert (Codex review 2026-10-15,
+      // the session or the therapist's in-app alert (review 2026-10-15,
       // finding 4). emailPainPause catches its own errors.
       if (pausedDetails) void emailPainPause(row.patient_id, row.therapist_id ?? null, pausedDetails);
     }
@@ -2181,7 +2181,7 @@ async function sendDigestOnce(
 // make-up window ended that day (missed). Therapists also get one email listing
 // the patients who did only part of that day's exercises. Only a finished day is
 // summarised, so nothing can be completed after its summary and fall between
-// two of them (Codex review 2026-10-15, finding 5). Safe to call repeatedly:
+// two of them (review 2026-10-15, finding 5). Safe to call repeatedly:
 // notification_email_digests lets each (recipient, kind, summarised day) send
 // at most once. Manual-monitoring exercises are not in the completed and missed
 // summaries.

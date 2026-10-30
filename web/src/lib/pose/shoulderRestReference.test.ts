@@ -71,7 +71,7 @@ test("against the resting line, a still body reads 0 and only the change counts"
 });
 
 test("the coaching configuration records the reference and stays valid", () => {
-  assert(COACHING_ALGORITHM_VERSION === "coaching_v13_aspect_corrected", COACHING_ALGORITHM_VERSION);
+  assert(COACHING_ALGORITHM_VERSION === "coaching_v21_trunk_lean_rest_reference", COACHING_ALGORITHM_VERSION);
   const configuration = coachingConfiguration(EXERCISE_REGISTRY.ex_004);
   assert(configuration.shoulderReference === SHOULDER_CUE_REFERENCE, "recorded");
   const version = `sha256:${"0".repeat(64)}`;

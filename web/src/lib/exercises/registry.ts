@@ -92,7 +92,10 @@ export type MetricName =
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
   | "shoulderElbowDistance"  // NEW 2026-05-21 — retained for future Wall Angels variants; removed from active ex_008 v1 compensation after live testing showed 2D foreshortening was too noisy
   | "hipShift"               // NEW 2026-10-02 — display-only coaching check on ex_005 (hips pushed sideways, in hip widths), computed in hipShiftWarning.ts rather than poseMetrics.ts; never scored or stored (see CoachingCheckSpec)
-  | "elbowBend";             // NEW 2026-10-04 — display-only coaching check on ex_001/ex_006 (elbow interior angle with the arm raised, 180 = straight), computed in elbowBendWarning.ts; never scored or stored (see CoachingCheckSpec)
+  | "elbowBend"              // NEW 2026-10-04 — display-only coaching check on ex_001/ex_006 (elbow interior angle with the arm raised, 180 = straight), computed in elbowBendWarning.ts; never scored or stored (see CoachingCheckSpec)
+  | "overRaise"              // NEW 2026-10-25 — display-only coaching check on ex_001 (an arm raised well past shoulder height, from the primary), computed in overRaiseWarning.ts; never scored or stored (see CoachingCheckSpec)
+  | "armAboveHold"           // Display-only: a prescribed hold arm above the existing target band.
+  | "otherArmDown";          // NEW 2026-10-25 — display-only coaching check on ex_006 (an unfinished arm below the band during a bilateral hold), computed in otherArmDownWarning.ts; never scored or stored (see CoachingCheckSpec)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRY TYPES
@@ -454,6 +457,16 @@ export function getCompensationBands(
  *     below the line for `persistMs` flags the arm until it is back below the
  *     repetition start; with `hold: "live"` (holds; `persistMs` 0) the live
  *     angle passes through. Per-limb bilateral exercises only.
+ *   - "over-raise" (`overRaiseWarning.ts`): each arm's own primary (how far
+ *     the arm is raised), warned ABOVE the line, which must sit above the
+ *     full-range line. A reading at or above it for `persistMs` flags the arm
+ *     until corrected below the cue's existing clear level. Per-limb bilateral
+ *     dynamic exercises only.
+ *   - "other-arm-down" / "arm-above-hold" (`otherArmDownWarning.ts`): while a
+ *     bilateral hold is timed after either prescribed arm earns current-set
+ *     credit, each unfinished arm is checked independently against the target
+ *     band's lower/upper edge for `persistMs`. Per-limb
+ *     bilateral holds only; neither check changes hold credit.
  */
 export type CoachingCheckSpec =
   | {
@@ -468,6 +481,27 @@ export type CoachingCheckSpec =
       compareDirection: "below";
       cue: CompensationCueSpec;
       check: { mode: "elbow-bend"; from: number; persistMs: number; hold: "repetition" | "live" };
+    }
+  | {
+      name: "overRaise";
+      warningThreshold: number;
+      compareDirection: "above";
+      cue: CompensationCueSpec;
+      check: { mode: "over-raise"; persistMs: number };
+    }
+  | {
+      name: "otherArmDown";
+      warningThreshold: number;
+      compareDirection: "below";
+      cue: CompensationCueSpec;
+      check: { mode: "other-arm-down"; persistMs: number };
+    }
+  | {
+      name: "armAboveHold";
+      warningThreshold: number;
+      compareDirection: "above";
+      cue: CompensationCueSpec;
+      check: { mode: "arm-above-hold"; persistMs: number };
     };
 
 /**
@@ -773,11 +807,17 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // study agreed with clinicians on trunk lean (Pavlikov et al. 2026,
       // Sensors, doi:10.3390/s26165054). These support the cue in general for
       // arm-raising exercises, not this exercise specifically.
+      // No cooldown (display only, D-65, 2026-10-29). The cooldown is kept per
+      // cue, not per side, so with the 3 s default a lean to the other side
+      // straight after the first was shown late or not at all (live sessions
+      // 251, 253 and 254). The warning must still drop to its switch-off level
+      // and pass its switch-on level again before the cue returns.
       { name: "trunkLean",
         cue: {
           id: "ex_001.trunk-lean",
           message: "Keep your torso upright.",
           priority: 10,
+          cooldownMs: 0,
         },
         warningThreshold: 8.8, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS }, // was 5; D-48
       // Shoulder shrug (scapular elevation) is the second-most-common
@@ -876,12 +916,32 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     // 75` matches that analysis. `persistMs: 100` (two trace frames, about
     // three live) keeps one noisy frame from flagging a repetition, and the
     // flag is held until the arm is back at rest. No wait and no cooldown, so
-    // each repetition can show its own cue. Last in priority, after the
-    // compensation cues above.
+    // each repetition can show its own cue. After the compensation cues above
+    // in priority.
     // Re-derived 2026-10-21 (D-48): 130 and 75 above are pipeline units. The
     // line is converted at a horizontal upper arm with the forearm bending in
     // the image plane (146.2); no pilot frame reaches it, so it could not be
     // re-derived from recorded decisions. `from` is the converted 75.
+    //
+    // Display-only past-shoulder-height check, added 2026-10-25 by user
+    // decision. The exercise is prescribed to shoulder height ("Raise arms to
+    // the side at shoulder height", its description), and the same clinical
+    // library raises the arms "until they are parallel to the floor". In
+    // recreational lifters, lateral raises above 90 degrees were associated
+    // with clinical signs of subacromial impingement, and the authors suggest
+    // staying below it (Kolber et al. 2014, J Strength Cond Res 28(4):1081-1089,
+    // doi:10.1519/JSC.0000000000000250; an association, not a cause).
+    // `warningThreshold: 115`, an engineering line: against motion capture
+    // (REHAB24-6, 8 people) the corrected reading of 115 falls at a median of
+    // 113 degrees on bodies (5th-95th percentile 106-119), well above
+    // horizontal; the pilot subject's correct raises since metric correction peaked at
+    // 102.5 at most (one subject; tuning data). Judged from the arm's own
+    // primary at any height; `persistMs: 100` as on the elbow check, and the
+    // warning clears at its existing clear level once corrected. Last in priority, with no
+    // minimum visible/display time: shown first, it would otherwise keep the slot for
+    // the selector's 1.5 s and hide "Straighten arms" for the repetition (8 of
+    // 37 REHAB24-6 raises lost it; replay review, 2026-10-25), so a
+    // higher-priority cue replaces it at once.
     coachingChecks: [
       {
         name: "elbowBend",
@@ -893,6 +953,21 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           message: "Keep your elbows straight as you raise your arms.",
           priority: 40,
           minActiveMs: 0,
+          cooldownMs: 0,
+        },
+      },
+      {
+        name: "overRaise",
+        warningThreshold: 115,
+        compareDirection: "above",
+        check: { mode: "over-raise", persistMs: 100 },
+        cue: {
+          id: "ex_001.over-raise",
+          message: "Raise your arms only to shoulder height.",
+          priority: 50,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
           cooldownMs: 0,
         },
       },
@@ -1428,11 +1503,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // Sources (cue review, 2026-10-03): as for ex_001's trunk lean (Fayad et
       // al. 2008; Cóias et al. 2022; Pavlikov et al. 2026). The pilot replay drew
       // it on a recorded lean and never on correct holds.
+      // No cooldown, as on ex_001's trunk lean (D-65).
       { name: "trunkLean",
         cue: {
           id: "ex_006.trunk-lean",
           message: "Keep your torso upright.",
           priority: 20,
+          cooldownMs: 0,
         },
         warningThreshold: 8.8 }, // was 5; D-48
       // Uneven shoulder line during the hold — one shoulder rides higher than
@@ -1478,6 +1555,45 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           id: "ex_006.elbow-bend",
           message: "Keep your elbows straight.",
           priority: 40,
+        },
+      },
+      // Live arm-height guidance uses the hold's existing band and the same
+      // about-one-second wait (550 ms plus latch/tick). Guidance starts after
+      // either prescribed arm earns time in the current set. Both unfinished
+      // arms are then checked independently: the opposite arm need not be
+      // perfectly in band to guide a lowered arm. A finished
+      // arm may rest, and unsteady/capture/rest guards still apply. Actual
+      // latched trunk lean, or shoulder asymmetry with arms straddling the
+      // band, is left to its posture cue in the camera caller. No new angle
+      // line or hold-credit rule is introduced.
+      {
+        name: "otherArmDown",
+        warningThreshold: 84.3,
+        compareDirection: "below",
+        check: { mode: "other-arm-down", persistMs: 550 },
+        cue: {
+          id: "ex_006.other-arm-down",
+          message: "Raise both arms to shoulder height.",
+          priority: 5,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
+          cooldownMs: 0,
+        },
+      },
+      {
+        name: "armAboveHold",
+        warningThreshold: 95.7,
+        compareDirection: "above",
+        check: { mode: "arm-above-hold", persistMs: 550 },
+        cue: {
+          id: "ex_006.arm-above-hold",
+          message: "Lower your arm to shoulder height.",
+          priority: 5,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
+          cooldownMs: 0,
         },
       },
     ],
@@ -1567,6 +1683,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
           // "don't lean back", which named an axis the metric does not detect.
           message: "Keep your torso upright.",
           priority: 10,
+          // No cooldown, as on ex_001's trunk lean (D-65).
+          cooldownMs: 0,
         },
         // `warningThreshold: 5`: the shared trunkLean warning boundary.
         // Engineering default set above the documented ~3° landmark noise
@@ -1713,11 +1831,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // (University of Illinois Extension, Wall Angels; Hinge Health, How to do
       // wall angels), and the arms or back leaving the wall is out of the
       // image plane.
+      // No cooldown, as on ex_001's trunk lean (D-65).
       { name: "trunkLean",
         cue: {
           id: "ex_008.trunk-lean",
           message: "Keep your torso upright.",
           priority: 10,
+          cooldownMs: 0,
         },
         warningThreshold: 8.8 }, // was 5; D-48
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
@@ -1969,6 +2089,51 @@ function validateRegistry(): void {
           throw new Error(
             `Registry invariant violated for ${owner}: warningThreshold and stanceMs ` +
             `must be positive, from at least the repetition start, and persistMs at least 0.`
+          );
+        }
+      } else if (check.name === "overRaise") {
+        // The arm's own primary, warned above a line that must sit above the
+        // full-range line, so a correct full raise is never the warning.
+        const { mode, persistMs } = check.check;
+        if (
+          mode !== "over-raise" || check.compareDirection !== "above" ||
+          def.kind !== "dynamic" || !def.bilateral || def.bilateralMode !== "per-limb"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the over-raise check is named ` +
+            `"overRaise", warns above its line, and needs a per-limb bilateral dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > def.primaryMetric.thresholds.targetROM && check.warningThreshold < 180) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must lie above ` +
+            `the full-range line and below 180, and persistMs at least 0.`
+          );
+        }
+      } else if (check.name === "otherArmDown" || check.name === "armAboveHold") {
+        // Hold-height cues share the timer's band, without adding angle lines.
+        const below = check.name === "otherArmDown";
+        const { mode, persistMs } = check.check;
+        if (
+          mode !== (below ? "other-arm-down" : "arm-above-hold") || check.compareDirection !== (below ? "below" : "above") ||
+          def.kind !== "isometric" || !def.bilateral || def.bilateralMode !== "per-limb"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: hold-height checks need their matching ` +
+            `mode/direction and a per-limb bilateral hold.`
+          );
+        }
+        const band = def.isometric.targetBand;
+        if (
+          !(Number.isFinite(check.warningThreshold) && Math.abs(check.warningThreshold - (band.center + (below ? -band.tolerance : band.tolerance))) < 1e-9) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must be the ` +
+            `target band's matching edge, and persistMs at least 0.`
           );
         }
       } else {

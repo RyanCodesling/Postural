@@ -91,7 +91,7 @@ async function run() {
   }
 
   {
-    // Codex's review of b84ebac: Stop cleared the footer readout the summary
+    // Review of b84ebac: Stop cleared the footer readout the summary
     // used, so Stop then End saved no size. The session's own count survives.
     const h = harness({ sessionId: 218 });
     await h.stop();

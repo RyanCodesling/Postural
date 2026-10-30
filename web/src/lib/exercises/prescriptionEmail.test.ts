@@ -62,7 +62,7 @@ assert.deepEqual(result.changed[0].changed, {
 result = diffAssignedExercises([row()], [row({ sets: 9 })], ["ex_999"]);
 assert.equal(result.assigned.length + result.changed.length, 0);
 
-// A hold exercise (Codex review 2026-10-19, finding 3): the email gives the hold
+// A hold exercise (review 2026-10-19, finding 3): the email gives the hold
 // time as the app does, and a change to the hold time alone is a change.
 const hold = (overrides: Partial<PrescriptionRow> = {}): PrescriptionRow =>
   row({ exercise_id: "ex_006", name: "Arm Abduction at 90°", reps: 10, hold_seconds: 10, ...overrides });

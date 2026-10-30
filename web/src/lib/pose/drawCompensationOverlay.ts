@@ -13,6 +13,7 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
   elbowFlexion:      [13, 14],       // elbow joints only (most focused)
   hipShift:          [23, 24],       // both hips (display-only side-bend check)
   elbowBend:         [13, 14],       // elbow joints (display-only arm-raise and arm-hold check)
+  overRaise:         [15, 16],       // both wrists, only when no arm is named (display-only arm-raise check: an arm past shoulder height; otherwise boxed around that arm)
 };
 
 /**
@@ -49,6 +50,13 @@ export const OVERLAY_LABELS: Partial<Record<MetricName, string>> = {
   // The same instruction as the shoulder press elbow cue: the display-only
   // check on lateral arm raises and the arm hold (elbowBendWarning.ts).
   elbowBend:         "Straighten arms",
+  // The prescribed height, not a direction word: "LOWER" already names the
+  // shoulder cue (overRaiseWarning.ts).
+  overRaise:         "Stop at shoulder height",
+  // Drawn at the lowered arm only, with an upward arrow: the arm hold's other
+  // arm left down while one is held (otherArmDownWarning.ts).
+  otherArmDown:      "Raise this arm",
+  armAboveHold:      "Lower to shoulder height",
 };
 
 export const OVERLAY_DIRECTION_LABELS = { shoulderSymmetry: "LOWER", straighten: "STRAIGHTEN" } as const;
@@ -341,11 +349,14 @@ function drawShoulderAsymmetry(
  *    elevated side (see `drawShoulderAsymmetry`).
  *  - `trunkLean` / `neckTilt`: the landmark box + a horizontal "straighten"
  *    arrow pointing the way to correct.
+ *  - `otherArmDown` / `armAboveHold` / `overRaise`: a box around the cued arm
+ *    + its static label, with a raise or lower arrow for the two hold cues.
  *  - everything else: the box + a static text label.
  *
  * `metricDirections` carries the tilt-corrected directional qualifiers used by
  * the directional paths: `shoulderSymmetry` → elevated side (anatomical),
- * `neckTilt` → tilt side (anatomical), `trunkLean` → lean side (image-space).
+ * `neckTilt` → tilt side (anatomical), `trunkLean` → lean side (image-space),
+ * the arm cues → the cued arm (anatomical).
  * The strings come from the caller, which has access to the full direction-rich
  * computation results not surfaced in `metricValues`.
  *
@@ -392,6 +403,32 @@ export function drawCompensationOverlay(
         rendered.push({ metric: spec.name, text: OVERLAY_DIRECTION_LABELS.shoulderSymmetry,
           direction: elevatedIdx === 11 ? "right" : "left" });
       }
+      continue;
+    }
+
+    // ── Arm height: a box around the cued arm ───────────────────────────────
+    // The side is the patient's own (MediaPipe's left landmarks are the left
+    // arm), and the box is drawn in raw space so the mirror carries it with
+    // the body. The hold cues add the matching raise/lower arrow; a vertical
+    // arrow reads the same mirrored. The past-shoulder-height cue has no
+    // arrow, and with no side (a saved track that recorded none) it keeps the
+    // box around both wrists, drawn below.
+    const side = metricDirections?.[spec.name];
+    if (
+      spec.name === "otherArmDown" || spec.name === "armAboveHold" ||
+      (spec.name === "overRaise" && (side === "left" || side === "right"))
+    ) {
+      if (side !== "left" && side !== "right") continue;
+      const arm = boundingBox(landmarks, side === "left" ? [11, 13, 15] : [12, 14, 16], canvasW, canvasH);
+      if (!arm) continue;
+      const minX = arm.minX - BOX_PAD, minY = arm.minY - BOX_PAD, maxX = arm.maxX + BOX_PAD, maxY = arm.maxY + BOX_PAD;
+      const centerX = (minX + maxX) / 2;
+      strokeBox(ctx, minX, minY, maxX, maxY, WARN);
+      if (spec.name === "otherArmDown") drawArrow(ctx, centerX, maxY, centerX, maxY - ARROW_LEN, WARN);
+      else if (spec.name === "armAboveHold") drawArrow(ctx, centerX, minY, centerX, minY + ARROW_LEN, WARN);
+      const label = OVERLAY_LABELS[spec.name]!;
+      drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN, mirroredDisplay);
+      rendered.push({ metric: spec.name, text: label, direction: side });
       continue;
     }
 

@@ -3,10 +3,14 @@ import { resolveCoachingCue, resolveCoachingCueTiming } from "./coachingCue";
 import { COMPENSATION_WARNING_DEBOUNCE_MS } from "./compensationWarningState";
 import { OVERLAY_LABELS, OVERLAY_DIRECTION_LABELS } from "./drawCompensationOverlay";
 import { SHOULDER_CUE_REFERENCE } from "./shoulderRestReference";
+import { TRUNK_LEAN_CUE_REFERENCE } from "./trunkRestReference";
 import { TRACKING_CHECK_VERSION, trackingCheckConfiguration } from "./trackingSteadiness";
+import { BODY_TURN_HOLD_MS, BODY_TURN_LINE_DEG, BODY_TURN_OFF_DEG, bodyTurnApplies } from "./bodyTurn";
+import { BRIGHT_PICTURE_LUMA, DARK_PICTURE_LUMA, PICTURE_LUMA_SAMPLE_MS } from "./pictureBrightness";
+import { HOLD_HINT_WAIT_MS } from "./holdHint";
 
 /** Bump when selector, latch, suppression, or drawing semantics change. */
-export const COACHING_ALGORITHM_VERSION = "coaching_v13_aspect_corrected";
+export const COACHING_ALGORITHM_VERSION = "coaching_v21_trunk_lean_rest_reference";
 export const COACHING_TICK_MS = 150;
 
 export function coachingConfiguration(definition: ExerciseDefinition) {
@@ -35,6 +39,18 @@ export function coachingConfiguration(definition: ExerciseDefinition) {
     tracking: trackingCheckConfiguration(definition),
     // How the LOWER cue's shoulder reading is referenced (display only, D-47).
     shoulderReference: SHOULDER_CUE_REFERENCE,
+    // How the trunk-lean cue's reading is referenced (display only, D-65).
+    trunkLeanReference: TRUNK_LEAN_CUE_REFERENCE,
+    // Position messages and hints, display only: the body-turn message, the
+    // picture-brightness lines behind the dark-picture and tracking wording,
+    // and the arm hold's raise-or-lower hint.
+    position: {
+      bodyTurn: bodyTurnApplies(definition)
+        ? { lineDeg: BODY_TURN_LINE_DEG, offDeg: BODY_TURN_OFF_DEG, holdMs: BODY_TURN_HOLD_MS }
+        : null,
+      picture: { sampleMs: PICTURE_LUMA_SAMPLE_MS, darkLuma: DARK_PICTURE_LUMA, brightLuma: BRIGHT_PICTURE_LUMA },
+      holdHintWaitMs: definition.kind === "isometric" ? HOLD_HINT_WAIT_MS : null,
+    },
   };
 }
 
@@ -63,7 +79,9 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
       const k = check as Record<string, unknown>;
       const count = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
       return typeof k.metric === "string" && typeof k.mode === "string" &&
-        [k.warningThreshold, k.from, k.persistMs].every(count) &&
+        [k.warningThreshold, k.persistMs].every(count) &&
+        // The over-raise check is judged at any height, so it has no `from`.
+        (k.from === undefined || count(k.from)) &&
         // The hip check's stance window; the elbow check has none.
         (k.stanceMs === undefined || count(k.stanceMs)) &&
         // Absent from configurations recorded before the elbow check.
@@ -73,7 +91,22 @@ export function validCoachingProvenance(value: unknown): value is CoachingProven
     // Absent from configurations recorded before the tracking check.
     (c.tracking === undefined || validTrackingConfiguration(c.tracking)) &&
     // Absent from configurations recorded before the resting shoulder reference.
-    (c.shoulderReference === undefined || c.shoulderReference === SHOULDER_CUE_REFERENCE);
+    (c.shoulderReference === undefined || c.shoulderReference === SHOULDER_CUE_REFERENCE) &&
+    // Absent from configurations recorded before the resting trunk reference.
+    (c.trunkLeanReference === undefined || c.trunkLeanReference === TRUNK_LEAN_CUE_REFERENCE) &&
+    // Absent from configurations recorded before the position messages.
+    (c.position === undefined || validPositionConfiguration(c.position));
+}
+
+function validPositionConfiguration(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0;
+  const turn = p.bodyTurn as Record<string, unknown> | null | undefined;
+  const picture = p.picture as Record<string, unknown> | null | undefined;
+  return (turn === null || (!!turn && typeof turn === "object" && [turn.lineDeg, turn.offDeg, turn.holdMs].every(positive))) &&
+    !!picture && typeof picture === "object" && [picture.sampleMs, picture.darkLuma, picture.brightLuma].every(positive) &&
+    (p.holdHintWaitMs === null || positive(p.holdHintWaitMs));
 }
 
 function validTrackingConfiguration(value: unknown): boolean {

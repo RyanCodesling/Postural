@@ -4,7 +4,9 @@
  * Tests the single-cue arbitration that sits downstream of the compensation
  * warning latches: priority resolution, the normalized-excess tiebreak, the
  * minimum-active promote gate, the minimum-display switch gate, the per-cue
- * post-clear cooldown, and the empty/no-latch paths.
+ * post-clear cooldown, the blocks on a latched warning short of its switch-on
+ * level (for an empty slot) or back past its switch-off level (to replace the
+ * displayed cue), and the empty/no-latch paths.
  *
  * USAGE
  *   npx tsx web/src/lib/pose/coachingCue.test.ts
@@ -671,6 +673,146 @@ test("a cue trigger sets the switch-on level used for ordering", () => {
   assertClose(coachingCueExcess(triggered, 9), 2, "excess over the on level");
   assertClose(coachingCueExcess(triggered, 6), 0, "below the on level there is no excess");
   assertClose(normalizedCoachingCueExcess(triggered, 9), 2 / 7, "normalized by the on level");
+});
+
+// ── A latched warning that has recovered ────────────────────────────────────
+// Rehearsal session 246 (2026-10-28): LOWER latched while "Raise this arm" held the slot. The shoulders levelled as
+// the arm came back, and when "Raise this arm" went, LOWER was promoted with a reading of 1.3 against its off level of
+// 2.8, inside its latch's 300 ms clear wait, then kept for its minimum visible time.
+// Rehearsal session 248 (2026-10-29): the same, at 3.1, between its off level and its on level of 4. The latch stayed
+// on, and LOWER was shown for 2 s; that hold had read 2.8-3.9 with no cue before the arm dropped.
+// Pilot recording C3: in its deliberate trunk lean, the lean became ready to replace the displayed LOWER at 7.8 and
+// read 7.4-8.4 throughout, between its off level of 4.4 and its on level of 8.8. It must still take over.
+
+/** The arm hold's LOWER, as the ex_006 registry entry declares it: on at 4, off at 2.8, last in priority. */
+const holdLower: CompensationMetricSpec = {
+  ...shoulderSymmetry,
+  cue: { ...shoulderSymmetry.cue!, priority: 30, trigger: { on: 4, off: 2.8 } },
+};
+
+/** Trunk lean holds the slot until 2.1 s while LOWER stays latched behind it, past its own minimum-active time. */
+function lowerBehindTrunkLean() {
+  const specs = [trunkLean, holdLower];
+  const held = hold(newCoachingCueState(), specs, active("trunkLean", "shoulderSymmetry"), { trunkLean: 9, shoulderSymmetry: 8 }, 0, 2_100);
+  assertEq(held.decision.cueId, "t.trunk-lean", "setup: trunk lean holds the slot, LOWER latched behind it");
+  return { specs, state: held.state };
+}
+
+test("a latched warning whose reading is already past its switch-off level does not take the slot", () => {
+  const { specs, state } = lowerBehindTrunkLean();
+  // Trunk lean's latch drops. LOWER's is still on (its clear wait), but its reading is already under 2.8.
+  const released = tick(state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 1.3 }, 2_250);
+  assertEq(released.decision.clearedCueId, "t.trunk-lean", "trunk lean released");
+  assertEq(released.decision.cueId, null, "LOWER is not promoted");
+  assertEq(released.decision.reason, "recovered", "reason");
+  assertEq(released.decision.candidates[0].blockedBy, "recovered", "the candidate is blocked as recovered");
+  const later = tick(released.state, specs, active(), { trunkLean: 1, shoulderSymmetry: 0.9 }, 2_400);
+  assertEq(later.decision.cueId, null, "its latch then clears with nothing drawn");
+  assertEq(later.decision.reason, "none-active", "reason");
+});
+
+test("a latched warning between its switch-off and switch-on levels does not take the slot", () => {
+  const { specs, state } = lowerBehindTrunkLean();
+  // Session 248: the latch stays on, as the reading never falls to 2.8, and LOWER is never shown.
+  let s = state;
+  for (const [i, reading] of [3.1, 3.3, 2.9, 3.2, 3.0].entries()) {
+    const next = tick(s, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: reading }, 2_250 + i * 150);
+    assertEq(next.decision.cueId, null, `${reading} lies between the off and on levels: not promoted`);
+    assertEq(next.decision.reason, "recovered", "reason");
+    s = next.state;
+  }
+  const later = tick(s, specs, active(), { trunkLean: 1, shoulderSymmetry: 2.6 }, 3_150);
+  assertEq(later.decision.cueId, null, "its latch then clears with nothing drawn");
+});
+
+test("a latched warning is promoted once back at its switch-on level, also after a recovered tick", () => {
+  const { specs, state } = lowerBehindTrunkLean();
+  const waiting = tick(state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 3.5 }, 2_250);
+  assertEq(waiting.decision.cueId, null, "setup: waiting");
+  const atOn = tick(waiting.state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 4 }, 2_400);
+  assertEq(atOn.decision.cueId, "t.shoulder-symmetry", "back at the on level while still latched: promoted at once");
+  assertEq(atOn.decision.reason, "promoted", "reason");
+
+  const recovered = tick(state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 2 }, 2_250);
+  assertEq(recovered.decision.cueId, null, "setup: recovered");
+  const back = tick(recovered.state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 5 }, 2_400);
+  assertEq(back.decision.cueId, "t.shoulder-symmetry", "back over the on level while still latched: promoted");
+  assertEq(back.decision.reason, "promoted", "reason");
+});
+
+test("the displayed cue stays while its latch is on, even with its reading past its switch-off level", () => {
+  const specs = [holdLower];
+  const shown = hold(newCoachingCueState(), specs, active("shoulderSymmetry"), { shoulderSymmetry: 8 }, 0, COACHING_CUE_MIN_ACTIVE_MS);
+  assertEq(shown.decision.cueId, "t.shoulder-symmetry", "setup: shown");
+  const clearing = tick(shown.state, specs, active("shoulderSymmetry"), { shoulderSymmetry: 1 }, COACHING_CUE_MIN_ACTIVE_MS + 150);
+  assertEq(clearing.decision.cueId, "t.shoulder-symmetry", "still shown during its latch's clear wait");
+  assertEq(clearing.decision.reason, "held", "reason");
+  assertEq(clearing.decision.candidates[0].blockedBy, null, "the displayed cue is never blocked as recovered");
+});
+
+test("a higher-priority cue already past its switch-off level does not replace the displayed cue", () => {
+  const promoted = hold(newCoachingCueState(), ALL, active("scapularElevation"), { scapularElevation: 0.06 }, 0, COACHING_CUE_MIN_ACTIVE_MS);
+  const contended = hold(
+    promoted.state,
+    ALL,
+    active("scapularElevation", "trunkLean"),
+    { scapularElevation: 0.06, trunkLean: 9 },
+    COACHING_CUE_MIN_ACTIVE_MS + 150,
+    COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_DISPLAY_MS - 150,
+  );
+  assertEq(contended.decision.reason, "held-min-display", "setup: trunk lean waits out the minimum display");
+  const atSwitch = tick(
+    contended.state,
+    ALL,
+    active("scapularElevation", "trunkLean"),
+    { scapularElevation: 0.06, trunkLean: 2 },
+    COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_DISPLAY_MS,
+  );
+  assertEq(atSwitch.decision.cueId, "t.scapular-elevation", "no switch to a lean already corrected");
+  assertEq(atSwitch.decision.reason, "held", "reason");
+  assertEq(atSwitch.decision.candidates.find((c) => c.cueId === "t.trunk-lean")?.blockedBy, "recovered", "trunk lean blocked as recovered");
+
+});
+
+test("a higher-priority cue between its switch-off and switch-on levels still replaces the displayed cue", () => {
+  // Pilot recording C3's trunk lean, with trunk lean's latch switching off at 2.5 and on at 5: 4 keeps it latched.
+  const promoted = hold(newCoachingCueState(), ALL, active("scapularElevation"), { scapularElevation: 0.06 }, 0, COACHING_CUE_MIN_ACTIVE_MS);
+  const contended = hold(
+    promoted.state,
+    ALL,
+    active("scapularElevation", "trunkLean"),
+    { scapularElevation: 0.06, trunkLean: 9 },
+    COACHING_CUE_MIN_ACTIVE_MS + 150,
+    COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_DISPLAY_MS - 150,
+  );
+  const inBand = tick(
+    contended.state,
+    ALL,
+    active("scapularElevation", "trunkLean"),
+    { scapularElevation: 0.06, trunkLean: 4 },
+    COACHING_CUE_MIN_ACTIVE_MS + COACHING_CUE_MIN_DISPLAY_MS,
+  );
+  assertEq(inBand.decision.cueId, "t.trunk-lean", "the latched lean takes over");
+  assertEq(inBand.decision.reason, "switched", "reason");
+});
+
+test("an empty slot does not take a latched warning short of its switch-on level after the displayed cue clears", () => {
+  const { specs, state } = lowerBehindTrunkLean();
+  // The same reading that would let LOWER replace a displayed cue keeps it off an empty screen.
+  const released = tick(state, specs, active("shoulderSymmetry"), { trunkLean: 1, shoulderSymmetry: 3.5 }, 2_250);
+  assertEq(released.decision.clearedCueId, "t.trunk-lean", "trunk lean released");
+  assertEq(released.decision.cueId, null, "LOWER waits");
+  assertEq(released.decision.candidates[0].blockedBy, "recovered", "blocked as recovered");
+});
+
+test("with every candidate blocked, min-active is reported before recovered", () => {
+  const { state } = lowerBehindTrunkLean();
+  const specs = [trunkLean, holdLower, scapularElevation];
+  // Scapular elevation latches on the tick trunk lean goes, so it still owes its minimum-active time.
+  const mixed = tick(state, specs, active("shoulderSymmetry", "scapularElevation"), { trunkLean: 1, shoulderSymmetry: 1.3, scapularElevation: 0.06 }, 2_250);
+  assertEq(mixed.decision.cueId, null, "nothing promoted");
+  assertEq(mixed.decision.reason, "min-active", "min-active, as before");
+  assertEq(mixed.decision.candidates.find((c) => c.cueId === "t.shoulder-symmetry")?.blockedBy, "recovered", "LOWER blocked as recovered");
 });
 
 test("the input state is not mutated", () => {

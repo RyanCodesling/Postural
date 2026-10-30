@@ -115,12 +115,18 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
     showCompletionRecapAfterReportRef: ref(false), terminalOccurrenceAfterReportRef: ref(null),
   };
   const refGroups: [any, string[]][] = [
-    [0, ["fpsFrameCount", "fpsWindowStartMs", "perfSampleCount", "inferMsSum", "frameMsSum", "stableOkSince", "lastBadCaptureAt", "captureFramesTotal", "captureFramesOk", "captureUnsteadyFrames", "captureCheckedFrames", "lastEx005DebugMs", "lastMetricsUpdate", "leftHoldMs", "rightHoldMs", "pairedHoldMs", "neckRepDebugSeq", "captureDropoutResets"]],
-    [false, ["captureDropoutResetDone", "leftInBand", "rightInBand", "coachingShadowEnabled", "coachingShadowStaffAllowed", "traceSyncWroteThisFrame", "calibrationStale"]],
-    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder", "lockedShoulderIndex", "lastDrawnCue", "trackingHint"]],
+    [0, ["fpsFrameCount", "fpsWindowStartMs", "perfSampleCount", "inferMsSum", "frameMsSum", "stableOkSince", "lastBadCaptureAt", "captureFramesTotal", "captureFramesOk", "captureUnsteadyFrames", "captureCheckedFrames", "lastEx005DebugMs", "lastMetricsUpdate", "leftHoldMs", "rightHoldMs", "pairedHoldMs", "neckRepDebugSeq", "captureDropoutResets", "lastLumaSampleMs"]],
+    [false, ["captureDropoutResetDone", "leftInBand", "rightInBand", "coachingShadowEnabled", "coachingShadowStaffAllowed", "traceSyncWroteThisFrame", "calibrationStale", "turnHint"]],
+    [null, ["videoResolution", "captureDropoutStartedAt", "lastIsometricTickMs", "neckRepDebugStartMs", "request", "recorder", "lockedShoulderIndex", "lastDrawnCue", "trackingHint", "pictureLuma"]],
   ];
   for (const [initial, names] of refGroups) for (const name of names) context[`${name}Ref`] = ref(initial);
-  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals", "repWindowStates", "hipShiftStates", "elbowBendStates"]) context[`${name}Ref`] = ref(new Map());
+  for (const name of ["metricFilters", "leftCompensationFilters", "rightCompensationFilters", "compensationWarningLatches", "compensationWarningSignals", "repWindowStates", "hipShiftStates", "elbowBendStates", "overRaiseStates", "otherArmDownStates"]) context[`${name}Ref`] = ref(new Map());
+  // Display-only position messages and the arm hold's hint. Replays carry no
+  // world landmarks and no video frame, so no turn or brightness is read.
+  context.bodyTurnStateRef = ref(globals.NO_BODY_TURN);
+  context.lumaSamplerRef = ref({ canvas: null });
+  context.holdHintStateRef = ref(globals.newHoldHintState());
+  context.armUnsteadyAtMsRef = ref({ leftArm: null, rightArm: null });
   for (const name of ["leftBaseline", "rightBaseline", "leftScapBaseline", "rightScapBaseline", "bidirectionalBaseline"]) context[`${name}Ref`] = ref({ value: null, samples: [] });
   context.lastCaptureOkRef = ref(true); context.lastCaptureMsgRef = ref("Captured");
   context.captureRejectedByStatusRef = ref({});
@@ -130,6 +136,9 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   // Replays start from a stored baseline without its calibration samples, so
   // no resting shoulder line: the LOWER cue reads as it did when recorded.
   context.shoulderRestLineDegRef = ref(null);
+  // Nor a resting trunk line (D-65) unless a caller sets one: the trunk-lean
+  // cue then reads against the frozen tilt.
+  context.trunkRestLineDegRef = ref(null);
   // Likewise no calibration ear line (D-49) unless a caller supplies one
   // (`tick({ earLine })`): ex_004 then reads against the frozen tilt.
   context.calibrationEarLineDegRef = ref(null);

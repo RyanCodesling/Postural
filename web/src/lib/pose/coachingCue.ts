@@ -1,5 +1,10 @@
 import type { CompensationCueSpec, CompensationMetricSpec, MetricName } from "@/lib/exercises/registry";
-import { compensationWarningIsOneSided, cueTriggerLevel } from "./compensationWarningState";
+import {
+  compensationWarningIsOneSided,
+  cueTriggerLevel,
+  warningValueCleared,
+  warningValueShortOfTrigger,
+} from "./compensationWarningState";
 
 /**
  * Single-cue arbitration for the patient-facing compensation warnings.
@@ -33,6 +38,29 @@ import { compensationWarningIsOneSided, cueTriggerLevel } from "./compensationWa
  * evaluated, latched and logged by the caller, but it never competes for the
  * slot here: it is never drawn, never highlights its metric card, and never
  * blocks a visible lower-priority cue.
+ *
+ * RECOVERED WARNINGS
+ * A latch switches on at its switch-on level, and off only once its value has
+ * stayed past its switch-off level for the 300 ms debounce, so a latched
+ * warning's value can lie anywhere short of the switch-off level. Two tests,
+ * both the latch's own, keep such a warning off screen (`recovered`), so no
+ * threshold is added here:
+ *   - an empty slot takes a latched warning only once its value is back at
+ *     its switch-on level (`warningValueShortOfTrigger`): a cue appears at the
+ *     level it would have needed with nothing else on screen. Rehearsal
+ *     sessions put LOWER up just after "Raise this arm" went, with the
+ *     shoulders back at their usual reading: 246 (2026-10-28) at 1.3, under
+ *     its off level of 2.8, for 0.8 s, and 248 (2026-10-29) at 3.1, between
+ *     that and its on level of 4, for 2 s.
+ *   - a better candidate replaces the displayed cue unless its value is
+ *     already back past its switch-off level (`warningValueCleared`). The
+ *     screen is already asking for a correction, and the more important fault
+ *     the latch still holds should take over: in pilot recording C3's
+ *     deliberate trunk lean, the lean became ready while LOWER was shown and
+ *     read 7.4-8.4 throughout, between its off level of 4.4 and its on level
+ *     of 8.8, so the switch-on test would never have shown it.
+ * The displayed cue is exempt: its latch and minimum visible time decide when
+ * it goes.
  *
  * NOT CLINICAL VALUES
  * The timing defaults below and the `priority` numbers in the registry are
@@ -117,6 +145,11 @@ export type CoachingCueTiming = {
  *  - `none-active`      no latched warnings at all
  *  - `min-active`       candidates exist but none has been active long enough
  *  - `cooldown`         every candidate is inside its post-clear cooldown
+ *  - `recovered`        no candidate may take the slot, none is waiting out its
+ *                       minimum-active time, and at least one is still latched
+ *                       with its value short of its switch-on level (for an
+ *                       empty slot) or past its switch-off level (to replace
+ *                       the displayed cue)
  *  - `promoted`         a cue took an empty slot
  *  - `held`             the displayed cue is still active and still the best
  *  - `held-min-display` a better candidate is ready but the minimum-display
@@ -130,6 +163,7 @@ export type CoachingCueReason =
   | "none-active"
   | "min-active"
   | "cooldown"
+  | "recovered"
   | "promoted"
   | "held"
   | "held-min-display"
@@ -137,7 +171,7 @@ export type CoachingCueReason =
   | "switched"
   | "cleared";
 
-export type CoachingCueBlock = "min-active" | "cooldown";
+export type CoachingCueBlock = "min-active" | "cooldown" | "recovered";
 
 /** One latched warning considered during a single selection tick. */
 export type CoachingCueCandidate = {
@@ -263,9 +297,10 @@ export function normalizedCoachingCueExcess(
  * Picks the single cue to surface from the already-latched warnings.
  *
  * `activeNames` is the latch layer's output — the set this module trusts.
- * `values` are the same display values the latch thresholded, used only for
- * the tie-break magnitude. Neither the input state nor any argument is
- * mutated; the successor state is returned on the decision.
+ * `values` are the same display values the latch thresholded, used for the
+ * tie-break magnitude and to keep a recovered warning out of the slot. Neither
+ * the input state nor any argument is mutated; the successor state is
+ * returned on the decision.
  */
 export function selectCoachingCue(
   previous: CoachingCueState,
@@ -357,7 +392,11 @@ export function selectCoachingCue(
         ? "cooldown"
         : activeForMs < timing.minActiveMs
           ? "min-active"
-          : null,
+          : cueId !== currentCueId && (currentCueId === null
+              ? warningValueShortOfTrigger(spec, values[spec.name])
+              : warningValueCleared(spec, values[spec.name]))
+            ? "recovered"
+            : null,
     });
   }
 
@@ -379,8 +418,9 @@ export function selectCoachingCue(
         return { cueId: currentCueId, sinceMs: currentSinceMs, reason: "held-min-visible" };
       }
       // The displayed cue is still latched, so it is always among the
-      // candidates and never blocked: its active run predates this tick and a
-      // cue only enters cooldown once it has left the slot.
+      // candidates and never blocked: its active run predates this tick, a
+      // cue only enters cooldown once it has left the slot, and the recovered
+      // block leaves it out.
       if (best === null || best.cueId === currentCueId) {
         return { cueId: currentCueId, sinceMs: currentSinceMs, reason: "held" };
       }
@@ -401,9 +441,14 @@ export function selectCoachingCue(
       return { cueId: null, sinceMs: null, reason: clearedCueId !== null ? "cleared" : "none-active" };
     }
     // Every candidate is blocked. Report cooldown only when that is the whole
-    // story, so a mixed tick is not mislabelled as a cooldown suppression.
-    const allCooldown = candidates.every((candidate) => candidate.blockedBy === "cooldown");
-    return { cueId: null, sinceMs: null, reason: allCooldown ? "cooldown" : "min-active" };
+    // story, so a mixed tick is not mislabelled as a cooldown suppression, and
+    // recovered only when no candidate still owes its minimum-active time.
+    const blocks = new Set(candidates.map((candidate) => candidate.blockedBy));
+    return {
+      cueId: null,
+      sinceMs: null,
+      reason: blocks.has("min-active") ? "min-active" : blocks.has("recovered") ? "recovered" : "cooldown",
+    };
   };
 
   const { cueId, sinceMs, reason } = decide();

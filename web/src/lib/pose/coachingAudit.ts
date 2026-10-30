@@ -143,7 +143,7 @@ export function validCoachingAudit(value: unknown): value is CoachingAudit {
           !Object.entries(s.warningValuesSmoothed).every(([k, v]) => k.length <= 80 && (v === null || typeof v === "number" && Number.isFinite(v))) ||
           !nonnegative(s.decisionAtMs) || s.decisionAtMs > r.endMs ||
           !(s.selectedSinceMs === null || nonnegative(s.selectedSinceMs) && s.selectedSinceMs <= s.decisionAtMs) ||
-          !["none-active", "min-active", "cooldown", "promoted", "held", "held-min-display", "held-min-visible", "switched", "cleared"].includes(String(s.reason))) return false;
+          !["none-active", "min-active", "cooldown", "recovered", "promoted", "held", "held-min-display", "held-min-visible", "switched", "cleared"].includes(String(s.reason))) return false;
     }
     end = r.endMs;
     return true;

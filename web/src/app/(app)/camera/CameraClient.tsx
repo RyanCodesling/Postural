@@ -26,6 +26,7 @@ import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureRe
 import { buildCaptureQualitySummary, type NeckRestTally } from "@/lib/sessionReadModels";
 import { NECK_REST_EXERCISES } from "@/lib/analytics/trendRules";
 import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/pose/shoulderRestReference";
+import { restReferencedTrunkLean, restingTrunkLineDeg } from "@/lib/pose/trunkRestReference";
 import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "@/lib/pose/neckCalibrationReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
 import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
@@ -157,7 +158,19 @@ import {
   type ElbowBendState,
 } from "@/lib/pose/elbowBendWarning";
 import {
+  newOverRaiseState,
+  updateOverRaise,
+  type OverRaiseState,
+} from "@/lib/pose/overRaiseWarning";
+import {
+  newOtherArmDownState,
+  updateOtherArmDown,
+  updateArmAboveHold,
+  type OtherArmDownState,
+} from "@/lib/pose/otherArmDownWarning";
+import {
   NO_TRACKING_MESSAGE,
+  TRACKING_STEADINESS,
   addTrackingMark,
   newSteadinessState,
   repTracking,
@@ -171,6 +184,27 @@ import {
   type TrackingMessageState,
   type TrackingPart,
 } from "@/lib/pose/trackingSteadiness";
+import {
+  BODY_TURN_MESSAGE,
+  NO_BODY_TURN,
+  bodyTurnApplies,
+  hipLineTurnDeg,
+  turnExplainsCaptureFailure,
+  updateBodyTurn,
+  type BodyTurnState,
+} from "@/lib/pose/bodyTurn";
+import {
+  PICTURE_LUMA_SAMPLE_MS,
+  captureMessageForPicture,
+  pictureIsBright,
+  samplePictureLuma,
+} from "@/lib/pose/pictureBrightness";
+import {
+  newHoldHintState,
+  updateHoldHint,
+  type HoldHint,
+  type HoldHintState,
+} from "@/lib/pose/holdHint";
 import {
   EventOutbox,
   persistedOutboxSessionIds,
@@ -1959,6 +1993,9 @@ export default function CameraClient() {
   // line from the calibration, smoothed by its own filter so the score's
   // filters above keep the frozen-tilt reading. Null until a calibration.
   const shoulderRestLineDegRef = useRef<number | null>(null);
+  // The trunk-lean cue's own reading (D-65), in the same way: the trunk against
+  // its resting line from the calibration. Null until a calibration.
+  const trunkRestLineDegRef = useRef<number | null>(null);
   // The ear line frozen in the calibration (D-49): the zero the neck side bend
   // counts from. Every calibration takes it; null until one has.
   const calibrationEarLineDegRef = useRef<number | null>(null);
@@ -2024,6 +2061,10 @@ export default function CameraClient() {
   const hipShiftStatesRef = useRef(new Map<MetricName, HipShiftState>());
   // Per-check state of the display-only elbow check (elbowBendWarning.ts).
   const elbowBendStatesRef = useRef(new Map<MetricName, ElbowBendState>());
+  // Per-check state of the display-only past-shoulder-height check (overRaiseWarning.ts).
+  const overRaiseStatesRef = useRef(new Map<MetricName, OverRaiseState>());
+  // Per-check state of the arm hold's "Raise this arm" check (otherArmDownWarning.ts).
+  const otherArmDownStatesRef = useRef(new Map<MetricName, OtherArmDownState>());
   // The cue last drawn, with the reading and direction it was drawn with. A cue
   // kept for its minimum visible time is drawn with these once its own reading
   // has gone, as the per-repetition, hip and at-rest coupled readings do.
@@ -2047,6 +2088,8 @@ export default function CameraClient() {
     repWindowStatesRef.current.clear();
     hipShiftStatesRef.current.clear();
     elbowBendStatesRef.current.clear();
+    overRaiseStatesRef.current.clear();
+    otherArmDownStatesRef.current.clear();
     lockedShoulderIndexRef.current = null;
     lastDrawnCueRef.current = null;
     setSelectedCoachingCueMetric(null);
@@ -2068,6 +2111,8 @@ export default function CameraClient() {
       repWindowStatesRef.current.size > 0 ||
       hipShiftStatesRef.current.size > 0 ||
       elbowBendStatesRef.current.size > 0 ||
+      overRaiseStatesRef.current.size > 0 ||
+      otherArmDownStatesRef.current.size > 0 ||
       lockedShoulderIndexRef.current !== null ||
       lastDrawnCueRef.current !== null
     );
@@ -2251,6 +2296,9 @@ export default function CameraClient() {
     rightSec: number;
     leftInBand: boolean;
     rightInBand: boolean;
+    /** Per-arm hold: which way the arm should move to get back into the band (display only). */
+    leftHint?: HoldHint | null;
+    rightHint?: HoldHint | null;
   }>({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
 
   // ── Isometric hold-quality accumulators ──────────────────────────────────────
@@ -3259,6 +3307,20 @@ export default function CameraClient() {
   const captureCheckedFramesRef = useRef<number>(0);
   const trackingHintRef = useRef<string | null>(null);
   const [trackingHint, setTrackingHint] = useState<string | null>(null);
+  // When each arm was last found unsteady, so the arm hold's raise-or-lower
+  // hint is held back while the tracking message speaks for that arm.
+  const armUnsteadyAtMsRef = useRef<{ leftArm: number | null; rightArm: number | null }>({ leftArm: null, rightArm: null });
+  // Display-only position messages: the body turned away from the camera
+  // (bodyTurn.ts), and the picture's brightness for the wording of the
+  // no-person and tracking messages (pictureBrightness.ts).
+  const bodyTurnStateRef = useRef<BodyTurnState>(NO_BODY_TURN);
+  const turnHintRef = useRef(false);
+  const [turnHint, setTurnHint] = useState(false);
+  const pictureLumaRef = useRef<number | null>(null);
+  const lastLumaSampleMsRef = useRef(0);
+  const lumaSamplerRef = useRef<{ canvas: unknown }>({ canvas: null });
+  // The arm hold's raise-or-lower hint per arm (holdHint.ts).
+  const holdHintStateRef = useRef<HoldHintState>(newHoldHintState());
 
   /**
    * Reset all in-memory session-persistence state (no DB call).
@@ -5408,6 +5470,7 @@ export default function CameraClient() {
     calibrationTraceSamplesRef.current = null;
     frozenTiltDegRef.current = null;
     shoulderRestLineDegRef.current = null;
+    trunkRestLineDegRef.current = null;
     calibrationEarLineDegRef.current = null;
     cueCompensationFiltersRef.current.clear();
     ex004FaceShadowRoiRef.current = null;
@@ -5571,8 +5634,10 @@ export default function CameraClient() {
 
     frozenTiltDegRef.current = frozenTiltDeg;
     calibrationEarLineDegRef.current = earLineDeg;
-    // The LOWER cue's resting shoulder line (D-47), from the same samples.
+    // The LOWER cue's resting shoulder line (D-47) and the trunk-lean cue's
+    // resting trunk line (D-65), from the same samples.
     shoulderRestLineDegRef.current = restingShoulderLineDeg(samples);
+    trunkRestLineDegRef.current = restingTrunkLineDeg(samples);
     cueCompensationFiltersRef.current.clear();
     // Snapshot BEFORE the ring is freed on the next line. Order matters: the
     // trace writer only runs once the phase below flips to "captured", by
@@ -6651,6 +6716,12 @@ export default function CameraClient() {
         traceSyncWroteThisFrameRef.current = false;
         const results = landmarker.detectForVideo(video, inferStart);
         const inferMs = performance.now() - inferStart;
+        // The picture's brightness, for the wording of the no-person and
+        // tracking messages (display only; a small copy twice a second).
+        if (frameStart - lastLumaSampleMsRef.current >= PICTURE_LUMA_SAMPLE_MS) {
+          lastLumaSampleMsRef.current = frameStart;
+          pictureLumaRef.current = samplePictureLuma(video, lumaSamplerRef.current);
+        }
 
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -6697,6 +6768,20 @@ export default function CameraClient() {
             coachingObservation.absenceReason = baselinePhaseRef.current !== "captured" ? "baseline-unavailable" : "not-selected";
           }
 
+          // Body turned away from the camera (display only, bodyTurn.ts): the
+          // hip line's turn in the pose model's world landmarks. The message
+          // shows after half a second at or above the line; a hidden hand or
+          // knee while turned gets it in place of the capture message below.
+          const turnApplies = bodyTurnApplies(activeDefinition);
+          const turnDeg = turnApplies ? hipLineTurnDeg(results.worldLandmarks?.[0]) : null;
+          bodyTurnStateRef.current = turnApplies
+            ? updateBodyTurn(bodyTurnStateRef.current, turnDeg, frameStart)
+            : NO_BODY_TURN;
+          if (bodyTurnStateRef.current.shown !== turnHintRef.current) {
+            turnHintRef.current = bodyTurnStateRef.current.shown;
+            setTurnHint(bodyTurnStateRef.current.shown);
+          }
+
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
             captureFramesTotalRef.current += 1;
@@ -6724,6 +6809,9 @@ export default function CameraClient() {
             steadinessRef.current = steady.state;
             for (const [part, judged] of Object.entries(steady.result.checked)) if (judged) checkedNow.push(part as TrackingPart);
             for (const [part, flagged] of Object.entries(steady.result.unsteady)) if (flagged) unsteadyNow.push(part as TrackingPart);
+            for (const arm of ["leftArm", "rightArm"] as const) {
+              if (unsteadyNow.includes(arm)) armUnsteadyAtMsRef.current[arm] = frameStart;
+            }
             const prescribed = trackingParts(trackingRegion(activeDefinition), prescriptionRef.current.prescribedSide);
             checkedPrescribed = prescribed.some((part) => checkedNow.includes(part));
             unsteadyPrescribed = prescribed.filter((part) => unsteadyNow.includes(part));
@@ -6738,7 +6826,9 @@ export default function CameraClient() {
             captureUnsteadyFramesRef.current += 1;
           }
           trackingMessageRef.current = updateTrackingMessage(trackingMessageRef.current, unsteadyPrescribed, frameStart);
-          const hint = trackingMessageRef.current.part ? trackingMessage(trackingMessageRef.current.part) : null;
+          const hint = trackingMessageRef.current.part
+            ? trackingMessage(trackingMessageRef.current.part, { bright: pictureIsBright(pictureLumaRef.current) })
+            : null;
           if (hint !== trackingHintRef.current) {
             trackingHintRef.current = hint;
             setTrackingHint(hint);
@@ -6758,7 +6848,16 @@ export default function CameraClient() {
               rightRepCounterRef.current?.noteMissing();
               bidirectionalRepCounterRef.current?.noteMissing();
             }
-            commitCaptureState(false, r.message);
+            // The arm hold's hint starts over once the arms are measured again.
+            holdHintStateRef.current = newHoldHintState();
+            // A hand or knee hidden while the body is turned: the turn is the
+            // likely cause. A failed detection in a dark picture: the light is.
+            commitCaptureState(
+              false,
+              turnExplainsCaptureFailure(r.status, turnDeg)
+                ? BODY_TURN_MESSAGE
+                : captureMessageForPicture(r.status, r.message, pictureLumaRef.current),
+            );
             if (
               activeDefinition?.id === "ex_005" &&
               now - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
@@ -6907,6 +7006,14 @@ export default function CameraClient() {
               // computePoseMetricsForExercise only surfaces absolute values in
               // raw.metrics; direction-rich results require calling the
               // underlying functions with the same tilt reference.
+              // The trunk-lean cue alone reads the trunk against its resting
+              // line from the calibration (D-65), for its warning below and its
+              // arrow here; without a resting line it reads as before.
+              const restLean = restReferencedTrunkLean(
+                landmarks,
+                trunkRestLineDegRef.current,
+                frameAspect,
+              );
               const metricDirections: Partial<Record<MetricName, string>> = {};
               {
                 const neckDir = computeLateralNeckTilt(
@@ -6920,11 +7027,11 @@ export default function CameraClient() {
                 // (Shoulder asymmetry places its boxes/arrow by raw landmark y
                 // inside the overlay, so it needs no direction string here.)
                 // Lean side (image-space) drives the trunk "STRAIGHTEN" arrow.
-                const leanDir = computeTrunkLateralLean(
+                const leanDir = (restLean ?? computeTrunkLateralLean(
                   landmarks,
                   raw.tiltReference,
                   frameAspect,
-                )?.direction;
+                ))?.direction;
                 if (leanDir && leanDir !== "center") {
                   metricDirections.trunkLean = leanDir;
                 }
@@ -7236,19 +7343,35 @@ export default function CameraClient() {
                       shoulderSpec.warningThreshold,
                     )
                   : null;
+              // The trunk-lean cue likewise, against the resting trunk line
+              // (D-65, `restLean` above).
+              const leanSpec = activeDefinition.compensationMetrics.find(
+                (c) => c.name === "trunkLean",
+              );
+              const cueLeanValue =
+                restLean !== null && leanSpec
+                  ? filterSideCompensation(
+                      cueCompensationFiltersRef.current,
+                      "trunkLean",
+                      restLean.angleDeg,
+                      leanSpec.warningThreshold,
+                    )
+                  : null;
               const cueValue = (
                 name: MetricName,
                 smoothed: number | null,
               ): number | null =>
                 name === "shoulderSymmetry" && cueShoulderValue !== null
                   ? cueShoulderValue
-                  : smoothed;
+                  : name === "trunkLean" && cueLeanValue !== null
+                    ? cueLeanValue
+                    : smoothed;
 
               // Warning/card inputs use the same transformed signal as the
-              // score (except the LOWER cue's reference, above). Coupled
-              // metrics therefore show and threshold their residual from the
-              // expected value, not the raw movement that naturally
-              // accompanies the exercise.
+              // score (except the LOWER and trunk-lean cues' references,
+              // above). Coupled metrics therefore show and threshold their
+              // residual from the expected value, not the raw movement that
+              // naturally accompanies the exercise.
               const warningDisplayMetrics: Partial<
                 Record<MetricName, number | null>
               > = { ...smoothedMetrics };
@@ -7333,10 +7456,100 @@ export default function CameraClient() {
                   metricDirections[comp.name] = signal.side;
                 }
               }
+              // Height guidance starts after any prescribed arm earns hold
+              // time in this set. Cumulative credit keeps it enabled if both
+              // arms later leave the band; a new set's zeroed timers reset it.
+              // This only gates display and never gates independent accrual.
+              const hasHoldProgress = prescribedOutcomeSides(
+                prescriptionRef.current.prescribedSide,
+              ).some((side) =>
+                (side === "left" ? leftHoldMsRef.current : rightHoldMsRef.current) > 0,
+              );
               // Display-only coaching checks (hipShiftWarning.ts,
-              // elbowBendWarning.ts): warned and cued like a compensation, but
-              // never scored or stored.
+              // elbowBendWarning.ts, overRaiseWarning.ts,
+              // otherArmDownWarning.ts): warned and cued like a compensation,
+              // but never scored or stored.
               for (const check of activeDefinition.coachingChecks ?? []) {
+                if (check.name === "otherArmDown" || check.name === "armAboveHold") {
+                  if (activeDefinition.kind !== "isometric") continue;
+                  // The hold's own raw readings and conditions: both arms
+                  // prescribed, the hold being timed (session active, baseline
+                  // captured) with first credit earned, neither arm found
+                  // unsteady lately, as for the
+                  // panel's hint (holdHint.ts), and an arm that has reached its
+                  // hold left to rest, as the panel shows it done
+                  // (holdDisplay.ts).
+                  const unsteadyRecently = (at: number | null) =>
+                    at !== null && tNow - at < TRACKING_STEADINESS.messageHoldMs;
+                  const holdTargetMs = prescriptionRef.current.holdSeconds * 1000;
+                  const band = activeDefinition.isometric.targetBand;
+                  const low = band.center - band.tolerance;
+                  const high = band.center + band.tolerance;
+                  const leftReading = raw.perSideMetrics?.left ?? null;
+                  const rightReading = raw.perSideMetrics?.right ?? null;
+                  const straddlesBand = leftReading !== null && rightReading !== null &&
+                    (leftReading < low && rightReading > high || rightReading < low && leftReading > high);
+                  // Preserve posture coaching for actual latched faults. An
+                  // out-of-band opposite arm alone is not proof of trunk lean.
+                  const postureFirst = compensationWarningLatchesRef.current.get("trunkLean")?.active === true ||
+                    straddlesBand && compensationWarningLatchesRef.current.get("shoulderSymmetry")?.active === true;
+                  const updateHeight = check.name === "otherArmDown" ? updateOtherArmDown : updateArmAboveHold;
+                  const result = updateHeight(
+                    otherArmDownStatesRef.current.get(check.name) ?? newOtherArmDownState(),
+                    {
+                      left: {
+                        value: raw.perSideMetrics?.left ?? null,
+                        unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.leftArm),
+                        done: leftHoldMsRef.current >= holdTargetMs,
+                      },
+                      right: {
+                        value: raw.perSideMetrics?.right ?? null,
+                        unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.rightArm),
+                        done: rightHoldMsRef.current >= holdTargetMs,
+                      },
+                      timed:
+                        prescriptionRef.current.prescribedSide === "both" &&
+                        sessionStateRef.current === "active" &&
+                        hasHoldProgress &&
+                        baselinePhaseRef.current === "captured" && !postureFirst,
+                      nowMs: tNow,
+                    },
+                    {
+                      persistMs: check.check.persistMs,
+                      low,
+                      high,
+                    },
+                  );
+                  otherArmDownStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                  warningDisplayMetrics[check.name] = result.value;
+                  if (result.side !== null) metricDirections[check.name] = result.side;
+                  continue;
+                }
+                if (check.name === "overRaise") {
+                  if (activeDefinition.kind !== "dynamic") continue;
+                  // Each arm is judged from its own raise reading, the one the
+                  // repetition counter reads.
+                  const result = updateOverRaise(
+                    overRaiseStatesRef.current.get(check.name) ?? newOverRaiseState(),
+                    {
+                      left: smoothedPrimaryLeft,
+                      right: smoothedPrimaryRight,
+                      sides: prescribedOutcomeSides(prescriptionRef.current.prescribedSide),
+                      nowMs: tNow,
+                    },
+                    {
+                      ...check.check,
+                      clearBelow: cueClearLevel(check),
+                    },
+                    cueTriggerLevel(check),
+                  );
+                  overRaiseStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                  warningDisplayMetrics[check.name] = result.value;
+                  if (result.side !== null) metricDirections[check.name] = result.side;
+                  continue;
+                }
                 if (check.name === "hipShift") {
                   if (activeDefinition.kind !== "dynamic") continue;
                   const result = updateHipShift(
@@ -7802,6 +8015,27 @@ export default function CameraClient() {
                   rInBand = !!perSide && inBand(perSide.right);
                   leftAngle = perSide?.left ?? null;
                   rightAngle = perSide?.right ?? null;
+                  // Display-only hint: which way each arm should move to get
+                  // back into the band (holdHint.ts), held back while the
+                  // tracking check finds that arm unsteady. Only while the
+                  // hold is being timed and a prescribed arm has earned time
+                  // in this set. Before first credit, before the baseline, and
+                  // between sets, the hint and its wait stay reset.
+                  if (sessionStateRef.current === "active" && baselineReadyForExercise && hasHoldProgress) {
+                    const unsteadyRecently = (at: number | null) =>
+                      at !== null && tNow - at < TRACKING_STEADINESS.messageHoldMs;
+                    holdHintStateRef.current = updateHoldHint(
+                      holdHintStateRef.current,
+                      {
+                        left: { value: leftAngle, unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.leftArm) },
+                        right: { value: rightAngle, unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.rightArm) },
+                        nowMs: tNow,
+                      },
+                      { lo, hi },
+                    );
+                  } else {
+                    holdHintStateRef.current = newHoldHintState();
+                  }
                 }
                 leftInBandRef.current = lInBand;
                 rightInBandRef.current = rInBand;
@@ -8049,6 +8283,8 @@ export default function CameraClient() {
                     rightSec: rightHoldMsRef.current / 1000,
                     leftInBand: leftInBandRef.current,
                     rightInBand: rightInBandRef.current,
+                    leftHint: holdHintStateRef.current.left.shown,
+                    rightHint: holdHintStateRef.current.right.shown,
                   });
                 }
               }
@@ -8079,6 +8315,17 @@ export default function CameraClient() {
                   prescriptionRef.current.prescribedSide !== "both" &&
                   comp.name === "shoulderSymmetry"
                 ) {
+                  return false;
+                }
+                // Height instructions describe the current arm position. Drop
+                // them on this frame after correction or any tracking/timing/
+                // finished-arm guard, rather than drawing a stale instruction
+                // until the next selector tick or its minimum visible time.
+                if (
+                  (comp.name === "overRaise" || comp.name === "otherArmDown" || comp.name === "armAboveHold") &&
+                  warningSignals.get(comp.name)?.value == null
+                ) {
+                  if (lastDrawnCueRef.current?.metric === comp.name) lastDrawnCueRef.current = null;
                   return false;
                 }
                 // A cue the selector keeps for its minimum visible time stays
@@ -8141,13 +8388,17 @@ export default function CameraClient() {
                 lastDrawnCueRef.current = null;
               }
               // The saved video's track records the cue as drawn, including the
-              // shoulder the LOWER arrow is locked to, so playback matches.
+              // shoulder the LOWER arrow is locked to and whether the past-
+              // shoulder-height box went around one arm, so playback matches.
               if (overlayFrame && drawnCue) {
                 overlayFrame.cue = {
                   metric: drawnCue.metric,
                   direction: drawnCue.direction,
                   ...(drawnCue.metric === "shoulderSymmetry" && lockedShoulderIndexRef.current !== null
                     ? { shoulder: lockedShoulderIndexRef.current }
+                    : {}),
+                  ...(drawnCue.metric === "overRaise" && (drawnCue.direction === "left" || drawnCue.direction === "right")
+                    ? { armBox: true as const }
                     : {}),
                 };
               }
@@ -8207,7 +8458,17 @@ export default function CameraClient() {
             neutralCalibrationClockRef.current,
           );
           updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
-          commitCaptureState(false, "No person detected. Step into the frame.");
+          commitCaptureState(
+            false,
+            captureMessageForPicture("NOT_VISIBLE", "No person detected. Step into the frame.", pictureLumaRef.current),
+          );
+          // Nobody to judge: the turn and hold-hint states start over.
+          bodyTurnStateRef.current = NO_BODY_TURN;
+          holdHintStateRef.current = newHoldHintState();
+          if (turnHintRef.current) {
+            turnHintRef.current = false;
+            setTurnHint(false);
+          }
           if (
             !captureDropoutResetDoneRef.current &&
             noPersonNow - captureDropoutStartedAtRef.current >=
@@ -9896,6 +10157,27 @@ export default function CameraClient() {
                   </div>
                 )}
 
+                {/* Body turned away from the camera: display only, it never
+                    pauses the exercise or changes a measurement (bodyTurn.ts). */}
+                {turnHint && captureOk && cameraFramesFlowing && (
+                  <div role="status" style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Position</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      {BODY_TURN_MESSAGE}
+                    </span>
+                  </div>
+                )}
+
                 {/* Baseline-capture banner. The loudest card on the view, because
                     the patient has to hold still while it runs. At the start it
                     follows the positioning overlay. */}
@@ -11395,7 +11677,9 @@ const TOUR_STEPS: {
     graphic: "position",
     cardW: 580,
     lines: [
+      "Place the camera at about chest height, pointing straight at you. Raise it on books or a shelf if needed.",
       "Stand or sit about 2–3 metres (7–10 feet) from the camera.",
+      "Stay in the centre of the picture and face the camera fully — chest and hips toward the camera, not turned sideways.",
       "Make sure your body — head to knees — is visible on screen.",
       "A green skeleton outline appears when the app can track you correctly.",
     ],
@@ -11868,9 +12152,9 @@ function CameraTour({
 
 /**
  * The small illustration beside a tour step: what to click, how to read the
- * status dots, how to switch exercises, where to stand, clothing and lighting,
- * and what happens after Start session. Decorative only; each point it shows
- * is also stated in the step's text.
+ * status dots, how to switch exercises, where to put the camera and stand,
+ * clothing and lighting, and what happens after Start session. Decorative
+ * only; each point it shows is also stated in the step's text.
  */
 function TourGraphic({ kind }: { kind: TourGraphicKind }) {
   const column: CSSProperties = { flex: "0 0 208px", width: 208, display: "flex", flexDirection: "column", gap: 8 };
@@ -12120,30 +12404,40 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         <rect x={x - 3.5} y={52} width={7} height={30} rx={3} />
       </g>
     );
-    // Side view: the camera on its stand at the left, the wedge it can see, and
-    // the person twice over, faint in full and solid where the camera sees them.
-    const sideView = (clipId: string, personX: number, ink: string, fov: string, textInk: string, distance: string) => (
+    // Side view: the camera on its stand at the left, level at chest height, the
+    // wedge it can see, and the person twice over, faint in full and solid where
+    // the camera sees them. With `heightLabel`, a dotted line runs level from the
+    // lens to the chest.
+    const sideView = (clipId: string, personX: number, ink: string, fov: string, textInk: string, distance: string, heightLabel?: string) => (
       <svg viewBox="0 0 168 92" style={{ display: "block", width: "100%", height: "auto", aspectRatio: "168 / 92", background: "oklch(0.985 0.003 240)" }} aria-hidden="true">
         <defs>
           <clipPath id={clipId}>
-            <polygon points="29,26 164,-8 164,84" />
+            <polygon points="29,37 164,-12 164,86" />
           </clipPath>
         </defs>
         <line x1="0" y1="82.5" x2="168" y2="82.5" stroke="oklch(0.86 0.005 240)" />
-        <polygon points="29,26 164,-8 164,84" fill={fov} fillOpacity={0.13} />
+        <polygon points="29,37 164,-12 164,86" fill={fov} fillOpacity={0.13} />
         <g stroke={fov} strokeWidth={0.9} strokeDasharray="3 3">
-          <line x1="29" y1="26" x2="164" y2="-8" />
-          <line x1="29" y1="26" x2="164" y2="84" />
+          <line x1="29" y1="37" x2="164" y2="-12" />
+          <line x1="29" y1="37" x2="164" y2="86" />
         </g>
         <g stroke="oklch(0.45 0.01 240)" strokeWidth={1.5} strokeLinecap="round">
-          <line x1="18" y1="31" x2="18" y2="82" />
+          <line x1="18" y1="42" x2="18" y2="82" />
           <line x1="18" y1="71" x2="12" y2="82" />
           <line x1="18" y1="71" x2="24" y2="82" />
         </g>
-        <rect x="9" y="21" width="17" height="10" rx="2" fill="oklch(0.30 0.01 240)" />
-        <circle cx="27" cy="26" r="2.4" fill="oklch(0.82 0.20 195)" />
+        <rect x="9" y="32" width="17" height="10" rx="2" fill="oklch(0.30 0.01 240)" />
+        <circle cx="27" cy="37" r="2.4" fill="oklch(0.82 0.20 195)" />
         {person(personX, ink, 0.25)}
         <g clipPath={`url(#${clipId})`}>{person(personX, ink, 1)}</g>
+        {heightLabel && (
+          <>
+            <line x1="31" y1="37" x2={personX - 5} y2="37" stroke={textInk} strokeWidth={0.9} strokeDasharray="1.5 2" />
+            <text x="82" y="34" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600 }}>
+              {heightLabel}
+            </text>
+          </>
+        )}
         <g stroke={textInk} strokeWidth={0.9}>
           <line x1="29" y1="88" x2={personX - 7} y2="88" />
           <line x1="29" y1="85.5" x2="29" y2="90.5" />
@@ -12158,11 +12452,11 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
       <div className="cam-tour-gfx" style={column}>
         <div style={label}>Side view</div>
         <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 8, overflow: "hidden" }}>
-          {sideView("tour-gfx-fov-good", 128, "oklch(0.45 0.06 200)", "oklch(0.65 0.13 145)", "oklch(0.40 0.07 145)", "2–3 m")}
+          {sideView("tour-gfx-fov-good", 128, "oklch(0.45 0.06 200)", "oklch(0.65 0.13 145)", "oklch(0.40 0.07 145)", "2–3 m", "chest height")}
           {verdict("ok", "2–3 m, head to knees")}
         </div>
         <div style={{ border: "1px solid oklch(0.88 0.08 25)", borderRadius: 8, overflow: "hidden" }}>
-          {sideView("tour-gfx-fov-close", 62, "oklch(0.55 0.17 25)", "oklch(0.58 0.17 25)", "oklch(0.45 0.14 25)", "< 2 m")}
+          {sideView("tour-gfx-fov-close", 94, "oklch(0.55 0.17 25)", "oklch(0.58 0.17 25)", "oklch(0.45 0.14 25)", "< 2 m")}
           {verdict("bad", "Too close — knees cut off")}
         </div>
       </div>
@@ -12841,6 +13135,8 @@ function CameraSetHud({
     rightSec: number;
     leftInBand: boolean;
     rightInBand: boolean;
+    leftHint?: HoldHint | null;
+    rightHint?: HoldHint | null;
   };
   timer: string;
   prescription: Prescription;
@@ -12939,10 +13235,14 @@ function CameraSetHud({
       fontWeight: 600,
       fontVariantNumeric: "tabular-nums",
     };
+    const hintColor = "oklch(0.82 0.13 70)";
     const armCell = (arm: HoldArmDisplay) => (
       <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
         <span style={{ ...sideSt, color: arm.tone === "paused" ? pausedColor : sideSt.color }}>
           {arm.label}{arm.observation ? " · observation" : ""}
+          {arm.hint && (
+            <span style={{ color: hintColor }}>{arm.hint === "raise" ? " · raise ↑" : " · lower ↓"}</span>
+          )}
         </span>
         <span style={{ ...armNumSt, color: arm.tone === "done" ? NEON.hex : arm.tone === "paused" ? pausedColor : "white" }}>
           {arm.seconds}s
@@ -13291,6 +13591,9 @@ function metricLabel(name: MetricName): string {
     case "shoulderElbowDistance":  return "ELBOW POS";
     case "hipShift":               return "HIP SHIFT";
     case "elbowBend":              return "ELBOW BEND";
+    case "overRaise":              return "ARM HEIGHT";
+    case "otherArmDown":           return "ARM DOWN";
+    case "armAboveHold":           return "ARM HEIGHT";
   }
 }
 

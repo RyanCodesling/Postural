@@ -1,3 +1,4 @@
+import type { HoldHint } from "./pose/holdHint";
 import type { PrescribedSide } from "./prescriptionContext";
 
 /**
@@ -10,7 +11,8 @@ import type { PrescribedSide } from "./prescriptionContext";
  * reach the band at different moments or one slips out briefly, which reads as
  * a counting fault. So the main number is the credited hold, the one that ends
  * the set, and each arm's own seconds stay on screen beneath it, greyed while
- * that arm is out of position.
+ * that arm is out of position. A paused arm that counts toward the set also says
+ * which way to move once it has stayed out (`hint`, holdHint.ts).
  *
  * Display only: no timer, completion rule or stored value depends on this.
  */
@@ -26,6 +28,8 @@ export type HoldArmDisplay = {
   tone: HoldArmTone;
   /** The arm the prescription does not include: shown, but it does not end the set. */
   observation: boolean;
+  /** Which way to move back into the band: only on a paused arm that counts toward the set. */
+  hint: HoldHint | null;
 };
 
 export type PerArmHoldDisplay = {
@@ -36,7 +40,14 @@ export type PerArmHoldDisplay = {
 };
 
 export function perArmHoldDisplay(
-  hold: { leftSec: number; rightSec: number; leftInBand: boolean; rightInBand: boolean },
+  hold: {
+    leftSec: number;
+    rightSec: number;
+    leftInBand: boolean;
+    rightInBand: boolean;
+    leftHint?: HoldHint | null;
+    rightHint?: HoldHint | null;
+  },
   prescription: { holdSeconds: number; prescribedSide: PrescribedSide },
 ): PerArmHoldDisplay {
   const credited =
@@ -46,19 +57,25 @@ export function perArmHoldDisplay(
         ? hold.rightSec
         : Math.min(hold.leftSec, hold.rightSec);
   const seconds = Math.floor(credited);
-  const arm = (side: "left" | "right", sec: number, inBand: boolean): HoldArmDisplay => {
+  const arm = (side: "left" | "right", sec: number, inBand: boolean, hint: HoldHint | null | undefined): HoldArmDisplay => {
     const whole = Math.floor(sec);
+    const tone: HoldArmTone = whole >= prescription.holdSeconds ? "done" : inBand ? "counting" : "paused";
+    const observation = prescription.prescribedSide !== "both" && prescription.prescribedSide !== side;
     return {
       side,
       label: side === "left" ? "L" : "R",
       seconds: whole,
-      tone: whole >= prescription.holdSeconds ? "done" : inBand ? "counting" : "paused",
-      observation: prescription.prescribedSide !== "both" && prescription.prescribedSide !== side,
+      tone,
+      observation,
+      hint: tone === "paused" && !observation ? hint ?? null : null,
     };
   };
   return {
     seconds,
     done: seconds >= prescription.holdSeconds,
-    arms: [arm("left", hold.leftSec, hold.leftInBand), arm("right", hold.rightSec, hold.rightInBand)],
+    arms: [
+      arm("left", hold.leftSec, hold.leftInBand, hold.leftHint),
+      arm("right", hold.rightSec, hold.rightInBand, hold.rightHint),
+    ],
   };
 }

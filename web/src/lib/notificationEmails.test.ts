@@ -1,10 +1,10 @@
 /**
- * Notification emails cannot hold up the app or skip anything (Codex review
+ * Notification emails cannot hold up the app or skip anything (review
  * 2026-10-15, findings 4 and 5). Ending a session for pain does not wait for
  * the mail server. Each daily summary covers one finished Manila day, so an
  * exercise completed late in the evening is still emailed. A summary whose
  * query fails after its claim releases the claim, and holds are named by their
- * time, not repetitions (Codex review 2026-10-19, findings 3 and 4).
+ * time, not repetitions (review 2026-10-19, findings 3 and 4).
  *
  * The production functions are taken from db.ts unchanged and run against
  * in-memory database and mail stand-ins: no email is sent and no database is
@@ -282,7 +282,7 @@ async function run() {
     assert.deepEqual(state.mails, []);
   });
 
-  await test("a completion after an evening check is in the summary sent after midnight (Codex's case)", async () => {
+  await test("a completion after an evening check is in the summary sent after midnight (the review's case)", async () => {
     const digest = digestHarness();
     await digest.check("2026-10-15T20:10");
     digest.complete("2026-10-15T21:30");
@@ -342,7 +342,7 @@ async function run() {
     assert.equal(digest.sent.length, 1);
   });
 
-  // Codex review 2026-10-19, finding 4.
+  // Review 2026-10-19, finding 4.
   await test("a summary query that fails after the claim releases it; the next hourly check sends", async () => {
     const digest = digestHarness();
     digest.complete("2026-10-15T18:00");
@@ -357,7 +357,7 @@ async function run() {
     assert.equal(digest.sent.length, 1, "and it goes out once");
   });
 
-  // Codex review 2026-10-19, finding 3: holds are named by their time, as the app shows them.
+  // Review 2026-10-19, finding 3: holds are named by their time, as the app shows them.
   await test("a summary line gives a hold's time and a repetition exercise's count", async () => {
     const digest = digestHarness();
     digest.complete("2026-10-15T09:00", { exercise_name: "Arm Abduction", exercise_id: "ex_006", sets: 2, reps: 10, hold_seconds: 30 });

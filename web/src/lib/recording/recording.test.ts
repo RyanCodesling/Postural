@@ -193,6 +193,30 @@ async function run() {
     assert.notDeepEqual(lowerAt(saved), lowerAt(older), "the two cases differ in this pose");
   });
 
+  await test("a saved past-shoulder-height cue is boxed around its arm; older tracks keep the box around both wrists", () => {
+    // Both arms above the shoulders; the cue names the left arm (11, 13, 15).
+    const landmarks = standing().map((p, i) =>
+      i === 13 ? { ...p, x: 0.37, y: 0.3 } : i === 15 ? { ...p, x: 0.29, y: 0.24 } :
+      i === 14 ? { ...p, x: 0.63, y: 0.3 } : i === 16 ? { ...p, x: 0.7, y: 0.22 } : p);
+    const lm = encodeLandmarks(landmarks);
+    const rounded = Array.from({ length: 33 }, (_, i) => ({ x: lm[2 * i], y: lm[2 * i + 1], z: 0, visibility: 1 }));
+    const labelAt = (canvas: ReturnType<typeof fakeCanvas>) =>
+      canvas.calls.find(([name, args]) => name === "fillText" && args[0] === "Stop at shoulder height")![1].slice(1, 3);
+    const drawLive = (side?: "left") => {
+      const canvas = fakeCanvas();
+      drawCompensationOverlay(canvas.ctx, rounded, 1280, 720, [{ name: "overRaise" } as any], { overRaise: 0 },
+        side ? { overRaise: side } : {}, new Set(["overRaise"] as const), { mirroredDisplay: false });
+      return canvas;
+    };
+    const saved = fakeCanvas();
+    drawOverlayFrame(saved.ctx, { t: 0, lm, cue: { metric: "overRaise", direction: "left", armBox: true } }, 1280, 720);
+    assert.deepEqual(labelAt(saved), labelAt(drawLive("left")), "playback boxes the arm the cue named, as live");
+    const older = fakeCanvas();
+    drawOverlayFrame(older.ctx, { t: 0, lm, cue: { metric: "overRaise", direction: "left" } }, 1280, 720);
+    assert.deepEqual(labelAt(older), labelAt(drawLive()), "a track without the marker keeps the box around both wrists");
+    assert.notDeepEqual(labelAt(saved), labelAt(older), "the two cases differ in this pose");
+  });
+
   await test("overlay tracks are stored per part in order and read back", async () => {
     await storage.startPart(70, "video/webm", 1_000);
     const line = '{"t":0,"lm":[0.1,0.2]}\n';

@@ -274,6 +274,14 @@ async function run() {
   assert(clippedAudit.records.slice(1).every(r => r.gapBeforeMs === 500));
   assert(validCoachingAudit(clippedAudit));
   assert(!validCoachingAudit({ ...clippedAudit, closedAtMs: 0 }));
+  // The selector's "recovered" reason (v19) validates; a reason it never gives does not.
+  const isoAudit = plain(isoSet.holdQuality.coaching);
+  const decided = isoAudit.records.find((r: any) => r.selected !== null);
+  assert(decided, "the hold's audit records a selector decision");
+  decided.selected.reason = "recovered";
+  assert(validCoachingAudit(isoAudit), "recovered is a known reason");
+  decided.selected.reason = "unknown-reason";
+  assert(!validCoachingAudit(isoAudit), "an unknown reason is refused");
 
   // Execute the production database functions against a disposable transport.
   let storedSession: any;
@@ -314,10 +322,14 @@ async function run() {
   assert.equal(storedSession.context_snapshot.coaching.source, "server-default-unverified", "legacy client provenance is not fabricated");
   assert(!("preSessionPain" in storedSession.context_snapshot), "a start without the survey stores no answer");
   const jsonResponse = (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200 });
+  let sessionCreateCalls = 0;
   const sessionRouteContext: any = vm.createContext({ exports: {}, console, require: (name: string) => {
     if (name === "next/server") return { NextResponse: { json: jsonResponse } };
     if (name === "@/lib/auth-server") return { getAuthenticatedUser: async () => ({ id: "fixture", role: "patient" }) };
-    if (name === "@/lib/db") return { createSession: dbContext.exports.createSession, SessionNotScheduledError: class extends Error {} };
+    if (name === "@/lib/db") return {
+      createSession: async (input: unknown) => { sessionCreateCalls++; return dbContext.exports.createSession(input); },
+      SessionNotScheduledError: class extends Error {},
+    };
     if (name === "@/lib/pose/coachingConfig") return config;
     if (name === "@/lib/exercises/versioning") return versioning;
     if (name === "@/lib/prescriptionContext") return contextContract;
@@ -429,7 +441,27 @@ async function run() {
   // Video consent counts only for the notice the page showed: a page from
   // before a notice change (or one that sends no notice) is refused.
   const consentStart = { patientExerciseId: 1, occurrenceId: 1, exerciseId: definition.id, videoConsent: true,
+    coaching: provenance,
     poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION, exerciseConfigVersion: versioning.EXERCISE_CONFIG_VERSIONS[definition.id] };
+  // A valid fingerprint describes what ran, but must also match the current
+  // coaching build before a new session starts. Display-only updates do not
+  // change measurement hashes and would otherwise silently run old feedback.
+  const callsBeforeStaleCoaching = sessionCreateCalls;
+  const oldAlgorithm = structuredClone(provenance.configuration);
+  oldAlgorithm.algorithm = "coaching_v14_over_raise_and_position_messages";
+  const changedCue = structuredClone(provenance.configuration);
+  changedCue.cues[0].message += " Previous wording";
+  for (const configuration of [oldAlgorithm, changedCue]) {
+    const coaching = { version: versioning.sha256Version(configuration), configuration };
+    assert(config.validCoachingProvenance(coaching), "historical provenance remains readable");
+    const stale = await sessionRequest({ ...consentStart, videoConsent: false, coaching });
+    assert.equal(stale.status, 409, "a valid but outdated coaching build is refused");
+    assert.equal((await stale.json()).code, "app_updated");
+  }
+  const noCoaching = await sessionRequest({ ...consentStart, videoConsent: false, coaching: undefined });
+  assert.equal(noCoaching.status, 409, "a new session needs current browser coaching provenance");
+  assert.equal((await noCoaching.json()).code, "app_updated");
+  assert.equal(sessionCreateCalls, callsBeforeStaleCoaching, "stale pages create no session or occurrence write");
   for (const videoNotice of [undefined, "session_video_notice_v1"]) {
     const stale = await sessionRequest({ ...consentStart, videoNotice });
     assert.equal(stale.status, 409, `consent under notice ${videoNotice} is refused`);
@@ -451,8 +483,9 @@ async function run() {
   delete neck.primaryMetric.reference;
   const neckBeforeEarLine = versioning.sha256Version(versioning.exerciseVersionPayload(neck));
   assert.notEqual(neckBeforeEarLine, versioning.EXERCISE_CONFIG_VERSIONS.ex_004);
-  for (const [exerciseId, exerciseConfigVersion] of [["ex_004", neckBeforeEarLine], [definition.id, undefined]]) {
-    const stale = await sessionRequest({ ...consentStart, videoConsent: false, exerciseId, exerciseConfigVersion });
+  for (const [exerciseId, exerciseConfigVersion] of [["ex_004", neckBeforeEarLine], [definition.id, undefined]] as const) {
+    const coaching = await config.captureCoachingProvenance(getExerciseDefinition(exerciseId)!);
+    const stale = await sessionRequest({ ...consentStart, videoConsent: false, exerciseId, exerciseConfigVersion, coaching });
     assert.equal(stale.status, 409, `${exerciseId} with exercise version ${exerciseConfigVersion} is refused`);
     assert.equal((await stale.json()).code, "app_updated");
   }

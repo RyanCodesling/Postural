@@ -399,14 +399,21 @@ export function evaluateCaptureReadiness(
   const rightWrist = landmarks[16];
 
   if (!isOverhead && !isLateral) {
-    const rawLeftHandOk =
-      !!leftWrist && inFrame01(leftWrist) && vis(leftWrist) >= HAND_VIS_MIN;
-    const rawRightHandOk =
-      !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
-    // The selfie camera is mirrored: MediaPipe's raw left wrist is the
-    // patient's anatomical right, and vice versa.
-    const leftHandOk = rawRightHandOk;
-    const rightHandOk = rawLeftHandOk;
+    const rawLeftInFrame = !!leftWrist && inFrame01(leftWrist);
+    const rawRightInFrame = !!rightWrist && inFrame01(rightWrist);
+    const rawLeftHandOk = rawLeftInFrame && vis(leftWrist) >= HAND_VIS_MIN;
+    const rawRightHandOk = rawRightInFrame && vis(rightWrist) >= HAND_VIS_MIN;
+    // MediaPipe names the person's own sides on the raw camera frame it reads;
+    // only the screen is mirrored, by CSS. Its left wrist is the patient's left
+    // hand: the repetition counters read the same sides (a right-arm-only raise
+    // counted on the right in a live check), and so does the knee gate above.
+    // Until 2026-10-25 this gate assumed a mirrored frame and swapped them, so
+    // it named the other hand and a one-sided prescription required the other
+    // hand.
+    const leftHandOk = rawLeftHandOk;
+    const rightHandOk = rawRightHandOk;
+    const leftHandInFrame = rawLeftInFrame;
+    const rightHandInFrame = rawRightInFrame;
     const requiredHandsOk =
       requiredSide === "left"
         ? leftHandOk
@@ -415,7 +422,17 @@ export function evaluateCaptureReadiness(
           : leftHandOk && rightHandOk;
 
     if (!requiredHandsOk) {
-      const msg = requiredSide === "left"
+      // A required hand inside the picture whose visibility is under the line
+      // is there but not made out: it blends into the background or is hidden
+      // behind the body. Asking to show it would name the wrong fix.
+      const missingLeft = requiredSide !== "right" && !leftHandOk;
+      const missingRight = requiredSide !== "left" && !rightHandOk;
+      const unclear = (!missingLeft || leftHandInFrame) && (!missingRight || rightHandInFrame);
+      const msg = unclear
+        ? missingLeft && missingRight
+          ? "The camera can't make out your hands. A plainer background or clothes that stand out may help."
+          : `The camera can't make out your ${missingLeft ? "left" : "right"} hand. A plainer background or clothes that stand out may help.`
+        : requiredSide === "left"
         ? "Show your left hand to the camera."
         : requiredSide === "right"
           ? "Show your right hand to the camera."
@@ -433,9 +450,9 @@ export function evaluateCaptureReadiness(
         person,
         score01:
           requiredSide === "left"
-            ? vis(rightWrist ?? { x: 0, y: 0 })
+            ? vis(leftWrist ?? { x: 0, y: 0 })
             : requiredSide === "right"
-              ? vis(leftWrist ?? { x: 0, y: 0 })
+              ? vis(rightWrist ?? { x: 0, y: 0 })
               : Math.min(
                   vis(leftWrist ?? { x: 0, y: 0 }),
                   vis(rightWrist ?? { x: 0, y: 0 }),
@@ -450,13 +467,13 @@ export function evaluateCaptureReadiness(
   // acceptable and don't penalize confidence — the metric pipeline
   // gracefully degrades. Use `??` fallbacks so we never call `vis(undefined)`.
   const safeLeftWristVis =
-    requiredSide === "right" || requiredSide === "both"
+    requiredSide === "left" || requiredSide === "both"
       ? leftWrist
         ? vis(leftWrist)
         : 1
       : 1;
   const safeRightWristVis =
-    requiredSide === "left" || requiredSide === "both"
+    requiredSide === "right" || requiredSide === "both"
       ? rightWrist
         ? vis(rightWrist)
         : 1

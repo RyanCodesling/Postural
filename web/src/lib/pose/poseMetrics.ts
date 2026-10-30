@@ -679,6 +679,34 @@ function signedTrunkLeanAngle(
 }
 
 /**
+ * The trunk line's raw angle (hip midpoint to shoulder midpoint, image
+ * coordinates, the same convention as `signedTrunkLeanAngle`; about −90° for
+ * an upright trunk), with no reference subtracted, or null when the shoulders
+ * or the hips are not both visible. For a reference taken from the patient's
+ * own resting trunk (`trunkRestReference.ts`).
+ */
+export function trunkLineAngleDeg(
+  landmarks: LM[],
+  frameAspect: number,
+): number | null {
+  const leftShoulder  = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip       = landmarks[23];
+  const rightHip      = landmarks[24];
+  if (!pairVisible(leftShoulder, rightShoulder)) return null;
+  if (!pairVisible(leftHip, rightHip)) return null;
+  const shoulderMid: LM = {
+    x: (leftShoulder!.x + rightShoulder!.x) / 2,
+    y: (leftShoulder!.y + rightShoulder!.y) / 2,
+  };
+  const hipMid: LM = {
+    x: (leftHip!.x + rightHip!.x) / 2,
+    y: (leftHip!.y + rightHip!.y) / 2,
+  };
+  return lineAngleDeg(hipMid, shoulderMid, frameAspect);
+}
+
+/**
  * computeTrunkLateralLean
  *
  * ── WHAT WE'RE MEASURING ─────────────────────────────────────────────────────
@@ -2203,6 +2231,15 @@ function computeMetricByName(
     case "elbowBend":
       // Display-only coaching check, computed per arm in elbowBendWarning.ts
       // from computeElbowFlexion. Never asked for here, like hipShift.
+      return null;
+    case "overRaise":
+      // Display-only coaching check, computed per arm in overRaiseWarning.ts
+      // from the exercise's own primary. Never asked for here, like hipShift.
+      return null;
+    case "armAboveHold":
+    case "otherArmDown":
+      // Display-only coaching check on the arm hold, computed in
+      // otherArmDownWarning.ts from both arms' hold readings.
       return null;
     default: {
       // Exhaustiveness guard — TypeScript will complain if a MetricName is

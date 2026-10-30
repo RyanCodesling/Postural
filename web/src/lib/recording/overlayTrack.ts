@@ -17,9 +17,12 @@ export type OverlayFrame = {
    * The compensation cue drawn on this frame, if any. `shoulder` is the
    * shoulder landmark (11 or 12) a LOWER arrow was locked to live; tracks saved
    * before it existed lack it, and playback then picks the higher shoulder each
-   * frame, as the live drawing did when they were saved.
+   * frame, as the live drawing did when they were saved. `armBox` marks a
+   * past-shoulder-height cue boxed around the arm `direction` names; tracks
+   * saved before it existed drew that box around both wrists, and playback
+   * still does for them.
    */
-  cue?: { metric: MetricName; direction: string | null; shoulder?: 11 | 12 };
+  cue?: { metric: MetricName; direction: string | null; shoulder?: 11 | 12; armBox?: true };
 };
 
 // MediaPipe Pose's 33-landmark skeleton, as the live camera draws it.
@@ -99,14 +102,17 @@ export function drawOverlayFrame(ctx: CanvasRenderingContext2D, frame: OverlayFr
   }
   ctx.restore();
   if (frame.cue) {
-    const { metric, direction, shoulder } = frame.cue;
+    const { metric, direction, shoulder, armBox } = frame.cue;
     // The recorded cue was on screen, so it is drawn as active; only its name,
-    // direction and locked shoulder matter to the drawing.
+    // direction and locked shoulder matter to the drawing. A past-shoulder-
+    // height cue without `armBox` is given no arm, so its box goes around both
+    // wrists, as it did live.
+    const drawnDirection = metric === "overRaise" && !armBox ? null : direction;
     drawCompensationOverlay(
       ctx, landmarks, width, height,
       [{ name: metric } as CompensationMetricSpec],
       { [metric]: 0 },
-      direction ? { [metric]: direction } : {},
+      drawnDirection ? { [metric]: drawnDirection } : {},
       new Set([metric]),
       { mirroredDisplay: false, shoulderElevatedIndex: shoulder === 11 || shoulder === 12 ? shoulder : undefined },
     );

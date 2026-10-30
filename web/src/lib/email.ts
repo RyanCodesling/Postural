@@ -20,7 +20,7 @@ function getTransporter() {
       user: SMTP_USER,
       pass: SMTP_PASS,
     },
-    // Bound each send (Codex review 2026-10-15, finding 4). Nodemailer's defaults
+    // Bound each send (review 2026-10-15, finding 4). Nodemailer's defaults
     // wait up to 2 minutes to connect and 10 minutes on a silent connection.
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,

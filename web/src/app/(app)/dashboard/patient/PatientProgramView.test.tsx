@@ -93,7 +93,7 @@ const legacy = session("2026-10-18T02:00:00Z", { leftReps: 0, rightReps: 0, comp
 assert.deepEqual(lastSessionSummary([legacy])?.reps, [{ label: "Total", counted: 12, fullRange: 10 }], "legacy totals");
 
 // 5b. When only the unprescribed side moved, the treated side keeps its own 0:
-// the other side's repetitions are never shown as its result (Codex review 2026-10-19, finding 1).
+// the other side's repetitions are never shown as its result (review 2026-10-19, finding 1).
 const otherSideOnly = session("2026-10-18T02:00:00Z", {
   prescribedSide: "left",
   totalReps: 5, completeReps: 5, leftReps: 0, completeLeftReps: 0, rightReps: 5, completeRightReps: 5,
@@ -154,7 +154,7 @@ assert.match(ended, /Began Thursday, Sep 3/);
 assert.ok(!/Week \d/.test(ended), "no week number after the end");
 
 // 10. A past day stopped for pain, or partly done, is not called missed; the
-// calendar's day rules decide (Codex review 2026-10-19, finding 2).
+// calendar's day rules decide (review 2026-10-19, finding 2).
 const YESTERDAY = "2026-10-18";
 const openUntil = (o: ProgramOccurrence, day: string): ProgramOccurrence => ({ ...o, makeup_until: day });
 assert.equal(dayState(YESTERDAY, [occurrence(1, YESTERDAY, "pain_stopped")], TODAY), "pain", "stopped for pain");

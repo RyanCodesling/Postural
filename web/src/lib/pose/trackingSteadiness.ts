@@ -206,9 +206,21 @@ export function updateTrackingMessage(
   return NO_TRACKING_MESSAGE;
 }
 
-export function trackingMessage(part: TrackingPart): string {
-  const where = part === "head" ? "your head" : part === "trunk" ? "your shoulders and hips" : "your arms";
-  return `The camera keeps losing track of ${where}. More light, a plainer background or clothes that stand out from the background may help.`;
+/**
+ * The message for the part being named. An arm is named by its side: the pose model's left arm is the patient's
+ * left, as the repetition counters read it (a right-arm-only raise counted on the right in a live check). In a picture
+ * that is already bright (`bright`, from pictureBrightness.ts) "More light" is left out: in the evaluation server's
+ * session 3 the room was bright and the flicker came from the busy background behind the arm.
+ */
+export function trackingMessage(part: TrackingPart, options: { bright?: boolean } = {}): string {
+  const where =
+    part === "head" ? "your head"
+      : part === "trunk" ? "your shoulders and hips"
+        : part === "leftArm" ? "your left arm"
+          : "your right arm";
+  return options.bright
+    ? `The camera keeps losing track of ${where}. A plainer background behind you or clothes that stand out from it may help.`
+    : `The camera keeps losing track of ${where}. More light, a plainer background or clothes that stand out from the background may help.`;
 }
 
 /** One processed frame, as the per-repetition record counts it. */

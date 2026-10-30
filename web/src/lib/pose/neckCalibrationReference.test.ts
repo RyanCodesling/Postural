@@ -13,6 +13,7 @@ import vm from "node:vm";
 import { EXERCISE_REGISTRY, type ExerciseDefinition } from "../exercises/registry";
 import { EXERCISE_CONFIG_VERSIONS, exerciseVersionPayload, sha256Version } from "../exercises/versioning";
 import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "./neckCalibrationReference";
+import { restingTrunkLineDeg } from "./trunkRestReference";
 import { computePoseMetricsForExercise, earLineAngleDeg, frameAspectOf } from "./poseMetrics";
 import { neckRestPeak } from "../analytics/trendRules";
 import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
@@ -164,7 +165,7 @@ function finalizeContext(samples: { landmarks: any[]; frameAspect: number }[]) {
     ex004FaceShadowBaselineYawSamplesRef: ref([]), ex004FaceShadowBaselinePitchSamplesRef: ref([]),
     ex004FaceShadowBaselineRollRef: ref(null), ex004FaceShadowBaselineYawRef: ref(null), ex004FaceShadowBaselinePitchRef: ref(null),
     frozenTiltDegRef: ref(null), calibrationEarLineDegRef: ref(null), shoulderRestLineDegRef: ref(null),
-    cueCompensationFiltersRef: ref(new Map()), calibrationTraceSamplesRef: ref(null),
+    trunkRestLineDegRef: ref(null), cueCompensationFiltersRef: ref(new Map()), calibrationTraceSamplesRef: ref(null),
     metricFiltersRef: ref(new Map()), leftCompensationFiltersRef: ref(new Map()), rightCompensationFiltersRef: ref(new Map()),
     leftPrimaryFilterRef: ref({ reset: noop }), rightPrimaryFilterRef: ref({ reset: noop }),
     neckRestTallyRef: ref({ epochs: [] }),
@@ -190,6 +191,7 @@ test("calibration (camera source): ex_004 freezes the ear line of the still head
   near(c.calibrationEarLineDegRef.current, 3 * ORIENT, "the still head's ear line", 0.05);
   assert(Math.abs(c.frozenTiltDegRef.current - c.calibrationEarLineDegRef.current) > 0.3,
     "the frozen camera tilt is a different line (here it also leans on the hips)");
+  near(c.trunkRestLineDegRef.current, restingTrunkLineDeg(samples) as number, "the trunk-lean cue's resting trunk line over the same samples (D-65)");
 });
 
 test("calibration (camera source): without both ears ex_004 cannot calibrate; other exercises still can", () => {

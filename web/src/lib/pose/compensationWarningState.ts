@@ -106,6 +106,44 @@ function crossesClear(
   return oneSided ? value <= clearLevel : Math.abs(value) <= clearLevel;
 }
 
+/** The latch's deadband: the cue trigger's on-off gap when it has one, else the metric's margin. */
+function latchMargin(spec: CompensationMetricSpec): number {
+  const trigger = spec.cue?.trigger;
+  return trigger ? Math.abs(trigger.on - trigger.off) : compensationWarningMargin(spec.name, spec.warningThreshold);
+}
+
+/**
+ * Whether a warning's value is already back past its switch-off level: the latch's own test for starting to switch
+ * off, before its debounce has run. The cue selector uses it so that a warning whose correction has already been made
+ * does not replace the displayed cue during that wait (coachingCue.ts). No reading is not a recovery.
+ */
+export function warningValueCleared(spec: CompensationMetricSpec, value: number | null | undefined): boolean {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return crossesClear(
+    value,
+    cueTriggerLevel(spec),
+    spec.compareDirection ?? "above",
+    latchMargin(spec),
+    compensationWarningIsOneSided(spec),
+  );
+}
+
+/**
+ * Whether a warning's value is short of its switch-on level: the latch's own switch-on test would not pass on it. A
+ * latched warning's value can sit anywhere short of its switch-off level, so the cue selector uses this to keep a
+ * latched warning off an empty screen until its value is back at the level that switched it on (coachingCue.ts). No
+ * reading is not short of it.
+ */
+export function warningValueShortOfTrigger(spec: CompensationMetricSpec, value: number | null | undefined): boolean {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return !crossesTrigger(
+    value,
+    cueTriggerLevel(spec),
+    spec.compareDirection ?? "above",
+    compensationWarningIsOneSided(spec),
+  );
+}
+
 function settleToward(
   latch: CompensationWarningLatch,
   targetActive: boolean,
@@ -159,9 +197,7 @@ export function updateCompensationWarningLatch(
   const direction = spec.compareDirection ?? "above";
   const oneSided = compensationWarningIsOneSided(spec);
   const threshold = cueTriggerLevel(spec);
-  const trigger = spec.cue?.trigger;
-  const margin = options.margin ??
-    (trigger ? Math.abs(trigger.on - trigger.off) : compensationWarningMargin(spec.name, spec.warningThreshold));
+  const margin = options.margin ?? latchMargin(spec);
 
   if (latch.active) {
     return settleToward(

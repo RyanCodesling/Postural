@@ -3,7 +3,7 @@
  *
  * The capture summary must record every camera frame size a session measured
  * on, so a session whose frame shape changed is not described by its last size
- * alone (Codex's review of b84ebac, 2026-10-14). Runs the camera page's own
+ * alone (review of b84ebac, 2026-10-14). Runs the camera page's own
  * frame loop (through the replay harness) across a size change and checks the
  * session-owned count, and that a frame that fails capture readiness is not
  * counted. Readings depend on the frame's shape; the thresholds were tuned on

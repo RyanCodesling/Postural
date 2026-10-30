@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
-import { EXERCISE_CONFIG_VERSIONS, sha256Version } from "@/lib/exercises/versioning";
+import { COACHING_CONFIG_VERSIONS, EXERCISE_CONFIG_VERSIONS, sha256Version } from "@/lib/exercises/versioning";
 import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
 import { hasRecording } from "@/lib/recording/storage";
 import {
@@ -126,6 +126,20 @@ export async function POST(request: NextRequest) {
       body?.poseMetricAlgorithm !== POSE_METRIC_ALGORITHM_VERSION ||
       (typeof exerciseConfigVersion === "string" && body?.exerciseConfigVersion !== exerciseConfigVersion)
     ) {
+      return NextResponse.json(
+        {
+          error: "The app has been updated. Reload this page, then start again.",
+          code: "app_updated",
+        },
+        { status: 409 },
+      );
+    }
+    // A display-only update can leave measurement versions unchanged while
+    // adding feedback. A valid old fingerprint is still historical provenance,
+    // but a new session must run this server's current coaching configuration.
+    // Refuse before creating a session or consuming its scheduled occurrence.
+    const coachingConfigVersion = COACHING_CONFIG_VERSIONS[exerciseId];
+    if (typeof coachingConfigVersion === "string" && coaching?.version !== coachingConfigVersion) {
       return NextResponse.json(
         {
           error: "The app has been updated. Reload this page, then start again.",

@@ -381,7 +381,7 @@
 - Showed My Progress one trend card per row again, in a centred column as wide as the therapist page
 - Showed each assigned exercise on View Profile as Upcoming, Active, Ended, or Ended early, with a line counting the days done, missed, stopped for pain, and to go
 - Fixed the two problems left in the 10-15 update's emails: ending a session paused for pain no longer waits for its email, and the daily summary no longer misses exercises completed after 8 PM
-- Fixed four problems Codex found after this update was deployed: the Last Session card credited the other side's repetitions to a one-sided prescription, a day stopped for pain showed as missed, emails described hold exercises by repetitions, and a daily summary whose query failed was never retried
+- Fixed four problems a review found after this update was deployed: the Last Session card credited the other side's repetitions to a one-sided prescription, a day stopped for pain showed as missed, emails described hold exercises by repetitions, and a daily summary whose query failed was never retried
 - Added the neck side bends animation to the Reference Guide and replaced the overhead press animation with the deep-start revision (low priority)
 
 ### *web\src\lib\analytics\trendRules.ts*, *web\src\lib\analytics\trendBreakdown.ts*, *web\src\lib\analytics\trendSeries.ts*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\db.ts*
@@ -451,7 +451,7 @@
 - Type check, lint, and a production build pass
 - The database check passes against actual PostgreSQL using connection-private temporary tables, including the neck rule in the session list query against the breakdown
 - Replaying the saved pilot traces through the camera loop gives the same results as before
-- Codex's four cases from its review of the deployed update, run again on the fixed source, now behave as fixed, and each fix has its own tests
+- The four cases from the review of the deployed update, run again on the fixed source, now behave as fixed, and each fix has its own tests
 - A live neck session on the new version counted both sets to their targets, took its baseline after the 5-second countdown, and saved the resting reading, and the app's session list read its peaks through the new rule
 - The Last Session card, the Reports list, the landing page, My Progress, and View Profile at phone width were checked on screen; the countdown's new display and the day list's new labels were not
 

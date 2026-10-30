@@ -194,6 +194,70 @@ test("only limb-sided warnings take their arm side as the overlay direction", ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// drawCompensationOverlay — the past-shoulder-height cue is drawn on its arm
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A 2D context stand-in that records the drawing calls it gets; text widths are fixed. */
+function recordingContext(): { ctx: CanvasRenderingContext2D; calls: { name: string; args: unknown[] }[] } {
+  const calls: { name: string; args: unknown[] }[] = [];
+  const state: Record<string | symbol, unknown> = {
+    measureText: (s: string) => ({ width: s.length * 10 }),
+  };
+  const ctx = new Proxy(state, {
+    get: (target, prop) => (prop in target ? target[prop] : (...args: unknown[]) => { calls.push({ name: String(prop), args }); }),
+    set: (target, prop, value) => { target[prop] = value; return true; },
+  }) as unknown as CanvasRenderingContext2D;
+  return { ctx, calls };
+}
+
+function assertPoint(actual: unknown[] | null | undefined, x: number, y: number, label: string): void {
+  if (!actual || Math.abs(Number(actual[0]) - x) > 1e-6 || Math.abs(Number(actual[1]) - y) > 1e-6) {
+    throw new Error(`${label}: expected (${x}, ${y}), got ${JSON.stringify(actual)}`);
+  }
+}
+
+/** Both arms raised in a 1000 x 1000 picture: the left arm (11, 13, 15) on the image's right. */
+function raisedArms(rightWristY: number): NormalizedLandmark[] {
+  const at = (x: number, y: number): NormalizedLandmark => ({ x, y, z: 0, visibility: 1 });
+  const lm: NormalizedLandmark[] = [];
+  lm[11] = at(0.60, 0.40); lm[13] = at(0.75, 0.30); lm[15] = at(0.90, 0.20);
+  lm[12] = at(0.40, 0.40); lm[14] = at(0.25, 0.30); lm[16] = at(0.10, rightWristY);
+  return lm;
+}
+
+test("the past-shoulder-height cue is drawn around its own arm, wherever the other wrist goes", () => {
+  const specs: CompensationMetricSpec[] = [{ name: "overRaise", warningThreshold: 115 }];
+  const active = new Set<MetricName>(["overRaise"]);
+  const draw = (side: "left" | "right" | undefined, rightWristY: number) => {
+    const { ctx, calls } = recordingContext();
+    const rendered = drawCompensationOverlay(
+      ctx, raisedArms(rightWristY), 1000, 1000, specs, { overRaise: 120 },
+      side === undefined ? {} : { overRaise: side }, active, { mirroredDisplay: false },
+    );
+    return {
+      direction: rendered[0]?.direction,
+      label: calls.find((c) => c.name === "fillText")?.args.slice(1),
+      boxStart: calls.find((c) => c.name === "moveTo")?.args,
+      arrowLines: calls.filter((c) => c.name === "lineTo").length,
+    };
+  };
+  // The left arm spans x 600-900 and y 200-400; its box is padded 12 px each way,
+  // and the label sits 4 px above the box.
+  const left = draw("left", 0.15);
+  assertEq(left.direction, "left", "left: the recorded side");
+  assertPoint(left.label, 750, 184, "left: label centred above the left arm");
+  assertPoint(left.boxStart, 598, 188, "left: box around the left arm");
+  assertEq(left.arrowLines, 0, "left: no arrow");
+  assertPoint(draw("left", 0.05).label, 750, 184, "left: the right wrist rising does not move it");
+  // The right arm spans x 100-400 and its wrist sits at y 150.
+  assertPoint(draw("right", 0.15).label, 250, 134, "right: label centred above the right arm");
+  // With no side recorded, the box spans both wrists, as before.
+  const none = draw(undefined, 0.15);
+  assertEq(none.direction, null, "no side: none recorded");
+  assertPoint(none.label, 500, 134, "no side: label between the wrists");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SUMMARY
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@
  */
 
 import { evaluateCaptureReadiness } from "./captureReadiness";
+import { computeShoulderAbduction, frameAspectOf } from "./poseMetrics";
 
 let passed = 0;
 let failed = 0;
@@ -40,20 +41,11 @@ function readyLandmarks() {
 
 console.log("\ncaptureReadiness - prescribed-side wrist gating\n");
 
-test("left-side prescription requires the mirrored raw right wrist", () => {
-  const landmarks = readyLandmarks();
-  landmarks[15].visibility = 0;
-  const result = evaluateCaptureReadiness(
-    landmarks,
-    1280,
-    720,
-    "default",
-    "left",
-  );
-  assert(result.ok, "an invisible unprescribed anatomical right wrist must not block capture");
-});
+// MediaPipe names the person's own sides on the raw, unmirrored frame it reads:
+// landmark 15 is the patient's left wrist, 16 the right. Until 2026-10-25 this
+// gate assumed a mirrored frame and swapped them.
 
-test("left-side prescription rejects a missing anatomical left wrist", () => {
+test("left-side prescription ignores the unprescribed right wrist (landmark 16)", () => {
   const landmarks = readyLandmarks();
   landmarks[16].visibility = 0;
   const result = evaluateCaptureReadiness(
@@ -63,11 +55,81 @@ test("left-side prescription rejects a missing anatomical left wrist", () => {
     "default",
     "left",
   );
-  assert(!result.ok, "the prescribed anatomical left wrist must be required");
+  assert(result.ok, "an invisible unprescribed right wrist must not block capture");
+});
+
+test("left-side prescription rejects a missing left wrist (landmark 15), naming the left hand", () => {
+  const landmarks = readyLandmarks();
+  landmarks[15].visibility = 0;
+  const result = evaluateCaptureReadiness(
+    landmarks,
+    1280,
+    720,
+    "default",
+    "left",
+  );
+  assert(!result.ok, "the prescribed left wrist must be required");
   assert(
     result.message.includes("left hand"),
-    "the message must use the patient's anatomical side",
+    "the message must use the patient's own side",
   );
+});
+
+test("right-side prescription mirrors it: landmark 16 required, landmark 15 ignored", () => {
+  const hiddenLeft = readyLandmarks();
+  hiddenLeft[15].visibility = 0;
+  assert(evaluateCaptureReadiness(hiddenLeft, 1280, 720, "default", "right").ok, "the unprescribed left wrist must not block capture");
+  const hiddenRight = readyLandmarks();
+  hiddenRight[16].visibility = 0;
+  const result = evaluateCaptureReadiness(hiddenRight, 1280, 720, "default", "right");
+  assert(!result.ok && result.message.includes("right hand"), `the prescribed right wrist must be required and named: ${result.message}`);
+});
+
+test("the hand the gate requires is the arm the repetition counter reads", () => {
+  // Raise the pose model's LEFT arm (shoulder 11, elbow 13, wrist 15) to shoulder height.
+  const landmarks = readyLandmarks();
+  landmarks[11] = { x: 0.55, y: 0.4, visibility: 1 };
+  landmarks[12] = { x: 0.45, y: 0.4, visibility: 1 };
+  landmarks[23] = { x: 0.54, y: 0.65, visibility: 1 };
+  landmarks[24] = { x: 0.46, y: 0.65, visibility: 1 };
+  landmarks[13] = { x: 0.65, y: 0.4, visibility: 1 };
+  landmarks[15] = { x: 0.75, y: 0.4, visibility: 1 };
+  landmarks[14] = { x: 0.43, y: 0.5, visibility: 1 };
+  landmarks[16] = { x: 0.42, y: 0.6, visibility: 1 };
+  const tilt = { cameraTiltDeg: 0, confidence: "high" as const, divergenceDeg: null };
+  const aspect = frameAspectOf(1280, 720);
+  const left = computeShoulderAbduction(landmarks, tilt, "left", aspect);
+  const right = computeShoulderAbduction(landmarks, tilt, "right", aspect);
+  assert(left !== null && right !== null && left > 80 && right < 40, `the "left" reading is the raised arm: left ${left}, right ${right}`);
+  // That raised arm's wrist is the one a left-side prescription requires.
+  landmarks[15] = { ...landmarks[15], visibility: 0 };
+  assert(!evaluateCaptureReadiness(landmarks, 1280, 720, "default", "left").ok, "hiding the counted arm's hand must block a left prescription");
+});
+
+test("a required hand inside the picture but not made out gets the can't-make-out message, not 'Show'", () => {
+  const landmarks = readyLandmarks();
+  landmarks[16].visibility = 0.3; // the right wrist, in the picture (x 0.65, y 0.5), under the 0.6 line
+  const result = evaluateCaptureReadiness(landmarks, 1280, 720, "default", "both");
+  assert(!result.ok && result.status === "HANDS_NOT_VISIBLE", `rejected for the hand, got ${result.status}`);
+  assert(result.message.startsWith("The camera can't make out your right hand."), result.message);
+  assert(result.message.includes("plainer background"), "names the likely fix");
+  const both = readyLandmarks();
+  both[15].visibility = 0.2;
+  both[16].visibility = 0.2;
+  const twoHands = evaluateCaptureReadiness(both, 1280, 720, "default", "both");
+  assert(twoHands.message.startsWith("The camera can't make out your hands."), twoHands.message);
+});
+
+test("a required hand outside the picture still gets 'Show your ... hand'", () => {
+  const landmarks = readyLandmarks();
+  landmarks[16] = { x: 1.08, y: 0.5, visibility: 0.9 }; // the right wrist, past the picture's edge
+  const result = evaluateCaptureReadiness(landmarks, 1280, 720, "default", "both");
+  assert(!result.ok && result.message === "Show your right hand to the camera.", result.message);
+  const mixed = readyLandmarks();
+  mixed[16] = { x: 1.08, y: 0.5, visibility: 0.9 };
+  mixed[15].visibility = 0.2;
+  const oneOutOneUnclear = evaluateCaptureReadiness(mixed, 1280, 720, "default", "both");
+  assert(oneOutOneUnclear.message === "Show both hands to the camera.", oneOutOneUnclear.message);
 });
 
 test("both-side prescription still requires both wrists", () => {

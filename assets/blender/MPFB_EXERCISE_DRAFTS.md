@@ -8,11 +8,9 @@ illustrative guides: each is copied unmodified into the gitignored
 `web/public/demos/` folder and shown through the same crop as the lateral-raise
 guide, set in `web/src/lib/exercises/demoClips.ts`. The neck exercise (`ex_004`)
 is now active alternating neck tilts rather than the assisted stretch. Its
-animation, the neck side bends, follows that version. Since 2026-10-11 it also
-plays in the Reference Guide, by user decision ahead of the multi-person neck
-counting test, as the resting-hand revision described in
-[MPFB_PRESENTATION.md](MPFB_PRESENTATION.md). Deprecated exercises `ex_002` and
-`ex_003` are not included.
+animation, the neck side bends, follows that version; it is a draft for review
+and is not in the Reference Guide. Deprecated exercises `ex_002` and `ex_003`
+are not included.
 
 | Exercise | Editable source | Preview | Timeline |
 | --- | --- | --- | --- |
@@ -28,9 +26,6 @@ angels play in the Reference Guide as full-size re-renders in the upgraded look
 (see [MPFB_FIGURE.md](MPFB_FIGURE.md#upgraded-presentation-look)). Those are
 870 x 980 at 64 samples, rebuilt by this builder from the upgraded figure into
 `previews/slate_2026_09_25/`, with the same motion and the same checks passed.
-Since 2026-10-11 the guide's overhead press is instead the deep-start revision
-in `previews/press_depth_hands_2026_10_11/` (see [MPFB_PRESENTATION.md](MPFB_PRESENTATION.md));
-the slate press remains archived.
 The side bend plays a one-sided version at the same size and look, rebuilt by
 this builder from the upgraded figure into `previews/side_bend_one_side_2026_09_25/`:
 180 frames (6 s), one bend per loop. The table's 360-frame alternating side bend

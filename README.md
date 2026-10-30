@@ -19,7 +19,6 @@
 - Let an admin move a finished session recorded on the wrong day, with its outcome, to an unused scheduled day of the same prescription, giving a reason that is kept with every move
 - Showed staff the share of tracked frames on which the points an exercise depends on were unsteady, in the therapist's session view and the session report
 - Documented the server's email setup and the notice telling participants their emails are sent through Gmail
-- Added the 3D builder's options for the guide's current overhead press and neck side bend, with their validation records
 
 ### *web\src\lib\pose\overRaiseWarning.ts*, *web\src\lib\pose\drawCompensationOverlay.ts*, *web\src\lib\recording\overlayTrack.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
 
@@ -85,12 +84,6 @@
 - Added the notice telling participants that account and exercise emails, including pain-pause alerts, are sent through Gmail
 - Recorded the 2026-10-21 email checks on the server, and the setup steps for the demo clock and date corrections
 
-### *tools\blender\refine_mpfb_form.py*, *assets\blender\MPFB_PRESENTATION.md*, *assets\blender\MPFB_EXERCISE_DRAFTS.md*, and three records in *assets\blender\reference*
-
-- Added the builder's --press-start and --neck-rest options; by default it now builds the guide's current overhead press, which starts with the fists beside the neck, and the neck side bends with the arms hanging relaxed
-- Wrote down the 2026-10-10 and 2026-10-11 press and neck revisions, including why the deeper press start lets the press counter count each repetition
-- Added the validation records of the vertical-finish press, the resting-arm pair, and the press-depth and resting-hand pair
-
 ### *web\src\lib\session-token.test.ts*, *web\src\lib\sessionDateCorrection.test.tsx*, *web\src\lib\demoClock.test.ts*, *web\README.md*, *web\.env.example*, and *web\package.json*
 
 - Let the sign-in test accept a shared route guard only while that guard itself calls the database-backed sign-in check, so the date correction routes pass it
@@ -151,7 +144,7 @@
 - The coaching lines are engineering lines from pilot recordings, not clinical norms, and the evaluation, already under way or finished, does not cover this update
 - From the next deploy the Demo Clock tab shows on the server, switched off; using it there needs scripts\demo_clock_settings_pg.sql run again, and date corrections also need scripts\session_date_corrections_pg.sql, both as the database owner
 - No date correction has been saved in a signed-in session, and neither the switch nor the corrections have been tried on the server
-- The three August anatomy validation records in assets\blender\reference stay on the laptop, since they hold this computer's file paths
+- Blender authoring changes and guide-validation records are excluded from this update; the three August anatomy records also remain outside version control
 
 ---
 

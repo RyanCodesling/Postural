@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   archiveExercise,
   deleteArchivedExercise,
+  discardNewExercise,
+  ExerciseInUseError,
   getExerciseById,
-  isRecentlyCreatedExercise,
   restoreExercise,
   updateExercise,
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import { deleteExerciseVideo } from "@/lib/exercises/customVideoStorage";
+import { deleteExerciseVideoFile } from "@/lib/exercises/customVideoStorage";
+import { exerciseVideoFileFromRow } from "@/lib/exercises/customVideo";
 
 type AuthenticatedUser = NonNullable<Awaited<ReturnType<typeof getAuthenticatedUser>>>;
 
@@ -46,10 +48,13 @@ export async function PUT(
       }
     }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "An exercise object is required" }, { status: 400 });
+    }
     const { name, description } = body;
 
-    if (!name?.trim() || !description?.trim()) {
+    if (typeof name !== "string" || typeof description !== "string" || !name.trim() || !description.trim() || name.trim().length > 255) {
       return NextResponse.json({ error: "name and description are required" }, { status: 400 });
     }
 
@@ -144,18 +149,18 @@ export async function DELETE(
     // the last ten minutes with no history qualifies, so this is not a way for
     // a therapist to permanently delete an established exercise.
     if (request.nextUrl.searchParams.get("discardNew") === "true") {
-      if (existing.archived_at || !(await isRecentlyCreatedExercise(id))) {
+      const result = await discardNewExercise(id);
+      if (result === "not-new") {
         return NextResponse.json({ error: "Only a just-added exercise can be discarded." }, { status: 409 });
       }
-      if (!(await archiveExercise(id, authenticatedUser.id))) {
+      if (result === "not-found") {
         return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
       }
-      const result = await deleteArchivedExercise(id);
-      if (result !== "deleted") {
-        await restoreExercise(id);
+      if (result === "has-history") {
         return NextResponse.json({ error: "The exercise is already in use and was kept." }, { status: 409 });
       }
-      await deleteExerciseVideo(id).catch(() => undefined);
+      const video = exerciseVideoFileFromRow(existing);
+      if (video) await deleteExerciseVideoFile(id, video.mimeType, video.fileName).catch(() => undefined);
       return NextResponse.json({ success: true });
     }
 
@@ -186,7 +191,8 @@ export async function DELETE(
           { status: 409 },
         );
       }
-      await deleteExerciseVideo(id).catch((error) =>
+      const video = exerciseVideoFileFromRow(existing);
+      if (video) await deleteExerciseVideoFile(id, video.mimeType, video.fileName).catch((error) =>
         console.error(`Could not remove the video file of deleted exercise ${id}:`, error),
       );
       return NextResponse.json({ success: true });
@@ -198,6 +204,9 @@ export async function DELETE(
     }
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ExerciseInUseError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     console.error("DELETE /api/exercises/[id] error:", error);
     return NextResponse.json({ error: "Failed to delete exercise" }, { status: 500 });
   }

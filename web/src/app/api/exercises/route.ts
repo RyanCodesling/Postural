@@ -33,7 +33,10 @@ export async function GET(request: NextRequest) {
     const includeArchived =
       (authenticatedUser.role === "admin" || authenticatedUser.role === "therapist") &&
       request.nextUrl.searchParams.get("includeArchived") === "true";
-    const all = (await getExercises({ includeArchived })).filter(
+    const all = (await getExercises({
+      includeArchived,
+      patientId: authenticatedUser.role === "patient" ? authenticatedUser.id : undefined,
+    })).filter(
       (e) =>
         !e.archived_at ||
         authenticatedUser.role === "admin" ||
@@ -60,10 +63,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "An exercise object is required" }, { status: 400 });
+    }
     const { name, description, isCustom, youtubeEmbed } = body;
 
-    if (!name?.trim() || !description?.trim()) {
+    if (typeof name !== "string" || typeof description !== "string" || !name.trim() || !description.trim() || name.trim().length > 255) {
       return NextResponse.json({ error: "name and description are required" }, { status: 400 });
     }
 

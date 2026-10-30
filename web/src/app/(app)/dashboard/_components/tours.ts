@@ -69,7 +69,7 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       lines: [
         "Each card is one scheduled day. The icon shows whether it is completed, today, open for a make-up, missed or upcoming.",
         "Click a day to open it and see each exercise with its sets and repetitions.",
-        "Press Start to open the camera for that exercise. Exercises your therapist set up without the camera show Mark done instead.",
+        "Press Start to open the exercise. A custom exercise shows its guide and manual sets; press Set done after each set and Finish after the last set.",
         "If you miss a day you may still have a make-up period. It stays open until its last day.",
         "Press Show the full schedule to see every day of your program.",
       ],

@@ -29,7 +29,7 @@ export function exerciseVideoChoiceError(choice: ExerciseVideoChoice): string | 
 /**
  * Adds a custom exercise with its optional guide video: the exercise with any
  * YouTube video first, then the uploaded file. An exercise whose upload fails
- * was never used, so it is removed again rather than left without its video.
+ * is discarded only if it is still unused; cleanup refusal is reported.
  */
 export async function createCustomExercise<T extends { id: string }>(
   data: { name: string; description: string },
@@ -59,8 +59,13 @@ export async function createCustomExercise<T extends { id: string }>(
   }).catch(() => null);
   const uploaded = upload ? await upload.json().catch(() => ({})) : {};
   if (!upload?.ok) {
-    await fetch(`/api/exercises/${id}?discardNew=true`, { method: "DELETE" }).catch(() => null);
-    return { error: `${uploaded.error || "The video could not be uploaded."} The exercise was not added.` };
+    const cleanup = await fetch(`/api/exercises/${id}?discardNew=true`, { method: "DELETE" }).catch(() => null);
+    const uploadError = uploaded.error || "The video could not be uploaded.";
+    if (cleanup?.ok) return { error: `${uploadError} The exercise was not added.` };
+    const reason = cleanup ? await cleanup.json().catch(() => ({})) : {};
+    return {
+      error: `${uploadError} ${cleanup?.status === 409 ? "The exercise was kept." : "Its removal could not be confirmed."} Reload the exercise list before retrying.${reason.error ? ` ${reason.error}` : ""}`,
+    };
   }
   return { exercise: uploaded.exercise as T };
 }

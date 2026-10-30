@@ -27,6 +27,8 @@ ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50)
 -- YouTube video id. Archiving keeps both, so a restored exercise has its video.
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS video_mime_type VARCHAR(20);
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS youtube_video_id VARCHAR(11);
+-- New uploads use immutable filenames. NULL preserves pre-existing id.mp4/webm files.
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS video_file_name VARCHAR(100);
 DO $$
 BEGIN
   ALTER TABLE exercises

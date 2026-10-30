@@ -66,6 +66,7 @@ import {
 import { coachingConfiguration, type CoachingProvenance } from "@/lib/pose/coachingConfig";
 import { isAuditOnlyMeasurement } from "@/lib/pose/holdQuality";
 import { joinNames } from "@/lib/notificationText";
+import { exerciseVideoFileFromRow, type ExerciseVideoMimeType } from "@/lib/exercises/customVideo";
 
 // Return DATE columns as plain YYYY-MM-DD strings instead of Date objects
 types.setTypeParser(1082, (val: string) => val);
@@ -658,13 +659,17 @@ export async function invalidateOTPs(email: string) {
 
 // ── Exercises ─────────────────────────────────────────────────────────────────
 
-export async function getExercises(options: { includeArchived?: boolean } = {}) {
+export async function getExercises(options: { includeArchived?: boolean; patientId?: string } = {}) {
   // Custom exercises are shared: every therapist sees the ones added by the
   // admin and by other therapists. Only editing and archiving stay with the
   // exercise's owner (see the exercise API routes).
   const conditions: string[] = [];
   const params: unknown[] = [];
   if (!options.includeArchived) conditions.push("archived_at IS NULL");
+  if (options.patientId !== undefined) {
+    params.push(options.patientId);
+    conditions.push(`id IN (SELECT exercise_id FROM patient_exercises WHERE patient_id = $${params.length} AND archived_at IS NULL)`);
+  }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pool.query(`SELECT * FROM exercises ${where} ORDER BY id`, params);
   return result.rows;
@@ -728,14 +733,33 @@ export function isMissingColumnError(error: unknown): boolean {
 }
 
 /** Records an uploaded file as the exercise's video, replacing a YouTube video. */
-export async function setExerciseVideoFile(id: string, mimeType: "video/mp4" | "video/webm") {
-  const result = await pool.query(
-    `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL
-      WHERE id = $1 AND archived_at IS NULL
-      RETURNING *`,
-    [id, mimeType],
-  );
-  return result.rows[0] ?? null;
+export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Serialize metadata publication, including the exact file it supersedes.
+    const previous = await client.query(
+      `SELECT video_mime_type, video_file_name FROM exercises
+        WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
+      [id],
+    );
+    if (previous.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL, video_file_name = $3
+        WHERE id = $1 RETURNING *`,
+      [id, mimeType, fileName],
+    );
+    await client.query("COMMIT");
+    return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 let exerciseVideoColumnsReady: boolean | null = null;
@@ -776,47 +800,37 @@ export async function updateExercise(id: string, data: { name?: string; descript
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
+export class ExerciseInUseError extends Error {
+  constructor() {
+    super("This exercise is still used by a prescription or program. End those prescriptions and remove the program entries before archiving it.");
+    this.name = "ExerciseInUseError";
+  }
+}
+
 export async function archiveExercise(id: string, archivedBy: string): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const exercise = await client.query(
-      `UPDATE exercises
-          SET archived_at = NOW(), archived_by = $2
-        WHERE id = $1 AND archived_at IS NULL
-        RETURNING id`,
-      [id, archivedBy],
+      "SELECT id FROM exercises WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE",
+      [id],
     );
     if (exercise.rows.length === 0) {
       await client.query("ROLLBACK");
       return false;
     }
 
-    const assignments = await client.query(
-      `UPDATE patient_exercises
-          SET archived_at = NOW(), archived_by = $2
-        WHERE exercise_id = $1 AND archived_at IS NULL
-        RETURNING id`,
-      [id, archivedBy],
-    );
-    const assignmentIds = assignments.rows.map((row) => Number(row.id));
-    if (assignmentIds.length > 0) {
-      await client.query(
-        `UPDATE exercise_occurrences
-            SET cancelled_at = NOW(), cancelled_by = $2
-          WHERE patient_exercise_id = ANY($1::int[])
-            AND status = 'pending'
-            AND cancelled_at IS NULL
-            AND COALESCE(makeup_until, due_date) >= $3::date`,
-        [assignmentIds, archivedBy, await todayKeyPH()],
-      );
-    }
-
-    // Program entries keep their copied name/description as history, but an
-    // archived catalog row is no longer assignable through the program.
-    await client.query(
-      "UPDATE program_exercises SET exercise_id = NULL WHERE exercise_id = $1",
+    // A shared catalog entry cannot silently end anyone's prescribed work.
+    // Assignment/program writers hold a share lock on this row until commit.
+    const used = await client.query(
+      `SELECT EXISTS (SELECT 1 FROM patient_exercises WHERE exercise_id = $1 AND archived_at IS NULL)
+           OR EXISTS (SELECT 1 FROM program_exercises WHERE exercise_id = $1) AS used`,
       [id],
+    );
+    if (used.rows[0]?.used) throw new ExerciseInUseError();
+    await client.query(
+      "UPDATE exercises SET archived_at = NOW(), archived_by = $2 WHERE id = $1",
+      [id, archivedBy],
     );
     await client.query("COMMIT");
     return true;
@@ -830,8 +844,8 @@ export async function archiveExercise(id: string, archivedBy: string): Promise<b
 
 /**
  * Returns an archived exercise to the catalog with its name, description and
- * video. Prescriptions ended by the archive stay ended; the therapist
- * prescribes it again.
+ * video. It never reopens historical prescriptions; the therapist prescribes
+ * it again when appropriate.
  */
 export async function restoreExercise(id: string) {
   const result = await pool.query(
@@ -850,6 +864,41 @@ export async function isRecentlyCreatedExercise(id: string): Promise<boolean> {
     [id],
   );
   return result.rows[0]?.recent === true;
+}
+
+/** Failed-upload cleanup must never invoke the prescription-ending archive. */
+export async function discardNewExercise(id: string): Promise<"deleted" | "not-found" | "not-new" | "has-history"> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT created_at > NOW() - INTERVAL '10 minutes' AS recent FROM exercises
+        WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
+      [id],
+    );
+    if (result.rows.length === 0 || !result.rows[0].recent) {
+      await client.query("ROLLBACK");
+      return result.rows.length === 0 ? "not-found" : "not-new";
+    }
+    const history = await client.query(
+      `SELECT EXISTS (SELECT 1 FROM patient_exercises WHERE exercise_id = $1)
+           OR EXISTS (SELECT 1 FROM sessions WHERE exercise_id = $1)
+           OR EXISTS (SELECT 1 FROM program_exercises WHERE exercise_id = $1) AS used`,
+      [id],
+    );
+    if (history.rows[0]?.used) {
+      await client.query("ROLLBACK");
+      return "has-history";
+    }
+    await client.query("DELETE FROM exercises WHERE id = $1", [id]);
+    await client.query("COMMIT");
+    return "deleted";
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export type DeleteExerciseResult = "deleted" | "not-found" | "has-history";
@@ -984,7 +1033,8 @@ export async function assignExercisesToPatient(
       `SELECT id
          FROM exercises
         WHERE id = ANY($1::varchar[])
-          AND archived_at IS NULL`,
+          AND archived_at IS NULL
+        ORDER BY id FOR SHARE`,
       [requestedExerciseIds],
     );
     if (allowedExercises.rows.length !== requestedExerciseIds.length) {
@@ -1382,7 +1432,8 @@ async function validateProgramExerciseAccess(
     `SELECT id
        FROM exercises
       WHERE id = ANY($1::varchar[])
-        AND archived_at IS NULL`,
+        AND archived_at IS NULL
+      ORDER BY id FOR SHARE`,
     [exerciseIds],
   );
   if (allowed.rows.length !== exerciseIds.length) {

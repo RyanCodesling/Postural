@@ -410,7 +410,7 @@ export default function ManageExercisesPage() {
               </div>
               <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? Existing prescriptions and session history will remain, while future pending tasks are ended.
+                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? An exercise still used by a prescription or program cannot be archived. End those prescriptions and remove the program entries first. Existing history is kept.
               </p>
               <div className="flex gap-3">
                 <button

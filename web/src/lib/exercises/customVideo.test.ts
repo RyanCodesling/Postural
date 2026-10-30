@@ -74,8 +74,10 @@ test("storage saves, replaces, refuses and deletes videos", async () => {
   process.env.EXERCISE_VIDEOS_DIR = root;
   try {
     const storage = await import("./customVideoStorage");
-    assert.equal(await storage.saveExerciseVideo("ex_101", "video/mp4", streamOf(MP4_HEAD, new Uint8Array(100))), "saved");
-    const opened = await storage.openExerciseVideo("ex_101", "video/mp4");
+    const first = await storage.saveExerciseVideo("ex_101", "video/mp4", streamOf(MP4_HEAD, new Uint8Array(100)));
+    assert.notEqual(typeof first, "string");
+    if (typeof first === "string") throw new Error(first);
+    const opened = await storage.openExerciseVideo("ex_101", "video/mp4", first.fileName);
     assert.equal(opened?.size, MP4_HEAD.length + 100);
 
     // A refused upload leaves the stored video alone.
@@ -84,17 +86,21 @@ test("storage saves, replaces, refuses and deletes videos", async () => {
     const big = new Uint8Array(MAX_EXERCISE_VIDEO_BYTES);
     big.set(MP4_HEAD);
     assert.equal(await storage.saveExerciseVideo("ex_101", "video/mp4", streamOf(big, new Uint8Array(1))), "too-large");
-    assert.equal((await storage.openExerciseVideo("ex_101", "video/mp4"))?.size, MP4_HEAD.length + 100);
+    assert.equal((await storage.openExerciseVideo("ex_101", "video/mp4", first.fileName))?.size, MP4_HEAD.length + 100);
 
     // Replacing with the other type, then dropping the old file.
-    assert.equal(await storage.saveExerciseVideo("ex_101", "video/webm", streamOf(WEBM_HEAD)), "saved");
-    await storage.deleteExerciseVideo("ex_101", "video/webm");
-    assert.equal(await storage.openExerciseVideo("ex_101", "video/mp4"), null);
-    assert(existsSync(path.join(root, "ex_101.webm")));
+    const second = await storage.saveExerciseVideo("ex_101", "video/webm", streamOf(WEBM_HEAD));
+    if (typeof second === "string") throw new Error(second);
+    assert.notEqual(first.fileName, second.fileName);
+    await storage.deleteExerciseVideoFile("ex_101", "video/mp4", first.fileName);
+    assert.equal(await storage.openExerciseVideo("ex_101", "video/mp4", first.fileName), null);
+    assert(existsSync(path.join(root, second.fileName)));
 
-    await storage.deleteExerciseVideo("ex_101");
-    assert.equal(await storage.openExerciseVideo("ex_101", "video/webm"), null);
+    await storage.deleteExerciseVideoFile("ex_101", "video/webm", second.fileName);
+    assert.equal(await storage.openExerciseVideo("ex_101", "video/webm", second.fileName), null);
     await assert.rejects(() => storage.saveExerciseVideo("../x", "video/mp4", streamOf(MP4_HEAD)));
+    await assert.rejects(() => storage.openExerciseVideo("ex_101", "video/mp4", "../secret.mp4"));
+    await assert.rejects(() => storage.openExerciseVideo("ex_102", "video/webm", second.fileName));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

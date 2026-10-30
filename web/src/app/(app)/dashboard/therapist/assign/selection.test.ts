@@ -13,12 +13,13 @@ function visit(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === "paramsFromExisting") found.params = node.getText(ast);
   if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "togglePatientSelection") found.toggle = node.initializer!.getText(ast);
   if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "handleConfirmAssign") found.confirm = node.initializer!.getText(ast);
+  if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "handleProgramSelect") found.program = node.initializer!.getText(ast);
   if (ts.isCallExpression(node) && node.expression.getText(ast) === "useEffect" && node.arguments[1]?.getText(ast) === "[assignPatientIds]") found.load = node.arguments[0].getText(ast);
   ts.forEachChild(node, visit);
 }
 visit(ast);
 assert(found.params && found.toggle && found.load && found.confirm);
-const code = ts.transpileModule(`${found.params}; globalThis.load = ${found.load}; globalThis.toggle = ${found.toggle}; globalThis.confirm = ${found.confirm};`, {
+const code = ts.transpileModule(`${found.params}; globalThis.load = ${found.load}; globalThis.toggle = ${found.toggle}; globalThis.confirm = ${found.confirm}; globalThis.program = ${found.program};`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -26,7 +27,7 @@ function fixture() {
   const requests: { url: string; signal: AbortSignal; resolve(value: unknown): void }[] = [];
   const context = vm.createContext({
     AbortController,
-    assignPatientIds: ["patient-a"], existingAssignments: [], assignSelected: new Set(), assignParams: {},
+    assignPatientIds: ["patient-a"], existingAssignments: [], assignSelected: new Set(), assignParams: {}, programAddedIds: new Set(), programs: [],
     assignmentRequest: { current: null },
     pendingPayload: [], showToast() {},
     fetch: (url: string, options: { signal: AbortSignal; method?: string }) => options.method === "POST"
@@ -38,10 +39,10 @@ function fixture() {
   for (const [setter, field] of Object.entries({
     setAssignPatientIds: "assignPatientIds", setExpandedPatientId: "expandedPatientId",
     setShowValidationErrors: "showValidationErrors", setAssignSelected: "assignSelected",
-    setAssignParams: "assignParams", setAssignProgramId: "assignProgramId",
+    setAssignParams: "assignParams", setAssignProgramId: "assignProgramId", setProgramAddedIds: "programAddedIds",
     setExistingAssignments: "existingAssignments", setDeleteSelected: "deleteSelected", setEditingExercises: "editingExercises",
     setAssigning: "assigning", setShowAssignPreview: "showAssignPreview", setAssignErrorMsg: "assignErrorMsg", setShowAssignError: "showAssignError",
-  })) context[setter] = (value: unknown) => { context[field] = value; };
+  })) context[setter] = (value: unknown) => { context[field] = typeof value === "function" ? value(context[field]) : value; };
   vm.runInContext(code, context);
   async function reply(index: number, exerciseId: string) {
     requests[index].resolve({ json: async () => ({ exercises: [{
@@ -111,6 +112,20 @@ async function run() {
   assert.equal(submitted.requests[0].signal.aborted, true, "successful submission invalidates before clearing selection");
   await submitted.reply(0, "pre-submit-assignment");
   submitted.assertEmpty();
+
+  const programs = fixture();
+  programs.context.assignSelected = new Set(["manual-choice"]);
+  programs.context.programs = [
+    { id: "a", exercises: [{ exerciseId: "manual-choice" }, { exerciseId: "from-a" }] },
+    { id: "b", exercises: [{ exerciseId: "from-b" }] },
+  ];
+  programs.context.program("a");
+  assert.deepEqual(Array.from(programs.context.assignSelected).sort(), ["from-a", "manual-choice"]);
+  programs.context.program("b");
+  assert.deepEqual(Array.from(programs.context.assignSelected).sort(), ["from-b", "manual-choice"]);
+  programs.context.program("");
+  assert.deepEqual(Array.from(programs.context.assignSelected), ["manual-choice"], "clearing the program preserves a prior manual selection");
+  assert.equal(programs.context.programAddedIds.size, 0);
   console.log("Assignment selection: multi-select, replacement, deselect, unmount, effect replay and successful submission passed.");
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

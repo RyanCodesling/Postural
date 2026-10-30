@@ -13,6 +13,18 @@ export const EXERCISE_VIDEO_ACCEPT = "video/mp4,video/webm,.mp4,.webm";
 
 export type ExerciseVideoMimeType = "video/mp4" | "video/webm";
 
+/** Server-side reference to one immutable upload, or a legacy id-based file. */
+export type ExerciseVideoFile = { mimeType: ExerciseVideoMimeType; fileName: string | null };
+
+export function exerciseVideoFileFromRow(row: {
+  video_mime_type?: unknown;
+  video_file_name?: unknown;
+}): ExerciseVideoFile | null {
+  return isExerciseVideoMimeType(row.video_mime_type)
+    ? { mimeType: row.video_mime_type, fileName: typeof row.video_file_name === "string" ? row.video_file_name : null }
+    : null;
+}
+
 export type ExerciseVideo =
   | { kind: "file"; mimeType: ExerciseVideoMimeType }
   | { kind: "youtube"; youtubeId: string };

@@ -10,9 +10,10 @@ import {
 import {
   MAX_EXERCISE_VIDEO_BYTES,
   exerciseVideoFromRow,
+  exerciseVideoFileFromRow,
   isExerciseVideoMimeType,
 } from "@/lib/exercises/customVideo";
-import { deleteExerciseVideo, openExerciseVideo, saveExerciseVideo } from "@/lib/exercises/customVideoStorage";
+import { deleteExerciseVideoFile, openExerciseVideo, saveExerciseVideo } from "@/lib/exercises/customVideoStorage";
 import { parseRange } from "@/lib/recording/http";
 
 type Context = { params: Promise<{ id: string }> };
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest, { params }: Context) {
   if (!exercise || video?.kind !== "file" || !(await canViewExerciseVideo(user, exercise))) {
     return NextResponse.json({ error: "Video not found" }, { status: 404 });
   }
-  const file = await openExerciseVideo(id, video.mimeType);
+  const file = await openExerciseVideo(id, video.mimeType, exerciseVideoFileFromRow(exercise)?.fileName);
   if (!file) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
   const headers: Record<string, string> = {
@@ -92,18 +93,29 @@ export async function PUT(request: NextRequest, { params }: Context) {
 
     let updated;
     try {
-      updated = await setExerciseVideoFile(id, mimeType);
+      updated = await setExerciseVideoFile(id, mimeType, saved.fileName);
     } catch (error) {
-      await deleteExerciseVideo(id);
+      // A lost connection can leave commit outcome unknown. Retain the staged
+      // file in that case: it might already be the metadata-selected guide.
+      // A missing-column error definitely did not publish the new reference.
+      if (isMissingColumnError(error)) {
+        await deleteExerciseVideoFile(id, mimeType, saved.fileName).catch(() => undefined);
+      }
       throw error;
     }
     if (!updated) {
-      await deleteExerciseVideo(id);
+      await deleteExerciseVideoFile(id, mimeType, saved.fileName).catch(() => undefined);
       return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
     }
-    // A video of the other type is no longer the exercise's file.
-    await deleteExerciseVideo(id, mimeType);
-    return NextResponse.json({ exercise: updated });
+    // Metadata publication captured the exact superseded file under a row lock.
+    // A later upload can never be removed by this request's cleanup.
+    const previous = updated.previousVideo;
+    if (previous && previous.fileName !== saved.fileName) {
+      await deleteExerciseVideoFile(id, previous.mimeType, previous.fileName).catch((error) =>
+        console.error(`Could not remove a superseded exercise video for ${id}:`, error),
+      );
+    }
+    return NextResponse.json({ exercise: updated.exercise });
   } catch (error) {
     if (isMissingColumnError(error)) {
       return NextResponse.json(

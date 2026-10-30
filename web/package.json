@@ -13,6 +13,7 @@
     "lint": "eslint",
     "verify:coaching": "tsx scripts/verify-coaching.ts",
     "verify:coaching:db": "tsx scripts/verify-coaching-readers.ts",
+    "verify:exercises:db": "tsx scripts/verify-exercise-lifecycle.ts",
     "replay:coaching": "tsx scripts/replay-coaching.ts",
     "backup:local": "tsx scripts/backup-local.ts",
     "profile:filter": "tsx scripts/profileOneEuroFilter.ts",

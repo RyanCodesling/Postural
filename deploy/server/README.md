@@ -17,6 +17,7 @@ The general checklist (passwords, accounts, backups, the second-device test) is
 | Reference Guide clips (gitignored, copied from a developer machine) | `/opt/postural/app/web/public/demos/` |
 | Settings and secrets (generated on the server, never printed) | `/etc/postural/env` |
 | Session videos | `/var/lib/postural/recordings` |
+| Uploaded custom exercise guides | `EXERCISE_VIDEOS_DIR`, preferably `/var/lib/postural/exercise-videos` |
 | Backups (nightly at 03:00, never deleted automatically) | `/var/backups/postural/<date_time>` |
 | App service, on 127.0.0.1:3000 | `postural-web` (systemd) |
 | HTTPS (automatic certificate) | Caddy, `/etc/caddy/Caddyfile` |
@@ -46,9 +47,10 @@ for `ssh -i <key file> <admin user>@<server>`):
 6. Set the admin password; the researcher types it, and it is never shown:
    `ssh -t -i <key file> <admin user>@<server> "sudo -u postural -H bash -c 'set -a; . /etc/postural/env; set +a; node /opt/postural/tools/set-password.mjs admin_001'"`
 
-Email is not configured on the server (no `SMTP_*` settings), so account emails and
-password-reset codes are not sent. New accounts use their first-sign-in password and must
-change it.
+The first setup leaves email unconfigured. Existing deployments may already have
+`SMTP_USER`, `SMTP_PASS` and sender settings in `/etc/postural/env`; preserve them when
+updating. Account emails and password-reset codes require that configuration. New accounts
+use their first-sign-in password and must change it.
 
 ## Updating to a new revision
 
@@ -61,6 +63,7 @@ deployment. Take a backup first.
 ## Backups
 
 - Run one by hand before and after a session day: `sudo systemctl start postural-backup`.
+- Backups include uploaded exercise guides in `exercise-videos/`, with their sizes and hashes in `manifest.json`, as well as session recordings and the database. Restore-check accepts older manifests without guide files. To recover guides, copy that folder back to the configured `EXERCISE_VIDEOS_DIR` and retain ownership by `postural`.
 - Copy them to a developer machine regularly, for example
   `scp -r -i <key file> <admin user>@<server>:/var/backups/postural/<date_time> <local backup folder>`.
   Keep them outside the repository and outside cloud-synced folders. They hold patient data

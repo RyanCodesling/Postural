@@ -1,11 +1,11 @@
 /**
  * Local backup, and a restore check, for a deployment that runs on one
- * computer: the database (pg_dump, custom format) and the session-video
- * folder, which a database dump alone does not contain. Read-only on the live
- * database and recordings.
+ * computer: the database (pg_dump, custom format), session recordings and
+ * uploaded exercise guides, which a database dump alone does not contain.
+ * Read-only on the live database and media.
  *
  *   npm run backup:local -- --out <new directory>
- *     Writes database.dump, a copy of the recordings folder and manifest.json:
+ *     Writes database.dump, copies of both media folders and manifest.json:
  *     every table's row count, every copied file's size and SHA-256, the git
  *     revision, the coaching algorithm version and the trend settings hash.
  *     Run it while no session is in progress, so the two copies agree. Keep
@@ -134,21 +134,37 @@ type Manifest = {
   createdAt: string;
   database: { name: string; rowCounts: Record<string, number>; dumpSha256: string };
   recordings: { source: string; files: { path: string; bytes: number; sha256: string }[] };
+  exerciseVideos?: { source: string; files: { path: string; bytes: number; sha256: string }[] };
   release: { gitRevision: string | null; uncommittedChanges: boolean | null; coachingAlgorithm: string; trendSettingsSha256: string };
 };
+
+function copyMedia(source: string, destination: string): NonNullable<Manifest["exerciseVideos"]> {
+  const files = filesUnder(source).map((file) => ({ path: relative(source, file), bytes: statSync(file).size, sha256: sha256(file) }));
+  if (existsSync(source)) cpSync(source, destination, { recursive: true });
+  for (const file of files) {
+    if (sha256(join(destination, file.path)) !== file.sha256) throw new Error(`copy of ${file.path} does not match its source`);
+  }
+  return { source, files };
+}
+
+function checkMedia(dir: string, folder: string, media: Manifest["exerciseVideos"], problems: string[]): void {
+  for (const file of media?.files ?? []) {
+    const copy = join(dir, folder, file.path);
+    if (!existsSync(copy) || sha256(copy) !== file.sha256) problems.push(`${folder}/${file.path} is missing or changed`);
+  }
+}
 
 async function backup(out: string): Promise<void> {
   if (existsSync(out)) throw new Error(`${out} already exists; backups are never overwritten.`);
   mkdirSync(out, { recursive: true });
   const recordingsRoot = resolve(web, setting("RECORDINGS_DIR") ?? ".recordings");
+  const exerciseVideosRoot = resolve(web, setting("EXERCISE_VIDEOS_DIR") ?? ".exercise-videos");
   const rowCountsBefore = await rowCounts(liveDatabase);
   const dump = join(out, "database.dump");
   run("pg_dump", ["--format=custom", `--file=${dump}`], liveDatabase);
-  const files = filesUnder(recordingsRoot).map((path) => ({ path: relative(recordingsRoot, path), bytes: statSync(path).size, sha256: sha256(path) }));
-  if (existsSync(recordingsRoot)) cpSync(recordingsRoot, join(out, "recordings"), { recursive: true });
-  for (const file of files) {
-    if (sha256(join(out, "recordings", file.path)) !== file.sha256) throw new Error(`copy of ${file.path} does not match its source`);
-  }
+  const recordings = copyMedia(recordingsRoot, join(out, "recordings"));
+  const exerciseVideos = copyMedia(exerciseVideosRoot, join(out, "exercise-videos"));
+  const files = recordings.files;
   const rowCountsAfter = await rowCounts(liveDatabase);
   if (JSON.stringify(rowCountsAfter) !== JSON.stringify(rowCountsBefore)) {
     throw new Error("row counts changed during the backup; run it again while no session is in progress");
@@ -157,7 +173,8 @@ async function backup(out: string): Promise<void> {
   const manifest: Manifest = {
     createdAt: new Date().toISOString(),
     database: { name: liveDatabase, rowCounts: rowCountsBefore, dumpSha256: sha256(dump) },
-    recordings: { source: recordingsRoot, files },
+    recordings,
+    exerciseVideos,
     release: {
       gitRevision: git(["rev-parse", "HEAD"]),
       uncommittedChanges: status === null ? null : status.length > 0,
@@ -168,7 +185,8 @@ async function backup(out: string): Promise<void> {
   writeFileSync(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   const rows = Object.values(rowCountsBefore).reduce((a, b) => a + b, 0);
   console.log(`Backup written to ${out}: ${Object.keys(rowCountsBefore).length} tables (${rows} rows), ` +
-    `${files.length} recording files (${(files.reduce((a, f) => a + f.bytes, 0) / 1e6).toFixed(1)} MB), all copies verified.`);
+    `${files.length} recording files (${(files.reduce((a, f) => a + f.bytes, 0) / 1e6).toFixed(1)} MB), ` +
+    `${exerciseVideos.files.length} exercise guide files, all copies verified.`);
 }
 
 async function verify(dir: string, into: string): Promise<void> {
@@ -176,10 +194,8 @@ async function verify(dir: string, into: string): Promise<void> {
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
   const problems: string[] = [];
   if (sha256(join(dir, "database.dump")) !== manifest.database.dumpSha256) problems.push("database.dump does not match the manifest");
-  for (const file of manifest.recordings.files) {
-    const copy = join(dir, "recordings", file.path);
-    if (!existsSync(copy) || sha256(copy) !== file.sha256) problems.push(`recording ${file.path} is missing or changed`);
-  }
+  checkMedia(dir, "recordings", manifest.recordings, problems);
+  checkMedia(dir, "exercise-videos", manifest.exerciseVideos, problems);
   const existing = await rowCounts(into);
   if (Object.keys(existing).length > 0) throw new Error(`${into} is not empty; restore checks only use an empty database.`);
   run("pg_restore", ["--no-owner", "--no-acl", "--exit-on-error", `--dbname=${into}`, join(dir, "database.dump")], into);
@@ -195,6 +211,7 @@ async function verify(dir: string, into: string): Promise<void> {
   }
   console.log(`Restore check passed: ${Object.keys(restored).length} tables with matching row counts in ${into}, ` +
     `${manifest.recordings.files.length} recording files matching their hashes. ` +
+    `${manifest.exerciseVideos?.files.length ?? 0} exercise guide files matching their hashes. ` +
     `The restored copy is still in ${into}; drop it when finished.`);
 }
 

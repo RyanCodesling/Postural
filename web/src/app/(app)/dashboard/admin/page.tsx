@@ -663,11 +663,18 @@ export default function AdminDashboard() {
         setExercises((prev) => prev.map((e) => (e.id === deleteTargetId ? { ...e, archived_at: archivedAt } : e)));
         setShowDeleteConfirm(false);
       } else {
-        console.error("Failed to archive exercise");
+        const data = await res.json().catch(() => ({}));
+        setStatusModalType("error");
+        setStatusModalMsg(data.error || "Unable to archive the exercise. Please try again.");
+        setShowStatusModal(true);
       }
     } catch (err) {
       console.error("Error archiving exercise:", err);
+      setStatusModalType("error");
+      setStatusModalMsg("Unable to archive the exercise. Please check your connection and try again.");
+      setShowStatusModal(true);
     } finally {
+      setShowDeleteConfirm(false);
       setDeleteTargetId(null);
       setDeleteTargetName(null);
     }

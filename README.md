@@ -13,6 +13,8 @@
 - Refused to archive a custom exercise while a prescription or program still uses it, so one therapist's archive no longer ends another therapist's prescriptions without notice
 - Fixed three problems in the guide video uploads of Enah's update: a failed replacement deleted the working video, an MP4 and a WebM uploaded together could delete each other, and the clean-up after a failed new upload could end prescriptions made in the meantime
 - Sent patients only their own prescribed exercises, and answered malformed exercise input with an error message instead of a server error
+- Showed the server's refused-archive reason on the admin page and closed the confirmation without changing the exercise list
+- Included uploaded exercise guides in local and nightly server backups and their restore checks, while keeping older backup manifests readable
 
 ### *web\src\lib\pose\overRaiseWarning.ts*, *web\src\lib\pose\drawCompensationOverlay.ts*, *web\src\lib\recording\overlayTrack.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
 
@@ -86,7 +88,7 @@
 
 ### *Validation*
 
-- 93 framework-free TypeScript suites pass, including the new route tests and the Assign page's test
+- 95 framework-free TypeScript suites pass, including the route, admin archive-message, guide backup, and Assign page tests
 - The exercise database check passes all 13 cases on connection-private temporary tables, including an archive refused for another therapist's prescription and for a program, and the session database check passes
 - Replaying the pilot recordings through the camera code gives the same summary as before the merge with Enah's update
 - Type check, lint (no errors), and a production build on Next.js 16.4.3 pass, and npm audit finds no vulnerabilities
@@ -96,7 +98,7 @@
 
 - Before uploads are used on the server, scripts\exercises_pg.sql must be run again for the new video_file_name column
 - A therapist cannot archive their exercise while another therapist still prescribes it or keeps it in a program; that therapist has to end it first
-- On the admin page, a refused archive shows no message; the archive window stays open and its text gives the reason
+- A refused archive now shows its reason on the admin page; staff must end prescriptions or remove program entries before retrying
 - Enah's section's last boundary no longer applies, since archiving ends no prescription; her section's Next.js update was from 16.4.2, not 16.4.0
 - The changes to Enah's update were checked by tests and on temporary tables, not yet in a signed-in session
 - Three cues have shown only in tests, not in a live session: "Straighten arms" during the arm hold, the lean cue on the neck side bends, and the box moving to the other arm

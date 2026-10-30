@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Nightly backup on the Postural evaluation server (run as root; safe to rerun).
 # A systemd timer runs `npm run backup:local` every night at 03:00 (server time, Asia/Manila)
-# into /var/backups/postural/<date_time>: the database dump, a copy of the session videos and
-# the manifest. Nothing is deleted automatically; prune old backups by hand after copying them
+# into /var/backups/postural/<date_time>: the database dump, session videos,
+# uploaded exercise guides and the manifest. Nothing is deleted automatically; prune old backups by hand after copying them
 # to the laptop. Run one by hand any time with: sudo systemctl start postural-backup
 set -euo pipefail
 

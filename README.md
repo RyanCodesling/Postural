@@ -15,6 +15,11 @@
 - Sent patients only their own prescribed exercises, and answered malformed exercise input with an error message instead of a server error
 - Showed the server's refused-archive reason on the admin page and closed the confirmation without changing the exercise list
 - Included uploaded exercise guides in local and nightly server backups and their restore checks, while keeping older backup manifests readable
+- Added an Enable demo tools switch to the admin's Demo Clock tab, on the laptop and on a deployed server alike, so the demo clock needs no restart; it stays off until an admin turns it on, and turning it off restores real time
+- Let an admin move a finished session recorded on the wrong day, with its outcome, to an unused scheduled day of the same prescription, giving a reason that is kept with every move
+- Showed staff the share of tracked frames on which the points an exercise depends on were unsteady, in the therapist's session view and the session report
+- Documented the server's email setup and the notice telling participants their emails are sent through Gmail
+- Added the 3D builder's options for the guide's current overhead press and neck side bend, with their validation records
 
 ### *web\src\lib\pose\overRaiseWarning.ts*, *web\src\lib\pose\drawCompensationOverlay.ts*, *web\src\lib\recording\overlayTrack.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
 
@@ -54,6 +59,45 @@
 - Checked that a new camera session names the server's current coaching configuration as well as its measurement configuration
 - Told a camera page left open from an older version to reload before it starts a session
 
+### *web\src\lib\demoClock.ts*, *web\src\app\api\demo-clock\route.ts*, *web\src\lib\DemoClockContext.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, and *scripts\demo_clock_settings_pg.sql*
+
+- Showed the Demo Clock tab on every installation, with an Enable demo tools switch whose setting is shared by everyone using that database
+- Started the tools on real time when enabled, and restored real time and cleared the saved date when disabled; a saved date is ignored while the tools are off
+- Replaced the rule that only npm run dev:demo could use the clock with DEMO_CLOCK=off, an optional lock for a server; npm run dev:demo and the new npm run start:demo share web\scripts\demo-server.mjs, which replaces dev-demo.mjs
+- Added the switch's column to scripts\demo_clock_settings_pg.sql, starting off; running the script again keeps the admin's choice
+
+### *web\src\lib\sessionDateCorrection.ts*, *web\src\lib\sessionDateCorrectionApi.ts*, *web\src\app\api\demo-clock\sessions*, *web\src\app\(app)\dashboard\admin\SessionDateCorrectionPanel.tsx*, *web\src\lib\db.ts*, and *scripts\session_date_corrections_pg.sql*
+
+- Added Correct a recorded date to the Demo Clock tab while the tools are on: an admin finds a finished session, picks an unused, uncancelled day of the same prescription with the same dose, side, and resistance, previews the move, and gives a reason
+- Moved the session's start and end together, inside that day's make-up window, along with its completion, pain stop, or partial outcome; the day it left becomes pending, or stays in progress if earlier attempts remain there
+- Refused days with activity, active sessions, conflicting outcomes, a changed prescription, and edits made from a stale view; no day is created and no prescription changes
+- Kept every move, with the admin, the reason, and the dates before and after, in a table the app can only read and add to; measurements, recordings, and emails already sent stay as they were
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\reports\sessionReport.ts*
+
+- Showed the share of tracked frames on which the points the exercise depends on were unsteady, in the therapist's session view and in the session report
+- Marked the share in amber at 25% or more, the line the trend rules use to leave a repetition out, with a note that readings from those moments, such as an arm's hold time, may be unreliable
+
+### *AUTHENTICATION_SETUP.md*, *deploy\server\README.md*, *deploy\server\05_email.sh*, *scripts\replace_system_email_pg.sql*, *web\docs\evaluation-deployment.md*, and *web\docs\participant-email-information.md*
+
+- Added 05_email.sh, which asks for the Gmail app password at a hidden prompt, checks it with Gmail before changing anything, and puts the previous settings back if the app then fails to start
+- Added scripts\replace_system_email_pg.sql, which changes only the administrator's email to the system sender on an existing database
+- Added the notice telling participants that account and exercise emails, including pain-pause alerts, are sent through Gmail
+- Recorded the 2026-10-21 email checks on the server, and the setup steps for the demo clock and date corrections
+
+### *tools\blender\refine_mpfb_form.py*, *assets\blender\MPFB_PRESENTATION.md*, *assets\blender\MPFB_EXERCISE_DRAFTS.md*, and three records in *assets\blender\reference*
+
+- Added the builder's --press-start and --neck-rest options; by default it now builds the guide's current overhead press, which starts with the fists beside the neck, and the neck side bends with the arms hanging relaxed
+- Wrote down the 2026-10-10 and 2026-10-11 press and neck revisions, including why the deeper press start lets the press counter count each repetition
+- Added the validation records of the vertical-finish press, the resting-arm pair, and the press-depth and resting-hand pair
+
+### *web\src\lib\session-token.test.ts*, *web\src\lib\sessionDateCorrection.test.tsx*, *web\src\lib\demoClock.test.ts*, *web\README.md*, *web\.env.example*, and *web\package.json*
+
+- Let the sign-in test accept a shared route guard only while that guard itself calls the database-backed sign-in check, so the date correction routes pass it
+- Gave the date correction test the exercise video check that Enah's update added to db.ts
+- Added npm run verify:session-dates, which runs the date corrections against connection-private temporary tables
+- Described the demo clock in web\README.md and web\.env.example
+
 ### Changes to Enah's Update-10-30-26: *web\src\lib\db.ts* and the archive windows in *therapist\exercises\page.tsx*, *therapist\programs\page.tsx*, and *admin\page.tsx*
 
 - Refused to archive a custom exercise while any unarchived prescription or program still uses it; the server answers with what to do, and the archive windows say to end those prescriptions and remove the program entries first
@@ -88,8 +132,9 @@
 
 ### *Validation*
 
-- 95 framework-free TypeScript suites pass, including the route, admin archive-message, guide backup, and Assign page tests
-- The exercise database check passes all 13 cases on connection-private temporary tables, including an archive refused for another therapist's prescription and for a program, and the session database check passes
+- 96 framework-free TypeScript suites pass, including the route, admin archive-message, guide backup, Assign page, and date correction tests
+- The exercise database check passes all 13 cases on connection-private temporary tables, including an archive refused for another therapist's prescription and for a program; the session database check and all 16 date correction checks pass too
+- On 2026-10-26 the demo tools switch was turned on, given a demo date, and turned off again in the signed-in admin dashboard on the laptop, where the date correction list also loaded; the laptop's tools are off with no saved date
 - Replaying the pilot recordings through the camera code gives the same summary as before the merge with Enah's update
 - Type check, lint (no errors), and a production build on Next.js 16.4.3 pass, and npm audit finds no vulnerabilities
 - In live sessions on the laptop, the box stayed on the named arm in all 118 frames that showed it, and "Keep your torso upright." showed for 7 of 7 leans to both sides, including a left lean on the wall angels that the earlier reading missed, with no cue in the upright controls
@@ -104,7 +149,9 @@
 - Three cues have shown only in tests, not in a live session: "Straighten arms" during the arm hold, the lean cue on the neck side bends, and the box moving to the other arm
 - A hand hidden from the camera can still read as visible, so the hand messages do not detect every hidden hand
 - The coaching lines are engineering lines from pilot recordings, not clinical norms, and the evaluation, already under way or finished, does not cover this update
-- The 3D builder's files (assets\blender and tools\blender), the email setup notes, the demo clock, the session date corrections, and the tracking share in the therapist's session view and report are not in this update
+- From the next deploy the Demo Clock tab shows on the server, switched off; using it there needs scripts\demo_clock_settings_pg.sql run again, and date corrections also need scripts\session_date_corrections_pg.sql, both as the database owner
+- No date correction has been saved in a signed-in session, and neither the switch nor the corrections have been tried on the server
+- The three August anatomy validation records in assets\blender\reference stay on the laptop, since they hold this computer's file paths
 
 ---
 

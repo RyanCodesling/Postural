@@ -33,6 +33,10 @@ the session-day steps apply to both.
 2. **Participant accounts.** The admin creates them in the app. Each new
    account must change its password at first sign-in, so have each person sign
    in once soon after the account is made.
+   Give each participant the [email information notice](participant-email-information.md).
+   It states: "Account and exercise emails, including pain-pause alerts, are sent
+   through Gmail." If a separate study-information handout is used, include this
+   sentence there too.
 3. **Optional clinical fields.** Leave Diagnosis, Condition and Prescription
    blank unless the `users` table owner has run
    `scripts/user_clinical_fields_pg.sql` (see `web/README.md`).

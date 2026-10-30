@@ -233,6 +233,20 @@ async function run() {
     assert.deepEqual(cues.cues.map((c) => [c.label, c.times]), [["Trunk lean", 2], ["Asymmetric shoulders", 1]]);
   });
 
+  await test("session report: the share of unsteady tracking is shown, and flagged at trend data rule 2's line", () => {
+    const render = (captureQuality: SessionReportInput["captureQuality"]) => drawnText(sessionReportPdf({ ...detail, captureQuality },
+      { patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila" }));
+    // The evaluation server's session 3: 770 unsteady frames of 1,568 judged.
+    const high = render({ framesTotal: 2468, framesOk: 1568, pctOk: 64, unsteadyFrames: 770, checkedFrames: 1568 });
+    assert(high.includes("Camera tracking: 64% of frames tracked (1568 of 2468)."), "the tracked share stays");
+    assert(high.includes("unsteady on 49% of the frames it judged"), "the unsteady share is shown");
+    assert(high.includes("may be unreliable"), "a large share is flagged");
+    const low = render({ framesTotal: 1000, framesOk: 950, pctOk: 95, unsteadyFrames: 95, checkedFrames: 950 });
+    assert(low.includes("unsteady on 10% of the frames it judged") && !low.includes("may be unreliable"), "a small share is shown, not flagged");
+    const steady = render({ framesTotal: 1000, framesOk: 950, pctOk: 95, unsteadyFrames: 0, checkedFrames: 950 });
+    assert(!steady.includes("unsteady"), "no unsteady frames: nothing added");
+  });
+
   await test("session report: older session without context or coaching record", () => {
     const text = drawnText(sessionReportPdf({
       ...detail, context: null, deviceContext: null, sets: detail.sets.map((s) => ({ ...s, holdQuality: null })),

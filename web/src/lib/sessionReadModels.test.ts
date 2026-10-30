@@ -5,7 +5,13 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildCaptureQualitySummary, parseCaptureQualitySummary, summarizeDeviceInfo } from "./sessionReadModels";
+import {
+  UNSTEADY_TRACKING_NOTE_PCT,
+  buildCaptureQualitySummary,
+  parseCaptureQualitySummary,
+  summarizeDeviceInfo,
+  unsteadyTrackingPct,
+} from "./sessionReadModels";
 
 let passed = 0;
 let failed = 0;
@@ -86,6 +92,17 @@ test("capture summary saves and reads back the unsteady frames", () => {
   const tooManyChecked = parseCaptureQualitySummary({ framesTotal: 10, framesOk: 8, pctOk: 80, checkedFrames: 9 });
   assert(tooManyChecked?.pctOk === 80 && tooManyChecked.checkedFrames === undefined,
     "more checked frames than tracked frames drops only the count");
+});
+
+test("the unsteady share is over the frames the check judged, else the tracked frames, and absent without a count", () => {
+  // The evaluation server's session 3: 770 unsteady of 1,568 judged.
+  const session3 = parseCaptureQualitySummary({ framesTotal: 2468, framesOk: 1568, pctOk: 64, unsteadyFrames: 770, checkedFrames: 1568 });
+  assert(unsteadyTrackingPct(session3) === 49, `session 3 reads ${unsteadyTrackingPct(session3)}`);
+  assert(unsteadyTrackingPct({ framesOk: 200, unsteadyFrames: 50 }) === 25, "before the judged count: over the tracked frames");
+  assert(unsteadyTrackingPct({ framesOk: 200 }) === null, "no tracking count: none");
+  assert(unsteadyTrackingPct({ framesOk: 0, unsteadyFrames: 0, checkedFrames: 0 }) === null, "nothing judged: none");
+  assert(unsteadyTrackingPct(null) === null, "no summary: none");
+  assert(UNSTEADY_TRACKING_NOTE_PCT === 25, "the note's line is trend data rule 2's");
 });
 
 test("capture summary saves and reads back every camera frame size, largest count first", () => {

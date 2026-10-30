@@ -17,6 +17,7 @@ import ExerciseVideoField, {
   type ExerciseVideoChoice,
 } from "../_components/ExerciseVideoField";
 import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
+import SessionDateCorrectionPanel from "./SessionDateCorrectionPanel";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
@@ -758,9 +759,7 @@ export default function AdminDashboard() {
         { key: "users", label: "Manage Users", icon: <AdminUsersIcon />, active: activeTab === "users", onSelect: () => setActiveTab("users") },
         { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
         { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
-        ...(demoClockOn
-          ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }]
-          : []),
+        { key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") },
         { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
       ]}
       userName={user?.name}
@@ -768,8 +767,11 @@ export default function AdminDashboard() {
       tour={ADMIN_TOURS[activeTab]}
       onLogout={async () => { await logout(); router.push("/"); }}
     >
-        {activeTab === "demo-clock" && demoClockOn && (
-          <DemoClockPanel />
+        {activeTab === "demo-clock" && (
+          <>
+            <DemoClockPanel />
+            {demoClockOn && <SessionDateCorrectionPanel />}
+          </>
         )}
         {/* Dashboard Tab */}
         {activeTab === "dashboard" && (
@@ -2703,7 +2705,7 @@ function PatientImagePicker({
 }
 
 function DemoClockPanel() {
-  const { now, overrideActive, settingsAvailable } = useDemoClock();
+  const { now, enabled, allowed, ready, overrideActive, settingsAvailable } = useDemoClock();
   // Only this panel and the badge tick every second; the pages read the date.
   const appTime = useTickingLabel(now);
   const computerTime = useTickingLabel(realTime);
@@ -2728,12 +2730,13 @@ function DemoClockPanel() {
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const submittedTarget = new FormData(event.currentTarget).get("targetAt");
     setSaving(true);
     setMessage("");
     setError("");
     try {
-      const target = new Date(targetAt);
-      if (!targetAt || Number.isNaN(target.getTime())) throw new Error("Choose a valid date and time.");
+      const target = new Date(typeof submittedTarget === "string" ? submittedTarget : "");
+      if (Number.isNaN(target.getTime())) throw new Error("Choose a valid date and time.");
       const response = await fetch("/api/demo-clock", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2769,12 +2772,33 @@ function DemoClockPanel() {
     }
   };
 
+  const toggle = async () => {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/demo-clock", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !enabled }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not switch demo tools.");
+      setTargetAt(toDateTimeLocalValue(data.effectiveAt));
+      setMessage(data.enabled ? "Demo tools enabled. The app is using real time until you choose a demo date." : "Demo tools disabled. The app is back on real time and the saved offset has been cleared.");
+      window.dispatchEvent(new Event("demo-clock-updated"));
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : "Could not switch demo tools.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section id="tour-demo-clock" className="max-w-2xl rounded-xl bg-white p-6 shadow-sm">
       <h1 className="text-2xl font-bold text-gray-900">Demo Clock</h1>
       <p className="mt-1 text-sm text-gray-600">
         Simulate app dates for scheduling and dashboard demonstrations. Scheduling days use Manila time; this does not change the computer clock.
-        Sessions recorded while a demo date is set are saved with that date, so use a demo account.
+        This applies to every user on this installation. Sessions recorded while a demo date is set keep that date, so use a demo account.
       </p>
       <dl className="mt-5 grid gap-3 border-y border-gray-100 py-4 sm:grid-cols-2">
         <div>
@@ -2788,16 +2812,28 @@ function DemoClockPanel() {
           </dd>
         </div>
       </dl>
-      {!settingsAvailable ? (
+      {!ready ? <p className="mt-4 text-sm" role="status">Loading demo settings…</p> : !allowed ? (
+        <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Demo tools are locked off by the server&apos;s DEMO_CLOCK=off setting. The server owner must remove that lock before this switch can be used.</p>
+      ) : !settingsAvailable ? (
         <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-          Run scripts/demo_clock_settings_pg.sql as the database owner to enable the demo clock.
+          One-time setup is needed. Have the database owner run the updated scripts/demo_clock_settings_pg.sql. After that, use the switch here without restarting the server.
         </p>
       ) : (
+        <>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button type="button" onClick={toggle} disabled={saving} aria-pressed={enabled} className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-50">
+            {saving ? "Saving…" : enabled ? "Disable demo tools" : "Enable demo tools"}
+          </button>
+          <span className="text-sm text-gray-600">{enabled ? "Enabled" : "Off — using real time"}</span>
+        </div>
+        <p className="mt-2 text-sm text-gray-600">Finish any active session before changing the clock. Disabling clears the offset; recorded sessions and corrections are kept.</p>
+        {enabled && (
         <form onSubmit={save} className="mt-5 space-y-4">
           <label htmlFor="demo-clock-target" className="block text-sm font-medium text-gray-700">
-            Simulated date and time
+            Simulated date and time (this device&apos;s time zone)
             <input
               id="demo-clock-target"
+              name="targetAt"
               type="datetime-local"
               required
               value={targetAt}
@@ -2823,12 +2859,15 @@ function DemoClockPanel() {
             </button>
           </div>
         </form>
+        )}
+        </>
       )}
       {message && <p role="status" className="mt-4 text-sm text-green-800">{message}</p>}
       {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
       <p className="mt-5 text-xs text-gray-500">
-        The demo clock works only while the app runs with npm run dev:demo. A normal start uses the real date and
-        ignores the demo date. Sign-in and password-expiry timers always use the real time.
+        This switch works locally and on deployed installations. No server restart is needed.
+        Enabling starts on real time; you can correct old records without setting a simulated date.
+        Sign-in and password-expiry timers always use the real time.
       </p>
     </section>
   );

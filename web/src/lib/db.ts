@@ -13,7 +13,16 @@ import {
   type PartialDayItem,
   type PartialDayPatient,
 } from "./email";
-import { DAY_MS, demoClockEnabled, manilaDayKey } from "./demoClock";
+import { DAY_MS, DemoClockError, demoClockAllowed, manilaDayKey } from "./demoClock";
+import {
+  parseCorrectionSessionId,
+  parseSessionDateCorrection,
+  sameCorrectionPrescription,
+  SessionDateCorrectionError,
+  type CorrectableSession,
+  type SessionDateCorrectionDetail,
+  type SessionDateCorrectionInput,
+} from "./sessionDateCorrection";
 import { DEPRECATED_EXERCISE_IDS } from "./exercises/deprecated";
 import {
   deriveAssignmentStatus,
@@ -74,55 +83,73 @@ types.setTypeParser(1082, (val: string) => val);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export interface DemoClockState {
+  allowed: boolean;
   available: boolean;
+  enabled: boolean;
   isOverridden: boolean;
   offsetMs: number;
   effectiveAt: string;
 }
 
-/** The saved demo offset, or null when the demo-clock table has not been installed. */
-async function readDemoClockOffsetMs(): Promise<number | null> {
+/** Missing table/upgrade is disabled, including a legacy saved nonzero offset. */
+async function readDemoClockSettings(): Promise<{ enabled: boolean; offsetMs: number } | null> {
   try {
     const result = await pool.query(
-      "SELECT offset_ms FROM demo_clock_settings WHERE id = 1",
+      "SELECT enabled, offset_ms FROM demo_clock_settings WHERE id = 1",
     );
-    return Number(result.rows[0]?.offset_ms ?? 0);
+    return { enabled: result.rows[0]?.enabled === true, offsetMs: Number(result.rows[0]?.offset_ms ?? 0) };
   } catch (error) {
-    if ((error as { code?: string }).code === "42P01") return null;
+    if (["42P01", "42703"].includes((error as { code?: string }).code ?? "")) return null;
     throw error;
   }
 }
 
-/** For the demo-clock controls, which exist only in demo mode (`demoClockEnabled`). */
+/** Signed-in state discovery remains available while tools are disabled. */
 export async function getDemoClockState(): Promise<DemoClockState> {
-  const offsetMs = await readDemoClockOffsetMs();
+  const allowed = demoClockAllowed(process.env);
+  const settings = allowed ? await readDemoClockSettings() : null;
+  const enabled = settings?.enabled === true;
+  const offsetMs = enabled ? settings.offsetMs : 0;
   return {
-    available: offsetMs !== null,
-    isOverridden: offsetMs !== null && offsetMs !== 0,
-    offsetMs: offsetMs ?? 0,
-    effectiveAt: new Date(Date.now() + (offsetMs ?? 0)).toISOString(),
+    allowed,
+    available: settings !== null,
+    enabled,
+    isOverridden: enabled && offsetMs !== 0,
+    offsetMs,
+    effectiveAt: new Date(Date.now() + offsetMs).toISOString(),
   };
 }
 
-export async function setDemoClock(targetAt: string, updatedBy: string): Promise<void> {
-  const targetMs = Date.parse(targetAt);
-  if (!Number.isFinite(targetMs)) throw new Error("Enter a valid demo date and time.");
-  const offsetMs = targetMs - Date.now();
-  if (Math.abs(offsetMs) > 10 * 366 * 24 * 60 * 60 * 1000) {
-    throw new Error("Demo time must be within 10 years of the real clock.");
-  }
+/** Turning off clears the offset; a fresh enable starts on real time. */
+export async function setDemoClockMode(enabled: boolean, updatedBy: string): Promise<void> {
+  if (!demoClockAllowed(process.env)) throw new DemoClockError("Demo tools are locked off by this server's configuration.", 403);
   await pool.query(
-    `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
-     VALUES (1, $1, $2, NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET offset_ms = EXCLUDED.offset_ms,
-           updated_by = EXCLUDED.updated_by,
-           updated_at = NOW()`,
-    [Math.trunc(offsetMs), updatedBy],
+    `INSERT INTO demo_clock_settings (id, enabled, offset_ms, updated_by, updated_at)
+     VALUES (1, $1, 0, $2, NOW())
+     ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled,
+       offset_ms = CASE WHEN EXCLUDED.enabled AND demo_clock_settings.enabled THEN demo_clock_settings.offset_ms ELSE 0 END,
+       updated_by = EXCLUDED.updated_by, updated_at = NOW()`, [enabled, updatedBy],
   );
 }
 
+export async function setDemoClock(targetAt: string, updatedBy: string): Promise<void> {
+  if (!demoClockAllowed(process.env)) throw new DemoClockError("Demo tools are locked off by this server's configuration.", 403);
+  const targetMs = Date.parse(targetAt);
+  if (!Number.isFinite(targetMs)) throw new DemoClockError("Enter a valid demo date and time.", 400);
+  const offsetMs = targetMs - Date.now();
+  if (Math.abs(offsetMs) > 10 * 366 * 24 * 60 * 60 * 1000) {
+    throw new DemoClockError("Demo time must be within 10 years of the real clock.", 400);
+  }
+  const result = await pool.query(
+    `UPDATE demo_clock_settings SET offset_ms = $1, updated_by = $2, updated_at = NOW()
+     WHERE id = 1 AND enabled = TRUE RETURNING id`,
+    [Math.trunc(offsetMs), updatedBy],
+  );
+  if (!result.rows.length) throw new DemoClockError("Enable demo tools before setting a demo time.", 409);
+}
+
 export async function resetDemoClock(updatedBy: string): Promise<void> {
+  if (!demoClockAllowed(process.env)) throw new DemoClockError("Demo tools are locked off by this server's configuration.", 403);
   await pool.query(
     `INSERT INTO demo_clock_settings (id, offset_ms, updated_by, updated_at)
      VALUES (1, 0, $1, NOW())
@@ -134,14 +161,186 @@ export async function resetDemoClock(updatedBy: string): Promise<void> {
   );
 }
 
+function mapCorrectableSession(row: Record<string, unknown>): CorrectableSession {
+  return {
+    id: Number(row.id), patientName: String(row.patient_name), exerciseName: String(row.exercise_name),
+    startedAt: String(row.started_at), endedAt: row.ended_at == null ? null : String(row.ended_at),
+    scheduledDay: row.scheduled_day == null ? null : String(row.scheduled_day),
+    occurrenceId: row.occurrence_id == null ? null : Number(row.occurrence_id), endReason: row.end_reason == null ? null : String(row.end_reason),
+  };
+}
+
+/** Metadata only; admin correction does not expose the clinical session payload. */
+export async function listCorrectableSessions(search: string, offset: number) {
+  const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+  const result = await pool.query(
+    `SELECT s.id, s.occurrence_id, s.end_reason, u.name AS patient_name, e.name AS exercise_name,
+            to_char(s.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS started_at,
+            to_char(s.ended_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ended_at,
+            o.due_date::text AS scheduled_day
+     FROM sessions s JOIN users u ON u.id = s.patient_id
+     JOIN exercises e ON e.id = s.exercise_id
+     LEFT JOIN exercise_occurrences o ON o.id = s.occurrence_id
+     WHERE s.ended_at IS NOT NULL
+       AND (u.name ILIKE $1 OR e.name ILIKE $1 OR s.id::text = $2)
+     ORDER BY s.started_at DESC, s.id DESC LIMIT 51 OFFSET $3`,
+    [pattern, search, offset],
+  );
+  return { sessions: result.rows.slice(0, 50).map(mapCorrectableSession), hasMore: result.rows.length > 50 };
+}
+
+export async function getSessionDateCorrectionDetail(id: number): Promise<SessionDateCorrectionDetail | null> {
+  const result = await pool.query(
+    `SELECT s.id, s.occurrence_id, s.end_reason, s.patient_exercise_id, s.context_snapshot,
+            u.name AS patient_name, e.name AS exercise_name,
+            to_char(s.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS started_at,
+            to_char(s.ended_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ended_at,
+            o.due_date::text AS scheduled_day
+     FROM sessions s JOIN users u ON u.id = s.patient_id
+     JOIN exercises e ON e.id = s.exercise_id
+     LEFT JOIN exercise_occurrences o ON o.id = s.occurrence_id WHERE s.id = $1`, [id],
+  );
+  if (!result.rows[0]) return null;
+  const session = mapCorrectableSession(result.rows[0]);
+  const candidates = await pool.query(
+    `SELECT o.id, o.due_date::text, COALESCE(o.makeup_until, o.due_date)::text AS makeup_until, o.prescription_snapshot
+     FROM exercise_occurrences o
+     WHERE o.patient_exercise_id = $1 AND o.cancelled_at IS NULL
+       AND (o.id = $2 OR (o.status = 'pending' AND o.completed_at IS NULL AND o.pain_stopped_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.occurrence_id = o.id)))
+     ORDER BY o.due_date, o.id`, [result.rows[0].patient_exercise_id, session.occurrenceId],
+  );
+  const destinations = candidates.rows
+    .filter(row => row.id === session.occurrenceId || sameCorrectionPrescription(result.rows[0].context_snapshot?.prescription, row.prescription_snapshot))
+    .map(row => ({ id: Number(row.id), dueDate: row.due_date, makeupUntil: row.makeup_until }));
+  try {
+    const history = await pool.query(
+      `SELECT c.id::text, c.old_started_at, c.old_ended_at, c.new_started_at, c.new_ended_at,
+              c.corrected_at, c.reason, u.name AS corrected_by_name,
+              c.source_before->>'due_date' AS old_scheduled_day, c.destination_before->>'due_date' AS new_scheduled_day
+       FROM session_date_corrections c JOIN users u ON u.id = c.corrected_by
+       WHERE c.session_id = $1 ORDER BY c.id DESC`, [id],
+    );
+    return {
+      session, destinations, available: true, revision: history.rows[0]?.id ?? "0",
+      history: history.rows.map(row => ({
+        id: row.id, oldStartedAt: new Date(row.old_started_at).toISOString(), oldEndedAt: new Date(row.old_ended_at).toISOString(),
+        newStartedAt: new Date(row.new_started_at).toISOString(), newEndedAt: new Date(row.new_ended_at).toISOString(),
+        correctedAt: new Date(row.corrected_at).toISOString(), correctedByName: row.corrected_by_name, reason: row.reason,
+        oldScheduledDay: row.old_scheduled_day, newScheduledDay: row.new_scheduled_day,
+      })),
+    };
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") return { session, destinations, available: false, revision: "0", history: [] };
+    throw error;
+  }
+}
+
+/** Move session dates and their occurrence outcome; retain duration and evidence.
+ * Session lock + revision prevent stale saves (including a date changed back).
+ * Audit insertion and date update either both commit or both roll back.
+ */
+export async function correctSessionDate(id: number, actorId: string, value: SessionDateCorrectionInput): Promise<void> {
+  if (!demoClockAllowed(process.env)) throw new SessionDateCorrectionError("Demo mode is off.", 404);
+  parseCorrectionSessionId(String(id));
+  const input = parseSessionDateCorrection(value);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL TIME ZONE 'UTC'");
+    const mode = await client.query("SELECT enabled FROM demo_clock_settings WHERE id = 1 FOR SHARE");
+    if (mode.rows[0]?.enabled !== true) throw new SessionDateCorrectionError("Enable demo tools before correcting a recorded date.", 404);
+    const actor = await client.query("SELECT id FROM users WHERE id = $1 AND role = 'admin' AND is_archived IS NOT TRUE AND must_change_password IS NOT TRUE FOR SHARE", [actorId]);
+    if (!actor.rows.length) throw new SessionDateCorrectionError("An active administrator is required.", 403);
+    const locked = await client.query(
+      `SELECT ended_at, occurrence_id, patient_exercise_id, end_reason, context_snapshot,
+              ended_at >= started_at AS valid_duration,
+              started_at = $2::timestamptz AS matches, started_at = $3::timestamptz AS unchanged
+       FROM sessions WHERE id = $1 FOR UPDATE`, [id, input.expectedStartedAt, input.targetAt],
+    );
+    const row = locked.rows[0];
+    if (!row) throw new SessionDateCorrectionError("Session not found.", 404);
+    if (row.ended_at == null) throw new SessionDateCorrectionError("Finish the session before correcting its date.", 409);
+    if (!row.valid_duration) throw new SessionDateCorrectionError("This session has an invalid duration and needs separate review.", 409);
+    const version = await client.query("SELECT COALESCE(MAX(id), 0)::text AS revision FROM session_date_corrections WHERE session_id = $1", [id]);
+    if (!row.matches || version.rows[0].revision !== input.expectedRevision) {
+      throw new SessionDateCorrectionError("This session changed. Reload it before saving another correction.", 409);
+    }
+    const moving = row.occurrence_id !== input.targetOccurrenceId;
+    if (row.unchanged && !moving) throw new SessionDateCorrectionError("Choose a different recorded date/time or scheduled day.", 400);
+    if (!row.occurrence_id) throw new SessionDateCorrectionError("This historical session has no scheduled day to correct.", 409);
+    const occurrences = await client.query(
+      `SELECT o.*, o.due_date::text AS due_key, COALESCE(o.makeup_until, o.due_date)::text AS makeup_key, to_jsonb(o) AS audit
+       FROM exercise_occurrences o WHERE o.id = ANY($1::integer[]) ORDER BY o.id FOR UPDATE`,
+      [[row.occurrence_id, input.targetOccurrenceId]],
+    );
+    const source = occurrences.rows.find(o => o.id === row.occurrence_id);
+    const destination = occurrences.rows.find(o => o.id === input.targetOccurrenceId);
+    if (!source || !destination || source.patient_exercise_id !== row.patient_exercise_id || destination.patient_exercise_id !== row.patient_exercise_id || source.cancelled_at || destination.cancelled_at) {
+      throw new SessionDateCorrectionError("Choose an uncancelled day from the same prescription.", 409);
+    }
+    const targetDay = manilaDayKey(Date.parse(input.targetAt));
+    if (targetDay < destination.due_key || targetDay > destination.makeup_key) {
+      throw new SessionDateCorrectionError("The corrected start must fall within the destination's Manila scheduled day or make-up window.", 400);
+    }
+    const outcome = row.end_reason === "completed" ? "completed" : row.end_reason === "pain" ? "pain_stopped" : ["user", "superseded"].includes(row.end_reason) ? "in_progress" : null;
+    if (!outcome || source.status !== outcome) throw new SessionDateCorrectionError("The session and scheduled outcome do not match. Review this history before correcting it.", 409);
+    const others = await client.query(
+      `SELECT occurrence_id, ended_at, end_reason FROM sessions WHERE occurrence_id = ANY($1::integer[]) AND id <> $2`,
+      [[source.id, destination.id], id],
+    );
+    if (others.rows.some(s => s.ended_at == null || (s.occurrence_id === source.id && ["completed", "pain"].includes(s.end_reason)))) {
+      throw new SessionDateCorrectionError("Another active session or terminal outcome uses this scheduled day. Finish or review it before correcting.", 409);
+    }
+    if (moving && (destination.status !== "pending" || destination.completed_at || destination.pain_stopped_at || others.rows.some(s => s.occurrence_id === destination.id))) {
+      throw new SessionDateCorrectionError("The destination already has activity or an outcome. Choose an unused scheduled day.", 409);
+    }
+    if (moving && !sameCorrectionPrescription(row.context_snapshot?.prescription, destination.prescription_snapshot)) {
+      throw new SessionDateCorrectionError("The destination must have the same recorded dose, side, and resistance. Unknown or changed prescriptions cannot be moved here.", 409);
+    }
+    if (moving) {
+      await client.query(
+        "UPDATE exercise_occurrences SET status = $2, completed_at = NULL, pain_stopped_at = NULL WHERE id = $1",
+        [source.id, others.rows.some(s => s.occurrence_id === source.id) ? "in_progress" : "pending"],
+      );
+    }
+    await client.query(
+      `UPDATE exercise_occurrences SET status = $2,
+         completed_at = CASE WHEN $2 = 'completed' THEN (SELECT ended_at + ($3::timestamptz - started_at) FROM sessions WHERE id = $4) ELSE NULL END,
+         pain_stopped_at = CASE WHEN $2 = 'pain_stopped' THEN (SELECT ended_at + ($3::timestamptz - started_at) FROM sessions WHERE id = $4) ELSE NULL END
+       WHERE id = $1`, [destination.id, outcome, input.targetAt, id],
+    );
+    // PostgreSQL interval arithmetic preserves sub-millisecond timestamps too.
+    await client.query(
+      `INSERT INTO session_date_corrections
+         (session_id, corrected_by, old_started_at, old_ended_at, new_started_at, new_ended_at, reason,
+          old_occurrence_id, new_occurrence_id, source_before, destination_before, source_after, destination_after)
+       SELECT id, $2, started_at, ended_at, $3::timestamptz,
+              ended_at + ($3::timestamptz - started_at), $4, $5, $6, $7::jsonb, $8::jsonb,
+              (SELECT to_jsonb(o) FROM exercise_occurrences o WHERE o.id = $5),
+              (SELECT to_jsonb(o) FROM exercise_occurrences o WHERE o.id = $6)
+       FROM sessions WHERE id = $1`,
+      [id, actorId, input.targetAt, input.reason, source.id, destination.id, JSON.stringify(source.audit), JSON.stringify(destination.audit)],
+    );
+    await client.query(
+      `UPDATE sessions SET ended_at = ended_at + ($2::timestamptz - started_at), started_at = $2::timestamptz, occurrence_id = $3 WHERE id = $1`,
+      [id, input.targetAt, destination.id],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /**
- * The app's current time. Outside demo mode (`npm run dev:demo`) this is the
- * real time whatever demo date the database still holds, so sessions,
- * completions and pain stops are never stamped with a forgotten demo date.
+ * The app's current time. The admin switch is off by default. While disabled
+ * (or locked off by the server), any saved offset is ignored in both environments.
  */
 export async function getEffectiveNow(): Promise<Date> {
-  if (!demoClockEnabled(process.env)) return new Date();
-  return new Date(Date.now() + ((await readDemoClockOffsetMs()) ?? 0));
+  return new Date((await getDemoClockState()).effectiveAt);
 }
 
 // Scheduling uses Manila calendar days; in demo mode the demo clock supplies the instant.

@@ -178,6 +178,26 @@ export function buildCaptureQualitySummary(tallies: CaptureTallies): CaptureQual
   };
 }
 
+/**
+ * The share of frames, in whole percent, on which the tracking check found the
+ * points the exercise depends on unsteady: unsteady frames over the frames it
+ * could judge, or over the frames that passed capture readiness for sessions
+ * saved before that count. Null without a tracking count or a judged frame.
+ */
+export function unsteadyTrackingPct(
+  quality: { framesOk: number; unsteadyFrames?: number; checkedFrames?: number } | null | undefined,
+): number | null {
+  if (!quality || quality.unsteadyFrames === undefined) return null;
+  const judged = quality.checkedFrames ?? quality.framesOk;
+  return judged > 0 ? Math.round((100 * quality.unsteadyFrames) / judged) : null;
+}
+
+/**
+ * At this share of unsteady frames or more, staff views flag the session: the
+ * line at which trend data rule 2 leaves a repetition out (D-39).
+ */
+export const UNSTEADY_TRACKING_NOTE_PCT = 25;
+
 export interface DeviceContext {
   browser: string;
   platform: string;

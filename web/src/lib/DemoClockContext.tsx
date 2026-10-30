@@ -12,9 +12,12 @@ interface DemoClockContextValue {
    * second.
    */
   todayKey: string;
-  /** The server runs in demo mode (`npm run dev:demo`); the controls exist only then. */
+  /** The administrator enabled demo tools in the shared database setting. */
   enabled: boolean;
-  /** Demo mode is on and the demo-clock table is installed. */
+  /** The optional server configuration lock permits admin activation. */
+  allowed: boolean;
+  ready: boolean;
+  /** The current demo-clock schema is installed. */
   settingsAvailable: boolean;
   overrideActive: boolean;
 }
@@ -23,12 +26,16 @@ const DemoClockContext = createContext<DemoClockContextValue>({
   now: () => new Date(),
   todayKey: manilaDayKey(Date.now()),
   enabled: false,
+  allowed: true,
+  ready: false,
   settingsAvailable: false,
   overrideActive: false,
 });
 
 interface DemoClockResponse {
+  allowed: boolean;
   available: boolean;
+  enabled: boolean;
   isOverridden: boolean;
   offsetMs: number;
 }
@@ -36,39 +43,40 @@ interface DemoClockResponse {
 export function DemoClockProvider({ children }: { children: ReactNode }) {
   const [offsetMs, setOffsetMs] = useState(0);
   const [enabled, setEnabled] = useState(false);
+  const [allowed, setAllowed] = useState(true);
+  const [ready, setReady] = useState(false);
   const [settingsAvailable, setSettingsAvailable] = useState(false);
   const [overrideActive, setOverrideActive] = useState(false);
   const [todayKey, setTodayKey] = useState(() => manilaDayKey(Date.now()));
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
     let cancelled = false;
     const refresh = async () => {
       try {
         const response = await fetch("/api/demo-clock", { cache: "no-store" });
         if (cancelled) return;
         if (!response.ok) {
-          // 404: the server was not started in demo mode, which only a restart
-          // changes, so stop asking.
-          if (response.status === 404) window.clearInterval(poll);
+          // Keep polling while disabled: an admin can enable tools without a restart.
           setEnabled(false);
           setSettingsAvailable(false);
           setOffsetMs(0);
           setOverrideActive(false);
+          setReady(true);
           return;
         }
         const state = (await response.json()) as DemoClockResponse;
         if (cancelled) return;
-        setEnabled(true);
+        setEnabled(Boolean(state.enabled));
+        setAllowed(state.allowed !== false);
         setOffsetMs(state.offsetMs || 0);
         setOverrideActive(Boolean(state.isOverridden));
         setSettingsAvailable(Boolean(state.available));
+        setReady(true);
       } catch {
-        if (!cancelled) setSettingsAvailable(false);
+        if (!cancelled) { setSettingsAvailable(false); setReady(true); }
       }
     };
 
-    // Set before the first request, which may clear it.
     const poll = window.setInterval(() => void refresh(), 15_000);
     void refresh();
     const onClockUpdated = () => void refresh();
@@ -91,8 +99,8 @@ export function DemoClockProvider({ children }: { children: ReactNode }) {
 
   const now = useCallback(() => new Date(Date.now() + offsetMs), [offsetMs]);
   const value = useMemo(
-    () => ({ now, todayKey, enabled, settingsAvailable, overrideActive }),
-    [now, todayKey, enabled, settingsAvailable, overrideActive],
+    () => ({ now, todayKey, enabled, allowed, ready, settingsAvailable, overrideActive }),
+    [now, todayKey, enabled, allowed, ready, settingsAvailable, overrideActive],
   );
 
   return (

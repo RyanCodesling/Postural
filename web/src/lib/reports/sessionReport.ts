@@ -26,7 +26,7 @@ import {
   type SessionContextSnapshot,
   type SessionEndReason,
 } from "@/lib/prescriptionContext";
-import type { DeviceContext } from "@/lib/sessionReadModels";
+import { UNSTEADY_TRACKING_NOTE_PCT, unsteadyTrackingPct, type DeviceContext } from "@/lib/sessionReadModels";
 import {
   ANGLE_ESTIMATE_LABEL,
   prescribedOutcomeSides,
@@ -54,7 +54,13 @@ export type SessionReportInput = {
     timing: PainTiming | null;
     bodyArea: string | null;
   };
-  captureQuality: { framesTotal: number; framesOk: number; pctOk: number } | null;
+  captureQuality: {
+    framesTotal: number;
+    framesOk: number;
+    pctOk: number;
+    unsteadyFrames?: number;
+    checkedFrames?: number;
+  } | null;
   /** The browser and system the session was recorded on. */
   deviceContext?: DeviceContext | null;
   sets: Array<StoredAttempt & {
@@ -396,8 +402,13 @@ export function sessionReportPdf(input: SessionReportInput, options: SessionRepo
 
   layout.heading("Limitations");
   const note = (text: string) => layout.paragraph(text, { size: 8.5, color: COLORS.muted });
+  const unsteadyPct = unsteadyTrackingPct(input.captureQuality);
   note(input.captureQuality
-    ? `Camera tracking: ${input.captureQuality.pctOk}% of frames tracked (${input.captureQuality.framesOk} of ${input.captureQuality.framesTotal}).`
+    ? `Camera tracking: ${input.captureQuality.pctOk}% of frames tracked (${input.captureQuality.framesOk} of ${input.captureQuality.framesTotal}).` +
+      (unsteadyPct !== null && unsteadyPct > 0
+        ? ` The tracking check found the points the exercise depends on unsteady on ${unsteadyPct}% of the frames it judged` +
+          (unsteadyPct >= UNSTEADY_TRACKING_NOTE_PCT ? "; readings from those moments may be unreliable." : ".")
+        : "")
     : "Camera tracking: not recorded for this session.");
   note(ANGLE_NOTE);
 

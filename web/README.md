@@ -17,6 +17,14 @@ Open [http://localhost:3000](http://localhost:3000). The seeded credentials in t
 
 `SESSION_SECRET` must contain at least 32 random bytes and must not be committed. Changing it invalidates existing `auth_token` cookies.
 
+### Optional demo clock
+
+The [demo clock](docs/demo-clock.md) supports local development and production
+deployments through **Admin → Demo Clock → Enable demo tools**, after one-time
+database setup. It stays off by default. Enable/disable needs no server restart;
+disabling restores real time and clears the offset. The guide covers installation,
+recorded-date corrections, shared scope and timestamp limits.
+
 ### Optional clinical profile fields
 
 For an existing database, its `users` table owner can enable Diagnosis, Condition,

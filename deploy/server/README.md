@@ -52,6 +52,45 @@ The first setup leaves email unconfigured. Existing deployments may already have
 updating. Account emails and password-reset codes require that configuration. New accounts
 use their first-sign-in password and must change it.
 
+## System email
+
+The system sender and seeded administrator email are `accbpostural.noreply@gmail.com`.
+
+Email was configured on the evaluation server on 2026-10-21. Gmail SMTP
+authentication passed and Gmail accepted one self-addressed test message with a
+250 response. The user confirmed Gmail inbox receipt on 2026-10-21.
+
+The public Forgot Password APIs were also verified on 2026-10-21 with a disposable
+account and the code actually delivered to Gmail. Password reset and new-password
+sign-in succeeded; the old password and consumed reset token were refused. The
+password-changed notice arrived too. The disposable account and its reset/login
+records were removed after verification. This exercised the API/email lifecycle;
+the interactive browser form sequence and scheduled notification delivery were not tested.
+
+On an existing database, back up first and run only `scripts/replace_system_email_pg.sql`
+as the database owner to change the existing `admin_001` email. It preserves the same
+account ID, password and all other fields. Do not rerun the full user seed for this change.
+Existing Postural passwords are independent of the Gmail password.
+
+Sending requires all three runtime settings in `/etc/postural/env`: `SMTP_USER` and
+`SMTP_FROM` set to the system sender, and `SMTP_PASS` set to that account's Gmail app
+password. Without the app password, account emails and password-reset codes are not sent.
+Enable 2-Step Verification on the Gmail account before creating an app password. Change
+the normal Google password first if needed: doing so afterward revokes app passwords.
+
+Install `deploy/server/05_email.sh` as root-owned
+`/usr/local/sbin/postural-configure-email` (mode 755), then run it in an interactive SSH
+session with `sudo bash /usr/local/sbin/postural-configure-email`. It reads the app
+password at a hidden terminal prompt and verifies Gmail authentication before
+changing settings. A rejected credential leaves the settings unchanged. It then
+backs up, updates only the SMTP settings,
+keeps root:postural 640 permissions and restarts the app. Failed application startup
+restores the previous settings. Never put the app password in chat, command arguments
+or logs. No application rebuild is needed for runtime email settings.
+
+Afterward, send one self-addressed test email and check both SMTP acceptance and receipt
+in the new inbox. A service restart alone does not verify email delivery.
+
 ## Updating to a new revision
 
 Copy the new code over `/opt/postural/app` (step 2's first command), then rerun
@@ -59,6 +98,39 @@ Copy the new code over `/opt/postural/app` (step 2's first command), then rerun
 leaves the existing database and secrets alone. A change to the database schema needs its
 SQL script run by hand (`sudo -u postgres psql -d postural -f <script>`), as on any other
 deployment. Take a backup first.
+
+## Optional demo clock
+
+The [demo clock](../../web/docs/demo-clock.md) is off until an admin selects
+**Demo Clock → Enable demo tools**. The tab remains visible while off. Leave
+`DEMO_CLOCK` unset for normal use. Enable/disable needs no restart or rebuild.
+
+After deploying this version, back up and run the updated
+`scripts/demo_clock_settings_pg.sql` as the database owner, including on an
+installation that already has the table. The new `enabled` column defaults to
+false; an old saved offset does not activate itself. Later reruns preserve the
+admin's current choice. Keep the ordinary production start command and
+`NODE_ENV=production`.
+
+Enable starts on real time. An admin can then set a simulated date or use the
+recorded-date correction form. **Disable demo tools** restores real time and
+clears the offset; a later enable starts fresh. All users share that installation's
+clock, while local and deployed databases have independent settings. Reminder
+emails still use real delivery and the simulated day for selection.
+
+`DEMO_CLOCK=off` is an optional server-level lock. If an existing service has it,
+remove that lock and restart once to permit dashboard control; preserve the
+environment file's root:postural 640 permissions. Merely setting `DEMO_CLOCK=on`
+does not enable the database mode. See the guide for fields that retain real time.
+
+For the optional **Correct a recorded date** control, also run
+`scripts/session_date_corrections_pg.sql` as the database owner after the existing
+session/occurrence schema. It adds audit storage without changing historical
+rows. In demo mode, an admin can move a finished session and its outcome to an
+unused compatible day of the same prescription. The form previews the move and
+requires a reason; existing notifications/emails are not rewritten or resent.
+The guide covers the restrictions and original-context preservation. Corrections
+persist after demo mode is disabled.
 
 ## Backups
 

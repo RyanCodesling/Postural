@@ -33,6 +33,7 @@ import ReportButton from "../../../_components/ReportButton";
 import PatientReports from "../../../_components/PatientReports";
 import type { OccurrenceStatus } from "@/lib/exercises/occurrences";
 import SessionVideo from "../../../_components/SessionVideo";
+import { UNSTEADY_TRACKING_NOTE_PCT, unsteadyTrackingPct } from "@/lib/sessionReadModels";
 
 interface Patient {
   id: string;
@@ -208,7 +209,13 @@ interface SessionDetail {
     bodyArea: string | null;
     reportedAt: string | null;
   };
-  captureQuality: { framesTotal: number; framesOk: number; pctOk: number } | null;
+  captureQuality: {
+    framesTotal: number;
+    framesOk: number;
+    pctOk: number;
+    unsteadyFrames?: number;
+    checkedFrames?: number;
+  } | null;
   deviceContext: { browser: string; platform: string } | null;
   sets: SessionSetDetail[];
   reps: SessionRepDetail[];
@@ -1417,12 +1424,20 @@ function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
   }
   const captureClass =
     quality && quality.pctOk < 80 ? "text-amber-700" : "text-gray-700";
+  // The tracking check's unsteady share, shown only when the points jumped.
+  const unsteadyPct = unsteadyTrackingPct(quality);
+  const unsteadyHigh = unsteadyPct !== null && unsteadyPct >= UNSTEADY_TRACKING_NOTE_PCT;
   return (
     <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
       <span className="font-semibold text-gray-800">Capture context</span>
       {quality && (
         <span className={`ml-3 ${captureClass}`}>
           {quality.pctOk}% ready frames ({quality.framesOk}/{quality.framesTotal})
+        </span>
+      )}
+      {unsteadyPct !== null && unsteadyPct > 0 && (
+        <span className={`ml-3 ${unsteadyHigh ? "text-amber-700" : "text-gray-700"}`}>
+          points unsteady on {unsteadyPct}% of tracked frames
         </span>
       )}
       {device && (
@@ -1433,6 +1448,12 @@ function SessionCaptureContext({ detail }: { detail: SessionDetail }) {
       {quality && quality.pctOk < 80 && (
         <p className="mt-1 text-amber-700">
           Reduced capture coverage may limit interpretation of this session.
+        </p>
+      )}
+      {unsteadyHigh && (
+        <p className="mt-1 text-amber-700">
+          The camera kept losing track of points the exercise depends on, so readings from those moments, such as an
+          arm&apos;s hold time, may be unreliable.
         </p>
       )}
     </div>

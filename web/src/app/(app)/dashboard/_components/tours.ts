@@ -5,6 +5,10 @@ const bell: TourStep = {
   targetId: "tour-bell",
   title: "Notifications",
   placement: "below",
+  flow: [
+    { kind: "shot", src: "bell-open.png", caption: "1. Press the bell to open your notifications" },
+    { kind: "result", text: "Use Mark all read to clear the unread count" },
+  ],
   lines: [
     "The bell shows what needs your attention, for example missed exercises or newly assigned exercises.",
     "Open a notification to read it, mark everything as read, or delete the ones you no longer need.",
@@ -16,6 +20,10 @@ const logout: TourStep = {
   targetId: "tour-logout",
   title: "Log Out",
   placement: "right",
+  flow: [
+    { kind: "shot", src: "logout.png", caption: "Press Log Out at the bottom of the menu" },
+    { kind: "result", text: "You are signed out" },
+  ],
   lines: ["Use Log Out when you are finished, especially on a shared computer."],
 };
 
@@ -30,6 +38,12 @@ const profileCard: TourStep[] = [
     targetId: "tour-profile-password",
     title: "Change your password",
     placement: "below",
+    flow: [
+      { kind: "shot", src: "profile-password-1.png", caption: "1. Press Change Password" },
+      { kind: "shot", src: "profile-password-2.png", caption: "2. Press Send OTP, then type the 6-digit code from your email" },
+      { kind: "result", text: "3. Press Verify OTP and type your new password twice" },
+      { kind: "email", text: "A confirmation email is sent" },
+    ],
     lines: [
       "Press Change Password to set a new password.",
       "We first confirm your email with a 6-digit code, which is valid for a few minutes, and then you choose the new password.",
@@ -66,6 +80,10 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-program",
       title: "Your exercise program",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "p-program-2.png", caption: "1. Click a day to see its exercises" },
+        { kind: "result", text: "2. Press Start on an exercise to begin" },
+      ],
       lines: [
         "Each card is one scheduled day. The icon shows whether it is completed, today, open for a make-up, missed or upcoming.",
         "Click a day to open it and see each exercise with its sets and repetitions.",
@@ -78,6 +96,20 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-calendar",
       title: "Your consistency",
       placement: "left",
+      flow: [
+        { kind: "shot", src: "p-calendar.png", caption: "Your calendar" },
+        { kind: "heading", text: "What the colours mean" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "green", label: "Completed" },
+            { tone: "amber", label: "Partly done" },
+            { tone: "amber", label: "Make-up still open", outline: true },
+            { tone: "red", label: "Missed" },
+            { tone: "green", label: "Coming up", outline: true },
+          ],
+        },
+      ],
       lines: [
         "The line at the top shows your current streak, your active days this month and your total sessions.",
         "Green is a day completed, amber is partly done, an outlined amber day still has a make-up open, red is missed and an outlined green day is coming up.",
@@ -105,6 +137,10 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       targetId: navTourId("camera"),
       title: "The camera page",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "p-camera-nav.png", caption: "1. Press Camera in the menu" },
+        { kind: "result", text: "2. Press How to Use on the camera page" },
+      ],
       lines: [
         "Camera is where you do your exercises. You can also reach it with Start from your program.",
         "It has its own How to Use button that walks you through setting up the camera and starting a session.",
@@ -124,6 +160,10 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-progress-header",
       title: "Download a report",
       placement: "below",
+      flow: [
+        { kind: "shot", src: "p-progress-header.png", caption: "Press Download progress report (PDF)" },
+        { kind: "result", text: "The PDF is saved to your device" },
+      ],
       lines: [
         "After you have some sessions, press Download progress report (PDF) to save your results.",
         "The trends are descriptive only. They are not a diagnosis.",
@@ -142,6 +182,18 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       title: "Your trends",
       placement: "above",
       optional: true,
+      flow: [
+        { kind: "heading", text: "One point per session" },
+        { kind: "chart" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "blue", label: "Rising or Falling: a real change" },
+            { tone: "gray", label: "No clear change" },
+            { tone: "gray", label: "Collecting data", outline: true },
+          ],
+        },
+      ],
       lines: [
         "Each card follows one exercise set up the same way (same side and resistance), so like is compared with like.",
         "The chart shows one point per session. Select a point to see that session's repetitions.",
@@ -175,6 +227,11 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       title: "Today and make-ups",
       placement: "right",
       optional: true,
+      flow: [
+        { kind: "row", title: "Today · Oct 31", meta: "2 exercises ready" },
+        { kind: "row", title: "Arm Abduction at 90°", meta: "3 sets × 30 s", button: "Start" },
+        { kind: "result", text: "Finished ones show a summary" },
+      ],
       lines: [
         "Open a date to see its exercises with their sets and repetitions.",
         "Press Start to begin an exercise. If you missed an earlier day and its make-up period is still open, it is listed here too.",
@@ -213,6 +270,7 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       title: "Assigned exercises",
       placement: "above",
       optional: true,
+      flow: [{ kind: "shot", src: "p-profile-exercises.png", caption: "Each exercise, with its label on the right" }],
       lines: [
         "Every exercise your therapist has assigned, with its sets and repetitions.",
         "The label on the right shows whether the exercise is active, upcoming or ended.",
@@ -246,6 +304,19 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-roster",
       title: "Patient roster",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "t-roster.png", caption: "Click a patient's name to open their profile" },
+        { kind: "heading", text: "What each status means" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "green", label: "Active" },
+            { tone: "amber", label: "Needs attention" },
+            { tone: "red", label: "Pain follow-up" },
+            { tone: "gray", label: "No exercises" },
+          ],
+        },
+      ],
       lines: [
         "Click a patient's name to open their profile.",
         "Progress shows completed over due exercises, with any missed exercises or pain stops next to it.",
@@ -256,6 +327,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-attention",
       title: "Needs attention",
       placement: "left",
+      flow: [{ kind: "shot", src: "t-attention.png", caption: "Click a patient to open their profile" }],
       lines: [
         "Patients with a pain stop to review, missed exercises, or no session this week, with the reason shown under each name.",
         "Click one to open their profile.",
@@ -278,7 +350,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-profile-left",
       title: "Personal information",
       placement: "right",
-      lines: ["Your name, email, specialization and therapist ID. Ask the administrator if any of it needs correcting."],
+      lines: ["Your name, email and specialization. Ask the administrator if any of it needs correcting."],
     },
     {
       targetId: "tour-profile-bottom",
@@ -306,6 +378,10 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-table",
       title: "Your patients",
       placement: "above",
+      flow: [
+        { kind: "shot", src: "t-patients.png", caption: "Press View on a patient" },
+        { kind: "result", text: "Their program, reports and sessions open" },
+      ],
       lines: [
         "Each row shows the patient's name and email and the exercises assigned to them with sets and repetitions.",
         "Press View to open the patient's profile, where you can see their program, reports and sessions.",
@@ -352,6 +428,10 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       title: "Archived",
       placement: "above",
       optional: true,
+      flow: [
+        { kind: "row", title: "Wall Push-up", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with its details and video" },
+      ],
       lines: ["Custom exercises you archived. Restore puts one back with its details and video. Only an admin can permanently delete one."],
     },
   ],
@@ -362,15 +442,24 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-assign-patients",
       title: "1. Select patients",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "t-assign-1.png", caption: "Tick each patient who should get the exercises" },
+        { kind: "result", text: "Their details show on the right" },
+      ],
       lines: [
         "Tick the patients who should receive the exercises. The panel on the right then shows their details.",
         "With exactly one patient selected, their current exercises appear so you can end or change them.",
+        "Steps 2 and 3 stay locked until at least one patient is selected.",
       ],
     },
     {
       targetId: "tour-assign-program",
       title: "2. Load from a program",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "t-assign-2.png", caption: "Optional: pick one of your saved programs" },
+        { kind: "result", text: "Its exercises and settings fill in" },
+      ],
       lines: [
         "Optional. Pick one of your saved programs to fill in its exercises and settings at once.",
         "It merges with anything you have already chosen.",
@@ -380,6 +469,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-assign-exercises",
       title: "3. Select and configure exercises",
       placement: "right",
+      flow: [{ kind: "shot", src: "t-assign-3.png", caption: "Tick an exercise, then fill in its sets, reps, side and schedule" }],
       lines: [
         "Tick each exercise to prescribe, then set its order, sets, repetitions, rest, side, resistance and schedule.",
         "A schedule needs a start date, an end date and how often it repeats. A new or changed date cannot be in the past.",
@@ -390,6 +480,11 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       title: "Save",
       placement: "above",
       optional: true,
+      flow: [
+        { kind: "click", label: "Assign Exercises" },
+        { kind: "dialog", title: "Preview of what will be saved", confirm: "Confirm" },
+        { kind: "email", text: "The patient and you get an email" },
+      ],
       lines: [
         "Press Assign Exercises, or Update Changes when editing. A preview lists what will be saved before you confirm.",
         "The patient and you both receive an email describing the exercises.",
@@ -417,6 +512,11 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       title: "Create",
       placement: "below",
       optional: true,
+      flow: [
+        { kind: "shot", src: "t-programs-1.png", caption: "1. Press + Create New Program" },
+        { kind: "shot", src: "t-programs-2.png", caption: "2. Name the program and tick its exercises" },
+        { kind: "result", text: "3. Press Create Program to save it" },
+      ],
       lines: [
         "Create New Program bundles exercises with their sets, repetitions, side and resistance so you can assign them in one step.",
         "Add New Custom Exercise creates a manual exercise that you describe yourself, with an optional guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. The admin and every therapist can use it.",
@@ -435,6 +535,10 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-custom",
       title: "Custom exercises",
       placement: "left",
+      flow: [
+        { kind: "shot", src: "t-programs-custom.png", caption: "Press Archive on an exercise you added" },
+        { kind: "result", text: "It moves to Archived on Manage Exercises" },
+      ],
       lines: [
         "Custom exercises added by you, the admin and other therapists. Edit the description of, or archive, one you added; the others are view only.",
         "Archiving keeps its history and moves it to Archived on Manage Exercises, where you can restore it. Only an admin can permanently delete a custom exercise.",
@@ -447,17 +551,19 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-detail-actions",
       title: "Patient actions",
       placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-actions.png", caption: "Assign Exercise, or download the Progress report (PDF)" }],
       lines: [
         "Assign Exercise opens the assign page for this patient.",
-        "Progress report (PDF) downloads a report. Print / Save as PDF prints this profile with every tab included, except the charts at the top of Reports.",
+        "Progress report (PDF) downloads a report of the patient's progress.",
       ],
     },
     {
       targetId: "tour-detail-tabs",
       title: "Four tabs",
       placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-tabs.png", caption: "Click a tab to switch between them" }],
       lines: [
-        "Overview — personal and clinical information and attached files. Opening an attached file asks for your password.",
+        "Overview — personal and clinical information and attached files. Edit changes Diagnosis, Condition and Prescription; Add files and Delete manage the files. Opening a file asks for your password. Everything stays with the patient if they move to another therapist.",
         "PT Program — current and ended prescriptions, and the exercises the patient has completed.",
         "Reports — charts of the peak angle (camera estimate) or hold time, repetitions and adherence for one exercise over a date range, plus form quality and trends.",
         "Sessions — every session with its repetitions, so you can review the details and mark a review.",
@@ -467,6 +573,7 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-detail-tab-reports",
       title: "Reports",
       placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-reports.png", caption: "Pick an exercise, then a date range" }],
       lines: [
         "Pick an exercise, then Prior Week, Prior Month or All to change the date range.",
         "Peak angles are camera estimates, not clinical measurements.",
@@ -476,7 +583,17 @@ export const THERAPIST_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-detail-tab-sessions",
       title: "Sessions",
       placement: "below",
-      lines: ["Open a session to see its sets and repetitions, any pain the patient reported, and to record your review."],
+      flow: [
+        { kind: "tabs", tabs: ["Overview", "PT Program", "Reports", "Sessions"], active: 3 },
+        { kind: "row", title: "Oct 30 · Shoulder Shrugs", meta: "3 sets · 34 reps" },
+        { kind: "result", text: "Record your review in the session" },
+      ],
+      lines: [
+        "Sessions are grouped by the day they were done, newest first. Click a day to open or close it.",
+        "A session done after its scheduled day is labelled as a make-up for that day.",
+        "Search by exercise name to see that exercise on every day it was done.",
+        "Open a session to see its sets and repetitions, any pain the patient reported, and to record your review.",
+      ],
     },
   ],
 };
@@ -502,19 +619,27 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       ],
     },
     {
-      targetId: "tour-feed",
-      title: "System activity feed",
+      targetId: "tour-presence",
+      title: "User status",
       placement: "right",
+      flow: [
+        { kind: "shot", src: "admin-presence.png", caption: "A green dot means the person has the app open right now" },
+      ],
       lines: [
-        "Recent sign-ins, sign-outs and system events, newest first. The list scrolls.",
-        "Press Clear Feed to empty it.",
+        "Every patient and therapist, with who is online now listed first.",
+        "Online means they have the app open. After they close it or log out, it shows when they were last active.",
+        "Use All, Patients and Therapists to filter the list. A search box appears when the list gets long.",
       ],
     },
     {
-      targetId: "tour-sessions",
-      title: "Recent patient sessions",
+      targetId: "tour-patients",
+      title: "Patients",
       placement: "left",
-      lines: ["The latest sessions patients have recorded, with the patient, the exercise and when it was done."],
+      lines: [
+        "Every active patient, with the same progress and status their therapist sees.",
+        "Progress shows completed over due exercises, with any missed exercises or pain stops next to it.",
+        "Status is Active, Needs attention, Pain follow-up or No exercises.",
+      ],
     },
     {
       targetId: "tour-actions",
@@ -541,6 +666,13 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-add-user",
       title: "Add a user",
       placement: "below",
+      flow: [
+        { kind: "shot", src: "admin-add-user-1.png", caption: "1. Press + Add User" },
+        { kind: "shot", src: "admin-add-user-2.png", caption: "2. Choose Patient or Therapist" },
+        { kind: "shot", src: "admin-add-user-3.png", caption: "3. Fill in the details" },
+        { kind: "result", text: "4. Press Add User, then Confirm & Add User" },
+        { kind: "email", text: "The new user gets a welcome email with sign-in details" },
+      ],
       lines: [
         "Press + Add User, choose Patient or Therapist, then fill in the details. The email address must not already belong to another account.",
         "A confirmation step appears before the account is created.",
@@ -548,11 +680,28 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       ],
     },
     {
+      targetId: "tour-user-search",
+      title: "Search users",
+      placement: "below",
+      lines: [
+        "Type a name, an email address or a role (patient or therapist).",
+        "Both Active Users and Archived Users narrow to the matches, and each count shows how many match.",
+      ],
+    },
+    {
       targetId: "tour-active-users",
       title: "Active users",
       placement: "above",
+      flow: [
+        { kind: "shot", src: "admin-active-users.png", caption: "1. Press Archive on the account" },
+        { kind: "shot", src: "admin-archive-confirm.png", caption: "2. Confirm" },
+        { kind: "result", text: "Suspended. All records are kept" },
+        { kind: "email", text: "The user is emailed" },
+      ],
       lines: [
-        "Edit changes an account's details. If you change the email address, the old and new addresses and you are notified by email.",
+        "View opens a read-only copy of the account's profile with what was entered when it was added. Attached files are listed by name only; just the patient and their assigned therapist can open them.",
+        "Edit changes an account's details. Files you add or delete in Edit are saved only when you press Save Changes, and the confirmation lists each file being added or deleted.",
+        "If you change the email address, the old and new addresses and you are notified by email.",
         "Archive suspends the account without deleting anything: its records stay and the user is emailed. Use it instead of deleting.",
       ],
     },
@@ -560,6 +709,14 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-archived-users",
       title: "Archived users",
       placement: "above",
+      flow: [
+        { kind: "heading", text: "Bring an account back" },
+        { kind: "row", title: "Ana Cruz", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with all its records" },
+        { kind: "heading", text: "Delete (rarely needed)" },
+        { kind: "dialog", title: "Delete permanently?", confirm: "Delete", danger: true },
+        { kind: "result", text: "Only for accounts with no history", tone: "bad" },
+      ],
       lines: [
         "Restore brings an account back with all its records, and the user is emailed.",
         "Delete is permanent and is only allowed for an archived account that has no history, meaning no prescriptions, sessions, assigned patients, owned exercises or programs, or reviews. You are asked to confirm twice.",
@@ -580,6 +737,11 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-add-exercise",
       title: "Add an exercise",
       placement: "below",
+      flow: [
+        { kind: "shot", src: "admin-add-exercise-1.png", caption: "1. Press + Add Exercise" },
+        { kind: "shot", src: "admin-add-exercise-2.png", caption: "2. Fill in the name and description, then press Add Exercise" },
+        { kind: "result", text: "Patients see the guide in their schedule" },
+      ],
       lines: [
         "Press + Add Exercise, enter a name and a description, and press Add Exercise to create a custom exercise.",
         "You can attach a guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. Patients see it on the exercise in their schedule.",
@@ -610,6 +772,10 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       title: "Archived exercises",
       placement: "above",
       optional: true,
+      flow: [
+        { kind: "row", title: "Wall Push-up", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with its details and video" },
+      ],
       lines: ["Restore puts an exercise back with its details and video. Permanently delete removes it, and is only allowed for one that was never prescribed."],
     },
     bell,
@@ -627,12 +793,21 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-unassigned",
       title: "1. Pick a patient",
       placement: "right",
+      flow: [
+        { kind: "row", title: "Ana Cruz", meta: "No therapist yet" },
+        { kind: "result", text: "The patient is selected" },
+      ],
       lines: ["Click a patient without a therapist to select them."],
     },
     {
       targetId: "tour-pick-therapist",
       title: "2. Pick a therapist",
       placement: "left",
+      flow: [
+        { kind: "choose", options: ["J. Lim, PT", "M. Santos, PT"], picked: 0 },
+        { kind: "click", label: "Assign Patient" },
+        { kind: "email", text: "Patient and therapist are notified" },
+      ],
       lines: [
         "Choose a therapist from the list and press Assign Patient.",
         "Both the patient and the therapist get a notification and an email about the assignment.",
@@ -642,6 +817,10 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       targetId: "tour-assigned",
       title: "Currently assigned patients",
       placement: "above",
+      flow: [
+        { kind: "shot", src: "admin-assigned.png", caption: "Press Unassign to remove the link" },
+        { kind: "result", text: "The patient moves back to Unassigned" },
+      ],
       lines: ["Every patient who has a therapist. Press Unassign to remove the link."],
     },
     {
@@ -653,19 +832,6 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
     bell,
   ],
 
-  "demo-clock": [
-    adminNav("demo-clock", "Demo clock", "Only for demonstrations. It lets the app pretend it is another date."),
-    {
-      targetId: "tour-demo-clock",
-      title: "Set a demo date",
-      placement: "right",
-      lines: [
-        "Choose a date and time and press Set demo time to simulate it for scheduling and dashboards. The computer's own clock does not change.",
-        "Sessions recorded while a demo date is set are saved with that date, so use a demo account.",
-        "Press the reset button to return to the real time.",
-      ],
-    },
-  ],
 };
 
 /** The tour for a therapist page, chosen by its address. */

@@ -61,9 +61,14 @@ export async function DELETE(
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-
     const { id, attachmentId: rawAttachmentId } = await params;
+    // The admin, or the patient's current therapist.
+    if (user.role !== "admin") {
+      const patient = user.role === "therapist" ? await getUserById(id) : null;
+      if (!(patient?.role === "patient" && patient.therapistId === user.id)) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
     const attachmentId = Number(rawAttachmentId);
     if (!Number.isInteger(attachmentId) || attachmentId < 1 || !(await deletePatientAttachment(id, attachmentId))) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });

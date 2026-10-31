@@ -99,6 +99,15 @@ leaves the existing database and secrets alone. A change to the database schema 
 SQL script run by hand (`sudo -u postgres psql -d postural -f <script>`), as on any other
 deployment. Take a backup first.
 
+The admin dashboard's User status panel needs `scripts/user_presence_pg.sql` run once on a
+database created before it existed:
+`sudo -u postgres psql -d postural -f /opt/postural/app/scripts/user_presence_pg.sql`.
+Until then the panel says so and the rest of the app works as before.
+
+The unused therapist ID column is removed by `scripts/drop_therapist_id_num_pg.sql`, run once
+after a backup: `sudo -u postgres psql -d postural -f /opt/postural/app/scripts/drop_therapist_id_num_pg.sql`.
+The app no longer uses the column, so it works the same before and after.
+
 ## Optional demo clock
 
 The [demo clock](../../web/docs/demo-clock.md) is off until an admin selects

@@ -194,6 +194,7 @@ import {
   type BodyTurnState,
 } from "@/lib/pose/bodyTurn";
 import {
+  DARK_PICTURE_MESSAGE,
   PICTURE_LUMA_SAMPLE_MS,
   captureMessageForPicture,
   pictureIsBright,
@@ -218,6 +219,7 @@ import {
   type FixedFaceRoi,
 } from "@/lib/pose/faceLandmarkerShadow";
 import ReportButton from "../dashboard/_components/ReportButton";
+import PleaseWait from "../dashboard/_components/PleaseWait";
 import { SESSION_VIDEO_NOTICE, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/recording/consent";
 import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "@/lib/recording/videoChoice";
 import { SessionRecorder, type RecordingState } from "@/lib/recording/sessionRecorder";
@@ -3008,6 +3010,9 @@ export default function CameraClient() {
     selectedExerciseRef.current = selectedExercise;
   }, [selectedExercise]);
   const assignedExercisesRef = useRef<Exercise[]>([]);
+  /** Whether the selected exercise is a custom one, for the per-frame loop (reads refs, not state). */
+  const customExerciseSelected = () =>
+    assignedExercisesRef.current.find((e) => e.id === selectedExerciseRef.current)?.isCustom === true;
   useEffect(() => {
     assignedExercisesRef.current = assignedExercises;
   }, [assignedExercises]);
@@ -3100,6 +3105,22 @@ export default function CameraClient() {
   // Whether a Resume should keep recording: true once recording starts, false
   // after the patient stops it.
   const recordingWantedRef = useRef(false);
+  // A custom exercise's video-only session while it records, else null.
+  const customSessionIdRef = useRef<number | null>(null);
+  // Whether that session records video, and the ended session awaiting its
+  // "pain after this attempt" report.
+  const customRecordingConsentRef = useRef(false);
+  const customReportSessionIdRef = useRef<number | null>(null);
+  // Whether that custom session is open, for the recording badge; and whether
+  // the patient pressed Stop, which keeps the remaining sets unrecorded.
+  const [customRecordingOpen, setCustomRecordingOpen] = useState(false);
+  const customRecordingStoppedRef = useRef(false);
+  // "Please wait" while the next page loads; the page unmounts when it arrives.
+  const [waitMessage, setWaitMessage] = useState<string | null>(null);
+  // The recording badge's Stop asks first; recording continues while it asks.
+  const [confirmStopRecording, setConfirmStopRecording] = useState(false);
+  // A custom exercise's rest, shown with the same overlay as a camera session's rest.
+  const [customRest, setCustomRest] = useState<{ remainingSec: number; totalSec: number; nextSet: number; sets: number } | null>(null);
   const [recordingState, setRecordingState] = useState<RecordingState | "off">("off");
   // The session the end card describes, for its PDF report.
   const [lastSessionId, setLastSessionId] = useState<number | null>(null);
@@ -3983,6 +4004,7 @@ export default function CameraClient() {
       assignedExercisesRef.current = remaining;
       setAssignedExercises(remaining);
       if (user?.role === "patient") {
+        setWaitMessage("Opening your schedule…");
         router.push("/dashboard/patient?tab=session");
         return;
       }
@@ -4054,6 +4076,7 @@ export default function CameraClient() {
     }
 
     if (user?.role === "patient") {
+      setWaitMessage("Opening your schedule…");
       router.push("/dashboard/patient?tab=session");
       return;
     }
@@ -4351,6 +4374,171 @@ export default function CameraClient() {
    * Complete, which also notifies the therapist. Resolves to an error message,
    * or null when saved.
    */
+  /**
+   * Before a patient's custom exercise starts, as before a camera session: the
+   * pain question, then the video question (or the answer this device
+   * remembers). Then a session opens to hold the pain answers, how the attempt
+   * ends and, with consent, its video. Resolves false when the patient pressed
+   * Back, which cancels the start.
+   */
+  const beginCustomSession = async (exercise: Exercise): Promise<boolean> => {
+    customSessionIdRef.current = null;
+    customRecordingConsentRef.current = false;
+    if (
+      user?.role !== "patient" ||
+      typeof exercise.patientExerciseId !== "number" ||
+      typeof exercise.occurrenceId !== "number"
+    ) return true;
+    const pain = await askPreSessionPain();
+    if (pain === null) return false;
+    let record: boolean;
+    let remembered = false;
+    let notice: string | null = SESSION_VIDEO_NOTICE_VERSION;
+    const saved = readVideoChoice(user?.id);
+    if (saved) {
+      record = saved.record;
+      remembered = true;
+      notice = saved.notice;
+    } else {
+      const choice = await askVideoChoice();
+      if (choice === null) return false;
+      record = choice.record;
+      if (choice.remember) rememberVideoChoice(user?.id, choice.record);
+    }
+    if (record && !cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) {
+      setError("The camera could not start, so this session is not being recorded.");
+      record = false;
+    }
+    const response = await fetch("/api/sessions/manual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientExerciseId: exercise.patientExerciseId,
+        occurrenceId: exercise.occurrenceId,
+        exerciseId: exercise.id,
+        preSessionPain: pain,
+        videoConsent: record,
+        ...(record ? { videoConsentRemembered: remembered, videoNotice: notice } : {}),
+        deviceInfo: { userAgent: navigator.userAgent },
+      }),
+    }).catch(() => null);
+    const body: unknown = await response?.json().catch(() => null);
+    if (!response?.ok || !isRecord(body) || typeof body.sessionId !== "number") {
+      // An outdated notice must be read first; otherwise the exercise still
+      // runs, and finishing marks the day complete without a session.
+      if (isRecord(body) && body.code === "video_notice_changed") {
+        setError(typeof body.error === "string" ? body.error : "Reload this page, then start again.");
+        return false;
+      }
+      setError(
+        isRecord(body) && typeof body.error === "string"
+          ? body.error
+          : "This attempt could not be saved as a session. You can still do the exercise.",
+      );
+      return true;
+    }
+    customSessionIdRef.current = body.sessionId;
+    if (record) {
+      // The recorder stamps each part through perfToIso, which reads these anchors.
+      sessionWallStartMsRef.current = Date.now();
+      sessionPerfStartMsRef.current = performance.now();
+      customRecordingConsentRef.current = true;
+      customRecordingStoppedRef.current = false;
+      setCustomRecordingOpen(true);
+      setRecordingState("off");
+    }
+    return true;
+  };
+
+  /** Each custom set is its own recording part; rest is not recorded. */
+  const recordCustomSet = () => {
+    if (customSessionIdRef.current !== null && customRecordingConsentRef.current && !customRecordingStoppedRef.current) {
+      startSessionRecording(customSessionIdRef.current);
+    }
+  };
+  const pauseCustomRecording = () => stopSessionRecording();
+
+  /** Ends a custom session through the same route as a camera session. */
+  const patchCustomSession = async (
+    sessionId: number,
+    end: { completed: true } | { endReason: "user" | "pain" },
+  ): Promise<string | null> => {
+    const response = await fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(end),
+    }).catch(() => null);
+    if (response?.ok) return null;
+    const body: unknown = await response?.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string" ? body.error : "Your session could not be saved. Please try again.";
+  };
+
+  /**
+   * The custom session ends: the recording stops and what was recorded is kept.
+   * Ended early or stopped for pain closes the session now (a pain stop pauses
+   * the day and tells the therapist, as for a camera session); after the last
+   * set completeCustomAttempt closes it as completed.
+   */
+  const endCustomSession = async (reason: "completed" | "user" | "pain"): Promise<string | null> => {
+    setCustomRecordingOpen(false);
+    stopSessionRecording(true);
+    const sessionId = customSessionIdRef.current;
+    if (reason === "completed" || sessionId === null) return null;
+    customSessionIdRef.current = null;
+    const error = await patchCustomSession(sessionId, { endReason: reason });
+    if (reason === "pain") customReportSessionIdRef.current = error ? null : sessionId;
+    return error;
+  };
+
+  /** After the last set: the day is marked complete, through the session when there is one. */
+  const completeCustomAttempt = async (occurrenceId: number): Promise<string | null> => {
+    const sessionId = customSessionIdRef.current;
+    if (sessionId === null) {
+      customReportSessionIdRef.current = null;
+      return completeCustomOccurrence(occurrenceId);
+    }
+    const error = await patchCustomSession(sessionId, { completed: true });
+    if (!error) {
+      customSessionIdRef.current = null;
+      customReportSessionIdRef.current = sessionId;
+    }
+    return error;
+  };
+
+  /** Whether "pain after this attempt" has a session to be saved on. */
+  const customPainReportPending = () => customReportSessionIdRef.current !== null;
+
+  /** Pain after this attempt, saved on the ended custom session; null when saved. */
+  const saveCustomPainReport = async (
+    report: { status: "declined" } | { status: "reported"; score: number; timing: PainTiming | null; bodyArea: string | null },
+  ): Promise<string | null> => {
+    const sessionId = customReportSessionIdRef.current;
+    if (sessionId === null) return null;
+    const response = await fetch(`/api/sessions/${sessionId}/pain-report`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+    }).catch(() => null);
+    if (response?.ok) {
+      customReportSessionIdRef.current = null;
+      return null;
+    }
+    const body: unknown = await response?.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string" ? body.error : "The pain report could not be saved.";
+  };
+
+  /**
+   * Shows "please wait" while a link opens the next page. A click that opens
+   * a new tab (modifier keys, middle button) leaves this page as it is.
+   */
+  const waitForPage = (
+    event: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean },
+    message: string,
+  ) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    setWaitMessage(message);
+  };
+
   const completeCustomOccurrence = async (occurrenceId: number): Promise<string | null> => {
     const response = await fetch(`/api/exercise-occurrences/${occurrenceId}`, { method: "PATCH" });
     if (response.ok) return null;
@@ -6742,7 +6930,10 @@ export default function CameraClient() {
           });
           // A consented session video keeps this frame's pose, and below the
           // cue drawn on it, so playback can redraw the coaching overlays.
-          const overlayFrame = recorderRef.current?.addOverlayFrame(landmarks) ?? null;
+          // A custom exercise has no coaching, so its video keeps no overlay track.
+          const overlayFrame = customExerciseSelected()
+            ? null
+            : recorderRef.current?.addOverlayFrame(landmarks) ?? null;
 
           // Framing mode is per-exercise: exercises that reach above head
           // height (ex_007 Press, ex_008 Wall Angels — `requiresOverheadRoom:
@@ -8493,6 +8684,9 @@ export default function CameraClient() {
           });
         }
 
+        // A custom exercise is not tracked: the skeleton, framing target and
+        // form highlights drawn above are cleared, so only the camera picture shows.
+        if (customExerciseSelected()) ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
         if (sessionStateRef.current === "active") {
           coachingAuditRef.current.observe(performance.now(), coachingObservation);
@@ -8676,6 +8870,9 @@ export default function CameraClient() {
   }
 
   const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+  // A custom exercise is guided, not tracked: its camera view keeps only the
+  // room and lighting checks, with no coaching, baseline or live metrics.
+  const isCustomSelected = selectedExerciseObj?.isCustom === true;
   const ex004FaceShadowStaffAllowed =
     user?.role === "admin" || user?.role === "therapist";
   const ex004FaceShadowCoverage =
@@ -8798,8 +8995,10 @@ export default function CameraClient() {
         ? "on"
         : "off";
   // A tour step can hold the camera menu open so its tray can be pointed out.
+  // On a narrow screen the open tray would cover the Start camera button the
+  // same step points at, so it stays closed there; the step's text names it.
   const cameraMenuShown =
-    cameraMenuOpen || (showTutorial && TOUR_STEPS[tutorialStep]?.opensCameraMenu === true);
+    cameraMenuOpen || (showTutorial && !compactLayout && TOUR_STEPS[tutorialStep]?.opensCameraMenu === true);
   const exerciseQueueLabel =
     selectedExerciseIndex >= 0
       ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length} today`
@@ -8978,6 +9177,7 @@ export default function CameraClient() {
               href={dashboardHref}
               aria-label="Back to Dashboard"
               title="Back to Dashboard"
+              onClick={(event) => waitForPage(event, "Opening your dashboard…")}
               style={ICON_BUTTON_STYLE}
             >
               <CameraHomeIcon />
@@ -9005,11 +9205,12 @@ export default function CameraClient() {
                     onClick={() => setCameraMenuOpen(false)}
                     style={{ position: "fixed", inset: 0, zIndex: 49 }}
                   />
-                  <div id="cam-tour-camera-menu" role="dialog" aria-label="Camera settings" style={{
+                  <div id="cam-tour-camera-menu" role="dialog" aria-label="Camera settings" ref={keepTrayOnScreen} style={{
                     position: "absolute",
                     top: "calc(100% + 10px)",
                     // Aligned to the button's right edge: the button sits near the right
                     // of the header, and a left-aligned tray ran past the window edge.
+                    // keepTrayOnScreen moves it when that edge leaves too little room.
                     right: 0,
                     zIndex: 50,
                     width: 320,
@@ -9172,12 +9373,21 @@ export default function CameraClient() {
                 {/* Live Metrics */}
                 <div style={{ ...CARD_STYLE, flexShrink: 0, overflow: "hidden" }}>
                   <div style={{ ...STAFF_HEADING_STYLE, padding: "12px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-                    Live Metrics · angles are camera estimates
+                    {isCustomSelected ? "Live Metrics" : "Live Metrics · angles are camera estimates"}
                   </div>
-                  <ClinicalScoreRow score={score} tier={tier} />
-                  {metricCards.map((card) => (
-                    <ClinicalMetricRow key={card.id} card={card} />
-                  ))}
+                  {isCustomSelected ? (
+                    <p style={{ margin: 0, padding: "14px 16px", fontSize: 13, lineHeight: 1.5, color: "oklch(0.40 0.01 240)" }}>
+                      Not measured. This is a custom exercise: the camera does not track, count or score it,
+                      so there is no posture score or joint angle. Only the room and lighting checks run.
+                    </p>
+                  ) : (
+                    <>
+                      <ClinicalScoreRow score={score} tier={tier} />
+                      {metricCards.map((card) => (
+                        <ClinicalMetricRow key={card.id} card={card} />
+                      ))}
+                    </>
+                  )}
                 </div>
 
                 {/* Capture telemetry */}
@@ -9978,7 +10188,9 @@ export default function CameraClient() {
                 alignItems: "center",
                 flexWrap: "wrap",
                 gap: 8,
-                maxWidth: "calc(100% - 28px)",
+                // Leaves the top-right corner to the AI indicator, so the
+                // recording badge wraps below instead of running into it.
+                maxWidth: "calc(100% - 120px)",
               }}>
                 <button
                   type="button"
@@ -10010,6 +10222,50 @@ export default function CameraClient() {
                 <div title="Frame rate" style={FEED_CHIP_STYLE}>
                   {fps !== null ? `${fps} fps` : "—"}
                 </div>
+                {/* Session video indicator: always visible while recording, beside
+                    the diagnostics button and frame rate so it never covers them. */}
+                {recordingState !== "off" && recordingState !== "stopped" &&
+                  (sessionState === "countdown" || sessionState === "active" || sessionState === "resting" || customRecordingOpen) && (
+                  <div role="status" style={{
+                    minHeight: 36,
+                    maxWidth: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    background: recordingState === "recording" ? "oklch(0.25 0.02 25 / 0.85)" : "oklch(0.30 0.05 75 / 0.9)",
+                    color: "white",
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}>
+                    {recordingState === "recording" ? (
+                      <>
+                        <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 999, background: "oklch(0.63 0.24 25)" }} />
+                        Recording video
+                        <button
+                          type="button"
+                          onClick={() => setConfirmStopRecording(true)}
+                          style={{
+                            padding: "2px 10px",
+                            borderRadius: 999,
+                            border: "1px solid oklch(1 0 0 / 0.6)",
+                            background: "transparent",
+                            color: "white",
+                            fontFamily: "var(--sans)",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >Stop</button>
+                      </>
+                    ) : recordingState === "unsupported" ? (
+                      "This browser cannot record video. Your exercise results are not affected."
+                    ) : (
+                      "Video recording stopped: it could not be saved. Your exercise results are not affected."
+                    )}
+                  </div>
+                )}
 
               </div>
 
@@ -10062,7 +10318,8 @@ export default function CameraClient() {
                 gap: 10,
                 pointerEvents: "none",
               }}>
-                {trackingPaused && (sessionState === "idle" || sessionState === "active") && (
+                {trackingPaused && (sessionState === "idle" || sessionState === "active") &&
+                  (!isCustomSelected || captureMessage === DARK_PICTURE_MESSAGE) && (
                   <div style={{
                     display: "flex",
                     alignItems: "center",
@@ -10100,7 +10357,7 @@ export default function CameraClient() {
                         textTransform: "uppercase",
                         color: "oklch(0.82 0.13 70)",
                       }}>
-                        Paused
+                        {isCustomSelected ? "Lighting" : "Paused"}
                       </span>
                       <span style={{
                         display: "block",
@@ -10138,7 +10395,7 @@ export default function CameraClient() {
 
                 {/* Unsteady-tracking message: display only, it never pauses the
                     exercise or changes a measurement. */}
-                {trackingHint && captureOk && cameraFramesFlowing && (
+                {trackingHint && captureOk && cameraFramesFlowing && !isCustomSelected && (
                   <div role="status" style={{
                     display: "flex",
                     alignItems: "center",
@@ -10159,7 +10416,7 @@ export default function CameraClient() {
 
                 {/* Body turned away from the camera: display only, it never
                     pauses the exercise or changes a measurement (bodyTurn.ts). */}
-                {turnHint && captureOk && cameraFramesFlowing && (
+                {turnHint && captureOk && cameraFramesFlowing && !isCustomSelected && (
                   <div role="status" style={{
                     display: "flex",
                     alignItems: "center",
@@ -10181,7 +10438,7 @@ export default function CameraClient() {
                 {/* Baseline-capture banner. The loudest card on the view, because
                     the patient has to hold still while it runs. At the start it
                     follows the positioning overlay. */}
-                {baselineVisible && !positioningOverlayVisible && (
+                {baselineVisible && !positioningOverlayVisible && !isCustomSelected && (
                   <div style={{
                     alignSelf: "stretch",
                     width: "100%",
@@ -10322,52 +10579,30 @@ export default function CameraClient() {
 
               {/* Rest */}
               {sessionState === "resting" && (
-                <div style={{
-                  position: "absolute",
-                  inset: 0,
-                  zIndex: 20,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 6,
-                  padding: 24,
-                  textAlign: "center",
-                  background: "oklch(0.18 0.01 240 / 0.72)",
-                }}>
-                  <div style={{ fontSize: tightLayout ? 18 : 24, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.80 0.03 200)" }}>
-                    Rest period
-                  </div>
-                  <div style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: "clamp(88px, 19vh, 170px)",
-                    fontWeight: 600,
-                    lineHeight: 1,
-                    letterSpacing: "-0.03em",
-                    color: "white",
-                    fontVariantNumeric: "tabular-nums",
-                  }}>
-                    {formatElapsedTime(restRemainingSec)}
-                  </div>
-                  <div style={{ fontSize: tightLayout ? 18 : 26, fontWeight: 500, color: "oklch(0.88 0.01 240)" }}>
-                    Set {currentSetIdx} of {prescription.sets} starts automatically
-                  </div>
-                  <div style={{
-                    width: "min(460px, 80%)",
-                    height: 10,
-                    marginTop: 20,
-                    borderRadius: 5,
-                    overflow: "hidden",
-                    background: "oklch(1 0 0 / 0.22)",
-                  }}>
-                    <div style={{ height: "100%", width: `${restElapsedPct}%`, borderRadius: 5, background: NEON.hex }} />
-                  </div>
-                  {trackingPaused && (
-                    <div style={{ marginTop: 16, fontSize: tightLayout ? 15 : 18, color: "oklch(0.86 0.10 75)" }}>
-                      {captureMessage}
-                    </div>
-                  )}
-                </div>
+                <RestOverlay
+                  remainingSec={restRemainingSec}
+                  elapsedPct={restElapsedPct}
+                  nextSet={currentSetIdx}
+                  sets={prescription.sets}
+                  compact={tightLayout}
+                  note={trackingPaused ? captureMessage : undefined}
+                />
+              )}
+
+              {/* A custom exercise's rest uses the same overlay, above the
+                  camera-off cover since its camera may be off. */}
+              {customRest && (
+                <RestOverlay
+                  remainingSec={customRest.remainingSec}
+                  elapsedPct={customRest.totalSec > 0
+                    ? Math.max(0, Math.min(100, Math.round((1 - customRest.remainingSec / customRest.totalSec) * 100)))
+                    : 0}
+                  nextSet={customRest.nextSet}
+                  sets={customRest.sets}
+                  compact={tightLayout}
+                  zIndex={30}
+                  opaque={!cameraOn}
+                />
               )}
 
               {/* Camera off */}
@@ -10430,53 +10665,6 @@ export default function CameraClient() {
                   <div style={{ maxWidth: 520, fontSize: tightLayout ? 15 : 18, lineHeight: 1.4, color: "oklch(0.82 0.01 240)" }}>
                     Please click Allow when browser asks for camera permission.
                   </div>
-                </div>
-              )}
-
-              {/* Session video indicator: always visible while recording. */}
-              {recordingState !== "off" && recordingState !== "stopped" &&
-                (sessionState === "countdown" || sessionState === "active" || sessionState === "resting") && (
-                <div role="status" style={{
-                  position: "absolute",
-                  top: 12,
-                  left: 12,
-                  zIndex: 34,
-                  maxWidth: "calc(100% - 24px)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "6px 10px",
-                  borderRadius: 999,
-                  background: recordingState === "recording" ? "oklch(0.25 0.02 25 / 0.85)" : "oklch(0.30 0.05 75 / 0.9)",
-                  color: "white",
-                  fontSize: 13,
-                  fontWeight: 600,
-                }}>
-                  {recordingState === "recording" ? (
-                    <>
-                      <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 999, background: "oklch(0.63 0.24 25)" }} />
-                      Recording video
-                      <button
-                        type="button"
-                        onClick={() => { stopSessionRecording(true); setRecordingState("off"); }}
-                        style={{
-                          padding: "2px 10px",
-                          borderRadius: 999,
-                          border: "1px solid oklch(1 0 0 / 0.6)",
-                          background: "transparent",
-                          color: "white",
-                          fontFamily: "var(--sans)",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: "pointer",
-                        }}
-                      >Stop</button>
-                    </>
-                  ) : recordingState === "unsupported" ? (
-                    "This browser cannot record video. Your exercise results are not affected."
-                  ) : (
-                    "Video recording stopped: it could not be saved. Your exercise results are not affected."
-                  )}
                 </div>
               )}
 
@@ -10657,6 +10845,7 @@ export default function CameraClient() {
                             }}
                             wrapperStyle={{ flex: "1 1 160px" }}
                             style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                            waitPopup
                           />
                         )}
                         {isPatient && pendingCompletionNavigation ? (
@@ -10672,6 +10861,7 @@ export default function CameraClient() {
                         ) : isPatient ? (
                           <Link
                             href="/dashboard/patient"
+                            onClick={(event) => waitForPage(event, "Opening your schedule…")}
                             style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
                         ) : null}
@@ -10808,11 +10998,13 @@ export default function CameraClient() {
                             }}
                             wrapperStyle={{ flex: "1 1 160px" }}
                             style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                            waitPopup
                           />
                         )}
                         {isPatient && (
                           <Link
                             href="/dashboard/patient"
+                            onClick={(event) => waitForPage(event, "Opening your schedule…")}
                             style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
                         )}
@@ -10978,6 +11170,41 @@ export default function CameraClient() {
                         cursor: "pointer",
                       }}
                     >Back</button>
+                  </div>
+                </div>
+              )}
+
+              {waitMessage && <PleaseWait message={waitMessage} />}
+
+              {/* Stop recording: confirmed first. What was recorded is kept, even
+                  mid-set; only the rest of this session goes unrecorded. */}
+              {confirmStopRecording && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="alertdialog" aria-modal="true" aria-labelledby="stop-recording-title" aria-describedby="stop-recording-text" style={MODAL_CARD_STYLE}>
+                    <div id="stop-recording-title" style={{ marginBottom: 8, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Stop recording?
+                    </div>
+                    <p id="stop-recording-text" style={{ margin: "0 0 20px", fontSize: 16, lineHeight: 1.5, color: "oklch(0.35 0.01 240)" }}>
+                      The video recorded so far is saved, even if you are in the middle of a set. The rest of this session will not be recorded. Your exercise continues as normal.
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      <button
+                        type="button"
+                        autoFocus
+                        onClick={() => setConfirmStopRecording(false)}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Keep recording</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmStopRecording(false);
+                          customRecordingStoppedRef.current = true;
+                          stopSessionRecording(true);
+                          setRecordingState("off");
+                        }}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px", background: "oklch(0.55 0.20 25)", borderColor: "oklch(0.55 0.20 25)" }}
+                      >Stop recording</button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -11250,7 +11477,7 @@ export default function CameraClient() {
                     completed, upcoming, or historical prescriptions.
                     {user?.role === "patient" && (
                       <div style={{ marginTop: 8 }}>
-                        <Link href="/dashboard/patient?tab=session" style={{ color: ACCENT.text, fontWeight: 650 }}>
+                        <Link href="/dashboard/patient?tab=session" onClick={(event) => waitForPage(event, "Opening your schedule…")} style={{ color: ACCENT.text, fontWeight: 650 }}>
                           Return to schedule
                         </Link>
                       </div>
@@ -11372,13 +11599,20 @@ export default function CameraClient() {
                       restSeconds={selectedExerciseObj.restSeconds}
                       onComplete={
                         user?.role === "patient" && selectedExerciseObj.occurrenceId !== undefined
-                          ? () => completeCustomOccurrence(selectedExerciseObj.occurrenceId as number)
+                          ? () => completeCustomAttempt(selectedExerciseObj.occurrenceId as number)
                           : undefined
                       }
                       onNext={hasNextExercise ? () => goToAdjacentExercise(1) : undefined}
                       onBackToSchedule={
-                        user?.role === "patient" ? () => router.push("/dashboard/patient?tab=session") : undefined
+                        user?.role === "patient" ? () => { setWaitMessage("Opening your schedule…"); router.push("/dashboard/patient?tab=session"); } : undefined
                       }
+                      onBeforeStart={() => beginCustomSession(selectedExerciseObj)}
+                      onSetStart={recordCustomSet}
+                      onRestStart={pauseCustomRecording}
+                      onEnd={(reason) => void endCustomSession(reason)}
+                      onRestChange={setCustomRest}
+                      onPainStop={user?.role === "patient" ? () => endCustomSession("pain") : undefined}
+                      painReport={user?.role === "patient" ? { pending: customPainReportPending, save: saveCustomPainReport } : undefined}
                     />
                   ) : (
                   <button
@@ -11634,7 +11868,7 @@ const TOUR_STEPS: {
     title: "Start Camera",
     placement: "below",
     graphic: "start",
-    cardW: 560,
+    cardW: 640,
     lines: [
       "Click this button to turn on your camera.",
       "Please click Allow when browser asks for camera permission.",
@@ -11648,7 +11882,7 @@ const TOUR_STEPS: {
     title: "Status Indicators",
     placement: "below",
     graphic: "status",
-    cardW: 560,
+    cardW: 640,
     lines: [
       "AI (top right of the camera view) — a green dot means movement detection is ready.",
       "An orange dot means it is still loading. Start camera and Start session stay unavailable until it turns green.",
@@ -11660,7 +11894,7 @@ const TOUR_STEPS: {
     title: "Your Assigned Exercise",
     placement: "left",
     graphic: "exercise",
-    cardW: 560,
+    cardW: 640,
     lines: [
       "This card shows the exercise assigned to you by your therapist.",
       "Use the left ( ‹ ) and right ( › ) arrows to move between exercises.",
@@ -11675,7 +11909,7 @@ const TOUR_STEPS: {
     title: "Camera View — Position Yourself Here",
     placement: "right",
     graphic: "position",
-    cardW: 580,
+    cardW: 660,
     lines: [
       "Place the camera at about chest height, pointing straight at you. Raise it on books or a shelf if needed.",
       "Stand or sit about 2–3 metres (7–10 feet) from the camera.",
@@ -11701,7 +11935,7 @@ const TOUR_STEPS: {
     title: "Clothing & Environment Tips",
     placement: "below",
     graphic: "environment",
-    cardW: 760,
+    cardW: 880,
     lines: [
       "Wear light or contrasting colours — dark clothing on a dark background makes it hard for the AI to track your joints.",
       "Avoid wearing very loose clothing — it can hide your joints from the camera.",
@@ -11715,7 +11949,7 @@ const TOUR_STEPS: {
     title: "Start Session & End",
     placement: "left",
     graphic: "session",
-    cardW: 600,
+    cardW: 680,
     lines: [
       "Press Start session when you are ready.",
       "A 5-second countdown gives you time to get into position. Then stand still for 3 seconds, looking straight ahead, while your starting position is measured. Counting begins after that.",
@@ -11821,12 +12055,16 @@ function CameraTour({
   // The illustration sits beside the text. When the screen cannot fit both, it
   // is left out and the card keeps the original text-only width.
   const maxW = Math.max(280, vw - EDGE * 2);
+  // On a tablet-sized screen the illustration is drawn smaller and the card
+  // narrower, so the card covers less of the page; the text keeps its size.
+  const graphicScale = vw < 1280 || vh < 860 ? 0.8 : 1;
   // The clothing and environment illustration uses two columns.
   const wideGraphic = def.graphic === "environment";
-  const graphicW = wideGraphic ? 348 : 208;
+  const graphicW = Math.round((wideGraphic ? 420 : 250) * graphicScale);
+  const fullCardW = Math.round((def.cardW ?? 640) - (1 - graphicScale) * (wideGraphic ? 420 : 250));
   const graphic =
-    def.graphic && Math.min(def.cardW ?? 560, maxW) - 48 - graphicW >= 240 ? def.graphic : undefined;
-  const cardW = Math.min(graphic ? (def.cardW ?? 560) : 360, maxW);
+    def.graphic && Math.min(fullCardW, maxW) - 48 - graphicW >= 240 ? def.graphic : undefined;
+  const cardW = Math.min(graphic ? fullCardW : 420, maxW);
   const clampLeft = (x: number) => Math.max(EDGE, Math.min(x, vw - cardW - EDGE));
 
   // The card sits in a fixed column that owns its vertical span, so flex layout
@@ -11857,7 +12095,7 @@ function CameraTour({
       // A card that would not fit on its preferred side moves to the roomier
       // one. The height is an estimate used only for that choice; the track
       // still scrolls a card that is taller than the space it gets.
-      const estH = graphic ? (wideGraphic ? 470 : 410) : 290;
+      const estH = graphic ? (wideGraphic ? 540 : 480) : 340;
       const gapAbove = def.aboveGap ?? 16;
       const roomBelow = vh - EDGE - (anchor.y + anchor.h + 16);
       const roomAbove = anchor.y - gapAbove - EDGE;
@@ -11999,7 +12237,10 @@ function CameraTour({
           <div style={{
             flex: "0 1 auto",
             minHeight: 0,
-            overflowY: "auto",
+            // Only the body scrolls, so the header and Back / Next stay on screen.
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
             background: "white",
             borderRadius: 14,
             boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
@@ -12009,6 +12250,7 @@ function CameraTour({
           }}>
             {/* Header */}
             <div style={{
+              flexShrink: 0,
               background: ACCENT.hex,
               padding: "14px 16px 12px",
               display: "flex",
@@ -12018,12 +12260,12 @@ function CameraTour({
             }}>
               <div>
                 <div style={{
-                  fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
-                  textTransform: "uppercase", color: "oklch(0.95 0.02 200)", marginBottom: 3,
+                  fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".1em",
+                  textTransform: "uppercase", color: "oklch(0.97 0.01 200)", marginBottom: 3,
                 }}>
                   Step {step + 1} of {total}
                 </div>
-                <div id="camera-tour-title" style={{ fontSize: 15, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
+                <div id="camera-tour-title" style={{ fontSize: 18, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
                   {def.title}
                 </div>
               </div>
@@ -12032,7 +12274,7 @@ function CameraTour({
                 onClick={onClose}
                 aria-label="Close tour"
                 style={{
-                  flexShrink: 0, width: 24, height: 24,
+                  flexShrink: 0, width: 30, height: 30,
                   border: "1px solid oklch(0.95 0.02 200 / 0.35)",
                   background: "oklch(0.95 0.02 200 / 0.12)",
                   borderRadius: 6, cursor: "pointer",
@@ -12040,14 +12282,14 @@ function CameraTour({
                   color: "white",
                 }}
               >
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
             </div>
 
             {/* Body: the step's lines, with its illustration beside them */}
-            <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "flex-start", gap: 16 }}>
+            <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "flex-start", gap: 16, flex: "1 1 auto", minHeight: 0, overflowY: "auto" }}>
               <ul style={{
                 margin: 0, padding: 0, listStyle: "none",
                 display: "flex", flexDirection: "column", gap: 7,
@@ -12056,20 +12298,26 @@ function CameraTour({
                 {def.lines.map((line, i) => (
                   <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                     <span style={{
-                      flexShrink: 0, marginTop: 6,
+                      flexShrink: 0, marginTop: 9,
                       width: 6, height: 6, borderRadius: 99,
                       background: ACCENT.hex,
                     }} />
-                    <span style={{ fontSize: 12.5, color: "oklch(0.22 0.01 240)", lineHeight: 1.55 }}>{line}</span>
+                    <span style={{ fontSize: 15, color: "oklch(0.2 0.01 240)", lineHeight: 1.55 }}>{line}</span>
                   </li>
                 ))}
               </ul>
-              {graphic && <TourGraphic kind={graphic} />}
+              {graphic && (
+                <div style={{ zoom: graphicScale, flexShrink: 0 }}>
+                  <TourGraphic kind={graphic} />
+                </div>
+              )}
             </div>
 
             {/* Footer */}
             <div style={{
-              padding: "10px 16px 14px",
+              flexShrink: 0,
+              padding: "12px 16px 14px",
+              borderTop: "1px solid oklch(0.94 0.003 240)",
               display: "flex", alignItems: "center", justifyContent: "space-between",
             }}>
               {/* Step dots */}
@@ -12098,10 +12346,10 @@ function CameraTour({
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onBack(); }}
                     style={{
-                      padding: "5px 13px",
-                      border: "1px solid oklch(0.90 0.003 240)",
-                      background: "white", borderRadius: 7,
-                      fontSize: 12, fontWeight: 500,
+                      padding: "8px 16px",
+                      border: "1px solid oklch(0.85 0.003 240)",
+                      background: "white", borderRadius: 8,
+                      fontSize: 14, fontWeight: 500,
                       color: "oklch(0.35 0.01 240)", cursor: "pointer",
                     }}
                   >Back</button>
@@ -12111,16 +12359,16 @@ function CameraTour({
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onNext(); }}
                     style={{
-                      padding: "5px 14px",
+                      padding: "8px 18px",
                       border: `1px solid ${ACCENT.hex}`,
-                      background: ACCENT.hex, borderRadius: 7,
-                      fontSize: 12, fontWeight: 600,
+                      background: ACCENT.hex, borderRadius: 8,
+                      fontSize: 14, fontWeight: 600,
                       color: "white", cursor: "pointer",
-                      display: "flex", alignItems: "center", gap: 5,
+                      display: "flex", alignItems: "center", gap: 6,
                     }}
                   >
                     Next
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
                       <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
                     </svg>
                   </button>
@@ -12129,10 +12377,10 @@ function CameraTour({
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClose(); }}
                     style={{
-                      padding: "5px 14px",
+                      padding: "8px 18px",
                       border: `1px solid ${ACCENT.hex}`,
-                      background: ACCENT.hex, borderRadius: 7,
-                      fontSize: 12, fontWeight: 600,
+                      background: ACCENT.hex, borderRadius: 8,
+                      fontSize: 14, fontWeight: 600,
                       color: "white", cursor: "pointer",
                     }}
                   >Got it!</button>
@@ -12157,9 +12405,9 @@ function CameraTour({
  * only; each point it shows is also stated in the step's text.
  */
 function TourGraphic({ kind }: { kind: TourGraphicKind }) {
-  const column: CSSProperties = { flex: "0 0 208px", width: 208, display: "flex", flexDirection: "column", gap: 8 };
+  const column: CSSProperties = { flex: "0 0 250px", width: 250, display: "flex", flexDirection: "column", gap: 8 };
   const label: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: 8.5, letterSpacing: ".18em",
+    fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
     textTransform: "uppercase", color: "oklch(0.50 0.01 240)",
   };
   const panel: CSSProperties = {
@@ -12174,8 +12422,8 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
     }[tone];
     return (
       <div style={{ flex: "1 1 auto", padding: "5px 8px", display: "flex", alignItems: "center", gap: 5, background: colors.bg, borderTop: `1px solid ${colors.line}` }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: colors.ink }}>{colors.mark}</span>
-        <span style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".1em", textTransform: "uppercase", color: colors.ink, fontWeight: 600 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: colors.ink }}>{colors.mark}</span>
+        <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: colors.ink, fontWeight: 600 }}>
           {text}
         </span>
       </div>
@@ -12228,7 +12476,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 5 }}>
           {/* The camera view while the camera is off, with its Start camera button. */}
           <div style={{ height: 40, borderRadius: 6, background: "oklch(0.22 0.01 240)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 5, background: ACCENT.hex, color: "white", fontSize: 9, fontWeight: 600, animation: "gfx-btn 2.2s ease-out infinite" }}>
+            <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 5, background: ACCENT.hex, color: "white", fontSize: 11.5, fontWeight: 600, animation: "gfx-btn 2.2s ease-out infinite" }}>
               {cameraGlyph(10)}
               Start camera
               <svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="oklch(0.25 0.01 240)" strokeWidth="1.6" aria-hidden="true" style={{ position: "absolute", right: -7, bottom: -9, animation: "gfx-cursor 2.2s ease-in-out infinite" }}>
@@ -12240,11 +12488,11 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
           <div style={{ padding: "6px 8px", background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6, boxShadow: "0 2px 6px oklch(0 0 0 / 0.06)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5, color: "oklch(0.35 0.01 240)" }}>
               {cameraGlyph(10)}
-              <span style={{ fontSize: 9.5, color: "oklch(0.25 0.01 240)", fontWeight: 500 }}>Use your camera?</span>
+              <span style={{ fontSize: 12, color: "oklch(0.25 0.01 240)", fontWeight: 500 }}>Use your camera?</span>
             </div>
             <div style={{ display: "flex", gap: 5 }}>
-              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 4, fontSize: 9, color: "oklch(0.45 0.01 240)" }}>Block</span>
-              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", borderRadius: 4, fontSize: 9, color: "oklch(0.30 0.06 200)", fontWeight: 600 }}>Allow</span>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 4, fontSize: 11.5, color: "oklch(0.45 0.01 240)" }}>Block</span>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", borderRadius: 4, fontSize: 11.5, color: "oklch(0.30 0.06 200)", fontWeight: 600 }}>Allow</span>
             </div>
           </div>
           {downArrow}
@@ -12270,7 +12518,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         display: "inline-flex", alignItems: "center", gap: 4,
         padding: "2px 6px", borderRadius: 999,
         background: "oklch(0.16 0.01 240 / 0.72)", border: "1px solid oklch(1 0 0 / 0.18)",
-        color: "white", fontSize: 8.5, fontWeight: 700, letterSpacing: ".04em",
+        color: "white", fontSize: 11, fontWeight: 700, letterSpacing: ".04em",
       }}>
         AI
         <span style={ready
@@ -12294,7 +12542,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
               display: "inline-flex", alignItems: "center", gap: 4,
               padding: "2px 7px", borderRadius: 999,
               background: "oklch(0.96 0.04 145)", border: "1px solid oklch(0.88 0.06 145)",
-              color: "oklch(0.38 0.07 145)", fontSize: 8.5, fontWeight: 600,
+              color: "oklch(0.38 0.07 145)", fontSize: 11, fontWeight: 600,
             }}>
               <span style={{ width: 5, height: 5, borderRadius: 999, background: "oklch(0.62 0.13 145)", boxShadow: "0 0 0 2px oklch(0.62 0.13 145 / 0.22)" }} />
               <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
@@ -12339,16 +12587,16 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         <div style={{ ...panel, display: "flex", alignItems: "stretch", gap: 6 }}>
           {chevron("M15 18l-6-6 6-6", "gfx-chev-a 2.8s ease-in-out infinite", false)}
           <div style={{ flex: 1, minWidth: 0, padding: "8px 9px", borderRadius: 6, border: "1px solid oklch(0.95 0.02 200)", background: "white" }}>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.35 0.06 200)", fontWeight: 600 }}>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.35 0.06 200)", fontWeight: 600 }}>
               Exercise 2 / 4
             </div>
-            <div style={{ fontSize: 11.5, fontWeight: 600, color: "oklch(0.18 0.01 240)", marginTop: 2, lineHeight: 1.2 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: "oklch(0.18 0.01 240)", marginTop: 2, lineHeight: 1.2 }}>
               Shoulder Shrugs
             </div>
           </div>
           {chevron("M9 18l6-6-6-6", "gfx-chev-b 2.8s ease-in-out infinite", true)}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 9.5, color: "oklch(0.50 0.01 240)", paddingLeft: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.50 0.01 240)", paddingLeft: 2 }}>
           <span>3 sets</span>
           <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
           <span>12 reps</span>
@@ -12358,7 +12606,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         <div style={{ ...label, marginTop: 4 }}>Watching the guide</div>
         <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-            <span style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>
               Reference Guide
             </span>
             <span style={{
@@ -12388,7 +12636,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
               <line x1="95" y1="41" x2="96" y2="60" />
             </g>
           </svg>
-          <div style={{ fontSize: 8, lineHeight: 1.35, color: "oklch(0.50 0.01 240)" }}>
+          <div style={{ fontSize: 10.5, lineHeight: 1.35, color: "oklch(0.50 0.01 240)" }}>
             {"Animated guide with illustrative timing. Your therapist's instructions come first."}
           </div>
         </div>
@@ -12433,7 +12681,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
         {heightLabel && (
           <>
             <line x1="31" y1="37" x2={personX - 5} y2="37" stroke={textInk} strokeWidth={0.9} strokeDasharray="1.5 2" />
-            <text x="82" y="34" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600 }}>
+            <text x="82" y="34" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600 }}>
               {heightLabel}
             </text>
           </>
@@ -12443,7 +12691,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
           <line x1="29" y1="85.5" x2="29" y2="90.5" />
           <line x1={personX - 7} y1="85.5" x2={personX - 7} y2="90.5" />
         </g>
-        <text x={(22 + personX) / 2} y="79" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 7.5, fontWeight: 600 }}>
+        <text x={(22 + personX) / 2} y="79" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600 }}>
           {distance}
         </text>
       </svg>
@@ -12486,7 +12734,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
     const trackedJoints: [number, number][] = [[76, 30], [92, 30], [68, 44], [100, 44], [80, 54], [88, 54], [79, 70], [89, 70]];
     const hiddenJoints: [number, number][] = [[76, 30], [92, 30], [62, 49], [106, 49], [74, 77], [94, 77]];
     return (
-      <div className="cam-tour-gfx" style={{ flex: "0 0 348px", width: 348, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", alignContent: "start" }}>
+      <div className="cam-tour-gfx" style={{ flex: "0 0 420px", width: 420, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", alignContent: "start" }}>
         {topic("Clothing contrast", true)}
         {tile(
           "ok",
@@ -12585,10 +12833,10 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
       <div style={label}>What happens next</div>
       <div style={{ ...panel, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", gap: 6 }}>
-          <div style={{ flex: 1, padding: "7px 8px", borderRadius: 5, background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, color: "white", fontSize: 10, fontWeight: 500, textAlign: "center" }}>
+          <div style={{ flex: 1, padding: "7px 8px", borderRadius: 5, background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, color: "white", fontSize: 12.5, fontWeight: 500, textAlign: "center" }}>
             Start session
           </div>
-          <div style={{ padding: "7px 12px", borderRadius: 5, background: "white", border: "1px solid oklch(0.90 0.003 240)", color: "oklch(0.30 0.01 240)", fontSize: 10, fontWeight: 500, textAlign: "center" }}>
+          <div style={{ padding: "7px 12px", borderRadius: 5, background: "white", border: "1px solid oklch(0.90 0.003 240)", color: "oklch(0.30 0.01 240)", fontSize: 12.5, fontWeight: 500, textAlign: "center" }}>
             End
           </div>
         </div>
@@ -12598,9 +12846,9 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
             <div style={{ ...digit, animation: "cd-3 3.6s linear infinite" }}>3</div>
             <div style={{ ...digit, opacity: 0, animation: "cd-2 3.6s linear infinite" }}>2</div>
             <div style={{ ...digit, opacity: 0, animation: "cd-1 3.6s linear infinite" }}>1</div>
-            <div style={{ ...digit, opacity: 0, fontSize: 11, letterSpacing: ".08em", color: "oklch(0.40 0.07 145)", animation: "cd-go 3.6s linear infinite" }}>GO</div>
+            <div style={{ ...digit, opacity: 0, fontSize: 13, letterSpacing: ".08em", color: "oklch(0.40 0.07 145)", animation: "cd-go 3.6s linear infinite" }}>GO</div>
           </div>
-          <div style={{ fontSize: 10.5, lineHeight: 1.45, color: "oklch(0.40 0.01 240)" }}>
+          <div style={{ fontSize: 13, lineHeight: 1.45, color: "oklch(0.40 0.01 240)" }}>
             A 5-second countdown to get into position, then 3 seconds standing still, run before counting starts.
           </div>
         </div>
@@ -12610,7 +12858,7 @@ function TourGraphic({ kind }: { kind: TourGraphicKind }) {
             <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.90 0.08 195)" }} />
             <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.92 0.003 240)" }} />
           </div>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 8, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)" }}>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)" }}>
             Set 1 of 3 — saved as you go
           </div>
         </div>
@@ -12641,11 +12889,11 @@ function ClinicalScoreRow({ score, tier }: { score: number | null; tier: ScoreTi
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: tier.hex }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
         <span style={{
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 12.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
         }}>Posture Score</span>
         <span style={{
-          fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 11.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: tier.text, fontWeight: 600,
         }}>{tier.label}</span>
       </div>
@@ -12700,14 +12948,14 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
       <div style={{ minWidth: 0 }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 6,
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 12.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: "oklch(0.30 0.01 240)",
           marginBottom: 4, fontWeight: 600,
         }}>
           <span>{card.label}</span>
           {isFlag && (
             <span style={{
-              fontFamily: "var(--mono)", fontSize: 8.5, letterSpacing: ".18em",
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               color: "oklch(0.45 0.10 65)", background: "white",
               border: "1px solid oklch(0.70 0.16 65)",
               padding: "1px 5px", borderRadius: 3,
@@ -12715,7 +12963,7 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
           )}
         </div>
         <div style={{
-          display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+          display: "flex", alignItems: "center", gap: 6, fontSize: 13,
           fontFamily: "var(--mono)", letterSpacing: ".04em",
           color: isFlag ? "oklch(0.45 0.10 65)" : "oklch(0.45 0.06 145)",
         }}>
@@ -12742,6 +12990,25 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
 }
 
 type CameraStatus = "off" | "starting" | "on";
+
+/** Smallest gap kept between the camera settings tray and the window edge. */
+const TRAY_EDGE = 12;
+
+/**
+ * Keeps the camera settings tray inside the window. It hangs from the Camera
+ * button's right edge; when the button sits too far left for that (a narrow
+ * window, or a phone where the header wraps), the tray slides right until its
+ * left edge clears the window, and it never runs past the right edge either.
+ */
+function keepTrayOnScreen(tray: HTMLDivElement | null) {
+  const anchor = tray?.offsetParent;
+  if (!tray || !anchor) return;
+  const button = anchor.getBoundingClientRect();
+  const width = tray.offsetWidth;
+  const leftOnScreen = Math.max(TRAY_EDGE, Math.min(button.right - width, window.innerWidth - TRAY_EDGE - width));
+  tray.style.right = "auto";
+  tray.style.left = `${leftOnScreen - button.left}px`;
+}
 
 /**
  * The camera menu in the header. The dot left of the camera icon shows whether
@@ -13337,33 +13604,165 @@ function CameraSetHud({
 }
 
 /**
+ * The rest countdown over the camera view between sets: the time left, which
+ * set starts next and a progress bar. Camera-monitored and custom exercises
+ * show the same overlay.
+ */
+function RestOverlay({ remainingSec, elapsedPct, nextSet, sets, compact, note, zIndex = 20, opaque = false }: {
+  remainingSec: number;
+  elapsedPct: number;
+  nextSet: number;
+  sets: number;
+  compact: boolean;
+  /** A line under the bar, such as why tracking is paused. */
+  note?: string;
+  zIndex?: number;
+  /** Hides what is underneath, such as the camera-off cover a custom exercise may show. */
+  opaque?: boolean;
+}) {
+  return (
+    <div style={{
+      position: "absolute",
+      inset: 0,
+      zIndex,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      padding: 24,
+      textAlign: "center",
+      background: opaque ? "oklch(0.18 0.01 240)" : "oklch(0.18 0.01 240 / 0.72)",
+    }}>
+      <div style={{ fontSize: compact ? 18 : 24, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.80 0.03 200)" }}>
+        Rest period
+      </div>
+      <div style={{
+        fontFamily: "var(--mono)",
+        fontSize: "clamp(88px, 19vh, 170px)",
+        fontWeight: 600,
+        lineHeight: 1,
+        letterSpacing: "-0.03em",
+        color: "white",
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        {formatElapsedTime(remainingSec)}
+      </div>
+      <div style={{ fontSize: compact ? 18 : 26, fontWeight: 500, color: "oklch(0.88 0.01 240)" }}>
+        Set {nextSet} of {sets} starts automatically
+      </div>
+      <div style={{
+        width: "min(460px, 80%)",
+        height: 10,
+        marginTop: 20,
+        borderRadius: 5,
+        overflow: "hidden",
+        background: "oklch(1 0 0 / 0.22)",
+      }}>
+        <div style={{ height: "100%", width: `${elapsedPct}%`, borderRadius: 5, background: NEON.hex }} />
+      </div>
+      {note && (
+        <div style={{ marginTop: 16, fontSize: compact ? 15 : 18, color: "oklch(0.86 0.10 75)" }}>
+          {note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * A custom exercise has no camera definition, so its session is a guide with
  * no tracking: the person presses Set done after each set, the rest countdown
  * runs between sets, and it ends after the last set. Nothing is counted or
  * scored. For a patient, finishing the last set marks that day's exercise
  * complete (`onComplete`); a staff preview saves nothing.
  */
-function CustomGuidedSession({ sets, restSeconds, onComplete, onNext, onBackToSchedule }: {
+type CustomPainReport =
+  | { status: "declined" }
+  | { status: "reported"; score: number; timing: PainTiming | null; bodyArea: string | null };
+
+function CustomGuidedSession({
+  sets, restSeconds, onComplete, onNext, onBackToSchedule,
+  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport,
+}: {
   sets: number;
   restSeconds: number;
   /** Saves the day as complete; resolves to an error message, or null when saved. */
   onComplete?: () => Promise<string | null>;
   onNext?: () => void;
   onBackToSchedule?: () => void;
+  /** Runs before the first set (pain and video questions); resolving false cancels the start. */
+  onBeforeStart?: () => Promise<boolean>;
+  /** A set begins: its recording part starts. */
+  onSetStart?: () => void;
+  /** Rest begins: the set's recording part stops. */
+  onRestStart?: () => void;
+  /** The session ends, after the last set or early; any recording stops. */
+  onEnd?: (reason: "completed" | "user") => void;
+  /** The rest countdown, for the camera view's rest overlay; null when not resting. */
+  onRestChange?: (rest: { remainingSec: number; totalSec: number; nextSet: number; sets: number } | null) => void;
+  /** "Stop — I have pain" (patients): ends the session as stopped for pain; resolves to an error, or null. */
+  onPainStop?: () => Promise<string | null>;
+  /** "Pain after this attempt" (patients), asked once the session has ended. */
+  painReport?: { pending: () => boolean; save: (report: CustomPainReport) => Promise<string | null> };
 }) {
-  const [phase, setPhase] = useState<"idle" | "set" | "rest" | "done">("idle");
+  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
   const [currentSet, setCurrentSet] = useState(1);
   const [restEndsAt, setRestEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [save, setSave] = useState<{ state: "idle" | "saving" | "saved" } | { state: "error"; message: string }>(
     { state: "idle" },
   );
+  // "Pain after this attempt": asked after the last set and after a pain stop.
+  const [asking, setAsking] = useState(false);
+  const [painScore, setPainScore] = useState(0);
+  const [painTiming, setPainTiming] = useState<PainTiming | "">("");
+  const [painBodyArea, setPainBodyArea] = useState("");
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [painStopError, setPainStopError] = useState<string | null>(null);
+  // Leaving the exercise mid-session (another exercise, another page) ends
+  // its recording the same way End session does.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
+  const onRestChangeRef = useRef(onRestChange);
+  onRestChangeRef.current = onRestChange;
+  useEffect(() => () => {
+    onRestChangeRef.current?.(null);
+    if (phaseRef.current === "set" || phaseRef.current === "rest") onEndRef.current?.("user");
+  }, []);
+
+  const askPainAfter = () => {
+    if (!painReport?.pending()) return;
+    setPainScore(0);
+    setPainTiming("");
+    setPainBodyArea("");
+    setReportError(null);
+    setAsking(true);
+  };
 
   const saveCompletion = async () => {
     if (!onComplete) return;
     setSave({ state: "saving" });
     const error = await onComplete().catch(() => "Your session could not be saved.");
     setSave(error ? { state: "error", message: error } : { state: "saved" });
+    if (!error) askPainAfter();
+  };
+
+  const sendPainReport = async (declined: boolean) => {
+    if (!painReport) return;
+    setReportSaving(true);
+    setReportError(null);
+    const error = await painReport.save(
+      declined
+        ? { status: "declined" }
+        : { status: "reported", score: painScore, timing: painTiming || null, bodyArea: painBodyArea.trim() || null },
+    ).catch(() => "The pain report could not be saved.");
+    setReportSaving(false);
+    if (error) setReportError(error);
+    else setAsking(false);
   };
 
   useEffect(() => {
@@ -13378,45 +13777,162 @@ function CustomGuidedSession({ sets, restSeconds, onComplete, onNext, onBackToSc
       setRestEndsAt(null);
       setCurrentSet((set) => set + 1);
       setPhase("set");
+      onSetStart?.();
     }
-  }, [phase, restRemaining]);
+  }, [phase, restRemaining, onSetStart]);
 
-  const start = () => { setCurrentSet(1); setRestEndsAt(null); setPhase("set"); };
+  // The rest overlay on the camera view follows this countdown.
+  useEffect(() => {
+    onRestChangeRef.current?.(
+      phase === "rest" && restRemaining > 0
+        ? { remainingSec: restRemaining, totalSec: restSeconds, nextSet: currentSet + 1, sets }
+        : null,
+    );
+  }, [phase, restRemaining, restSeconds, currentSet, sets]);
+
+  const start = async () => {
+    setPhase("starting");
+    if (onBeforeStart && !(await onBeforeStart().catch(() => true))) { setPhase("idle"); return; }
+    setCurrentSet(1);
+    setRestEndsAt(null);
+    setSave({ state: "idle" });
+    setAsking(false);
+    setPainStopError(null);
+    setPhase("set");
+    onSetStart?.();
+  };
   const finishSet = () => {
-    if (currentSet >= sets) { setPhase("done"); void saveCompletion(); return; }
+    if (currentSet >= sets) { setPhase("done"); onEnd?.("completed"); void saveCompletion(); return; }
     if (restSeconds <= 0) { setCurrentSet((set) => set + 1); return; }
+    onRestStart?.();
     const startedAt = Date.now();
     setNow(startedAt);
     setRestEndsAt(startedAt + restSeconds * 1000);
     setPhase("rest");
   };
-  const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); };
+  const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
+  const endEarly = () => { setPhase("idle"); setRestEndsAt(null); onEnd?.("user"); };
+  const stopForPain = async () => {
+    if (!onPainStop) return;
+    setPhase("pain");
+    setRestEndsAt(null);
+    const error = await onPainStop().catch(() => "The pain stop could not be saved.");
+    setPainStopError(error);
+    if (!error) askPainAfter();
+  };
 
   const status = phase === "set"
     ? `Set ${currentSet} of ${sets} — do the set, then press Set done.`
     : phase === "rest"
-      ? `Rest ${restRemaining}s · set ${currentSet + 1} of ${sets} next`
-      : phase === "done"
-        ? onComplete
-          ? save.state === "saved"
-            ? `All ${sets} sets done. Today's exercise is marked complete.`
-            : save.state === "error"
-              ? `All ${sets} sets done, but it was not saved.`
-              : `All ${sets} sets done. Saving...`
-          : `All ${sets} sets done.`
-        : null;
+      ? `Resting · set ${currentSet + 1} of ${sets} starts automatically`
+      : phase === "pain"
+        ? "Stopped because of pain. Your therapist has been notified and will review it before you try again."
+        : phase === "done"
+          ? onComplete
+            ? save.state === "saved"
+              ? `All ${sets} sets done. Today's exercise is marked complete.`
+              : save.state === "error"
+                ? `All ${sets} sets done, but it was not saved.`
+                : `All ${sets} sets done. Saving...`
+            : `All ${sets} sets done.`
+          : null;
+
+  if (asking) {
+    return (
+      <div style={{ ...CARD_STYLE, padding: 16 }}>
+        <div style={{ ...EYEBROW_STYLE, fontSize: 12, color: ACCENT.text, marginBottom: 6 }}>
+          Pain after this attempt
+        </div>
+        <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+          Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
+        </p>
+        <label style={{ display: "block", marginBottom: 6, fontSize: 14 }}>
+          Pain score: <strong>{painScore}/10</strong>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={10}
+          step={1}
+          value={painScore}
+          onChange={(event) => setPainScore(Number(event.target.value))}
+          disabled={reportSaving}
+          aria-label="Pain score from 0 to 10"
+          style={{ width: "100%", accentColor: ACCENT.hex }}
+        />
+        <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>Timing (optional)</label>
+        <select
+          value={painTiming}
+          onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
+          disabled={reportSaving}
+          style={FIELD_STYLE}
+        >
+          <option value="">Not specified</option>
+          <option value="during">During</option>
+          <option value="after">After</option>
+          <option value="both">During and after</option>
+        </select>
+        <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>Body area (optional)</label>
+        <input
+          value={painBodyArea}
+          maxLength={80}
+          onChange={(event) => setPainBodyArea(event.target.value)}
+          disabled={reportSaving}
+          placeholder="e.g. left shoulder"
+          style={FIELD_STYLE}
+        />
+        {reportError && (
+          <p role="alert" style={{ margin: "10px 0 0", fontSize: 13, color: "oklch(0.50 0.18 25)" }}>
+            {reportError} Please retry while this page remains open.
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={() => void sendPainReport(false)} disabled={reportSaving}
+            style={{ ...PRIMARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}>
+            {reportSaving ? "Saving…" : "Save report"}
+          </button>
+          <button type="button" onClick={() => void sendPainReport(true)} disabled={reportSaving}
+            style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}>
+            Decline
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
       {status && (
         <div role="status" style={{
-          padding: "10px 12px", borderRadius: 8, background: ACCENT.soft, color: ACCENT.text,
+          padding: "10px 12px", borderRadius: 8,
+          background: phase === "pain" ? "oklch(0.97 0.025 25)" : ACCENT.soft,
+          color: phase === "pain" ? "oklch(0.42 0.16 25)" : ACCENT.text,
           fontSize: 15, fontWeight: 600, lineHeight: 1.4,
         }}>
           {status}
         </div>
       )}
-      {phase === "done" && onComplete ? (
+      {phase === "pain" ? (
+        <>
+          {painStopError && (
+            <>
+              <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+                {painStopError}
+              </p>
+              <button type="button" onClick={() => void stopForPain()}
+                style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+                Try saving again
+              </button>
+            </>
+          )}
+          {!painStopError && onBackToSchedule && (
+            <button type="button" onClick={onBackToSchedule}
+              style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600 }}>
+              Back to schedule
+            </button>
+          )}
+        </>
+      ) : phase === "done" && onComplete ? (
         <>
           {save.state === "error" && (
             <>
@@ -13453,15 +13969,35 @@ function CustomGuidedSession({ sets, restSeconds, onComplete, onNext, onBackToSc
           Skip rest
         </button>
       ) : (
-        <button type="button" onClick={start}
-          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20 }}>
-          {phase === "done" ? "Restart" : "Start session"}
+        <button type="button" onClick={() => void start()} disabled={phase === "starting"}
+          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20, opacity: phase === "starting" ? 0.6 : 1 }}>
+          {phase === "starting" ? "Starting…" : phase === "done" ? "Restart" : "Start session"}
         </button>
       )}
-      {phase !== "idle" && phase !== "done" && (
-        <button type="button" onClick={() => setPhase("idle")}
+      {(phase === "set" || phase === "rest") && (
+        <button type="button" onClick={endEarly}
           style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "10px 14px", fontSize: 14 }}>
           End session
+        </button>
+      )}
+      {(phase === "set" || phase === "rest") && onPainStop && (
+        <button
+          type="button"
+          onClick={() => void stopForPain()}
+          style={{
+            width: "100%",
+            padding: "13px 12px",
+            borderRadius: 10,
+            border: "1px solid oklch(0.55 0.17 25)",
+            background: "oklch(0.97 0.025 25)",
+            color: "oklch(0.42 0.16 25)",
+            fontFamily: "var(--sans)",
+            fontSize: 15,
+            fontWeight: 650,
+            cursor: "pointer",
+          }}
+        >
+          Stop — I have pain
         </button>
       )}
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>

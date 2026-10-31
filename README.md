@@ -1,5 +1,171 @@
 # Sprint Updates 
 
+## 📌 Update-10-31-26 | *Enah*
+
+- Simplified the landing page's wording without changing its design or the clinic's name, phone numbers, email, and address, and moved the progress report to the therapists' list and the daily email to the patients'
+- Replaced the dashboards' How to Use drawings with screenshots of the real screens on 23 steps, showing each step in order with the button to press outlined
+- Kept every How to Use card inside the screen, with its title and Back / Next always visible and only its middle scrolling, and enlarged its text for readability
+- Replaced the admin's System Activity Feed with a User Status panel showing which patients and therapists are online now and when the others were last active
+- Added a search box on Manage Users that filters active and archived users by name, email, or role
+- Replaced the admin's Recent Patient Sessions with a Patients card showing each active patient's progress and status, as therapists see their own
+- Made the dashboards and the camera page fit phones and tablets: no page is wider than the screen, header rows and labels wrap, and wide tables scroll inside their cards
+- Let patients record a custom exercise, one video part per set with nothing recorded during rest, saved, shown, and deleted like a camera session's video
+- Gave custom exercises the camera session's rest overlay, pain question before starting, Stop — I have pain button, and pain report after the attempt
+- Removed the coaching, baseline, and live metrics from a custom exercise's camera view, keeping only the lighting check
+- Added a "please wait" message to the camera page's Home, Back to schedule, and session report buttons
+- Asked before stopping a recording, and moved the recording badge beside the camera view's buttons
+- Let admins and therapists keep, remove, or replace a custom exercise's guide video when editing it
+- Locked Assign Exercise's steps 2 and 3 until a patient is selected, and made its review and end windows scroll
+- Removed the Demo Clock's How to Use tour, as the Demo Clock will be removed before deployment
+- Let a patient's therapist edit their Diagnosis, Condition, and Prescription and add or delete their attached files; these belong to the patient, stay after reassignment, and are the same records the admin sees
+- Grouped the Patient Profile's Sessions by day in dropdowns, with a search box by exercise name and a "Make-up Exercise for" label on sessions done after their scheduled day
+- Named custom exercises "(Custom Exercise)" in the progress report PDF
+- Gave the Patient Profile's Edit and Add files buttons the solid green style of its other buttons
+- Removed the unused Therapist ID from the therapist's View Profile, the code, and the database scripts
+- Added a View button to Manage Users' Active Users, showing a read-only profile with what the Add User form collects; attached files are listed by name and cannot be opened
+- Saved the admin's attached file additions and deletions only on Save Changes or Add User, naming each file in the Confirm Edit and Confirm New User windows
+- Added a "How to add a video" guide to every custom exercise's Guide video field, with steps for attaching a video file and for getting a YouTube embed code, shown with screenshots of YouTube and the form
+
+### *web\src\app\page.tsx*
+
+- Rewrote the landing page's text in plain words for patients, keeping its layout, colors, and the clinic's name, phone numbers, email, and address
+- Listed "Download your patient's progress reports to PDF" for therapists and "Get a daily email of your finished and missed exercises" for patients
+
+### *web\src\app\(app)\dashboard\_components\TourFlow.tsx*, *web\src\app\(app)\dashboard\_components\SpotlightTour.tsx*, *web\src\app\(app)\dashboard\_components\tours.ts*, and *web\public\tour*
+
+- Added 30 screenshots of the real screens to the admin, therapist, and patient tours, numbered in order, with the button to press outlined in green and the outcome written under them
+- Kept drawings on the steps whose screens were empty in the test data, such as the archived lists and the assign Save button
+- Showed each screenshot at its real on-screen size, full width under the step's text, and no taller than a third of the screen
+- Limited the card to the screen's height and measured it again once its screenshots load, so Back / Next never fall off screen; the card goes to the side away from a large highlighted area
+- Raised the card's text to at least 11 px everywhere and 14 to 15 px for anything needed to follow a step, and widened the cards to fit
+- Removed Print / Save as PDF from the Patient Profile's Patient actions step and its screenshot, and removed the Demo Clock tour
+- Added steps for the User Status panel, the Patients card, the Manage Users search, and the Assign Exercise lock
+
+### *web\src\app\(app)\camera\CameraClient.tsx* (How to Use)
+
+- Enlarged the camera tour's text to match the dashboards', kept its title and Back / Next on screen with only its middle scrolling, and drew its pictures at 80% on tablet-sized screens
+- Opened the camera menu from wherever its button sits, so it never runs off the screen, and left it closed during step 1 on screens narrower than 1024 px, where it covered the Start camera button
+
+### *web\src\lib\presence.ts*, *web\src\lib\usePresenceHeartbeat.ts*, *web\src\app\api\presence\route.ts*, *web\src\app\(app)\dashboard\admin\UserStatusPanel.tsx*, *web\src\app\(app)\layout.tsx*, and *scripts\user_presence_pg.sql*
+
+- Added a User Status panel to the admin dashboard listing every active patient and therapist: online first, then by last activity, with All / Patients / Therapists filters and a search box past 8 users
+- Counted a user as online when a signed-in page, the camera page included, reported in within the last 2 minutes while visible; Log Out shows them offline at once
+- Decided online by the database clock, so the demo clock and a browser's clock cannot change it
+- Added scripts\user_presence_pg.sql, which adds last_seen_at and signed_out_at to users; until it runs, the panel says so and the rest of the app works
+- Stopped writing "User Logged In" and "User Logged Out" notifications, which only the removed feed showed, and removed Clear Feed
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\lib\db.ts*, and *web\src\app\(app)\dashboard\_components\rosterStatus.tsx*
+
+- Added a search box above Manage Users' lists, filtering both by name, email, or role, with each count showing how many match
+- Replaced Recent Patient Sessions with a Patients card of every active patient's progress and status, with no Manage patients link
+- Shared the roster's status rules and progress display between the therapist and admin dashboards, so both always agree
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\_components\AppShell.tsx*, *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, and the dashboard pages
+
+- Let cards shrink on narrow screens, with wide tables scrolling inside them, so no page is wider than the screen from 360 px up
+- Wrapped header rows, summary tile labels, profile names, and emails instead of cutting them, and showed Exercise Program's tiles two per row on phones
+- Showed How to Use, the bell, and the user's full name and role in the header on phones, wrapping a long name onto two lines
+- Hid the therapist roster's Last active and This week columns on phones, and showed a patient's email under their name on the therapist's profile
+- Fitted the Patient Profile to phones: its action buttons in rows, all four tabs across the width, less card padding, and its status badges above the text in PT Program and Completed Exercise Outcomes
+- Gave the therapist's Manage Exercises lists equal widths
+- Moved My Progress's session videos above the exercise trends
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\app\api\sessions\manual\route.ts*, *web\src\lib\db.ts*, and *web\src\lib\email.ts* (custom exercises)
+
+- Created a session for each patient attempt at a custom exercise, holding the pain answers, how it ended, and, with consent, its video; nothing is counted, so trends, counts, and reports leave it out
+- Asked the camera session's pain question, then its video question, before a custom exercise starts; Back on either cancels the start
+- Recorded each set as its own video part, stopping during rest, and labeled the parts Set 1, Set 2 for the patient and therapist; viewing, deleting, and consent follow the camera session's rules
+- Added Stop — I have pain, which pauses the day for pain and notifies the therapist and patient, and the pain report after the attempt, after Finish and after a pain stop
+- Described a custom exercise's pain pause as "a custom exercise, so no sets or reps are counted" in notifications and emails
+- Showed the camera session's rest overlay between custom sets, for every role
+- Cleared the skeleton, framing target, and form highlights from a custom exercise's camera view, kept only the dark-room message, labeled "Lighting", and hid the baseline card and the tracking and turn messages
+- Said "Not measured" under the staff diagnostics' Live Metrics for a custom exercise
+- Labeled a custom session "Custom exercise · guided, not measured" in the therapist's Sessions tab
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\app\(app)\dashboard\_components\PleaseWait.tsx*, *web\src\app\(app)\dashboard\_components\ReportButton.tsx*, and *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*
+
+- Showed "Opening your dashboard…" or "Opening your schedule…" until the next page loads after Home, Back to schedule, Return to schedule, and the automatic return, and "Preparing your PDF report…" while a session report is built
+- Asked "Stop recording?" before stopping a recording; the video up to that moment is kept even mid-set, and only the patient's Delete removes it
+- Put the recording badge in the camera view's top-left row beside its two buttons, wrapping below them on phones instead of covering the AI indicator
+
+### *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\api\exercises\[id]\route.ts*, *web\src\lib\db.ts*, and the exercise edit forms
+
+- Added Keep current video, Remove video, Replace with video file, and Replace with YouTube to editing a custom exercise on the admin's and therapist's Manage Exercises and the Exercise Program page; keep is chosen by default
+- Deleted the replaced uploaded file when a video is removed or replaced; a failed upload keeps the saved description and the old video
+- Allowed admins to change any custom exercise's video and therapists only their own, checked on the server; system exercises still edit only their description
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+
+- Locked Load from Program and Select Exercises until a patient is selected, with a note saying so
+- Kept the Review Changes and End Prescriptions windows inside the screen, with the list scrolling between the title and the buttons
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\api\users\[id]\clinical\route.ts*, and *web\src\app\api\users\[id]\attachments*
+
+- Added Edit to the Patient Profile's clinical information, saving Diagnosis, Condition, and Prescription to the patient's own record, so the admin's Edit form and the next therapist after a reassignment see the same values
+- Added + Add files and Delete to the patient's attached files for their therapist, with the admin's file types and limits
+- Allowed only the admin and the patient's current therapist to change either, checked on the server; a former therapist is refused
+- Grouped Sessions by day, newest first, each day a dropdown with the latest one open, and added a search box that finds sessions by exercise name and opens the matching days
+- Labeled a session done after its scheduled day "Make-up Exercise for" that day
+- Gave Edit and + Add files the solid green style of Assign Exercise and Progress Report (PDF)
+
+### *web\src\lib\reports\homeProgram.ts* and *web\src\lib\reports\reports.test.ts*
+
+- Added "(Custom Exercise)" after a custom exercise's name in the progress report PDF, for example "Shoulder Shrugs (Custom Exercise)"
+
+### *web\src\lib\db.ts*, *web\src\app\api\users\route.ts*, *web\src\app\(app)\dashboard\therapist\profile\page.tsx*, *web\scripts\seedDemo.ts*, *scripts\user_credentials_pg.sql*, and *scripts\drop_therapist_id_num_pg.sql*
+
+- Removed Therapist ID, which no form ever filled, from the therapist's View Profile, its tour step, the user code, the demo seed, and the user table script
+- Added scripts\drop_therapist_id_num_pg.sql, which drops the column from an existing database; the app works the same before and after it runs
+
+### *web\src\app\(app)\dashboard\_components\VideoGuide.tsx*, *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\(app)\dashboard\_components\TourFlow.tsx*, and *web\public\tour*
+
+- Added "How to add a video" under Guide video on the therapist's Exercise Program and Manage Exercises forms and the admin's Manage Exercises forms, adding and editing alike
+- Opened a step-by-step card in the How to Use style with two tabs, Video file and YouTube embed code, starting on the one chosen in the form, with Back, Next, and Done
+- Covered a video file in 4 steps: MP4 or WebM up to 100 MB and how to film it, converting an iPhone's MOV file or trimming a large one, choosing the file, and saving, including a failed upload
+- Covered YouTube in 6 steps, with screenshots of YouTube's Share button, the Embed choice, and the embed code's Copy button, then pasting in the form until "Video found." shows, and saving; it notes the phone app's Copy link, videos whose owners block embedding, and videos later removed
+- Added the screenshots yt-share-1.png to yt-share-3.png, from a public "Shoulder Shrugs" video, and video-file-chosen.png and video-youtube-found.png of the form
+- Pointed the YouTube box's hint to the guide
+- Kept tour screenshots in proportion when a tall one is shrunk to fit, which had left blank space beside it in every tour
+
+- Added View to each Active Users row, opening the patient's or therapist's View Profile layout read-only, without Change Password, showing the names, email, date of birth, age, gender, and the patient's clinical information and file names or the therapist's specialization
+- Listed attached files by name only, noting that only the patient and their therapist can open them
+- Changed the Edit form's file Delete to cross the file out with an Undo, deleting it only on Confirm & Save Changes; new files are uploaded only then too
+- Listed "Files to add" and "Files to delete" by name in Confirm Edit and "Files to add" in Confirm New User
+- Added the View action and the save-first rule to the Manage Users tour and retook its Active Users screenshot
+
+### *AUTHENTICATION_SETUP.md*, *deploy\server\README.md*, and *deploy\server\02_app_db.sh*
+
+- Added scripts\user_presence_pg.sql to the SQL order and to a new server's setup, and noted the one command an existing server needs
+- Noted running scripts\drop_therapist_id_num_pg.sql once, after a backup, on a database created before this update
+
+### *Validation*
+
+- The new presence test passes 6 checks, and the existing notification email and prescription context tests pass
+- Type check and lint (no errors) pass
+- Every How to Use step for admin, therapist, and patient, 170 in all, stayed on screen at 1366×768 and 1280×620 after the text was enlarged, and the camera tour's 7 steps fit at 390, 570, 820, 1180, 1366, and 1920 px wide
+- No page of the three roles was wider than the screen at 360, 390, 600, 768, 840, and 1024 px
+- In signed-in sessions on the laptop, a recorded custom exercise saved two parts labeled Set 1 and Set 2, the User Status panel showed the patient online, and the custom exercise view drew nothing on the camera picture and said "Not measured"
+- The new routes refused missing consent, an old video notice, an invalid pain answer, an exercise not due today, a video change on a system exercise, and a therapist changing another's video, without saving anything
+- The reports test passes 15 checks, including the "(Custom Exercise)" name
+- A therapist's clinical edit and file upload and delete showed in the admin's Edit form, and the original values were restored afterwards
+- Both tabs of the video guide fit the screen with every screenshot loaded on the therapist's form at 1280×800, the admin's at 1366×768, and a 375 px phone, and every How to Use step for the three roles still fit after the screenshot change
+- As the admin, View showed a patient and a therapist read-only with no links, and fit a 375 px screen; marking a file for deletion and choosing a new one sent nothing until Confirm & Save Changes, and saving a test file then deleting it left the patient's own file untouched
+
+### *Remaining boundaries*
+
+- Before User Status works on the server, scripts\user_presence_pg.sql must be run once as the database owner
+- scripts\drop_therapist_id_num_pg.sql has not been run locally or on the server; it permanently deletes the column, so take a backup first
+- If a file deletion or upload fails after Save Changes, the other details are still saved and the admin is told which files to retry
+- The custom exercise's pain steps, Stop recording confirmation, and Assign's End Prescriptions window have not been tried in a signed-in session
+- The tour screenshots show the test accounts' real names and emails; they must be taken again if the screens change
+- The video guide's YouTube screenshots show YouTube's layout as of 2026-11-01 and must be taken again if YouTube changes its Share box
+- Tour steps whose screens were empty in the test data still use drawings
+- A therapist who leaves the app in a background tab shows offline after 2 minutes
+- The Demo Clock page and its menu item remain until they are removed before deployment
+- The layouts were checked with phone and tablet emulation, not on real devices
+
+---
+
 ## 📌 Update-10-30-26 | *RyanCodesling*
 
 - Added "Stop at shoulder height" on the lateral arm raise when an arm goes past shoulder height, boxed around that arm and cleared once it is corrected in the same raise; saved videos redraw the box as it was shown

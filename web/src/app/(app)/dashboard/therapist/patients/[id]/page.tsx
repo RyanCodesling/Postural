@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { isPatientImageMimeType } from "@/lib/patientAttachments";
+import { PATIENT_ATTACHMENT_ACCEPT, isPatientImageMimeType } from "@/lib/patientAttachments";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
@@ -100,6 +100,10 @@ interface SessionSummary {
   exerciseId: string;
   exerciseName: string;
   exerciseKind: "dynamic" | "isometric" | null;
+  /** A custom exercise's session: guided, with nothing counted. */
+  customExercise?: boolean;
+  /** The day the attempt was scheduled for (YYYY-MM-DD); done later, it was a make-up. */
+  scheduledDay?: string | null;
   startedAt: string;
   endedAt: string | null;
   endReason: SessionEndReason | null;
@@ -292,6 +296,16 @@ export default function PatientDetailPage() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [patientImages, setPatientImages] = useState<PatientAttachment[]>([]);
   const [patientImagesError, setPatientImagesError] = useState(false);
+  // Clinical information and files, edited by this patient's therapist. They
+  // belong to the patient, so they stay if the patient moves to another therapist.
+  const [clinicalDraft, setClinicalDraft] = useState<{ diagnosis: string; condition: string; prescription: string } | null>(null);
+  const [savingClinical, setSavingClinical] = useState(false);
+  const [clinicalError, setClinicalError] = useState<string | null>(null);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [filesMessage, setFilesMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [fileToDelete, setFileToDelete] = useState<PatientAttachment | null>(null);
+  const [deletingFile, setDeletingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [imageToView, setImageToView] = useState<PatientAttachment | null>(null);
   const [imagePassword, setImagePassword] = useState("");
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
@@ -306,6 +320,10 @@ export default function PatientDetailPage() {
 
   // Session drill-down: which row is expanded, fetched detail cache, in-flight id.
   const [expandedSessionId, setExpandedSessionId] = useState<number | null>(null);
+  // Sessions tab: the exercise-name search, and which day groups are open
+  // (null: only the most recent day).
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [openSessionDays, setOpenSessionDays] = useState<Set<string> | null>(null);
   const [sessionDetails, setSessionDetails] = useState<Record<number, SessionDetail>>({});
   const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
   const sessionsCardRef = useRef<HTMLDivElement | null>(null);
@@ -392,6 +410,84 @@ export default function PatientDetailPage() {
   const scrollToSessions = () => {
     setTab("reports");
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+  };
+
+  const saveClinical = async () => {
+    if (!clinicalDraft) return;
+    setSavingClinical(true);
+    setClinicalError(null);
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(patientId)}/clinical`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clinicalDraft),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setClinicalError(data.error || "The clinical information could not be saved.");
+        return;
+      }
+      setPatient((current) => (current ? { ...current, ...data.clinical } : current));
+      setClinicalDraft(null);
+    } catch {
+      setClinicalError("The clinical information could not be saved. Please try again.");
+    } finally {
+      setSavingClinical(false);
+    }
+  };
+
+  const reloadAttachments = async () => {
+    const response = await fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`);
+    if (!response.ok) { setPatientImagesError(true); return; }
+    const data = await response.json();
+    setPatientImages(data.attachments ?? []);
+    setPatientImagesError(false);
+  };
+
+  const uploadFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadingFiles(true);
+    setFilesMessage(null);
+    try {
+      const form = new FormData();
+      for (const file of Array.from(files)) form.append("files", file);
+      const response = await fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { method: "POST", body: form });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setFilesMessage({ tone: "error", text: data.error || "The files could not be uploaded." });
+        return;
+      }
+      await reloadAttachments();
+      setFilesMessage({ tone: "ok", text: `${data.count ?? files.length} file${(data.count ?? files.length) === 1 ? "" : "s"} added.` });
+    } catch {
+      setFilesMessage({ tone: "error", text: "The files could not be uploaded. Please try again." });
+    } finally {
+      setUploadingFiles(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const confirmDeleteFile = async () => {
+    if (!fileToDelete) return;
+    setDeletingFile(true);
+    try {
+      const response = await fetch(
+        `/api/users/${encodeURIComponent(patientId)}/attachments/${fileToDelete.id}`,
+        { method: "DELETE" },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setFilesMessage({ tone: "error", text: data.error || "The file could not be deleted." });
+      } else {
+        setPatientImages((current) => current.filter((file) => file.id !== fileToDelete.id));
+        setFilesMessage({ tone: "ok", text: `${fileToDelete.fileName} was deleted.` });
+      }
+    } catch {
+      setFilesMessage({ tone: "error", text: "The file could not be deleted. Please try again." });
+    } finally {
+      setDeletingFile(false);
+      setFileToDelete(null);
+    }
   };
 
   const closeImageViewer = () => {
@@ -516,10 +612,10 @@ export default function PatientDetailPage() {
             <h1 className="text-2xl font-bold text-gray-900">Patient Profile</h1>
             <p className="text-gray-500 mt-1">{patient.name}</p>
           </div>
-          <div id="tour-detail-actions" className="shrink-0 flex flex-wrap items-start justify-end gap-2">
+          <div id="tour-detail-actions" className="flex w-full min-w-0 flex-wrap items-start gap-2 sm:w-auto sm:justify-end">
             <Link
               href={`/dashboard/therapist/assign?patientId=${encodeURIComponent(patientId)}`}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition"
+              className="inline-flex flex-1 items-center justify-center gap-2 whitespace-nowrap px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition sm:flex-none"
             >
               Assign Exercise
             </Link>
@@ -529,11 +625,11 @@ export default function PatientDetailPage() {
                 const { downloadProgressReport } = await import("../../../_components/progressReport");
                 await downloadProgressReport({ patientId }, patient.name);
               }}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
+              className="inline-flex flex-1 items-center justify-center gap-2 whitespace-nowrap px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60 sm:flex-none"
             />
             <button
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition"
+              className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition sm:w-auto"
             >
               <PrinterIcon />
               Print / Save as PDF
@@ -541,7 +637,7 @@ export default function PatientDetailPage() {
           </div>
         </div>
 
-        <div id="tour-detail-tabs" role="tablist" className="mt-5 mb-6 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-green-100">
+        <div id="tour-detail-tabs" role="tablist" className="mt-5 mb-6 grid grid-cols-4 overflow-x-auto overflow-y-hidden border-b border-green-100 sm:flex sm:gap-1">
           {PATIENT_TABS.map(({ key, label }) => (
             <button
               key={key}
@@ -550,7 +646,7 @@ export default function PatientDetailPage() {
               aria-selected={tab === key}
               type="button"
               onClick={() => setTab(key)}
-              className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+              className={`-mb-px whitespace-nowrap border-b-2 px-1 py-2.5 text-center text-[13px] font-medium transition sm:px-4 sm:text-sm ${
                 tab === key
                   ? "border-green-600 text-green-700"
                   : "border-transparent text-gray-500 hover:text-green-700"
@@ -564,7 +660,7 @@ export default function PatientDetailPage() {
 
       <TabPanel active={tab === "overview"}>
       {/* Personal Information */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
         <h2 className="text-gray-900 font-semibold text-lg mb-6">Personal Information</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
@@ -624,8 +720,70 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Clinical information */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <h2 className="text-gray-900 font-semibold text-lg mb-5">Clinical Information</h2>
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-gray-900 font-semibold text-lg">Clinical Information</h2>
+          {!clinicalDraft && (
+            <button
+              type="button"
+              onClick={() => {
+                setClinicalError(null);
+                setClinicalDraft({
+                  diagnosis: patient.diagnosis ?? "",
+                  condition: patient.condition ?? "",
+                  prescription: patient.prescription ?? "",
+                });
+              }}
+              className="inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 print:hidden"
+            >
+              Edit
+            </button>
+          )}
+        </div>
+        {clinicalDraft ? (
+          <div className="space-y-4 print:hidden">
+            {([
+              ["diagnosis", "Diagnosis", 3],
+              ["condition", "Condition", 3],
+              ["prescription", "Prescription", 4],
+            ] as const).map(([field, label, rows]) => (
+              <label key={field} className="block">
+                <span className="mb-1 block text-xs text-gray-500">{label}</span>
+                <textarea
+                  value={clinicalDraft[field]}
+                  onChange={(e) => setClinicalDraft({ ...clinicalDraft, [field]: e.target.value })}
+                  rows={rows}
+                  maxLength={5000}
+                  disabled={savingClinical}
+                  placeholder={`No ${label.toLowerCase()} recorded`}
+                  className="w-full rounded-lg border border-green-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
+                />
+              </label>
+            ))}
+            {clinicalError && <p role="alert" className="text-sm text-red-600">{clinicalError}</p>}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void saveClinical()}
+                disabled={savingClinical}
+                className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 disabled:bg-gray-300"
+              >
+                {savingClinical ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setClinicalDraft(null); setClinicalError(null); }}
+                disabled={savingClinical}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Saved to the patient&apos;s record. It stays with the patient if they move to another therapist, and the admin sees the same information.
+            </p>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             <p className="text-xs text-gray-500 mb-1">Diagnosis</p>
@@ -646,16 +804,38 @@ export default function PatientDetailPage() {
             </p>
           </div>
         </div>
+        )}
       </div>
 
       {/* Patient attachments */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <div className="flex items-center justify-between gap-3 mb-5">
-          <h2 className="text-gray-900 font-semibold text-lg">Attached Files</h2>
-          {patientImages.length > 0 && (
-            <span className="text-xs text-gray-500">{patientImages.length} file{patientImages.length === 1 ? "" : "s"}</span>
-          )}
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-gray-900 font-semibold text-lg">Attached Files</h2>
+            {patientImages.length > 0 && (
+              <span className="text-xs text-gray-500">{patientImages.length} file{patientImages.length === 1 ? "" : "s"}</span>
+            )}
+          </div>
+          <label className={`cursor-pointer inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 print:hidden ${uploadingFiles ? "pointer-events-none opacity-60" : ""}`}>
+            {uploadingFiles ? "Uploading…" : "+ Add files"}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={PATIENT_ATTACHMENT_ACCEPT}
+              onChange={(e) => void uploadFiles(e.target.files)}
+              className="sr-only"
+            />
+          </label>
         </div>
+        <p className="-mt-3 mb-4 text-xs text-gray-500 print:hidden">
+          Up to 5 files at a time, 5 MB each: images, PDF, Word, Excel, PowerPoint, RTF or TXT.
+        </p>
+        {filesMessage && (
+          <p role="status" className={`mb-4 text-sm ${filesMessage.tone === "ok" ? "text-green-700" : "text-red-600"}`}>
+            {filesMessage.text}
+          </p>
+        )}
         {patientImagesError ? (
           <p className="text-sm text-red-600">Unable to load attached files.</p>
         ) : patientImages.length === 0 ? (
@@ -664,8 +844,8 @@ export default function PatientDetailPage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {patientImages.map((attachment) => {
               return (
+                <div key={attachment.id} className="flex flex-col">
                 <button
-                  key={attachment.id}
                   type="button"
                   onClick={() => {
                     setImageToView(attachment);
@@ -687,11 +867,40 @@ export default function PatientDetailPage() {
                     {attachment.fileName}
                   </span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setFileToDelete(attachment)}
+                  className="mt-1 self-start rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 print:hidden"
+                >
+                  Delete
+                </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {fileToDelete && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 print:hidden" role="presentation">
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-file-title" className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl">
+            <h2 id="delete-file-title" className="mb-1 text-lg font-bold text-gray-900">Delete this file?</h2>
+            <p className="mb-5 break-words text-sm text-gray-600">
+              <span className="font-semibold text-gray-900">{fileToDelete.fileName}</span> will be removed from the patient&apos;s record for everyone, including the admin. This cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button type="button" autoFocus onClick={() => setFileToDelete(null)} disabled={deletingFile}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50">
+                Cancel
+              </button>
+              <button type="button" onClick={() => void confirmDeleteFile()} disabled={deletingFile}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:bg-gray-300">
+                {deletingFile ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {imageToView && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="presentation">
@@ -794,7 +1003,7 @@ export default function PatientDetailPage() {
 
       <TabPanel active={tab === "program"}>
       {/* Current prescription lifecycle */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-gray-900 font-semibold text-xl">Current Prescriptions</h2>
           <button
@@ -812,7 +1021,7 @@ export default function PatientDetailPage() {
             {currentPrescriptions.map((ex) => (
               <div
                 key={ex.id}
-                className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
+                className="rounded-xl border border-gray-100 p-4 flex flex-col-reverse items-start gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
               >
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -855,7 +1064,7 @@ export default function PatientDetailPage() {
 
       {/* Ended prescription lifecycle */}
       {endedPrescriptions.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
           <h2 className="text-gray-800 font-semibold text-xl mb-2">Ended Prescriptions</h2>
           <p className="mb-5 text-sm text-gray-500">
             Prescription state is shown separately from the completed and missed occurrence outcomes below.
@@ -864,7 +1073,7 @@ export default function PatientDetailPage() {
             {endedPrescriptions.map((ex) => (
               <div
                 key={ex.id}
-                className="rounded-xl border border-gray-100 p-4 flex justify-between items-center gap-4"
+                className="rounded-xl border border-gray-100 p-4 flex flex-col-reverse items-start gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
@@ -887,7 +1096,7 @@ export default function PatientDetailPage() {
       )}
 
       {/* Completed occurrence outcomes */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
         <h2 className="text-gray-900 font-semibold text-xl mb-2">Completed Exercise Outcomes</h2>
         <p className="mb-5 text-sm text-gray-500">
           Populated from completed scheduled occurrences, even when the overall prescription later ended with missed work.
@@ -900,7 +1109,7 @@ export default function PatientDetailPage() {
             {completedExercises.map((ex) => (
               <div
                 key={ex.id}
-                className="rounded-xl border border-gray-100 p-4 flex justify-between items-center"
+                className="rounded-xl border border-gray-100 p-4 flex flex-col-reverse items-start gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
               >
                 <div>
                   <h3 className="font-semibold text-gray-800">{ex.name}</h3>
@@ -908,7 +1117,7 @@ export default function PatientDetailPage() {
                     {adherenceSummaryText(ex)}
                   </p>
                 </div>
-                <span className="px-3 py-1 bg-green-100 text-green-700 text-base rounded-full font-medium">
+                <span className="shrink-0 whitespace-nowrap px-3 py-1 bg-green-100 text-green-700 text-base rounded-full font-medium">
                   {ex.occurrence_summary.completed} completed
                 </span>
               </div>
@@ -925,7 +1134,7 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Form Quality */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
         <h2 className="text-gray-900 font-semibold text-xl">Form Quality</h2>
         <p className="text-sm text-gray-400 mt-1 mb-5">
           How cleanly the movement was performed (compensation patterns). Supplementary — not a diagnosis.
@@ -976,7 +1185,7 @@ export default function PatientDetailPage() {
       </div>
 
       {/* Progress Trends */}
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+      <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
         <h2 className="text-gray-900 font-semibold text-xl">Progress Trends</h2>
         <p className="text-sm text-gray-400 mt-1 mb-6">
           Session-over-session trends per exercise. Descriptive statistics — not a diagnosis.
@@ -1001,7 +1210,7 @@ export default function PatientDetailPage() {
 
       <TabPanel active={tab === "sessions"}>
       {/* Sessions Record */}
-      <div ref={sessionsCardRef} className="bg-white rounded-xl shadow-sm p-6 scroll-mt-6">
+      <div ref={sessionsCardRef} className="bg-white rounded-xl shadow-sm p-4 sm:p-6 scroll-mt-6">
         <h2 className="text-gray-900 font-semibold text-xl mb-6">Sessions Record</h2>
 
         {sessionsError ? (
@@ -1010,22 +1219,77 @@ export default function PatientDetailPage() {
           </p>
         ) : sessions.length === 0 ? (
           <p className="text-gray-400 text-base text-center py-6">No sessions recorded</p>
-        ) : (
-          <div className="space-y-3">
-            {sessions.map((s) => (
-              <SessionCard
-                key={s.id}
-                session={s}
-                expanded={expandedSessionId === s.id}
-                detail={sessionDetails[s.id] ?? null}
-                loadingDetail={loadingDetailId === s.id}
-                onToggle={() => toggleSession(s.id)}
-                onDetailChanged={() => refreshSessionDetail(s.id)}
-                patientName={patient.name}
-              />
-            ))}
-          </div>
-        )}
+        ) : (() => {
+          const needle = sessionQuery.trim().toLowerCase();
+          const groups = groupSessionsByDay(
+            needle ? sessions.filter((session) => session.exerciseName.toLowerCase().includes(needle)) : sessions,
+          );
+          const isOpen = (day: string, index: number) =>
+            needle !== "" || (openSessionDays ? openSessionDays.has(day) : index === 0);
+          const toggleDay = (day: string, index: number) => {
+            const next = new Set(openSessionDays ?? (groups[0] ? [groups[0].day] : []));
+            if (isOpen(day, index)) next.delete(day); else next.add(day);
+            setOpenSessionDays(next);
+          };
+          return (
+            <>
+              <div className="relative mb-4 w-full max-w-sm print:hidden">
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                <input
+                  type="search"
+                  value={sessionQuery}
+                  onChange={(e) => setSessionQuery(e.target.value)}
+                  placeholder="Search exercise name"
+                  aria-label="Search sessions by exercise name"
+                  className="w-full rounded-lg border border-green-200 bg-white py-2 pl-10 pr-4 text-sm text-black outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                />
+              </div>
+              {groups.length === 0 ? (
+                <p className="text-gray-400 text-base text-center py-6">No sessions match your search.</p>
+              ) : (
+                <div className="space-y-3">
+                  {groups.map((group, index) => {
+                    const open = isOpen(group.day, index);
+                    return (
+                      <section key={group.day} className="rounded-xl border border-green-100">
+                        <button
+                          type="button"
+                          onClick={() => toggleDay(group.day, index)}
+                          aria-expanded={open}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl bg-green-50/60 px-4 py-3 text-left transition hover:bg-green-50"
+                        >
+                          <span className="font-semibold text-gray-900">{longDayLabel(group.day)}</span>
+                          <span className="flex shrink-0 items-center gap-2 text-sm text-gray-500">
+                            {group.sessions.length} session{group.sessions.length === 1 ? "" : "s"}
+                            <span aria-hidden>{open ? "▲" : "▼"}</span>
+                          </span>
+                        </button>
+                        {/* Printing keeps every day's sessions. */}
+                        <div className={`space-y-3 p-3 ${open ? "" : "hidden print:block"}`}>
+                          {group.sessions.map((s) => (
+                            <SessionCard
+                              key={s.id}
+                              session={s}
+                              makeupFor={s.scheduledDay && s.scheduledDay < group.day ? s.scheduledDay : null}
+                              expanded={expandedSessionId === s.id}
+                              detail={sessionDetails[s.id] ?? null}
+                              loadingDetail={loadingDetailId === s.id}
+                              onToggle={() => toggleSession(s.id)}
+                              onDetailChanged={() => refreshSessionDetail(s.id)}
+                              patientName={patient.name}
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       </TabPanel>
@@ -1041,6 +1305,34 @@ export default function PatientDetailPage() {
 }
 
 // ── Sessions Record ──────────────────────────────────────────────────────────
+
+/** The Manila day (YYYY-MM-DD) a session was done on, as the schedule counts days. */
+function manilaDayOf(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
+
+/** "Saturday, October 31, 2026" for a YYYY-MM-DD day. */
+function longDayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? "Unknown date"
+    : d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
+/** Sessions grouped by the day they were done, newest day first; each day's sessions newest first. */
+function groupSessionsByDay(sessions: SessionSummary[]): { day: string; sessions: SessionSummary[] }[] {
+  const byDay = new Map<string, SessionSummary[]>();
+  for (const session of sessions) {
+    const day = manilaDayOf(session.startedAt);
+    const list = byDay.get(day);
+    if (list) list.push(session); else byDay.set(day, [session]);
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([day, list]) => ({ day, sessions: list.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt)) }));
+}
+
 
 function fmtDateTime(iso: string): string {
   const d = new Date(iso);
@@ -1072,6 +1364,7 @@ function isAngleUnit(exerciseId: string): boolean {
 
 function SessionCard({
   session,
+  makeupFor,
   expanded,
   detail,
   loadingDetail,
@@ -1080,6 +1373,8 @@ function SessionCard({
   patientName,
 }: {
   session: SessionSummary;
+  /** Done after its scheduled day: that day (YYYY-MM-DD), shown as a make-up label. */
+  makeupFor?: string | null;
   expanded: boolean;
   detail: SessionDetail | null;
   loadingDetail: boolean;
@@ -1115,8 +1410,13 @@ function SessionCard({
         className="w-full text-left p-4 hover:bg-green-50/50 transition flex justify-between items-start gap-4"
       >
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold text-green-700">{session.exerciseName}</h3>
+            {makeupFor && (
+              <span className="px-2 py-0.5 text-xs rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-medium">
+                Make-up Exercise for {longDayLabel(makeupFor).replace(/^\w+, /, "")}
+              </span>
+            )}
             {session.endedAt === null && (
               <span className="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-700 font-medium">
                 incomplete
@@ -1143,6 +1443,13 @@ function SessionCard({
             {prescribedSideText(session.prescribedSide)} ·{" "}
             {formatResistanceContext(session.resistance)}
           </p>
+          {session.customExercise ? (
+            // A custom exercise: nothing is counted, so only its length shows.
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-base text-gray-600">
+              <span>{fmtDuration(session.durationMs)}</span>
+              <span>Custom exercise · guided, not measured</span>
+            </div>
+          ) : (
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-base text-gray-600">
             <span>{fmtDuration(session.durationMs)}</span>
             <span>{session.setCount} set{session.setCount === 1 ? "" : "s"}</span>
@@ -1172,6 +1479,7 @@ function SessionCard({
               </>
             )}
           </div>
+          )}
         </div>
         <span className="text-gray-400 text-base shrink-0 mt-1">{expanded ? "▲" : "▼"}</span>
       </button>
@@ -1186,6 +1494,7 @@ function SessionCard({
               detail={detail}
               reviewScore={session.reviewScore}
               reviewScoreSource={session.reviewScoreSource}
+              customExercise={session.customExercise === true}
               onDetailChanged={onDetailChanged}
               patientName={patientName}
             />
@@ -1204,7 +1513,10 @@ function SessionDetailBody({
   reviewScoreSource,
   onDetailChanged,
   patientName,
+  customExercise,
 }: {
+  /** A custom exercise's session: its video parts are its sets. */
+  customExercise: boolean;
   detail: SessionDetail;
   reviewScore: number | null;
   reviewScoreSource: "raw_rule_v1" | "hold_rule_v1" | null;
@@ -1241,7 +1553,7 @@ function SessionDetailBody({
           className="px-3 py-1.5 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition disabled:opacity-60"
         />
       </div>
-      <SessionVideo sessionId={detail.id} />
+      <SessionVideo sessionId={detail.id} partLabel={customExercise ? "Set" : "Part"} />
       <SessionPrescriptionContext detail={detail} />
       <SessionPainReport detail={detail} />
       <SessionCaptureContext detail={detail} />

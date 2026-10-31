@@ -818,6 +818,9 @@ export default function AssignExercisePage() {
     .map((patientId) => patients.find((patient) => patient.id === patientId))
     .filter((patient): patient is PatientData => Boolean(patient));
   const minDate = todayKey;
+  // Steps 2 and 3 open once step 1 has a patient: programs and exercises are
+  // always chosen for someone.
+  const needsPatient = assignPatientIds.length === 0;
 
   // True when at least one selected exercise is new or has been edited and differs from existing
   const hasAssignChanges = (() => {
@@ -876,7 +879,7 @@ export default function AssignExercisePage() {
       </div>
 
       <div className={`grid items-start gap-4 ${selectedPatients.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
-        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
+        <div className="min-w-0 bg-white rounded-xl shadow-sm p-4 sm:p-6 space-y-6">
 
           {/* Step 1 — Select Patients */}
           <div id="tour-assign-patients">
@@ -974,8 +977,19 @@ export default function AssignExercisePage() {
             </div>
           )}
 
+          {needsPatient && (
+            <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Select a patient in step 1 first. Steps 2 and 3 open once a patient is selected.
+            </p>
+          )}
+
           {/* Step 2 — Load from Program */}
-          <div id="tour-assign-program">
+          <div
+            id="tour-assign-program"
+            inert={needsPatient}
+            aria-disabled={needsPatient}
+            className={needsPatient ? "pointer-events-none select-none opacity-50" : undefined}
+          >
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <label htmlFor="assign-program-select" className="text-sm font-semibold text-gray-700">
                 2. Load from Program{" "}
@@ -1083,7 +1097,12 @@ export default function AssignExercisePage() {
           </div>
 
           {/* Step 3 — Select & Configure Exercises */}
-          <div id="tour-assign-exercises">
+          <div
+            id="tour-assign-exercises"
+            inert={needsPatient}
+            aria-disabled={needsPatient}
+            className={needsPatient ? "pointer-events-none select-none opacity-50" : undefined}
+          >
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-gray-700">
                 3. Select Exercises <span className="text-red-500">*</span>
@@ -1270,14 +1289,15 @@ export default function AssignExercisePage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteModal(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            {/* Title and buttons stay in view; a long list scrolls between them. */}
+            <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="text-lg font-bold text-gray-900 mb-1">End Prescriptions</h2>
               <p className="text-sm text-gray-500 mb-4">
                 The following prescriptions will stop future scheduling for{" "}
                 <span className="font-semibold text-gray-700">{selectedPatient?.name}</span>:
               </p>
 
-              <div className="rounded-xl border border-red-200 bg-red-50 divide-y divide-red-100 mb-4 overflow-hidden">
+              <div className="mb-4 min-h-0 flex-1 divide-y divide-red-100 overflow-y-auto rounded-xl border border-red-200 bg-red-50">
                 {existingAssignments
                   .filter((e) => deleteSelected.has(e.exercise_id))
                   .map((ex) => (
@@ -1306,7 +1326,7 @@ export default function AssignExercisePage() {
                 <p className="text-xs text-red-600 mb-3">{deleteError}</p>
               )}
 
-              <div className="flex gap-3 justify-end">
+              <div className="flex shrink-0 gap-3 justify-end">
                 <button
                   onClick={() => setShowDeleteModal(false)}
                   className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
@@ -1355,7 +1375,8 @@ export default function AssignExercisePage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowAssignPreview(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            {/* Title and buttons stay in view; the list of changes scrolls between them. */}
+            <div className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="text-lg font-bold text-gray-900 mb-1">Review Changes</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Assigning to{" "}
@@ -1367,6 +1388,7 @@ export default function AssignExercisePage() {
                 </p>
               )}
 
+              <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2">
               {/* New */}
               {previewItems.filter((i) => i.type === "new").length > 0 && (
                 <div className="mb-4">
@@ -1435,7 +1457,9 @@ export default function AssignExercisePage() {
                 </div>
               )}
 
-              <div className="flex gap-3 justify-end pt-2">
+              </div>
+
+              <div className="flex shrink-0 gap-3 justify-end border-t border-gray-100 pt-3">
                 <button
                   onClick={() => setShowAssignPreview(false)}
                   className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"

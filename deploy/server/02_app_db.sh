@@ -51,7 +51,7 @@ as_app "cd $APP/web && npm ci --include=dev --no-audit --no-fund --loglevel=erro
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'postural'" | grep -q 1; then
   sudo -u postgres createdb postural
   for f in user_credentials_pg exercises_pg patient_exercises_pg exercise_programs_pg sessions_pg \
-           exercise_occurrences_pg email_features reset_token_migration notifications_pg; do
+           exercise_occurrences_pg email_features reset_token_migration notifications_pg user_presence_pg; do
     echo "running $f.sql"
     sudo -u postgres psql -v ON_ERROR_STOP=1 -q -d postural -f "$APP/scripts/$f.sql"
   done

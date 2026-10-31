@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminNotification } from "@/lib/db";
+import { recordUserSignedOut } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   AUTH_COOKIE_NAME,
@@ -16,16 +16,12 @@ export async function POST(request: NextRequest) {
     console.error("Failed to verify user during logout", error);
   }
 
-  // Log logout event for admins if the user is a patient or therapist
-  if (user && (user.role === "patient" || user.role === "therapist")) {
+  // Show the user offline on the admin dashboard straight away.
+  if (user) {
     try {
-      await createAdminNotification(
-        "User Logged Out",
-        `${user.name} has logged out.`,
-        "user_logout"
-      );
+      await recordUserSignedOut(user.id);
     } catch (err) {
-      console.error("Failed to log logout event:", err);
+      console.error("Failed to record sign-out for user status:", err);
     }
   }
 

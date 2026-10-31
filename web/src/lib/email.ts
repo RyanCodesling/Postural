@@ -740,9 +740,14 @@ export interface ExercisePausedDetails {
   pausedSet: number | null;
   repsInPausedSet: number;
   completedSets: number;
+  /** A custom exercise: guided, so no sets or repetitions were counted. */
+  custom?: boolean;
 }
 
 export function describePausedProgress(d: ExercisePausedDetails): string {
+  if (d.custom) {
+    return `a custom exercise, so no sets or reps are counted (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
+  }
   if (d.isHold) {
     return d.completedSets > 0
       ? `${d.completedSets} of ${d.prescribedSets} sets completed before the pause`

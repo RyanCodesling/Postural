@@ -67,14 +67,16 @@ export async function POST(
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (user.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
 
     const { id } = await params;
     const patient = await getUserById(id);
     if (!patient || patient.role !== "patient") {
       return NextResponse.json({ error: "Patient not found" }, { status: 404 });
+    }
+    // The admin, or the patient's current therapist. Files belong to the
+    // patient, so they stay when the patient is moved to another therapist.
+    if (user.role !== "admin" && !(user.role === "therapist" && patient.therapistId === user.id)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const formData = await request.formData();

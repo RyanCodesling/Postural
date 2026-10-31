@@ -39,7 +39,12 @@ export type VideoPart = {
 };
 
 /** Loads a session's video and timeline data; renders nothing when the session has no video. */
-export default function SessionVideo({ sessionId, onDeleted }: { sessionId: number; onDeleted?: () => void }) {
+export default function SessionVideo({ sessionId, onDeleted, partLabel = "Part" }: {
+  sessionId: number;
+  onDeleted?: () => void;
+  /** A custom exercise records one part per set, so its parts are named "Set". */
+  partLabel?: "Part" | "Set";
+}) {
   const [state, setState] = useState<
     | { kind: "loading" }
     | { kind: "none" }
@@ -84,6 +89,7 @@ export default function SessionVideo({ sessionId, onDeleted }: { sessionId: numb
       source={state.source}
       partUrl={(part) => `/api/sessions/${sessionId}/recording/${part.index}`}
       overlayUrl={(part) => `/api/sessions/${sessionId}/recording/${part.index}?track=overlay`}
+      partLabel={partLabel}
       onDelete={state.canDelete ? async () => {
         const response = await fetch(`/api/sessions/${sessionId}/recording`, { method: "DELETE" });
         if (!response.ok) throw new Error(`delete returned ${response.status}`);
@@ -100,12 +106,14 @@ export function SessionVideoPlayer({
   partUrl,
   overlayUrl,
   onDelete,
+  partLabel = "Part",
 }: {
   parts: VideoPart[];
   source: TimelineSource;
   partUrl: (part: VideoPart) => string;
   overlayUrl?: (part: VideoPart) => string;
   onDelete?: () => Promise<void>;
+  partLabel?: "Part" | "Set";
 }) {
   const [partIndex, setPartIndex] = useState(0);
   const part = parts[Math.min(partIndex, parts.length - 1)];
@@ -239,7 +247,7 @@ export function SessionVideoPlayer({
                 }}
                 className={`px-2 py-1 text-xs rounded border ${i === partIndex ? "border-green-700 bg-green-50 text-green-800" : "border-gray-200 text-gray-600"}`}
               >
-                Part {p.index}
+                {partLabel} {p.index}
               </button>
             ))}
           </div>

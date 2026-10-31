@@ -5,12 +5,14 @@ import {
   discardNewExercise,
   ExerciseInUseError,
   getExerciseById,
+  isMissingColumnError,
   restoreExercise,
+  setExerciseYouTubeVideo,
   updateExercise,
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { deleteExerciseVideoFile } from "@/lib/exercises/customVideoStorage";
-import { exerciseVideoFileFromRow } from "@/lib/exercises/customVideo";
+import { exerciseVideoFileFromRow, parseYouTubeVideoId } from "@/lib/exercises/customVideo";
 
 type AuthenticatedUser = NonNullable<Awaited<ReturnType<typeof getAuthenticatedUser>>>;
 
@@ -52,10 +54,27 @@ export async function PUT(
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json({ error: "An exercise object is required" }, { status: 400 });
     }
-    const { name, description } = body;
+    const { name, description, video } = body;
 
     if (typeof name !== "string" || typeof description !== "string" || !name.trim() || !description.trim() || name.trim().length > 255) {
       return NextResponse.json({ error: "name and description are required" }, { status: 400 });
+    }
+    // A custom exercise's guide video can be removed or replaced by a YouTube
+    // video here; a replacement file is uploaded to /api/exercises/[id]/video.
+    let youtubeVideoId: string | null | undefined;
+    if (video !== undefined) {
+      if (existing.is_custom !== true) {
+        return NextResponse.json({ error: "Only custom exercises have a guide video." }, { status: 400 });
+      }
+      if (video?.source === "none") youtubeVideoId = null;
+      else if (video?.source === "youtube" && typeof video.embed === "string") {
+        youtubeVideoId = parseYouTubeVideoId(video.embed);
+        if (!youtubeVideoId) {
+          return NextResponse.json({ error: "Paste a YouTube embed code or a YouTube video link." }, { status: 400 });
+        }
+      } else {
+        return NextResponse.json({ error: 'video must be { source: "none" } or { source: "youtube", embed }' }, { status: 400 });
+      }
     }
 
     // A system exercise keeps its name: only its description can be edited.
@@ -66,8 +85,24 @@ export async function PUT(
     if (!exercise) {
       return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
     }
-    return NextResponse.json({ exercise });
+    if (youtubeVideoId === undefined) return NextResponse.json({ exercise });
+
+    const changed = await setExerciseYouTubeVideo(id, youtubeVideoId);
+    if (!changed) return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
+    // The replaced upload, captured under the row lock, is no longer used.
+    if (changed.previousVideo) {
+      await deleteExerciseVideoFile(id, changed.previousVideo.mimeType, changed.previousVideo.fileName).catch((error) =>
+        console.error(`Could not remove a replaced exercise video for ${id}:`, error),
+      );
+    }
+    return NextResponse.json({ exercise: changed.exercise });
   } catch (error) {
+    if (isMissingColumnError(error)) {
+      return NextResponse.json(
+        { error: "Exercise videos need scripts/exercises_pg.sql to be run on the database first." },
+        { status: 503 },
+      );
+    }
     console.error("PUT /api/exercises/[id] error:", error);
     return NextResponse.json({ error: "Failed to update exercise" }, { status: 500 });
   }

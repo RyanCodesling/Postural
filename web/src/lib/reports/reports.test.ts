@@ -320,7 +320,7 @@ async function run() {
       "Current home exercise program Exercise Dose Side and load Schedule Dates Done so far",
       "Lateral Arm Raises 2 sets of 12 reps · 30s rest Both sides · No resistance Every day Sep 20, 2026 to Oct 3, 2026 " +
         "5 of 14 scheduled days done · 1 missed",
-      "Towel stretch (done without the camera) 1 set of 10 reps Left side · Resistance band",
+      "Towel stretch (Custom Exercise) 1 set of 10 reps Left side · Resistance band",
       "3x a week · Mon, Wed, Fri (not started yet) Sep 28, 2026 to Oct 25, 2026 0 of 12 scheduled days done",
       "Lateral Arm Raises", "Measure Side Counted sessions Change since the first counted session (95 % range) Trend",
       "Peak angle (camera estimate) Left 4 +", "Peak angle (camera estimate) Right 4 +", "(95 % range +", "Rising",

@@ -11,13 +11,19 @@ import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/pati
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
+  KEEP_EXERCISE_VIDEO,
   NO_EXERCISE_VIDEO,
   createCustomExercise,
   exerciseVideoChoiceError,
+  saveCustomExerciseEdit,
   type ExerciseVideoChoice,
 } from "../_components/ExerciseVideoField";
 import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import SessionDateCorrectionPanel from "./SessionDateCorrectionPanel";
+import UserStatusPanel from "./UserStatusPanel";
+import ProfileLayout, { ProfileField } from "../_components/ProfileLayout";
+import type { UserPresence } from "@/lib/presence";
+import { RosterProgress, RosterStatusBadge, type RosterPatient } from "../_components/rosterStatus";
 
 type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
 
@@ -34,7 +40,6 @@ interface User {
   age?: number;
   gender?: string;
   // Therapist-specific fields
-  therapistIDNum?: string;
   specialty?: string;
   diagnosis?: string | null;
   prescription?: string | null;
@@ -86,22 +91,12 @@ export default function AdminDashboard() {
       totalSessions: number;
       activeAssignments: number;
     };
-    activityLogs: {
-      id: number;
-      title: string;
-      message: string;
-      type: string;
-      createdAt: string;
-    }[];
-    recentSessions: {
-      id: number;
-      startedAt: string;
-      patientName: string;
-      exerciseName: string;
-      endReason: string | null;
-    }[];
+    userPresence: { available: boolean; users: UserPresence[] };
+    patientRoster: RosterPatient[];
   } | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
+  // When the dashboard data arrived; "Last active 5 min ago" is measured from it.
+  const [dashboardFetchedAt, setDashboardFetchedAt] = useState(0);
 
   const fetchDashboardData = async (silent = false) => {
     if (!silent) setDashboardLoading(true);
@@ -110,6 +105,7 @@ export default function AdminDashboard() {
       if (res.ok) {
         const data = await res.json();
         setDashboardData(data);
+        setDashboardFetchedAt(Date.now());
       }
     } catch (err) {
       console.error("Failed to fetch dashboard data:", err);
@@ -132,34 +128,6 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
-  const handleClearActivityLogs = async () => {
-    try {
-      const res = await fetch("/api/notifications", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "clear_activity_logs" }),
-      });
-      if (res.ok) {
-        setDashboardData((prev) => prev ? {
-          ...prev,
-          activityLogs: [],
-        } : null);
-      }
-    } catch (err) {
-      console.error("Failed to clear activity logs:", err);
-    }
-  };
-
-  const formatLogDate = (isoStr: string) => {
-    const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return "";
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
   const [users, setUsers] = useState<User[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
 
@@ -174,7 +142,6 @@ export default function AdminDashboard() {
     dateOfBirth: "",
     age: undefined,
     gender: "",
-    therapistIDNum: "",
     specialty: "",
     diagnosis: "",
     prescription: "",
@@ -185,8 +152,12 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const editAttachments = usePatientAttachments(editingUser?.role === "patient" ? editingUser.id : null);
   const [newPatientImages, setNewPatientImages] = useState<File[]>([]);
   const [editPatientImages, setEditPatientImages] = useState<File[]>([]);
+  // Files marked for deletion in the edit form; nothing is deleted until Confirm & Save Changes.
+  const [editRemovedAttachmentIds, setEditRemovedAttachmentIds] = useState<number[]>([]);
+  const [viewingUser, setViewingUser] = useState<User | null>(null);
   const [showStatusModal,  setShowStatusModal]  = useState(false);
   const [statusModalMsg,   setStatusModalMsg]   = useState("");
   const [statusModalType,  setStatusModalType]  = useState<"success" | "error">("success");
@@ -235,8 +206,12 @@ export default function AdminDashboard() {
   // Exercise states matching therapist exercises list
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState("");
+  // A custom exercise's guide video on the edit form; it starts as "keep".
+  const [editVideo, setEditVideo] = useState<ExerciseVideoChoice>(KEEP_EXERCISE_VIDEO);
+  const [editVideoError, setEditVideoError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [exerciseQuery, setExerciseQuery] = useState("");
+  const [userQuery, setUserQuery] = useState("");
   const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
@@ -314,7 +289,7 @@ export default function AdminDashboard() {
 
     setShowAddPreview(false);
     setNewPatientImages([]);
-    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", therapistIDNum: "", specialty: "", diagnosis: "", prescription: "", condition: "" });
+    setNewUser({ firstName: "", middleName: "", lastName: "", email: "", role: "patient", dateOfBirth: "", age: undefined, gender: "", specialty: "", diagnosis: "", prescription: "", condition: "" });
     setEmailError(null);
     setSelectedRole(null);
     setShowUserForm(false);
@@ -463,6 +438,7 @@ export default function AdminDashboard() {
     setEditingUser({ ...user });
     setEditingUserId(user.id);
     setEditPatientImages([]);
+    setEditRemovedAttachmentIds([]);
     setShowUserForm(false);
   };
 
@@ -488,16 +464,23 @@ export default function AdminDashboard() {
         const originalEmail = users.find((u) => u.id === editingUserId)?.email;
         const emailChanged = editingUser.email && originalEmail && editingUser.email !== originalEmail;
         let imageUploadError = "";
-        if (editingUser.role === "patient" && editPatientImages.length > 0) {
-          try {
-            await uploadPatientAttachments(editingUser.id, editPatientImages);
-          } catch (error) {
-            imageUploadError = error instanceof Error ? error.message : "File upload failed.";
+        if (editingUser.role === "patient") {
+          const removed = (editAttachments.files ?? []).filter((file) => editRemovedAttachmentIds.includes(file.id));
+          const notDeleted = await deletePatientAttachments(editingUser.id, removed);
+          if (notDeleted.length > 0) {
+            imageUploadError = `${notDeleted.join(", ")} could not be deleted.`;
+          }
+          if (editPatientImages.length > 0) {
+            try {
+              await uploadPatientAttachments(editingUser.id, editPatientImages);
+            } catch (error) {
+              imageUploadError = [imageUploadError, error instanceof Error ? error.message : "File upload failed."].filter(Boolean).join(" ");
+            }
           }
         }
         setStatusModalType(imageUploadError ? "error" : "success");
         setStatusModalMsg(imageUploadError
-          ? `${fullName} was updated, but the files could not be saved: ${imageUploadError} Edit the patient to try again.`
+          ? `${fullName} was updated, but the file changes were not all saved: ${imageUploadError} Edit the patient to try again.`
           : emailChanged
             ? `${fullName} successfully updated. Email notifications have been sent to ${originalEmail} and ${editingUser.email} about the email address change.`
             : `${fullName} successfully updated.`);
@@ -515,6 +498,7 @@ export default function AdminDashboard() {
     }
     setShowEditPreview(false);
     setEditPatientImages([]);
+    setEditRemovedAttachmentIds([]);
     setEditingUserId(null);
     setEditingUser(null);
   };
@@ -523,6 +507,7 @@ export default function AdminDashboard() {
     setEditingUserId(null);
     setEditingUser(null);
     setEditPatientImages([]);
+    setEditRemovedAttachmentIds([]);
     setEditEmailError(null);
   };
 
@@ -616,6 +601,8 @@ export default function AdminDashboard() {
   const startEdit = (ex: Exercise) => {
     setEditingId(ex.id);
     setEditDesc(ex.description);
+    setEditVideo(exerciseVideoFromRow(ex) ? KEEP_EXERCISE_VIDEO : NO_EXERCISE_VIDEO);
+    setEditVideoError(null);
   };
 
   const cancelEdit = () => {
@@ -627,6 +614,22 @@ export default function AdminDashboard() {
     if (!editDesc.trim()) return;
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
+    if (original.is_custom) {
+      const invalid = exerciseVideoChoiceError(editVideo);
+      if (invalid) { setEditVideoError(invalid); return; }
+      setSaving(true);
+      const result = await saveCustomExerciseEdit<Exercise>(id, { name: original.name, description: editDesc.trim() }, editVideo);
+      setSaving(false);
+      if ("error" in result) {
+        setStatusModalType("error");
+        setStatusModalMsg(result.error);
+        setShowStatusModal(true);
+        return;
+      }
+      setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...result.exercise } : e)));
+      cancelEdit();
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`/api/exercises/${id}`, {
@@ -742,6 +745,14 @@ export default function AdminDashboard() {
     return therapists.find((t) => t.id === therapistId)?.name || "Unknown";
   };
 
+  // One search box filters both user lists, by name, email or role.
+  const userNeedle = userQuery.trim().toLowerCase();
+  const matchesUserQuery = (u: User) =>
+    !userNeedle || [u.name, u.email ?? "", u.role].some((field) => field.toLowerCase().includes(userNeedle));
+  const shownActiveUsers = activeUsers.filter(matchesUserQuery);
+  const shownArchivedUsers = archivedUsers.filter(matchesUserQuery);
+  const userCount = (shown: number, total: number) => (userNeedle ? `${shown} of ${total}` : `${total}`);
+
   const filteredExercises = exercises.filter((e) =>
     e.name.toLowerCase().includes(exerciseQuery.toLowerCase()) ||
     e.description.toLowerCase().includes(exerciseQuery.toLowerCase())
@@ -817,85 +828,42 @@ export default function AdminDashboard() {
                   <StatTile label="Total exercises" value={dashboardData.stats.systemExercises + dashboardData.stats.customExercises} icon={Glyph.dumbbell} tone="teal" />
                 </div>
 
-                {/* System Activity & Recent Sessions */}
+                {/* User status & Patients */}
                 <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
-                  {/* Activity Feed */}
-                  <div id="tour-feed" className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7 lg:min-h-0">
-                    <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
-                      <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
-                        <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        System Activity Feed
-                      </h2>
-                      {dashboardData.activityLogs.length > 0 && (
-                        <button
-                          onClick={handleClearActivityLogs}
-                          className="text-xs text-red-600 hover:text-red-800 hover:underline cursor-pointer"
-                        >
-                          Clear Feed
-                        </button>
-                      )}
-                    </div>
+                  <UserStatusPanel presence={dashboardData.userPresence} now={dashboardFetchedAt} />
 
-                    <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-gray-50 pr-1">
-                      {dashboardData.activityLogs.length === 0 ? (
-                        <p className="text-gray-400 text-sm text-center py-12">No recent system activity.</p>
-                      ) : (
-                        dashboardData.activityLogs.map((log) => (
-                          <div key={log.id} className="py-3 flex gap-3 items-start hover:bg-green-50/20 px-2 rounded-lg transition animate-log-in">
-                            <div className="mt-1.5 shrink-0">
-                              {log.type === "user_login" ? (
-                                <span className="flex h-2 w-2 rounded-full bg-green-500" title="Login"></span>
-                              ) : log.type === "user_logout" ? (
-                                <span className="flex h-2 w-2 rounded-full bg-gray-400" title="Logout"></span>
-                              ) : (
-                                <span className="flex h-2 w-2 rounded-full bg-blue-500" title="System"></span>
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-gray-800 font-medium">{log.title}</p>
-                              <p className="text-xs text-gray-500 mt-0.5">{log.message}</p>
-                            </div>
-                            <span className="text-[10px] text-gray-400 shrink-0 whitespace-nowrap">
-                              {formatLogDate(log.createdAt)}
-                            </span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Recent Sessions */}
-                  <div id="tour-sessions" className="flex min-h-[260px] flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5 lg:min-h-0">
+                  {/* Patients: every active patient's progress, as therapists see their own */}
+                  <div id="tour-patients" className="flex min-h-[260px] min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5 lg:min-h-0">
                     <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
                       <h2 className="text-gray-900 font-semibold text-base flex items-center gap-2">
                         <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        Recent Patient Sessions
+                        Patients
                       </h2>
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-auto">
-                      {dashboardData.recentSessions.length === 0 ? (
-                        <p className="text-gray-400 text-sm text-center py-12">No patient sessions logged yet.</p>
+                      {dashboardData.patientRoster.length === 0 ? (
+                        <p className="text-gray-400 text-sm text-center py-12">No active patients yet.</p>
                       ) : (
                         <table className="w-full text-sm">
-                          <thead>
+                          <thead className="sticky top-0 bg-white">
                             <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
                               <th className="py-2 pr-2 font-medium">Patient</th>
-                              <th className="py-2 px-2 font-medium">Exercise</th>
-                              <th className="py-2 pl-2 font-medium">Completed</th>
+                              <th className="py-2 px-2 font-medium">Progress</th>
+                              <th className="py-2 pl-2 font-medium">Status</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {dashboardData.recentSessions.map((session) => (
-                              <tr key={session.id} className="border-b border-gray-50 hover:bg-green-50/40 transition">
-                                <td className="py-2.5 pr-2 font-semibold text-green-700">{session.patientName}</td>
-                                <td className="py-2.5 px-2 text-gray-600">{session.exerciseName}</td>
-                                <td className="py-2.5 pl-2 text-gray-400 text-xs whitespace-nowrap">
-                                  {formatLogDate(session.startedAt)}
+                            {dashboardData.patientRoster.map((patient) => (
+                              <tr key={patient.id} className="border-b border-gray-50 hover:bg-green-50/40 transition">
+                                <td className="py-2.5 pr-2 font-semibold text-green-700">{patient.name}</td>
+                                <td className="py-2.5 px-2 text-gray-600">
+                                  <RosterProgress patient={patient} />
+                                </td>
+                                <td className="py-2.5 pl-2">
+                                  <RosterStatusBadge patient={patient} />
                                 </td>
                               </tr>
                             ))}
@@ -934,7 +902,7 @@ export default function AdminDashboard() {
         {/* Users Tab */}
         {activeTab === "users" && (
           <div className={showUserForm || editingUserId ? "space-y-4" : FIT_SCREEN}>
-            <div className="flex shrink-0 items-center justify-between gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
               <PageHeading title="Manage Users" subtitle="Add, edit and archive patient and therapist accounts." />
               <button
                 id="tour-add-user"
@@ -954,7 +922,6 @@ export default function AdminDashboard() {
                         dateOfBirth: "",
                         age: undefined,
                         gender: "",
-                        therapistIDNum: "",
                         specialty: "",
                         diagnosis: "",
                         prescription: "",
@@ -1378,7 +1345,12 @@ export default function AdminDashboard() {
                           />
                         </div>
                       </div>
-                      <PatientAttachmentList patientId={editingUser.id} />
+                      <PatientAttachmentList
+                        files={editAttachments.files}
+                        error={editAttachments.error}
+                        removedIds={editRemovedAttachmentIds}
+                        onChange={setEditRemovedAttachmentIds}
+                      />
                       <PatientImagePicker files={editPatientImages} onChange={setEditPatientImages} />
                     </>
                   )}
@@ -1488,8 +1460,8 @@ export default function AdminDashboard() {
                         </div>
                         {newPatientImages.length > 0 && (
                           <div className="flex gap-2">
-                            <span className="w-32 shrink-0 text-gray-500">Files</span>
-                            <span className="font-medium text-gray-900">{newPatientImages.map((file) => file.name).join(", ")}</span>
+                            <span className="w-32 shrink-0 text-gray-500">Files to add</span>
+                            <span className="min-w-0 break-words font-medium text-green-700">{newPatientImages.map((file) => file.name).join(", ")}</span>
                           </div>
                         )}
                       </>
@@ -1536,7 +1508,6 @@ export default function AdminDashboard() {
                   { label: "Diagnosis", oldVal: original?.diagnosis ?? undefined, newVal: editingUser.diagnosis ?? undefined },
                   { label: "Condition", oldVal: original?.condition ?? undefined, newVal: editingUser.condition ?? undefined },
                   { label: "Prescription", oldVal: original?.prescription ?? undefined, newVal: editingUser.prescription ?? undefined },
-                  ...(editPatientImages.length > 0 ? [{ label: "Files to attach", oldVal: undefined, newVal: `${editPatientImages.length} file${editPatientImages.length === 1 ? "" : "s"}` }] : []),
                 ] : []),
                 ...(editingUser.role === "therapist" ? [
                   { label: "Specialty", oldVal: original?.specialty, newVal: editingUser.specialty },
@@ -1565,6 +1536,20 @@ export default function AdminDashboard() {
                             </div>
                           );
                         })}
+                        {editingUser.role === "patient" && editPatientImages.length > 0 && (
+                          <div className="grid grid-cols-3 gap-2 rounded bg-yellow-50 px-2 py-2 text-sm">
+                            <span className="text-gray-500">Files to add</span>
+                            <span className="col-span-2 break-words font-medium text-green-700">{editPatientImages.map((file) => file.name).join(", ")}</span>
+                          </div>
+                        )}
+                        {editingUser.role === "patient" && editRemovedAttachmentIds.length > 0 && (
+                          <div className="grid grid-cols-3 gap-2 rounded bg-yellow-50 px-2 py-2 text-sm">
+                            <span className="text-gray-500">Files to delete</span>
+                            <span className="col-span-2 break-words text-red-500 line-through">
+                              {(editAttachments.files ?? []).filter((file) => editRemovedAttachmentIds.includes(file.id)).map((file) => file.fileName).join(", ")}
+                            </span>
+                          </div>
+                        )}
                       </div>
                       <div className="mt-6 flex gap-3">
                         <button
@@ -1587,6 +1572,8 @@ export default function AdminDashboard() {
                 </>
               );
             })()}
+
+            {viewingUser && <UserProfilePreview user={viewingUser} onClose={() => setViewingUser(null)} />}
 
             {/* Archive Confirmation Modal */}
             {isArchiveModalOpen && (
@@ -1775,13 +1762,29 @@ export default function AdminDashboard() {
               </>
             )}
 
+            <div id="tour-user-search" className="shrink-0">
+              <div className="relative w-full max-w-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                <input
+                  type="search"
+                  value={userQuery}
+                  onChange={(e) => setUserQuery(e.target.value)}
+                  placeholder="Search by name, email or role"
+                  aria-label="Search active and archived users by name, email or role"
+                  className="w-full rounded-lg border border-green-200 bg-white py-2 pl-10 pr-4 text-sm text-black outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+                />
+              </div>
+            </div>
+
             <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[minmax(0,3fr)_minmax(0,2fr)]">
             {/* Users List — Active */}
-            <div id="tour-active-users" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+            <div id="tour-active-users" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>
                 Active Users
-                <span className="ml-1 text-sm font-normal text-gray-500">({activeUsers.length})</span>
+                <span className="ml-1 text-sm font-normal text-gray-500">({userCount(shownActiveUsers.length, activeUsers.length)})</span>
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="w-full min-w-[600px]">
@@ -1794,12 +1797,14 @@ export default function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {activeUsers.length === 0 ? (
+                    {shownActiveUsers.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">No active users.</td>
+                        <td colSpan={4} className="px-6 py-6 text-center text-sm text-gray-500">
+                          {activeUsers.length === 0 ? "No active users." : "No active users match your search."}
+                        </td>
                       </tr>
                     ) : (
-                      activeUsers.map((u) => (
+                      shownActiveUsers.map((u) => (
                         <tr key={u.id} className="transition hover:bg-green-50/40">
                           <td className="px-5 py-3 text-sm text-gray-900">{u.name}</td>
                           <td className="px-5 py-3 text-sm text-gray-600">{u.email}</td>
@@ -1810,6 +1815,12 @@ export default function AdminDashboard() {
                           </td>
                           <td className="px-5 py-3 text-sm">
                             <div className="flex gap-2">
+                              <button
+                                onClick={() => setViewingUser(u)}
+                                className="text-blue-700 hover:text-blue-900 font-medium"
+                              >
+                                View
+                              </button>
                               <button
                                 onClick={() => handleEditUser(u)}
                                 className="text-green-700 hover:text-green-900 font-medium"
@@ -1833,11 +1844,11 @@ export default function AdminDashboard() {
             </div>
 
             {/* Users List — Archived */}
-            <div id="tour-archived-users" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm">
+            <div id="tour-archived-users" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm">
               <h3 className="mb-3 flex shrink-0 items-center gap-2 text-base font-semibold text-gray-900">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                 Archived Users
-                <span className="ml-1 text-sm font-normal text-gray-500">({archivedUsers.length})</span>
+                <span className="ml-1 text-sm font-normal text-gray-500">({userCount(shownArchivedUsers.length, archivedUsers.length)})</span>
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="w-full min-w-[600px]">
@@ -1851,12 +1862,14 @@ export default function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {archivedUsers.length === 0 ? (
+                    {shownArchivedUsers.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-6 text-center text-sm text-gray-500">No archived users.</td>
+                        <td colSpan={5} className="px-6 py-6 text-center text-sm text-gray-500">
+                          {archivedUsers.length === 0 ? "No archived users." : "No archived users match your search."}
+                        </td>
                       </tr>
                     ) : (
-                      archivedUsers.map((u) => (
+                      shownArchivedUsers.map((u) => (
                         <tr key={u.id} className="hover:bg-amber-50 opacity-80">
                           <td className="px-5 py-3 text-sm text-gray-700">{u.name}</td>
                           <td className="px-5 py-3 text-sm text-gray-500">{u.email}</td>
@@ -1899,7 +1912,7 @@ export default function AdminDashboard() {
         {/* Exercises Tab */}
         {activeTab === "exercises" && (
           <div className={showExerciseForm ? "space-y-4" : FIT_SCREEN}>
-            <div className="flex shrink-0 items-center justify-between gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
               <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage custom ones." />
               <button
                 id="tour-add-exercise"
@@ -2036,6 +2049,7 @@ export default function AdminDashboard() {
                         onEditDesc={setEditDesc}
                         onView={() => setViewingExercise(ex)}
                         onDelete={() => handleDeleteClick(ex.id, ex.name)}
+                        video={{ value: editVideo, onChange: setEditVideo, error: editVideoError, onError: setEditVideoError }}
                       />
                     ))}
                   </div>
@@ -2427,8 +2441,15 @@ export default function AdminDashboard() {
 
 function AdminExerciseRow({
   exercise, isEditing, editDesc, saving,
-  onEdit, onCancel, onSave, onEditDesc, onView, onDelete,
+  onEdit, onCancel, onSave, onEditDesc, onView, onDelete, video,
 }: {
+  /** The guide video choice on a custom exercise's edit form. */
+  video?: {
+    value: ExerciseVideoChoice;
+    onChange: (choice: ExerciseVideoChoice) => void;
+    error: string | null;
+    onError: (message: string | null) => void;
+  };
   exercise: Exercise;
   isEditing: boolean;
   editDesc: string;
@@ -2452,6 +2473,18 @@ function AdminExerciseRow({
             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition bg-white text-black"
             rows={3}
           />
+          {exercise.is_custom && video && (
+            <div className="text-black">
+              <ExerciseVideoField
+                value={video.value}
+                onChange={video.onChange}
+                onError={video.onError}
+                current={exerciseVideoFromRow(exercise)}
+                name={`admin-edit-video-${exercise.id}`}
+              />
+              {video.error && <p role="alert" className="mt-1 text-xs text-red-600">{video.error}</p>}
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               onClick={onSave}
@@ -2544,54 +2577,63 @@ interface StoredAttachment {
   createdAt: string;
 }
 
-/**
- * The patient's attached files, each with a Delete, in the edit form: a file
- * put on the wrong patient, or one the patient asks to remove, is deleted here.
- * Deleting is permanent, so it asks first.
- */
-function PatientAttachmentList({ patientId }: { patientId: string }) {
+/** Loads a patient's attached files; pass null to load nothing. */
+function usePatientAttachments(patientId: string | null) {
   const [files, setFiles] = useState<StoredAttachment[] | null>(null);
   const [error, setError] = useState("");
-  const [confirmId, setConfirmId] = useState<number | null>(null);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [reload, setReload] = useState(0);
 
   useEffect(() => {
+    setFiles(null);
+    setError("");
+    if (!patientId) return;
     let cancelled = false;
     fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { cache: "no-store" })
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Could not load the attached files.");
-        if (!cancelled) {
-          setFiles(Array.isArray(data.attachments) ? data.attachments : []);
-          setError("");
-        }
+        if (!cancelled) setFiles(Array.isArray(data.attachments) ? data.attachments : []);
       })
       .catch((loadError) => {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load the attached files.");
       });
     return () => { cancelled = true; };
-  }, [patientId, reload]);
+  }, [patientId]);
 
-  const remove = async (file: StoredAttachment) => {
-    setDeletingId(file.id);
-    setError("");
+  return { files, error };
+}
+
+/** Deletes the given files and returns the names of any that could not be deleted. */
+async function deletePatientAttachments(patientId: string, files: StoredAttachment[]) {
+  const failed: string[] = [];
+  for (const file of files) {
     try {
       const response = await fetch(
         `/api/users/${encodeURIComponent(patientId)}/attachments/${file.id}`,
         { method: "DELETE" },
       );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "The file could not be deleted.");
-      setConfirmId(null);
-      setReload((n) => n + 1);
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "The file could not be deleted.");
-    } finally {
-      setDeletingId(null);
+      if (!response.ok) failed.push(file.fileName);
+    } catch {
+      failed.push(file.fileName);
     }
-  };
+  }
+  return failed;
+}
 
+/**
+ * The patient's attached files in the edit form. Delete only marks a file;
+ * it is deleted when the admin confirms Save Changes, and Undo unmarks it.
+ */
+function PatientAttachmentList({
+  files,
+  error,
+  removedIds,
+  onChange,
+}: {
+  files: StoredAttachment[] | null;
+  error: string;
+  removedIds: number[];
+  onChange: (ids: number[]) => void;
+}) {
   return (
     <div className="rounded-lg border border-gray-200 p-4">
       <p className="text-sm font-medium text-gray-700 mb-2">Files already attached</p>
@@ -2601,44 +2643,155 @@ function PatientAttachmentList({ patientId }: { patientId: string }) {
       ) : files.length === 0 ? (
         <p className="text-xs text-gray-500">No files attached.</p>
       ) : (
-        <ul className="space-y-2">
-          {files.map((file) => (
-            <li key={file.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-700">
-              <span className="min-w-0 truncate" title={file.fileName}>{file.fileName}</span>
-              {confirmId === file.id ? (
-                <span className="flex items-center gap-2">
-                  <span className="text-red-700">Delete for good?</span>
-                  <button
-                    type="button"
-                    onClick={() => void remove(file)}
-                    disabled={deletingId === file.id}
-                    className="rounded-lg bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                  >
-                    {deletingId === file.id ? "Deleting…" : "Delete"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmId(null)}
-                    className="rounded-lg border border-gray-300 px-2 py-1 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmId(file.id)}
-                  className="shrink-0 text-red-700 hover:underline"
-                  aria-label={`Delete ${file.fileName}`}
-                >
-                  Delete
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-2">
+            {files.map((file) => {
+              const removed = removedIds.includes(file.id);
+              return (
+                <li key={file.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-700">
+                  <span className={`min-w-0 truncate ${removed ? "text-red-500 line-through" : ""}`} title={file.fileName}>
+                    {file.fileName}
+                  </span>
+                  {removed ? (
+                    <button
+                      type="button"
+                      onClick={() => onChange(removedIds.filter((id) => id !== file.id))}
+                      className="shrink-0 text-green-700 hover:underline"
+                      aria-label={`Keep ${file.fileName}`}
+                    >
+                      Undo
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onChange([...removedIds, file.id])}
+                      className="shrink-0 text-red-700 hover:underline"
+                      aria-label={`Delete ${file.fileName}`}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {removedIds.length > 0 && (
+            <p className="mt-2 text-xs text-amber-800">Crossed-out files are deleted when you save changes.</p>
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+function formatBirthDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return value;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+/**
+ * A read-only look at an active user's profile, in the patient and therapist
+ * View Profile layout, showing only what the Add User form collects. Attached
+ * files are listed by name; only the patient and their therapist open them.
+ */
+function UserProfilePreview({ user, onClose }: { user: User; onClose: () => void }) {
+  const attachments = usePatientAttachments(user.role === "patient" ? user.id : null);
+  const fullName = [user.firstName, user.middleName, user.lastName].filter(Boolean).join(" ") || user.name;
+  const capitalize = (value: string | undefined) => (value ? value.charAt(0).toUpperCase() + value.slice(1) : null);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const personal = (
+    <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+      <ProfileField label="First Name" value={user.firstName || null} />
+      <ProfileField label="Middle Name" value={user.middleName || null} />
+      <ProfileField label="Last Name" value={user.lastName || null} />
+      <ProfileField label="Email" value={user.email || null} />
+      <ProfileField label="Date of Birth" value={formatBirthDate(user.dateOfBirth)} />
+      <ProfileField label="Age" value={user.age != null ? String(user.age) : null} />
+      <ProfileField label="Gender" value={capitalize(user.gender)} />
+    </div>
+  );
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${fullName} profile`}
+          className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-gray-50 p-4 shadow-xl sm:p-5"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-gray-700">Profile preview (read-only)</p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+            >
+              Close
+            </button>
+          </div>
+          {user.role === "patient" ? (
+            <ProfileLayout
+              fitScreen={false}
+              name={fullName}
+              email={user.email}
+              roleLabel="Patient"
+              leftTitle="Personal Information"
+              left={personal}
+              rightTitle="Clinical Information"
+              right={
+                <div className="space-y-5">
+                  <ProfileField label="Diagnosis" value={user.diagnosis || null} />
+                  <ProfileField label="Condition" value={user.condition || null} />
+                  <ProfileField label="Prescription" value={user.prescription || null} />
+                </div>
+              }
+              bottomTitle="Attached Files"
+              bottom={
+                attachments.error ? (
+                  <p role="alert" className="text-sm text-red-600">{attachments.error}</p>
+                ) : attachments.files === null ? (
+                  <p className="text-sm text-gray-500">Loading…</p>
+                ) : attachments.files.length === 0 ? (
+                  <p className="text-sm text-gray-400">No files attached.</p>
+                ) : (
+                  <>
+                    <ul className="divide-y divide-gray-100">
+                      {attachments.files.map((file) => (
+                        <li key={file.id} className="break-all py-2 text-sm text-gray-800">{file.fileName}</li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-gray-500">Only the patient and their assigned therapist can open these files.</p>
+                  </>
+                )
+              }
+            />
+          ) : (
+            <ProfileLayout
+              fitScreen={false}
+              name={fullName}
+              email={user.email}
+              roleLabel="Therapist"
+              leftTitle="Personal Information"
+              left={personal}
+              rightTitle="Professional Information"
+              right={<ProfileField label="Specialization" value={user.specialty || null} />}
+            />
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 

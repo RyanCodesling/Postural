@@ -14,7 +14,7 @@ export function ProfileField({ label, value, icon }: { label: string; value: str
       {icon && <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700">{icon}</span>}
       <div className="min-w-0">
         <p className="text-xs text-gray-500">{label}</p>
-        <p className="truncate text-sm font-semibold text-gray-900">{value ?? "—"}</p>
+        <p className="break-words text-sm font-semibold text-gray-900">{value ?? "—"}</p>
       </div>
     </div>
   );
@@ -23,7 +23,8 @@ export function ProfileField({ label, value, icon }: { label: string; value: str
 /**
  * The profile page shared by the patient and therapist: a green identity card
  * with the Change Password action, then two panels that share the rest of the
- * screen.
+ * screen. The admin's read-only preview leaves out Change Password and the
+ * full-screen height.
  */
 export default function ProfileLayout({
   name,
@@ -36,11 +37,12 @@ export default function ProfileLayout({
   right,
   bottomTitle,
   bottom,
+  fitScreen = true,
 }: {
   name: string | undefined;
   email: string | null | undefined;
   roleLabel: string;
-  onChangePassword: () => void;
+  onChangePassword?: () => void;
   leftTitle: string;
   left: ReactNode;
   rightTitle: string;
@@ -48,28 +50,31 @@ export default function ProfileLayout({
   /** An optional full-width panel under the two above, which then take only the height they need. */
   bottomTitle?: string;
   bottom?: ReactNode;
+  fitScreen?: boolean;
 }) {
   return (
-    <div className={FIT_SCREEN}>
+    <div className={fitScreen ? FIT_SCREEN : "flex flex-col gap-4"}>
       <div id="tour-profile-card" className="flex shrink-0 flex-wrap items-center justify-between gap-4 rounded-xl bg-gradient-to-br from-green-700 to-emerald-500 px-6 py-5 text-white shadow-sm">
         <div className="flex min-w-0 items-center gap-4">
           <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-white text-xl font-bold text-green-700 shadow">
             {initials(name)}
           </span>
           <div className="min-w-0 leading-tight">
-            <h1 className="truncate text-2xl font-bold">{name ?? "My Profile"}</h1>
-            <p className="truncate text-sm text-green-50">{email ?? ""}</p>
+            <h1 className="break-words text-xl font-bold sm:text-2xl">{name ?? "My Profile"}</h1>
+            <p className="break-all text-sm text-green-50">{email ?? ""}</p>
             <span className="mt-2 inline-block rounded-full bg-white/20 px-3 py-0.5 text-xs font-semibold">{roleLabel}</span>
           </div>
         </div>
-        <button
-          id="tour-profile-password"
-          type="button"
-          onClick={onChangePassword}
-          className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-green-800 transition hover:bg-green-50"
-        >
-          Change Password
-        </button>
+        {onChangePassword && (
+          <button
+            id="tour-profile-password"
+            type="button"
+            onClick={onChangePassword}
+            className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-green-800 transition hover:bg-green-50"
+          >
+            Change Password
+          </button>
+        )}
       </div>
 
       <div className={`grid gap-4 lg:grid-cols-12 ${bottom ? "shrink-0" : "min-h-0 flex-1"}`}>

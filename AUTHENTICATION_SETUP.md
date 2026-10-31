@@ -219,6 +219,9 @@ To bring an existing PostgreSQL database up to the current application schema, r
 9. `scripts/email_features.sql`
 10. `scripts/reset_token_migration.sql`
 11. `scripts/notifications_pg.sql`
+12. `scripts/user_presence_pg.sql` (the admin dashboard's User status panel; until it runs, the panel asks for it and everything else works)
+
+On a database created before 2026-11-01, also run `scripts/drop_therapist_id_num_pg.sql` once (after a backup) to remove the unused therapist ID column. New databases never get it.
 
 Optional recorded-date corrections: after step 8, run
 `scripts/session_date_corrections_pg.sql` as the database owner. It adds append-only

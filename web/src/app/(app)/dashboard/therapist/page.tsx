@@ -6,19 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { SkeletonBar, SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../_components/DashboardKit";
-
-interface RosterPatient {
-  id: string;
-  name: string;
-  totalSessions: number;
-  sessionsThisWeek: number;
-  lastSessionAt: string | null;
-  assignedCount: number;  // distinct prescriptions (drives "No exercises")
-  dueCount: number;       // scheduled occurrences due on or before today
-  completedCount: number; // occurrences completed
-  missedCount: number;    // past-due occurrences never completed
-  painStoppedCount: number; // occurrences paused after a pain stop
-}
+import { RosterProgress, RosterStatusBadge, rosterStatus, type RosterPatient } from "../_components/rosterStatus";
 
 export default function TherapistDashboardPage() {
   const { user, loading } = useAuth();
@@ -125,34 +113,29 @@ export default function TherapistDashboardPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
-                  <th className="py-2 pr-4 font-medium">Patient</th>
-                  <th className="px-4 py-2 font-medium">Last active</th>
-                  <th className="px-4 py-2 font-medium">This week</th>
-                  <th className="px-4 py-2 font-medium">Progress</th>
-                  <th className="py-2 pl-4 font-medium">Status</th>
+                  <th className="py-2 pr-2 font-medium sm:pr-4">Patient</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Last active</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">This week</th>
+                  <th className="px-2 py-2 font-medium sm:px-4">Progress</th>
+                  <th className="py-2 pl-2 font-medium sm:pl-4">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {patients.map((p) => {
-                  const status = rosterStatus(p);
                   return (
                     <tr key={p.id} className="border-b border-gray-50 transition hover:bg-green-50/40">
-                      <td className="py-2.5 pr-4">
+                      <td className="py-2.5 pr-2 sm:pr-4">
                         <Link href={`/dashboard/therapist/patients/${p.id}`} className="font-semibold text-green-700 hover:underline">
                           {p.name}
                         </Link>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-gray-600">{fmtLastActive(p.lastSessionAt)}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{p.sessionsThisWeek}</td>
-                      <td className="px-4 py-2.5 text-gray-600">
-                        {p.dueCount > 0 ? `${p.completedCount}/${p.dueCount}` : "—"}
-                        {p.missedCount > 0 && <span className="ml-2 text-xs text-amber-600">{p.missedCount} missed</span>}
-                        {p.painStoppedCount > 0 && <span className="ml-2 text-xs font-medium text-red-600">{p.painStoppedCount} pain stop</span>}
+                      <td className="hidden whitespace-nowrap px-4 py-2.5 text-gray-600 sm:table-cell">{fmtLastActive(p.lastSessionAt)}</td>
+                      <td className="hidden px-4 py-2.5 text-gray-600 sm:table-cell">{p.sessionsThisWeek}</td>
+                      <td className="px-2 py-2.5 text-gray-600 sm:px-4">
+                        <RosterProgress patient={p} />
                       </td>
-                      <td className="py-2.5 pl-4">
-                        <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${status.classes}`}>
-                          {status.label}
-                        </span>
+                      <td className="py-2.5 pl-2 sm:pl-4">
+                        <RosterStatusBadge patient={p} />
                       </td>
                     </tr>
                   );
@@ -219,26 +202,6 @@ export default function TherapistDashboardPage() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-// "Needs attention" = the patient has prescriptions but either no outcome-bearing
-// session in the server's 7-day window (sessionsThisWeek === 0) or scheduled days
-// that slipped past uncompleted (missedCount > 0). The 7-day window is a tunable
-// heuristic set in getTherapistRoster.
-function rosterStatus(p: RosterPatient): { label: string; classes: string } {
-  if (p.assignedCount === 0) {
-    return { label: "No exercises", classes: "bg-gray-100 text-gray-500" };
-  }
-  if (p.painStoppedCount > 0) {
-    return { label: "Pain follow-up", classes: "bg-red-100 text-red-700" };
-  }
-  if (p.missedCount > 0) {
-    return { label: "Needs attention", classes: "bg-amber-100 text-amber-700" };
-  }
-  if (p.sessionsThisWeek > 0) {
-    return { label: "Active", classes: "bg-green-100 text-green-700" };
-  }
-  return { label: "Needs attention", classes: "bg-amber-100 text-amber-700" };
-}
 
 function fmtLastActive(iso: string | null): string {
   if (!iso) return "Never";

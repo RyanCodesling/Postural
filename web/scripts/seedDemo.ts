@@ -167,8 +167,8 @@ async function seedDemoAccounts(client: Client) {
   const passwordHash = hashPassword(DEMO_PASSWORD);
   await client.query(
     `INSERT INTO users
-       (id, email, password, name, first_name, last_name, role, "clinicId", therapist_id_num, specialty)
-     VALUES ($1,$2,$3,$4,$5,$6,'therapist',$7,$8,$9)
+       (id, email, password, name, first_name, last_name, role, "clinicId", specialty)
+     VALUES ($1,$2,$3,$4,$5,$6,'therapist',$7,$8)
      ON CONFLICT (id) DO UPDATE SET
        email = EXCLUDED.email,
        password = EXCLUDED.password,
@@ -177,10 +177,9 @@ async function seedDemoAccounts(client: Client) {
        last_name = EXCLUDED.last_name,
        role = EXCLUDED.role,
        "clinicId" = EXCLUDED."clinicId",
-       therapist_id_num = EXCLUDED.therapist_id_num,
        specialty = EXCLUDED.specialty`,
     [DEMO_THERAPIST_ID, "demo.therapist@example.com", passwordHash,
-     "Taylor Morgan", "Taylor", "Morgan", "DEMO_CLINIC", "DEMO-PT-001", "Physical Therapy"],
+     "Taylor Morgan", "Taylor", "Morgan", "DEMO_CLINIC", "Physical Therapy"],
   );
 
   for (const patient of PATIENTS.filter((plan) => !plan.existing)) {

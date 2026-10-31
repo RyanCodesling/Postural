@@ -122,6 +122,8 @@ interface SessionLite extends ScheduleSessionRecord {
   // Read by the progress report.
   context: SessionContextSnapshot | null;
   hasRecording?: boolean;
+  /** A custom exercise's session: its video has one part per set. */
+  customExercise?: boolean;
   painReport: {
     status: PainReportStatus;
     score: number | null;
@@ -168,7 +170,7 @@ function SessionVideoList({
             </div>
             {openId === s.id && (
               <div className="mt-3">
-                <SessionVideo sessionId={s.id} onDeleted={() => onDeleted(s.id)} />
+                <SessionVideo sessionId={s.id} onDeleted={() => onDeleted(s.id)} partLabel={s.customExercise ? "Set" : "Part"} />
               </div>
             )}
           </div>
@@ -377,6 +379,11 @@ export default function PatientDashboardPage() {
                 <StatTile label="Saved videos" value={sessions.filter((x) => x.hasRecording).length} icon={Glyph.list} tone="green" />
               </div>
 
+              <SessionVideoList
+                sessions={sessions.filter((x) => x.hasRecording)}
+                onDeleted={(id) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, hasRecording: false } : x)))}
+              />
+
               {trendGroups.length === 0 ? (
                 <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">
                   Finish a few sessions to see your progress here.
@@ -388,11 +395,6 @@ export default function PatientDashboardPage() {
                   ))}
                 </div>
               )}
-
-              <SessionVideoList
-                sessions={sessions.filter((x) => x.hasRecording)}
-                onDeleted={(id) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, hasRecording: false } : x)))}
-              />
             </div>
           );
         })()}

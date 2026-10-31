@@ -9,7 +9,6 @@ import {
   getUsers,
   deleteNotification,
   deleteMultipleNotifications,
-  clearActivityLogs,
 } from "@/lib/db";
 
 const NOTIFICATIONS_PAGE_SIZE = 10;
@@ -91,12 +90,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { id, ids, action } = body;
-
-    if (action === "clear_activity_logs") {
-      await clearActivityLogs(user.id);
-      return NextResponse.json({ success: true });
-    }
+    const { id, ids } = body;
 
     if (ids && Array.isArray(ids)) {
       await deleteMultipleNotifications(ids.map(Number), user.id);

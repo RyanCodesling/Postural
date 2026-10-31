@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type CSSProperties } from "react";
+import PleaseWait from "./PleaseWait";
 
 /**
  * A button that builds and saves a PDF report. The report code loads only
@@ -12,6 +13,7 @@ export default function ReportButton({
   className,
   style,
   wrapperStyle,
+  waitPopup = false,
 }: {
   label: string;
   onDownload: () => Promise<void>;
@@ -19,6 +21,8 @@ export default function ReportButton({
   style?: CSSProperties;
   /** Sizing for the wrapper, e.g. a flex share inside a button row. */
   wrapperStyle?: CSSProperties;
+  /** Also covers the page with a "please wait" message while the PDF is built. */
+  waitPopup?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -44,6 +48,7 @@ export default function ReportButton({
       >
         {busy ? "Preparing PDF…" : label}
       </button>
+      {busy && waitPopup && <PleaseWait message="Preparing your PDF report…" />}
       {error && (
         <span role="alert" style={{ fontSize: 12, color: "#b91c1c" }}>
           The report could not be created. Please try again.

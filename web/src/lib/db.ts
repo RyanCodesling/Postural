@@ -14,6 +14,7 @@ import {
   type PartialDayPatient,
 } from "./email";
 import { DAY_MS, DemoClockError, demoClockAllowed, manilaDayKey } from "./demoClock";
+import { HEARTBEAT_MS, ONLINE_WINDOW_MS, sortPresence, type UserPresence } from "./presence";
 import {
   parseCorrectionSessionId,
   parseSessionDateCorrection,
@@ -363,7 +364,6 @@ function mapUser(row: Record<string, unknown>) {
     dateOfBirth:    row.date_of_birth     ?? null,
     age:            row.age               ?? null,
     gender:         row.gender            ?? null,
-    therapistIDNum: row.therapist_id_num  ?? null,
     specialty:      row.specialty         ?? null,
     diagnosis:      row.diagnosis         ?? null,
     prescription:   row.prescription      ?? null,
@@ -497,7 +497,6 @@ export async function createUser(data: {
   dateOfBirth?: string;
   age?: number;
   gender?: string;
-  therapistIDNum?: string;
   specialty?: string;
   diagnosis?: string;
   prescription?: string;
@@ -506,14 +505,14 @@ export async function createUser(data: {
   const writable = await userDataForSchema(data);
   const clinicalKeys = userClinicalKeys.filter(key => key in writable);
   const clinicalColumns = clinicalKeys.map(key => `, "${key}"`).join("");
-  const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 14}`).join("");
+  const clinicalParameters = clinicalKeys.map((_, index) => `,$${index + 13}`).join("");
   const hashedPassword = hashPassword(data.password);
   const result = await pool.query(
     `INSERT INTO users
        (id, email, password, name, first_name, middle_name, last_name,
         role, date_of_birth, age, gender,
-        therapist_id_num, specialty${clinicalColumns})
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13${clinicalParameters})
+        specialty${clinicalColumns})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12${clinicalParameters})
      RETURNING *`,
     [
       data.id,
@@ -527,7 +526,6 @@ export async function createUser(data: {
       data.dateOfBirth ?? null,
       data.age ?? null,
       data.gender ?? null,
-      data.therapistIDNum ?? null,
       data.specialty ?? null,
       ...clinicalKeys.map(key => writable[key] ?? null),
     ]
@@ -545,7 +543,6 @@ export async function updateUser(id: string, data: Partial<{
   dateOfBirth: string;
   age: number;
   gender: string;
-  therapistIDNum: string;
   specialty: string;
   diagnosis: string;
   prescription: string;
@@ -565,7 +562,6 @@ export async function updateUser(id: string, data: Partial<{
     dateOfBirth:    "date_of_birth",
     age:            "age",
     gender:         "gender",
-    therapistIDNum: "therapist_id_num",
     specialty:      "specialty",
     diagnosis:      "diagnosis",
     prescription:   "prescription",
@@ -950,6 +946,39 @@ export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMi
       `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL, video_file_name = $3
         WHERE id = $1 RETURNING *`,
       [id, mimeType, fileName],
+    );
+    await client.query("COMMIT");
+    return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Points a custom exercise at a YouTube video, or at no video (null), from its
+ * edit form. Any uploaded file it had is returned so the caller can delete it;
+ * the row lock keeps a concurrent upload from being the one removed.
+ */
+export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const previous = await client.query(
+      `SELECT video_mime_type, video_file_name FROM exercises
+        WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
+      [id],
+    );
+    if (previous.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE exercises SET youtube_video_id = $2, video_mime_type = NULL, video_file_name = NULL
+        WHERE id = $1 RETURNING *`,
+      [id, youtubeVideoId],
     );
     await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
@@ -1855,6 +1884,118 @@ export async function completeManualOccurrence(
   };
 }
 
+/**
+ * A patient's attempt at a custom (manual) exercise. It holds what a camera
+ * session holds besides measurements: the pain answer before starting, the
+ * pain report after, how it ended (completed, ended early, stopped for pain,
+ * which endSession turns into the day's outcome) and, with consent, its video.
+ * The video is stored, shown and deleted like a camera session's: only the
+ * patient and their assigned therapist can reach it, only the patient deletes it.
+ *
+ * Nothing is counted or measured, so the session has no set or rep events and
+ * the dashboards' counts, trends and reports leave it out. Its context marks
+ * the exercise as manual with no camera definition.
+ */
+export async function createCustomExerciseSession(data: {
+  patientId: string;
+  patientExerciseId: number;
+  occurrenceId: number;
+  exerciseId: string;
+  deviceInfo?: unknown;
+  videoConsent?: SessionVideoConsent;
+  preSessionPain?: PreSessionPain;
+}): Promise<{ id: number; startedAt: string }> {
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const occ = await client.query(
+      `SELECT eo.id, eo.due_date, COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
+              pe.id AS patient_exercise_id, pe.exercise_id, pe.sets, pe.reps, pe.rest_seconds,
+              pe.hold_seconds, pe.sequence_index, pe.prescribed_side, pe.resistance_type,
+              pe.resistance_value, pe.resistance_unit, pe.resistance_label, e.name
+         FROM exercise_occurrences eo
+         JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+         JOIN exercises e ON e.id = pe.exercise_id
+        WHERE eo.id = $1
+          AND eo.patient_exercise_id = $2
+          AND pe.patient_id = $3
+          AND pe.exercise_id = $4
+          AND pe.archived_at IS NULL
+          AND e.archived_at IS NULL
+          AND e.monitoring_mode = 'manual'
+          AND eo.cancelled_at IS NULL
+          AND eo.status <> 'completed'
+          AND eo.due_date <= $5::date
+          AND COALESCE(eo.makeup_until, eo.due_date) >= $5::date
+        LIMIT 1`,
+      [data.occurrenceId, data.patientExerciseId, data.patientId, data.exerciseId, today],
+    );
+    if (occ.rows.length === 0) throw new SessionNotScheduledError();
+    const o = occ.rows[0] as Record<string, unknown>;
+    const capturedAt = effectiveAt.toISOString();
+    const schedule = { dueDate: String(o.due_date), makeupUntil: String(o.makeup_until) };
+    const context = {
+      version: SESSION_CONTEXT_VERSION,
+      capturedAt,
+      prescription: {
+        version: PRESCRIPTION_SNAPSHOT_VERSION,
+        capturedAt,
+        patientExerciseId: Number(o.patient_exercise_id),
+        exerciseId: String(o.exercise_id),
+        sets: Number(o.sets),
+        reps: Number(o.reps),
+        restSeconds: Number(o.rest_seconds),
+        holdSeconds: Number(o.hold_seconds),
+        sequenceIndex: Number(o.sequence_index),
+        prescribedSide: (o.prescribed_side ?? "both") as PrescribedSide,
+        resistance: resistanceContextFromRow(o),
+        schedule,
+      },
+      schedule: { ...schedule, startedDuringMakeupWindow: today > schedule.dueDate },
+      // A custom exercise has no camera definition: nothing is measured.
+      exercise: { id: data.exerciseId, name: String(o.name), kind: "manual", bilateralMode: null, definition: null },
+      versions: { appRevision: getAppRevision() },
+      ...(data.preSessionPain ? { preSessionPain: data.preSessionPain } : {}),
+      ...(data.videoConsent ? { videoConsent: data.videoConsent } : {}),
+    };
+    // A new start replaces an attempt left open by a closed tab.
+    await client.query(
+      `UPDATE sessions SET ended_at = $2, end_reason = 'superseded'
+        WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
+      [data.patientExerciseId, capturedAt],
+    );
+    const result = await client.query(
+      `INSERT INTO sessions
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id, started_at,
+          context_snapshot, context_snapshot_version, context_captured_at, app_revision)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, started_at`,
+      [
+        data.patientId,
+        data.patientExerciseId,
+        data.exerciseId,
+        data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+        Number(o.id),
+        capturedAt,
+        JSON.stringify(context),
+        SESSION_CONTEXT_VERSION,
+        capturedAt,
+        context.versions.appRevision,
+      ],
+    );
+    await client.query("COMMIT");
+    const row = result.rows[0] as Record<string, unknown>;
+    return { id: Number(row.id), startedAt: new Date(String(row.started_at)).toISOString() };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
@@ -2328,9 +2469,10 @@ async function getPausedProgress(sessionId: number) {
     `SELECT COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
             COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
             COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
-            pe.exercise_id
+            pe.exercise_id, e.monitoring_mode
        FROM sessions s
        JOIN patient_exercises pe ON pe.id = s.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
        LEFT JOIN exercise_occurrences eo ON eo.id = s.occurrence_id
       WHERE s.id = $1`,
     [sessionId],
@@ -2343,6 +2485,19 @@ async function getPausedProgress(sessionId: number) {
     reps: Number(p.reps),
     holdSeconds: p.hold_seconds == null ? null : Number(p.hold_seconds),
   });
+  // A custom exercise is guided, not counted: its progress cannot be described.
+  if (p.monitoring_mode === "manual") {
+    return {
+      prescribedSets: Number(p.sets),
+      prescribedReps: Number(p.reps),
+      prescribedTarget,
+      isHold: false,
+      pausedSet: null,
+      repsInPausedSet: 0,
+      completedSets: 0,
+      custom: true,
+    };
+  }
   if (isHold) {
     // A hold has no repetitions: its progress is the sets that reached their time.
     const held = await pool.query(
@@ -3068,9 +3223,11 @@ export async function getSessionsForPatient(patientId: string) {
         review.label AS latest_review_label,
         review.score_source AS latest_review_score_source,
         review.score_value AS latest_review_score_value,
-        review.created_at AS latest_review_created_at
+        review.created_at AS latest_review_created_at,
+        to_char(sched.due_date, 'YYYY-MM-DD') AS scheduled_day
      FROM sessions s
      JOIN exercises e ON e.id = s.exercise_id
+     LEFT JOIN exercise_occurrences sched ON sched.id = s.occurrence_id
      LEFT JOIN (
         SELECT session_id,
                COUNT(*)                                            AS total_reps,
@@ -3287,6 +3444,10 @@ export async function getSessionsForPatient(patientId: string) {
       occurrenceId:      row.occurrence_id != null ? Number(row.occurrence_id) : null,
       exerciseName:      row.exercise_name,
       exerciseKind:      row.exercise_kind ?? null,   // 'dynamic' | 'isometric' | null
+      // The day the attempt was scheduled for (YYYY-MM-DD); later than that is a make-up.
+      scheduledDay:      (row.scheduled_day as string | null) ?? null,
+      // A custom exercise's session: guided, with nothing counted.
+      customExercise:         (context?.exercise as { kind?: unknown } | undefined)?.kind === "manual",
       startedAt:         row.started_at,
       endedAt:           row.ended_at ?? null,
       endReason:         row.end_reason ?? null,
@@ -3405,6 +3566,15 @@ export async function getSessionsForPatient(patientId: string) {
  * inflate activity — consistent with the patient consistency calendar.
  */
 export async function getTherapistRoster(therapistId: string) {
+  return getPatientRoster({ therapistId });
+}
+
+/**
+ * Each patient's sessions and adherence. With a therapist, their assigned
+ * patients (as the therapist dashboard has always shown); without one, every
+ * active patient, for the admin dashboard.
+ */
+async function getPatientRoster({ therapistId }: { therapistId: string | null }) {
   const now = await getEffectiveNow();
   const today = await todayKeyPH();
   const result = await pool.query(
@@ -3453,7 +3623,8 @@ export async function getTherapistRoster(therapistId: string) {
         LEFT JOIN exercise_occurrences eo ON eo.patient_exercise_id = pe.id
         GROUP BY pe.patient_id
      ) ex ON ex.patient_id = u.id
-     WHERE u.role = 'patient' AND u.therapist_id = $1
+     WHERE u.role = 'patient'
+       AND (CASE WHEN $1::text IS NULL THEN u.is_archived IS NOT TRUE ELSE u.therapist_id = $1 END)
      ORDER BY u.name`,
     [therapistId, now.toISOString(), today],
   );
@@ -3839,7 +4010,7 @@ export async function deleteMultipleNotifications(ids: number[], userId: string)
   );
 }
 
-export async function getAdminDashboardData(adminId: string) {
+export async function getAdminDashboardData() {
   // 1. Stats queries
   const activePatients = await pool.query(
     "SELECT COUNT(*)::integer FROM users WHERE role = 'patient' AND (is_archived IS NULL OR is_archived = FALSE)"
@@ -3861,25 +4032,11 @@ export async function getAdminDashboardData(adminId: string) {
     "SELECT COUNT(*)::integer FROM patient_exercises"
   );
 
-  // 2. Recent activity logs (login/logout events and other admin notifications)
-  const activityLogs = await pool.query(
-    `SELECT id, title, message, type, created_at AS "createdAt"
-     FROM notifications
-     WHERE user_id = $1 AND type IN ('user_login', 'user_logout', 'therapist_password_change') AND (is_deleted IS NULL OR is_deleted = FALSE)
-     ORDER BY created_at DESC
-     LIMIT 20`,
-    [adminId]
-  );
+  // 2. Who is online now, and when everyone else was last active
+  const userPresence = await getUserPresence();
 
-  // 3. Recent completed sessions
-  const recentSessions = await pool.query(
-    `SELECT s.id, s.started_at AS "startedAt", p.name AS "patientName", e.name AS "exerciseName", s.end_reason AS "endReason"
-     FROM sessions s
-     JOIN users p ON s.patient_id = p.id
-     JOIN exercises e ON s.exercise_id = e.id
-     ORDER BY s.started_at DESC
-     LIMIT 5`
-  );
+  // 3. Every active patient's progress, as the therapist dashboard shows it
+  const patientRoster = await getPatientRoster({ therapistId: null });
 
   return {
     stats: {
@@ -3891,18 +4048,65 @@ export async function getAdminDashboardData(adminId: string) {
       totalSessions: totalSessions.rows[0].count,
       activeAssignments: activeAssignments.rows[0].count,
     },
-    activityLogs: activityLogs.rows,
-    recentSessions: recentSessions.rows,
+    userPresence,
+    patientRoster,
   };
 }
 
-export async function clearActivityLogs(adminId: string): Promise<void> {
-  await pool.query(
-    `UPDATE notifications
-     SET is_deleted = TRUE
-     WHERE user_id = $1 AND type IN ('user_login', 'user_logout', 'therapist_password_change')`,
-    [adminId]
-  );
+// ── User presence ───────────────────────────────────────────────────────────
+// The columns come from scripts/user_presence_pg.sql. Before it runs, reports
+// are skipped and the dashboard panel asks for it; nothing else depends on them.
+
+/**
+ * Marks the user as seen now. Writes at most about once per heartbeat, so the
+ * signal costs one small update a minute per open page. Signing in always
+ * writes, so a quick sign-out and sign-in shows online at once.
+ */
+export async function recordUserSeen(userId: string, { always = false } = {}): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE users SET last_seen_at = now()
+       WHERE id = $1 AND ($3 OR last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $2))`,
+      [userId, HEARTBEAT_MS / 2000, always],
+    );
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+  }
+}
+
+/** Log Out shows the user offline straight away instead of after the online window. */
+export async function recordUserSignedOut(userId: string): Promise<void> {
+  try {
+    await pool.query("UPDATE users SET signed_out_at = now() WHERE id = $1", [userId]);
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+  }
+}
+
+/** Active patients and therapists with their status; `available` is false until the schema script has run. */
+export async function getUserPresence(): Promise<{ available: boolean; users: UserPresence[] }> {
+  try {
+    // Online is decided by the database clock, so a skewed browser clock cannot change it.
+    const result = await pool.query(
+      `SELECT id, name, role, last_seen_at AS "lastSeenAt",
+              (last_seen_at > now() - make_interval(secs => $1)
+                AND (signed_out_at IS NULL OR last_seen_at > signed_out_at)) IS TRUE AS online
+       FROM users
+       WHERE role IN ('patient', 'therapist') AND (is_archived IS NULL OR is_archived = FALSE)`,
+      [ONLINE_WINDOW_MS / 1000],
+    );
+    const users = result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      online: row.online === true,
+      lastSeenAt: row.lastSeenAt ? new Date(row.lastSeenAt).toISOString() : null,
+    }));
+    return { available: true, users: sortPresence(users) };
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+    return { available: false, users: [] };
+  }
 }
 
 export default pool;

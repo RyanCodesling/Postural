@@ -3,11 +3,14 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import ExerciseVideoField, {
+  KEEP_EXERCISE_VIDEO,
   NO_EXERCISE_VIDEO,
   createCustomExercise,
   exerciseVideoChoiceError,
+  saveCustomExerciseEdit,
   type ExerciseVideoChoice,
 } from "../../_components/ExerciseVideoField";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../../_components/DashboardKit";
 import {
   DEFAULT_DISPLAY_HOLD_SECONDS,
@@ -37,6 +40,9 @@ interface Exercise {
   description: string;
   is_custom: boolean;
   owner_therapist_id?: string | null;
+  /** A custom exercise's guide video: an uploaded file, or a YouTube video. */
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 interface ProgramExercise {
@@ -123,6 +129,9 @@ export default function ExerciseProgramsPage() {
   // Custom exercise inline edit/delete state
   const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
   const [editCustomDesc, setEditCustomDesc] = useState("");
+  // The edited custom exercise's guide video; it starts as "keep".
+  const [editCustomVideo, setEditCustomVideo] = useState<ExerciseVideoChoice>(KEEP_EXERCISE_VIDEO);
+  const [editCustomVideoError, setEditCustomVideoError] = useState<string | null>(null);
   const [savingCustom, setSavingCustom] = useState(false);
 
   // Styled modal states for custom exercise deletion
@@ -423,6 +432,8 @@ export default function ExerciseProgramsPage() {
   const startEditCustom = (ex: Exercise) => {
     setEditingCustomId(ex.id);
     setEditCustomDesc(ex.description);
+    setEditCustomVideo(exerciseVideoFromRow(ex) ? KEEP_EXERCISE_VIDEO : NO_EXERCISE_VIDEO);
+    setEditCustomVideoError(null);
   };
 
   const cancelEditCustom = () => {
@@ -434,22 +445,18 @@ export default function ExerciseProgramsPage() {
     if (!editCustomDesc.trim()) return;
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
+    const invalid = exerciseVideoChoiceError(editCustomVideo);
+    if (invalid) { setEditCustomVideoError(invalid); return; }
     setSavingCustom(true);
     try {
-      const res = await fetch(`/api/exercises/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: original.name, description: editCustomDesc.trim() }),
-      });
-      if (res.ok) {
-        const { exercise } = await res.json();
-        setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...exercise } : e)));
+      const result = await saveCustomExerciseEdit<Exercise>(id, { name: original.name, description: editCustomDesc.trim() }, editCustomVideo);
+      if ("exercise" in result) {
+        setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...result.exercise } : e)));
         cancelEditCustom();
         setSuccessMsg(`"${original.name}" updated successfully.`);
         setShowSuccessModal(true);
       } else {
-        const d = await res.json();
-        setErrorTitle("Failed to Save"); setErrorMsg(d.error ?? "Could not save custom exercise."); setShowErrorModal(true);
+        setErrorTitle("Failed to Save"); setErrorMsg(result.error); setShowErrorModal(true);
       }
     } catch (err) {
       console.error("Error saving custom exercise:", err);
@@ -510,7 +517,7 @@ export default function ExerciseProgramsPage() {
     <div className={showForm || showCustomForm ? "space-y-4" : FIT_SCREEN}>
       <PageHeading title="Exercise Program" subtitle="Create and manage reusable exercise programs." />
 
-      <div id="tour-tiles" className="grid shrink-0 grid-cols-3 gap-3">
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3">
         <StatTile label="Programs" value={programs.length} icon={Glyph.list} tone="green" />
         <StatTile label="Custom exercises" value={customExercises.length} icon={Glyph.dumbbell} tone="teal" />
         <StatTile label="Exercises in programs" value={programs.reduce((n, pr) => n + pr.exercises.length, 0)} icon={Glyph.pulse} tone="lime" />
@@ -954,7 +961,7 @@ export default function ExerciseProgramsPage() {
 
       {/* Programs list */}
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
-      <div id="tour-programs" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+      <div id="tour-programs" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
         <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Programs ({programs.length})
         </h2>
@@ -987,7 +994,7 @@ export default function ExerciseProgramsPage() {
                             return (
                               <span
                                 key={i}
-                                className="text-xs px-2 py-1 rounded-full font-medium bg-green-50 text-green-600 border border-green-200"
+                                className="text-xs px-2 py-1 rounded-lg font-medium bg-green-50 text-green-600 border border-green-200"
                               >
                                 {ex.name}
                                 {` #${ex.sequenceIndex ?? i + 1}`}
@@ -1036,7 +1043,7 @@ export default function ExerciseProgramsPage() {
       </div>
 
       {/* Your Custom Exercises */}
-      <div id="tour-custom" className="flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+      <div id="tour-custom" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
         <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Custom Exercises ({customExercises.length})
         </h2>
@@ -1063,6 +1070,16 @@ export default function ExerciseProgramsPage() {
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
                         rows={3}
                       />
+                      <div>
+                        <ExerciseVideoField
+                          value={editCustomVideo}
+                          onChange={setEditCustomVideo}
+                          onError={setEditCustomVideoError}
+                          current={exerciseVideoFromRow(ex)}
+                          name={`edit-custom-video-${ex.id}`}
+                        />
+                        {editCustomVideoError && <p role="alert" className="mt-1 text-xs text-red-600">{editCustomVideoError}</p>}
+                      </div>
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleSaveCustomExercise(ex.id)}
@@ -1082,7 +1099,7 @@ export default function ExerciseProgramsPage() {
                   ) : (
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
                           <h3 className="font-semibold text-gray-900 text-sm">{ex.name}</h3>
                           <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium">custom</span>
                           {own ? (

@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { firstName, middleName, lastName, email, role, dateOfBirth, age, gender,
-          therapistIDNum, specialty, diagnosis, prescription, condition } = body;
+          specialty, diagnosis, prescription, condition } = body;
 
     if (!firstName || !lastName || !role) {
       return NextResponse.json({ error: "firstName, lastName, and role are required" }, { status: 400 });
@@ -90,7 +90,6 @@ export async function POST(request: NextRequest) {
       dateOfBirth:    dateOfBirth ?? null,
       age:            age         ?? null,
       gender:         gender      ?? null,
-      therapistIDNum: therapistIDNum ?? null,
       specialty:      specialty   ?? null,
       diagnosis:      diagnosis   ?? null,
       prescription:   prescription ?? null,

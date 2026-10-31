@@ -135,23 +135,23 @@ export default function ManagePatientsPage() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
-                <th className="py-2 pr-4 font-medium">Patient</th>
-                <th className="px-4 py-2 font-medium">Assigned exercises</th>
-                <th className="py-2 pl-4 text-right font-medium" />
+                <th className="py-2 pr-2 font-medium sm:pr-4">Patient</th>
+                <th className="px-2 py-2 font-medium sm:px-4">Assigned exercises</th>
+                <th className="py-2 pl-2 text-right font-medium sm:pl-4" />
               </tr>
             </thead>
             <tbody>
               {filtered.map((p) => (
                 <tr key={p.id} className="border-b border-gray-50 align-top transition hover:bg-green-50/40">
-                  <td className="py-3 pr-4">
+                  <td className="py-3 pr-2 sm:pr-4">
                     <p className="font-semibold text-gray-900">{p.name}</p>
-                    <p className="text-xs text-gray-500">{p.email}</p>
+                    <p className="break-all text-xs text-gray-500">{p.email}</p>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-3 sm:px-4">
                     {p.exercises.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
                         {p.exercises.map((ex) => (
-                          <span key={ex.exercise_id} className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusColor(ex.status)}`}>
+                          <span key={ex.exercise_id} className={`rounded-lg px-2.5 py-1 text-xs font-medium ${statusColor(ex.status)}`}>
                             {ex.name} — {ex.sets}×
                             {prescriptionTargetText({ exerciseId: ex.exercise_id, reps: ex.reps, holdSeconds: ex.hold_seconds })}
                           </span>
@@ -161,7 +161,7 @@ export default function ManagePatientsPage() {
                       <span className="text-xs text-gray-400">No exercises assigned yet</span>
                     )}
                   </td>
-                  <td className="py-3 pl-4 text-right">
+                  <td className="py-3 pl-2 text-right sm:pl-4">
                     <Link
                       href={`/dashboard/therapist/patients/${p.id}`}
                       className="inline-block rounded-lg bg-green-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-green-800"

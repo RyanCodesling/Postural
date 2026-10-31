@@ -11,7 +11,6 @@ interface TherapistProfile {
   id: string;
   name: string;
   email: string;
-  therapistIDNum: string | null;
   specialty: string | null;
   createdAt: string | null;
 }
@@ -77,7 +76,6 @@ export default function TherapistProfilePage() {
               <ProfileField icon={<PersonIcon />} label="Full Name" value={profile.name} />
               <ProfileField icon={<EmailIcon />} label="Email" value={profile.email} />
               <ProfileField icon={<BriefcaseIcon />} label="Specialization" value={profile.specialty} />
-              <ProfileField icon={<BriefcaseIcon />} label="Therapist ID" value={profile.therapistIDNum} />
             </div>
           )
         }
@@ -92,15 +90,19 @@ export default function TherapistProfilePage() {
               <thead className="sticky top-0 bg-white">
                 <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
                   <th className="py-2 pr-4 font-medium">Patient</th>
-                  <th className="px-4 py-2 font-medium">Email</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Email</th>
                   <th className="py-2 pl-4 text-right font-medium" />
                 </tr>
               </thead>
               <tbody>
                 {patients.map((patient) => (
                   <tr key={patient.id} className="border-b border-gray-50 transition hover:bg-green-50/40">
-                    <td className="py-2.5 pr-4 font-semibold text-gray-900">{patient.name}</td>
-                    <td className="px-4 py-2.5 text-gray-600">{patient.email}</td>
+                    <td className="py-2.5 pr-4">
+                      <span className="font-semibold text-gray-900">{patient.name}</span>
+                      {/* On a phone the email sits under the name instead of in its own column. */}
+                      <span className="block break-all text-xs text-gray-500 sm:hidden">{patient.email}</span>
+                    </td>
+                    <td className="hidden px-4 py-2.5 text-gray-600 sm:table-cell">{patient.email}</td>
                     <td className="py-2.5 pl-4 text-right">
                       <Link
                         href={`/dashboard/therapist/patients/${patient.id}`}

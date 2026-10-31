@@ -122,7 +122,7 @@ export default function AppShell({
         <div className="mb-6 flex shrink-0 items-center gap-2 px-3">
           <Image src={logo} alt="ACC Bacoor" width={64} height={64} className="h-8 w-8 shrink-0 rounded-full" />
           <div className="min-w-0 leading-tight">
-            <p className="truncate text-sm font-bold text-green-900">ACC Bacoor</p>
+            <p className="truncate text-sm font-bold text-green-900">ACC+ Bacoor</p>
             <p className="truncate text-[10px] text-green-900/60">Postural Monitoring</p>
           </div>
         </div>
@@ -142,38 +142,39 @@ export default function AppShell({
       </aside>
 
       <div className="md:pl-52 print:pl-0">
-        <header className="sticky top-0 z-20 flex items-center gap-3 bg-white px-4 py-3 shadow-sm print:hidden sm:px-6">
+        <header className="sticky top-0 z-20 flex items-center gap-2 bg-white px-3 py-3 shadow-sm print:hidden sm:gap-3 sm:px-6">
           <button
             type="button"
             aria-label="Open menu"
-            className="rounded-lg border border-green-200 px-3 py-2 text-sm text-green-800 md:hidden"
+            className="shrink-0 rounded-lg border border-green-200 px-2.5 py-2 text-sm text-green-800 sm:px-3 md:hidden"
             onClick={() => setDrawerOpen(true)}
           >
             ☰
           </button>
 
-          <div className="ml-auto flex items-center gap-3">
+          {/* Everything stays visible on a phone: a long name wraps onto a second line instead of being hidden. */}
+          <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-3">
             {tour && (
               <button
                 id="tour-how-to-use"
                 type="button"
                 onClick={() => setShowTour(true)}
-                className="flex items-center gap-1.5 rounded-lg border border-green-600 bg-white px-3 py-2 text-sm font-semibold text-green-700 transition hover:bg-green-50"
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-green-600 bg-white px-2 py-2 text-[13px] font-semibold text-green-700 transition hover:bg-green-50 sm:gap-1.5 sm:px-3 sm:text-sm"
               >
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
                   <circle cx="12" cy="12" r="10" />
                   <path d="M12 16v.01M12 8v4" strokeLinecap="round" />
                 </svg>
-                <span className="hidden sm:inline">How to Use</span>
+                How to Use
               </button>
             )}
-            <span id="tour-bell"><NotificationBell /></span>
-            <div className="hidden items-center gap-3 sm:flex">
-              <span className="grid h-9 w-9 place-items-center rounded-full bg-green-600 text-xs font-bold text-white">
+            <span id="tour-bell" className="shrink-0"><NotificationBell /></span>
+            <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-green-600 text-xs font-bold text-white sm:h-9 sm:w-9">
                 {initials(userName)}
               </span>
-              <div className="leading-tight">
-                <p className="text-sm font-semibold text-gray-900">{userName || roleLabel}</p>
+              <div className="min-w-0 leading-tight">
+                <p className="break-words text-sm font-semibold text-gray-900">{userName || roleLabel}</p>
                 <p className="text-xs text-gray-500">{roleLabel}</p>
               </div>
             </div>

@@ -4,6 +4,13 @@ import { useState, useEffect } from "react";
 import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../../_components/DashboardKit";
 import ExerciseReferenceVideo from "../../_components/ExerciseReferenceVideo";
 import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
+import ExerciseVideoField, {
+  KEEP_EXERCISE_VIDEO,
+  NO_EXERCISE_VIDEO,
+  exerciseVideoChoiceError,
+  saveCustomExerciseEdit,
+  type ExerciseVideoChoice,
+} from "../../_components/ExerciseVideoField";
 import { useAuth } from "@/lib/AuthContext";
 
 interface Exercise {
@@ -23,6 +30,9 @@ export default function ManageExercisesPage() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState("");
+  // A custom exercise's guide video on the edit form; it starts as "keep".
+  const [editVideo, setEditVideo] = useState<ExerciseVideoChoice>(KEEP_EXERCISE_VIDEO);
+  const [editVideoError, setEditVideoError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -62,6 +72,8 @@ export default function ManageExercisesPage() {
     setActionError("");
     setEditingId(ex.id);
     setEditDesc(ex.description);
+    setEditVideo(exerciseVideoFromRow(ex) ? KEEP_EXERCISE_VIDEO : NO_EXERCISE_VIDEO);
+    setEditVideoError(null);
   };
 
   const cancelEdit = () => {
@@ -73,6 +85,18 @@ export default function ManageExercisesPage() {
     if (!editDesc.trim()) return;
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
+    if (original.is_custom) {
+      const invalid = exerciseVideoChoiceError(editVideo);
+      if (invalid) { setEditVideoError(invalid); return; }
+      setSaving(true);
+      setActionError("");
+      const result = await saveCustomExerciseEdit<Exercise>(id, { name: original.name, description: editDesc.trim() }, editVideo);
+      setSaving(false);
+      if ("error" in result) { setActionError(result.error); return; }
+      setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...result.exercise } : e)));
+      cancelEdit();
+      return;
+    }
     setSaving(true);
     setActionError("");
     try {
@@ -226,7 +250,7 @@ export default function ManageExercisesPage() {
         </Panel>
       ) : (
         <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_minmax(0,13rem)]">
-          <Panel id="tour-system" className="lg:col-span-7" title={`System exercises (${systemExercises.length})`} scroll>
+          <Panel id="tour-system" className="lg:col-span-6" title={`System exercises (${systemExercises.length})`} scroll>
             {systemExercises.length === 0 ? (
               <p className="py-8 text-center text-sm text-gray-400">No system exercises match your search.</p>
             ) : (
@@ -249,7 +273,7 @@ export default function ManageExercisesPage() {
             )}
           </Panel>
 
-          <Panel id="tour-custom" className="lg:col-span-5" title={`Custom exercises (${customExercises.length})`} scroll>
+          <Panel id="tour-custom" className="lg:col-span-6" title={`Custom exercises (${customExercises.length})`} scroll>
             {customExercises.length === 0 ? (
               <p className="py-8 text-center text-sm text-gray-400">
                 {query === "" ? "No custom exercises yet. Add them in Exercise Program." : "No custom exercises match your search."}
@@ -273,6 +297,12 @@ export default function ManageExercisesPage() {
                         onEditDesc={setEditDesc}
                         onView={() => setViewingExercise(ex)}
                         onDelete={own ? () => handleDeleteClick(ex.id, ex.name) : undefined}
+                        video={own ? {
+                          value: editVideo,
+                          onChange: setEditVideo,
+                          error: editVideoError,
+                          onError: setEditVideoError,
+                        } : undefined}
                       />
                     );
                   })}
@@ -438,7 +468,7 @@ export default function ManageExercisesPage() {
 
 function ExerciseRow({
   exercise, addedBy, isEditing, editDesc, saving,
-  onEdit, onCancel, onSave, onEditDesc, onView, onDelete,
+  onEdit, onCancel, onSave, onEditDesc, onView, onDelete, video,
 }: {
   exercise: Exercise;
   /** Who added a custom exercise; only "you" can edit or archive it. */
@@ -452,6 +482,13 @@ function ExerciseRow({
   onEditDesc: (v: string) => void;
   onView: () => void;
   onDelete?: () => void;
+  /** The guide video choice on a custom exercise's edit form. */
+  video?: {
+    value: ExerciseVideoChoice;
+    onChange: (choice: ExerciseVideoChoice) => void;
+    error: string | null;
+    onError: (message: string | null) => void;
+  };
 }) {
   return (
     <div className="rounded-lg border border-green-50 bg-[#fafcfa] p-4 transition hover:bg-green-50/50">
@@ -465,6 +502,18 @@ function ExerciseRow({
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
             rows={3}
           />
+          {exercise.is_custom && video && (
+            <div>
+              <ExerciseVideoField
+                value={video.value}
+                onChange={video.onChange}
+                onError={video.onError}
+                current={exerciseVideoFromRow(exercise)}
+                name={`edit-video-${exercise.id}`}
+              />
+              {video.error && <p role="alert" className="mt-1 text-xs text-red-600">{video.error}</p>}
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               onClick={onSave}

@@ -90,7 +90,7 @@ export function homeProgramRow(item: HomeProgramItem): string[] {
     ...(item.days.painStopped ? [`${item.days.painStopped} stopped for pain`] : []),
   ].join(" · ");
   return [
-    item.cameraMonitored ? item.name : `${item.name} (done without the camera)`,
+    item.cameraMonitored ? item.name : `${item.name} (Custom Exercise)`,
     dose,
     `${sides} · ${formatResistanceContext(item.resistance)}`,
     `${formatCadence(item)}${item.state === "upcoming" ? " (not started yet)" : ""}`,

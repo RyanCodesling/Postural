@@ -25,12 +25,13 @@ export function StatTile({
   tone?: TileTone;
 }) {
   return (
-    <div className={`flex min-w-0 items-center gap-3 rounded-xl bg-gradient-to-br ${TONE[tone]} px-4 py-3 shadow-sm`}>
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-green-700 shadow-sm">
+    <div className={`flex min-w-0 items-center gap-2.5 rounded-xl bg-gradient-to-br ${TONE[tone]} px-3 py-3 shadow-sm sm:gap-3 sm:px-4`}>
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-green-700 shadow-sm sm:h-10 sm:w-10">
         {icon}
       </span>
       <div className="min-w-0 leading-tight">
-        <p className="truncate text-xs text-gray-600">{label}</p>
+        {/* The label wraps onto a second line on a narrow tile instead of being cut off. */}
+        <p className="line-clamp-2 text-xs text-gray-600">{label}</p>
         <p className="truncate text-xl font-bold text-gray-900">
           {value}
           {unit && <span className="ml-1 text-xs font-medium text-gray-500">{unit}</span>}
@@ -57,12 +58,14 @@ export function Panel({
   scroll?: boolean;
 }) {
   return (
-    <section id={id} className={`flex min-h-0 flex-col rounded-xl bg-white p-5 shadow-sm ${className}`}>
-      <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
+    // min-w-0 lets the card shrink on a narrow screen; a wide table then scrolls
+    // sideways inside the card instead of making the whole page wider.
+    <section id={id} className={`flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm ${className}`}>
+      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <h2 className="text-base font-semibold text-gray-900">{title}</h2>
         {right}
       </div>
-      <div className={`min-h-0 flex-1 ${scroll ? "overflow-y-auto pr-1" : ""}`}>{children}</div>
+      <div className={`min-h-0 min-w-0 flex-1 overflow-x-auto ${scroll ? "overflow-y-auto pr-1" : ""}`}>{children}</div>
     </section>
   );
 }
@@ -70,7 +73,7 @@ export function Panel({
 /** Small page heading used at the top of the dashboards, kept short so the page fits one screen. */
 export function PageHeading({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="shrink-0">
+    <div className="min-w-0 shrink">
       <h1 className="text-xl font-bold text-gray-900">{title}</h1>
       {subtitle && <p className="text-sm text-gray-500">{subtitle}</p>}
     </div>

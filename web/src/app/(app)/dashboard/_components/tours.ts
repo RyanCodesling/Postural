@@ -21,7 +21,7 @@ const logout: TourStep = {
   title: "Log Out",
   placement: "right",
   flow: [
-    { kind: "shot", src: "logout.png", caption: "Press Log Out at the bottom of the menu" },
+    { kind: "shot", src: "logout.png", caption: "Open the ☰ menu and press Log Out at the bottom" },
     { kind: "result", text: "You are signed out" },
   ],
   lines: ["Use Log Out when you are finished, especially on a shared computer."],
@@ -62,7 +62,7 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       placement: "right",
       lines: [
         "This is your home page: today's exercises, your whole program and how you are doing, all on one screen.",
-        "Use the menu on the left to move between pages. Every page has its own How to Use button.",
+        "Use the ☰ menu button at the top left to move between pages. Every page has its own How to Use button.",
       ],
     },
     {
@@ -138,7 +138,7 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       title: "The camera page",
       placement: "right",
       flow: [
-        { kind: "shot", src: "p-camera-nav.png", caption: "1. Press Camera in the menu" },
+        { kind: "shot", src: "p-camera-nav.png", caption: "1. Open the ☰ menu and press Camera" },
         { kind: "result", text: "2. Press How to Use on the camera page" },
       ],
       lines: [
@@ -266,6 +266,16 @@ export const PATIENT_TOURS: Record<string, TourStep[]> = {
       lines: ["Your name, age, email and the specialist who looks after you. If something is wrong, ask your therapist or the clinic to correct it."],
     },
     {
+      targetId: "tour-profile-files",
+      title: "Attached files",
+      placement: "left",
+      lines: [
+        "Files your therapist or the clinic attached to your record, such as test results or referral letters.",
+        "Press View and enter your password to open one. Close the window to lock it again.",
+        "You can view these files but not add, change or delete them. Ask your therapist if a file should be added or removed.",
+      ],
+    },
+    {
       targetId: "tour-profile-bottom",
       title: "Assigned exercises",
       placement: "above",
@@ -291,7 +301,7 @@ const therapistNav = (href: string, title: string, text: string): TourStep => ({
 
 export const THERAPIST_TOURS: Record<string, TourStep[]> = {
   dashboard: [
-    therapistNav("/dashboard/therapist", "Your dashboard", "A one-screen overview of your patients. Use the menu on the left to open the other pages; each has its own How to Use button."),
+    therapistNav("/dashboard/therapist", "Your dashboard", "A one-screen overview of your patients. Use the ☰ menu button at the top left to open the other pages; each has its own How to Use button."),
     {
       targetId: "tour-tiles",
       title: "Your numbers",
@@ -609,7 +619,7 @@ const adminNav = (key: string, title: string, text: string): TourStep => ({
 
 export const ADMIN_TOURS: Record<string, TourStep[]> = {
   dashboard: [
-    adminNav("dashboard", "Your dashboard", "A one-screen overview of the whole system. Use the menu on the left to open the other pages; each has its own How to Use button."),
+    adminNav("dashboard", "Your dashboard", "A one-screen overview of the whole system. Use the ☰ menu button at the top left to open the other pages; each has its own How to Use button."),
     {
       targetId: "tour-tiles",
       title: "System numbers",
@@ -699,7 +709,7 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
         { kind: "email", text: "The user is emailed" },
       ],
       lines: [
-        "View opens a read-only copy of the account's profile with what was entered when it was added. Attached files are listed by name only; just the patient and their assigned therapist can open them.",
+        "View opens a read-only copy of the account's profile with what was entered when it was added. Attached files are listed by name only; just the patient and their assigned therapist can open them. The patient views them, read-only, on their own View Profile.",
         "Edit changes an account's details. Files you add or delete in Edit are saved only when you press Save Changes, and the confirmation lists each file being added or deleted.",
         "If you change the email address, the old and new addresses and you are notified by email.",
         "Archive suspends the account without deleting anything: its records stay and the user is emailed. Use it instead of deleting.",
@@ -828,6 +838,36 @@ export const ADMIN_TOURS: Record<string, TourStep[]> = {
       title: "Assignment history",
       placement: "above",
       lines: ["The assignments and unassignments you have made during this visit."],
+    },
+    bell,
+  ],
+
+  deleted: [
+    adminNav("deleted", "Recently deleted", "Deleted session videos, attached files and guide videos, kept until you restore them or delete them for good."),
+    {
+      targetId: "tour-deleted-filters",
+      title: "Find an item",
+      placement: "below",
+      lines: [
+        "Show one kind at a time: session videos a patient deleted, attached files an admin or therapist deleted, or guide videos removed or replaced on a custom exercise.",
+        "Search by the item's name, the patient or exercise, or who deleted it.",
+      ],
+    },
+    {
+      targetId: "tour-deleted-list",
+      title: "Restore or delete for good",
+      placement: "above",
+      flow: [
+        { kind: "row", title: "Shoulder Shrugs session video", meta: "Juan Cruz · deleted by the patient", button: "Restore" },
+        { kind: "result", text: "Back where it was; the patient and therapist are notified" },
+        { kind: "dialog", title: "Delete for good?", confirm: "Delete for good", danger: true },
+        { kind: "result", text: "Removed from the system", tone: "warn" },
+      ],
+      lines: [
+        "Each row shows what was deleted, whose it is, who deleted it and when. You cannot open the contents here.",
+        "Restore puts it back. A restored guide video becomes the exercise's video again, and the one it replaces moves here.",
+        "Delete for good removes it from the system. Nothing here is removed automatically. Copies in earlier nightly backups stay until those backups are removed.",
+      ],
     },
     bell,
   ],

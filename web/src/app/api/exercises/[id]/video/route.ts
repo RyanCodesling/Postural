@@ -93,7 +93,7 @@ export async function PUT(request: NextRequest, { params }: Context) {
 
     let updated;
     try {
-      updated = await setExerciseVideoFile(id, mimeType, saved.fileName);
+      updated = await setExerciseVideoFile(id, mimeType, saved.fileName, user.id);
     } catch (error) {
       // A lost connection can leave commit outcome unknown. Retain the staged
       // file in that case: it might already be the metadata-selected guide.
@@ -107,14 +107,8 @@ export async function PUT(request: NextRequest, { params }: Context) {
       await deleteExerciseVideoFile(id, mimeType, saved.fileName).catch(() => undefined);
       return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
     }
-    // Metadata publication captured the exact superseded file under a row lock.
-    // A later upload can never be removed by this request's cleanup.
-    const previous = updated.previousVideo;
-    if (previous && previous.fileName !== saved.fileName) {
-      await deleteExerciseVideoFile(id, previous.mimeType, previous.fileName).catch((error) =>
-        console.error(`Could not remove a superseded exercise video for ${id}:`, error),
-      );
-    }
+    // The superseded video, captured under the row lock, went to Recently
+    // Deleted with its file kept, so an admin can restore it.
     return NextResponse.json({ exercise: updated.exercise });
   } catch (error) {
     if (isMissingColumnError(error)) {

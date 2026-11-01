@@ -21,11 +21,12 @@ import ExerciseVideoField, {
 import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import SessionDateCorrectionPanel from "./SessionDateCorrectionPanel";
 import UserStatusPanel from "./UserStatusPanel";
+import RecentlyDeletedPanel from "./RecentlyDeletedPanel";
 import ProfileLayout, { ProfileField } from "../_components/ProfileLayout";
 import type { UserPresence } from "@/lib/presence";
 import { RosterProgress, RosterStatusBadge, type RosterPatient } from "../_components/rosterStatus";
 
-type Tab = "dashboard" | "users" | "exercises" | "assignments" | "demo-clock";
+type Tab = "dashboard" | "users" | "exercises" | "assignments" | "deleted" | "demo-clock";
 
 interface User {
   id: string;
@@ -770,6 +771,7 @@ export default function AdminDashboard() {
         { key: "users", label: "Manage Users", icon: <AdminUsersIcon />, active: activeTab === "users", onSelect: () => setActiveTab("users") },
         { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
         { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
+        { key: "deleted", label: "Recently Deleted", icon: <AdminBinIcon />, active: activeTab === "deleted", onSelect: () => setActiveTab("deleted") },
         { key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") },
         { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
       ]}
@@ -778,6 +780,7 @@ export default function AdminDashboard() {
       tour={ADMIN_TOURS[activeTab]}
       onLogout={async () => { await logout(); router.push("/"); }}
     >
+        {activeTab === "deleted" && <RecentlyDeletedPanel />}
         {activeTab === "demo-clock" && (
           <>
             <DemoClockPanel />
@@ -1004,7 +1007,7 @@ export default function AdminDashboard() {
                       </div>
 
                       {/* Common Fields */}
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
                             First Name <span className="text-red-500">*</span>
@@ -1207,7 +1210,7 @@ export default function AdminDashboard() {
                   </h4>
 
                   {/* Common Fields */}
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         First Name
@@ -1421,46 +1424,46 @@ export default function AdminDashboard() {
                   <p className="text-sm text-gray-500 mb-4">Please review the details below before adding the user.</p>
                   <div className="space-y-2 text-sm">
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Role</span>
-                      <span className="font-medium text-gray-900 capitalize">{newUser.role}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Role</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900 capitalize">{newUser.role}</span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Full Name</span>
-                      <span className="font-medium text-gray-900">{[newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ")}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Full Name</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{[newUser.firstName, newUser.middleName, newUser.lastName].filter(Boolean).join(" ")}</span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Email</span>
-                      <span className="font-medium text-gray-900">{newUser.email}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Email</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.email}</span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Date of Birth</span>
-                      <span className="font-medium text-gray-900">{newUser.dateOfBirth}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Date of Birth</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.dateOfBirth}</span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Age</span>
-                      <span className="font-medium text-gray-900">{newUser.age}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Age</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.age}</span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="w-32 shrink-0 text-gray-500">Gender</span>
-                      <span className="font-medium text-gray-900 capitalize">{newUser.gender}</span>
+                      <span className="w-28 shrink-0 text-gray-500 sm:w-32">Gender</span>
+                      <span className="min-w-0 wrap-anywhere font-medium text-gray-900 capitalize">{newUser.gender}</span>
                     </div>
                     {newUser.role === "patient" && (
                       <>
                         <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Diagnosis</span>
-                          <span className="font-medium text-gray-900">{newUser.diagnosis || "—"}</span>
+                          <span className="w-28 shrink-0 text-gray-500 sm:w-32">Diagnosis</span>
+                          <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.diagnosis || "—"}</span>
                         </div>
                         <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Condition</span>
-                          <span className="font-medium text-gray-900">{newUser.condition || "—"}</span>
+                          <span className="w-28 shrink-0 text-gray-500 sm:w-32">Condition</span>
+                          <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.condition || "—"}</span>
                         </div>
                         <div className="flex gap-2">
-                          <span className="w-32 shrink-0 text-gray-500">Prescription</span>
-                          <span className="font-medium text-gray-900">{newUser.prescription || "—"}</span>
+                          <span className="w-28 shrink-0 text-gray-500 sm:w-32">Prescription</span>
+                          <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.prescription || "—"}</span>
                         </div>
                         {newPatientImages.length > 0 && (
                           <div className="flex gap-2">
-                            <span className="w-32 shrink-0 text-gray-500">Files to add</span>
+                            <span className="w-28 shrink-0 text-gray-500 sm:w-32">Files to add</span>
                             <span className="min-w-0 break-words font-medium text-green-700">{newPatientImages.map((file) => file.name).join(", ")}</span>
                           </div>
                         )}
@@ -1468,8 +1471,8 @@ export default function AdminDashboard() {
                     )}
                     {newUser.role === "therapist" && (
                       <div className="flex gap-2">
-                        <span className="w-32 shrink-0 text-gray-500">Specialty</span>
-                        <span className="font-medium text-gray-900">{newUser.specialty}</span>
+                        <span className="w-28 shrink-0 text-gray-500 sm:w-32">Specialty</span>
+                        <span className="min-w-0 wrap-anywhere font-medium text-gray-900">{newUser.specialty}</span>
                       </div>
                     )}
                   </div>
@@ -1530,22 +1533,22 @@ export default function AdminDashboard() {
                           const changed = String(oldVal ?? "") !== String(newVal ?? "");
                           return (
                             <div key={label} className={`grid grid-cols-3 gap-2 text-sm py-2 px-2 rounded ${changed ? "bg-yellow-50" : ""}`}>
-                              <span className="text-gray-500">{label}</span>
-                              <span className={changed ? "line-through text-red-400" : "text-gray-700"}>{oldVal || "—"}</span>
-                              <span className={changed ? "font-medium text-green-700" : "text-gray-700"}>{newVal || "—"}</span>
+                              <span className="min-w-0 text-gray-500 wrap-anywhere">{label}</span>
+                              <span className={`min-w-0 wrap-anywhere ${changed ? "line-through text-red-400" : "text-gray-700"}`}>{oldVal || "—"}</span>
+                              <span className={`min-w-0 wrap-anywhere ${changed ? "font-medium text-green-700" : "text-gray-700"}`}>{newVal || "—"}</span>
                             </div>
                           );
                         })}
                         {editingUser.role === "patient" && editPatientImages.length > 0 && (
                           <div className="grid grid-cols-3 gap-2 rounded bg-yellow-50 px-2 py-2 text-sm">
                             <span className="text-gray-500">Files to add</span>
-                            <span className="col-span-2 break-words font-medium text-green-700">{editPatientImages.map((file) => file.name).join(", ")}</span>
+                            <span className="col-span-2 min-w-0 wrap-anywhere font-medium text-green-700">{editPatientImages.map((file) => file.name).join(", ")}</span>
                           </div>
                         )}
                         {editingUser.role === "patient" && editRemovedAttachmentIds.length > 0 && (
                           <div className="grid grid-cols-3 gap-2 rounded bg-yellow-50 px-2 py-2 text-sm">
                             <span className="text-gray-500">Files to delete</span>
-                            <span className="col-span-2 break-words text-red-500 line-through">
+                            <span className="col-span-2 min-w-0 wrap-anywhere text-red-500 line-through">
                               {(editAttachments.files ?? []).filter((file) => editRemovedAttachmentIds.includes(file.id)).map((file) => file.fileName).join(", ")}
                             </span>
                           </div>
@@ -1787,7 +1790,7 @@ export default function AdminDashboard() {
                 <span className="ml-1 text-sm font-normal text-gray-500">({userCount(shownActiveUsers.length, activeUsers.length)})</span>
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
-                <table className="w-full min-w-[600px]">
+                <table className="stack-table w-full min-w-[600px]">
                   <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
@@ -1806,15 +1809,22 @@ export default function AdminDashboard() {
                     ) : (
                       shownActiveUsers.map((u) => (
                         <tr key={u.id} className="transition hover:bg-green-50/40">
-                          <td className="px-5 py-3 text-sm text-gray-900">{u.name}</td>
-                          <td className="px-5 py-3 text-sm text-gray-600">{u.email}</td>
-                          <td className="px-5 py-3 text-sm">
+                          <td className="px-5 py-3 text-sm font-medium text-gray-900 sm:font-normal">{u.name}</td>
+                          <td className="px-5 py-3 text-sm text-gray-600">
+                            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span>{u.email}</span>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                                {u.role}
+                              </span>
+                            </span>
+                          </td>
+                          <td className="stack-hide px-5 py-3 text-sm">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                               {u.role}
                             </span>
                           </td>
                           <td className="px-5 py-3 text-sm">
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-x-4 gap-y-2 sm:gap-2">
                               <button
                                 onClick={() => setViewingUser(u)}
                                 className="text-blue-700 hover:text-blue-900 font-medium"
@@ -1851,7 +1861,7 @@ export default function AdminDashboard() {
                 <span className="ml-1 text-sm font-normal text-gray-500">({userCount(shownArchivedUsers.length, archivedUsers.length)})</span>
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
-                <table className="w-full min-w-[600px]">
+                <table className="stack-table w-full min-w-[600px]">
                   <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
@@ -1871,18 +1881,25 @@ export default function AdminDashboard() {
                     ) : (
                       shownArchivedUsers.map((u) => (
                         <tr key={u.id} className="hover:bg-amber-50 opacity-80">
-                          <td className="px-5 py-3 text-sm text-gray-700">{u.name}</td>
-                          <td className="px-5 py-3 text-sm text-gray-500">{u.email}</td>
-                          <td className="px-5 py-3 text-sm">
+                          <td className="px-5 py-3 text-sm font-medium text-gray-700 sm:font-normal">{u.name}</td>
+                          <td className="px-5 py-3 text-sm text-gray-500">
+                            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span>{u.email}</span>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium opacity-70 ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                                {u.role}
+                              </span>
+                            </span>
+                          </td>
+                          <td className="stack-hide px-5 py-3 text-sm">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
                               {u.role}
                             </span>
                           </td>
-                          <td className="px-5 py-3 text-sm text-gray-500">
+                          <td data-label="Archived on" className="px-5 py-3 text-sm text-gray-500">
                             {u.archivedAt ? new Date(u.archivedAt).toLocaleDateString() : "—"}
                           </td>
                           <td className="px-5 py-3 text-sm">
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-x-4 gap-y-2 sm:gap-2">
                               <button
                                 onClick={() => handleRestoreUser(u)}
                                 className="text-green-700 hover:text-green-900 font-medium"
@@ -2173,7 +2190,7 @@ export default function AdminDashboard() {
                 Currently Assigned Patients ({assignedPatients.length})
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
-                <table className="w-full min-w-[600px]">
+                <table className="stack-table w-full min-w-[600px]">
                   <thead className="sticky top-0 border-b border-gray-100 bg-white">
                     <tr>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Patient</th>
@@ -2194,7 +2211,7 @@ export default function AdminDashboard() {
                         <tr key={patient.id}>
                           <td className="px-5 py-3 text-sm font-medium text-gray-900">{patient.name}</td>
                           <td className="px-5 py-3 text-sm text-gray-600">{patient.email}</td>
-                          <td className="px-5 py-3 text-sm text-gray-900">
+                          <td data-label="Assigned therapist" className="px-5 py-3 text-sm text-gray-900">
                             {patient.therapistId ? getTherapistName(patient.therapistId) : "Unassigned"}
                           </td>
                           <td className="px-5 py-3 text-sm">
@@ -2222,7 +2239,7 @@ export default function AdminDashboard() {
                 {assignHistory.length === 0 ? (
                   <p className="px-6 py-6 text-sm text-gray-500">No assignment actions yet this session.</p>
                 ) : (
-                  <table className="w-full min-w-[520px]">
+                  <table className="stack-table w-full min-w-[520px]">
                     <thead className="sticky top-0 border-b border-gray-100 bg-white">
                       <tr>
                         <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Action</th>
@@ -2602,7 +2619,10 @@ function usePatientAttachments(patientId: string | null) {
   return { files, error };
 }
 
-/** Deletes the given files and returns the names of any that could not be deleted. */
+/**
+ * Moves the given files to Recently Deleted and returns, for any that could
+ * not be, its name with the server's reason.
+ */
 async function deletePatientAttachments(patientId: string, files: StoredAttachment[]) {
   const failed: string[] = [];
   for (const file of files) {
@@ -2611,7 +2631,10 @@ async function deletePatientAttachments(patientId: string, files: StoredAttachme
         `/api/users/${encodeURIComponent(patientId)}/attachments/${file.id}`,
         { method: "DELETE" },
       );
-      if (!response.ok) failed.push(file.fileName);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        failed.push(data.error ? `${file.fileName} (${data.error})` : file.fileName);
+      }
     } catch {
       failed.push(file.fileName);
     }
@@ -2676,7 +2699,7 @@ function PatientAttachmentList({
             })}
           </ul>
           {removedIds.length > 0 && (
-            <p className="mt-2 text-xs text-amber-800">Crossed-out files are deleted when you save changes.</p>
+            <p className="mt-2 text-xs text-amber-800">Crossed-out files move to Recently Deleted when you save changes.</p>
           )}
         </>
       )}
@@ -2772,7 +2795,7 @@ function UserProfilePreview({ user, onClose }: { user: User; onClose: () => void
                         <li key={file.id} className="break-all py-2 text-sm text-gray-800">{file.fileName}</li>
                       ))}
                     </ul>
-                    <p className="mt-2 text-xs text-gray-500">Only the patient and their assigned therapist can open these files.</p>
+                    <p className="mt-2 text-xs text-gray-500">Only the patient and their assigned therapist can open these files. The patient can view them, but not change them, on their own View Profile.</p>
                   </>
                 )
               }
@@ -3073,6 +3096,14 @@ function AdminCameraIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 14c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/>
+    </svg>
+  );
+}
+
+function AdminBinIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zm2.46-7.12 1.41-1.41L12 12.59l2.12-2.12 1.41 1.41L13.41 14l2.12 2.12-1.41 1.41L12 15.41l-2.12 2.12-1.41-1.41L10.59 14l-2.13-2.12zM15.5 4l-1-1h-5l-1 1H5v2h14V4z"/>
     </svg>
   );
 }

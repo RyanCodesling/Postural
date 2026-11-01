@@ -70,6 +70,16 @@ export default function AppShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmLogout, loggingOut]);
+
+  // The menu drawer closes with Escape as well as by clicking outside it.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
   const itemClass = (active: boolean) =>
     `group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide transition ${
       active
@@ -111,13 +121,13 @@ export default function AppShell({
       style={{ colorScheme: "light" }}
     >
       {drawerOpen && (
-        <div className="fixed inset-0 z-30 bg-black/40 md:hidden print:hidden" onClick={() => setDrawerOpen(false)} />
+        <div className="fixed inset-0 z-30 bg-black/40 print:hidden" onClick={() => setDrawerOpen(false)} />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-56 transform flex-col bg-[#e6f0e8] px-3 pb-16 pt-6 transition-transform duration-200 print:hidden md:w-52 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-56 transform flex-col bg-[#e6f0e8] px-3 pb-16 pt-6 transition-transform duration-200 print:hidden ${
           drawerOpen ? "translate-x-0" : "-translate-x-full"
-        } md:translate-x-0`}
+        }`}
       >
         <div className="mb-6 flex shrink-0 items-center gap-2 px-3">
           <Image src={logo} alt="ACC Bacoor" width={64} height={64} className="h-8 w-8 shrink-0 rounded-full" />
@@ -141,12 +151,12 @@ export default function AppShell({
         </button>
       </aside>
 
-      <div className="md:pl-52 print:pl-0">
+      <div>
         <header className="sticky top-0 z-20 flex items-center gap-2 bg-white px-3 py-3 shadow-sm print:hidden sm:gap-3 sm:px-6">
           <button
             type="button"
             aria-label="Open menu"
-            className="shrink-0 rounded-lg border border-green-200 px-2.5 py-2 text-sm text-green-800 sm:px-3 md:hidden"
+            className="shrink-0 rounded-lg border border-green-200 px-2.5 py-2 text-sm text-green-800 sm:px-3"
             onClick={() => setDrawerOpen(true)}
           >
             ☰

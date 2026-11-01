@@ -12,6 +12,7 @@ import {
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { deleteExerciseVideoFile } from "@/lib/exercises/customVideoStorage";
+import { binnedExerciseVideos, eraseExerciseVideoContents } from "@/lib/deletedItems";
 import { exerciseVideoFileFromRow, parseYouTubeVideoId } from "@/lib/exercises/customVideo";
 
 type AuthenticatedUser = NonNullable<Awaited<ReturnType<typeof getAuthenticatedUser>>>;
@@ -87,14 +88,9 @@ export async function PUT(
     }
     if (youtubeVideoId === undefined) return NextResponse.json({ exercise });
 
-    const changed = await setExerciseYouTubeVideo(id, youtubeVideoId);
+    // The replaced video, captured under the row lock, goes to Recently Deleted.
+    const changed = await setExerciseYouTubeVideo(id, youtubeVideoId, authenticatedUser.id);
     if (!changed) return NextResponse.json({ error: "Exercise not found" }, { status: 404 });
-    // The replaced upload, captured under the row lock, is no longer used.
-    if (changed.previousVideo) {
-      await deleteExerciseVideoFile(id, changed.previousVideo.mimeType, changed.previousVideo.fileName).catch((error) =>
-        console.error(`Could not remove a replaced exercise video for ${id}:`, error),
-      );
-    }
     return NextResponse.json({ exercise: changed.exercise });
   } catch (error) {
     if (isMissingColumnError(error)) {
@@ -183,6 +179,8 @@ export async function DELETE(
     // ago when its video upload failed. Only a never-archived exercise from
     // the last ten minutes with no history qualifies, so this is not a way for
     // a therapist to permanently delete an established exercise.
+    // Guide videos of this exercise in Recently Deleted go when it does.
+    const binned = await binnedExerciseVideos(id);
     if (request.nextUrl.searchParams.get("discardNew") === "true") {
       const result = await discardNewExercise(id);
       if (result === "not-new") {
@@ -196,6 +194,7 @@ export async function DELETE(
       }
       const video = exerciseVideoFileFromRow(existing);
       if (video) await deleteExerciseVideoFile(id, video.mimeType, video.fileName).catch(() => undefined);
+      await eraseExerciseVideoContents(binned);
       return NextResponse.json({ success: true });
     }
 
@@ -230,6 +229,7 @@ export async function DELETE(
       if (video) await deleteExerciseVideoFile(id, video.mimeType, video.fileName).catch((error) =>
         console.error(`Could not remove the video file of deleted exercise ${id}:`, error),
       );
+      await eraseExerciseVideoContents(binned);
       return NextResponse.json({ success: true });
     }
 

@@ -3,6 +3,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* A table that shows each row as a small card on a phone, each cell under its
+   column name (the cell's data-label), so nothing has to scroll sideways. */
+/* Shown only inside a stacked table on a phone, e.g. a role badge beside an email. */
+table.stack-table .stack-only { display: none; }
+
+@media (max-width: 39.99rem) {
+  table.stack-table { min-width: 0 !important; }
+  table.stack-table .stack-only { display: inline-block; }
+  table.stack-table td.stack-hide { display: none; }
+  table.stack-table thead { display: none; }
+  table.stack-table, table.stack-table tbody, table.stack-table tr, table.stack-table td { display: block; width: 100%; }
+  table.stack-table tr { padding: 0.75rem 0; }
+  table.stack-table td { padding: 0.125rem 1rem !important; text-align: left !important; overflow-wrap: anywhere; }
+  table.stack-table td:last-child { padding-top: 0.5rem !important; }
+  table.stack-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: #6b7280;
+  }
+}
+
 
 :root {
   --background: #ffffff;

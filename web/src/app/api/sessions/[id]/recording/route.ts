@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { recordingAccess } from "@/lib/recording/access";
+import { binSessionVideo } from "@/lib/deletedItems";
+import { DeletedItemsBinUnavailableError } from "@/lib/db";
 import {
-  deleteRecording,
   finishPart,
   overlayCoverage,
   readManifest,
@@ -76,13 +77,24 @@ export async function POST(request: NextRequest, { params }: Context) {
   return NextResponse.json({ error: "action must be start or finish" }, { status: 400 });
 }
 
-// DELETE /api/sessions/[id]/recording — the owning patient removes every part.
+// DELETE /api/sessions/[id]/recording — the owning patient moves the video,
+// every part, to Recently Deleted, where only an admin can restore it.
 export async function DELETE(request: NextRequest, { params }: Context) {
-  const access = await recordingAccess(await getAuthenticatedUser(request), (await params).id);
+  const user = await getAuthenticatedUser(request);
+  const access = await recordingAccess(user, (await params).id);
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status });
   if (access.role !== "owner") {
     return NextResponse.json({ error: "Only the patient can delete this video." }, { status: 403 });
   }
-  await deleteRecording(access.sessionId);
+  try {
+    if (!(await binSessionVideo(access.sessionId, user!.id, user!.id))) {
+      return NextResponse.json({ error: "This session has no video." }, { status: 404 });
+    }
+  } catch (error) {
+    if (error instanceof DeletedItemsBinUnavailableError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
+    throw error;
+  }
   return NextResponse.json({ success: true });
 }

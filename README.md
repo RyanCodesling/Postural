@@ -25,6 +25,13 @@
 - Added a View button to Manage Users' Active Users, showing a read-only profile with what the Add User form collects; attached files are listed by name and cannot be opened
 - Saved the admin's attached file additions and deletions only on Save Changes or Add User, naming each file in the Confirm Edit and Confirm New User windows
 - Added a "How to add a video" guide to every custom exercise's Guide video field, with steps for attaching a video file and for getting a YouTube embed code, shown with screenshots of YouTube and the form
+- Let patients view, but not add, change, or delete, the files the admin or their therapist attached, on their own View Profile after entering their password
+- Made the side navigation a ☰ menu on every screen, PC windows, tablets, and phones alike, closing when a page is picked, outside it is clicked, or Escape is pressed
+- Fixed logging in sometimes returning to an empty login form even with the right email and password
+- Added a Recently Deleted page for admins: session videos a patient deleted, attached files an admin or therapist deleted, and guide videos removed or replaced on a custom exercise are kept there until the admin restores them or deletes them for good
+- Fitted the admin pages to phones in portrait: tables show each row as a small card instead of scrolling sideways, user cards read name, email with the role beside it, then the actions, and long names and emails wrap instead of overlapping
+- Replaced the browser's confirm box for deleting a session video with the app's own delete confirmation window
+- Kept the notifications panel fully on screen on phones in portrait, under the header
 
 ### *web\src\app\page.tsx*
 
@@ -127,16 +134,67 @@
 - Pointed the YouTube box's hint to the guide
 - Kept tour screenshots in proportion when a tall one is shrunk to fit, which had left blank space beside it in every tour
 
+### *web\src\app\(app)\dashboard\admin\page.tsx* and *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*
+
 - Added View to each Active Users row, opening the patient's or therapist's View Profile layout read-only, without Change Password, showing the names, email, date of birth, age, gender, and the patient's clinical information and file names or the therapist's specialization
 - Listed attached files by name only, noting that only the patient and their therapist can open them
 - Changed the Edit form's file Delete to cross the file out with an Undo, deleting it only on Confirm & Save Changes; new files are uploaded only then too
 - Listed "Files to add" and "Files to delete" by name in Confirm Edit and "Files to add" in Confirm New User
 - Added the View action and the save-first rule to the Manage Users tour and retook its Active Users screenshot
 
+### *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\app\(app)\dashboard\_components\PatientFileViewer.tsx*, and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Added Attached Files under Account Information on the patient's View Profile, listing each file attached by the admin or their therapist with a View button and no add, change, or delete controls
+- Opened a file only after the patient re-enters their password, showing an image or PDF and offering other documents as a download, locked again when the window closes
+- Relied on the existing server checks: a patient can open only their own files and is refused when uploading or deleting
+- Moved the password check and file preview into PatientFileViewer.tsx, shared by the patient's View Profile and the therapist's Patient Profile
+- Added an Attached files step to the patient's View Profile tour, and noted in the admin's View window and the Manage Users tour that the patient can view the files on their own View Profile
+
 ### *AUTHENTICATION_SETUP.md*, *deploy\server\README.md*, and *deploy\server\02_app_db.sh*
 
 - Added scripts\user_presence_pg.sql to the SQL order and to a new server's setup, and noted the one command an existing server needs
 - Noted running scripts\drop_therapist_id_num_pg.sql once, after a backup, on a database created before this update
+- Added scripts\deleted_items_pg.sql to the SQL order, to a new server's setup, and to the existing-server notes, and added the missing scripts\patient_image_attachments_pg.sql to a new server's setup
+
+### *web\src\app\(app)\dashboard\_components\AppShell.tsx* and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Made the side navigation a ☰ menu at the top left on every screen, PC windows included, sliding in over the page, so pages use the full window width
+- Closed the menu when a page is picked, when the dimmed page beside it is clicked, or when Escape is pressed
+- Changed the How to Use text from "the menu on the left" to the ☰ menu button, and told users to open the ☰ menu first in the Log Out and Camera steps
+- Kept the dashboard pages' own width-based layouts and the camera page's side panels as they were
+
+### *web\src\lib\AuthContext.tsx* and *web\src\app\(auth)\login\page.tsx*
+
+- Fixed a race on the login page: the page-load check of who is signed in could answer "nobody" after a successful login and send the user back to an empty form; a login or logout now makes that earlier answer ignored
+- Kept Log In disabled until the page's script is running, a split second at most, since an earlier press reloaded the page and emptied the form, and made the form post so a too-early press never puts the password in the address bar
+
+### *web\src\lib\deletedItems.ts*, *web\src\app\api\admin\deleted-items*, *web\src\app\(app)\dashboard\admin\RecentlyDeletedPanel.tsx*, *web\src\lib\db.ts*, *web\src\lib\recording\storage.ts*, and *scripts\deleted_items_pg.sql*
+
+- Added scripts\deleted_items_pg.sql, which adds a deleted_items table and marks attached files as deleted instead of removing them, and gives the app's database user access to the new table
+- Moved a patient's deleted session video into a deleted-session-<id>-<time> folder beside the live ones instead of erasing it
+- Hid an attached file deleted by the admin or a therapist everywhere, including from the patient, while keeping it in the database
+- Kept a custom exercise's guide video, uploaded file or YouTube video, when it is removed or replaced; deleting the exercise for good still deletes its guide videos
+- Added Recently Deleted to the admin's menu, listing what was deleted, whose it is, who deleted it, and when, with filters by kind and a search box; the contents cannot be opened there
+- Added Restore, which puts the item back and notifies the patient and their therapist, or for a guide video the exercise's creator; a restored guide video becomes the exercise's video again and the one it replaces moves to Recently Deleted
+- Added Delete for good, which removes the item from the system after a confirmation noting that copies in earlier nightly backups remain
+- Removed nothing automatically; until the script runs, deleting session videos and attached files is refused so nothing is lost, and the admin's page says the script is needed
+- Showed the server's reason when the admin's edit form cannot delete a file
+- Changed the patient's, therapist's, and admin's delete messages to say the item goes to Recently Deleted, and added a Recently Deleted tour
+
+### *web\src\app\globals.css*, *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\dashboard\admin\RecentlyDeletedPanel.tsx*, *web\src\app\(app)\dashboard\admin\UserStatusPanel.tsx*, and *web\src\app\(app)\dashboard\_components\rosterStatus.tsx*
+
+- Added a `stack-table` rule that shows a table's rows as small cards on screens narrower than 640 px, and used it for Active Users, Archived Users, Currently Assigned Patients, Assignment History, and Recently Deleted
+- Showed Active and Archived Users on phones as the name, then the email with the role badge beside it, then a small space and View, Edit, Archive or Restore, Delete; the badge drops onto the next line, flush left, when a long email leaves no room
+- Labelled only values that are unclear on their own, such as "Archived on:", "Assigned therapist:", and "Deleted by:", on the same line as the value
+- Put the Add User and Edit User forms' First, Middle, and Last name fields one per row on phones
+- Wrapped long values, such as emails, inside their own column in the Confirm Edit and Confirm New User windows
+- Showed full names in the User Status panel, with the last-active time on its own line on phones
+- Kept each of the Patients card's progress counts on one line, lined up with the others when they wrap; the therapist's roster shares it
+
+### *web\src\app\(app)\dashboard\_components\SessionVideo.tsx* and *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+
+- Replaced the "localhost says" confirm box on Delete video with the app's confirmation window: a red trash icon, "Delete this session video?", the note that the clinic's admin can restore it, and Cancel and Delete; Escape or Cancel closes it without deleting
+- Pinned the notifications panel on phones to the screen, a small margin from each side and just under the header, measured when the bell is pressed so a two-line name never covers it, with its list scrolling inside so Previous and Next stay visible; tablets and PCs keep it under the bell
 
 ### *Validation*
 
@@ -148,6 +206,14 @@
 - The new routes refused missing consent, an old video notice, an invalid pain answer, an exercise not due today, a video change on a system exercise, and a therapist changing another's video, without saving anything
 - The reports test passes 15 checks, including the "(Custom Exercise)" name
 - A therapist's clinical edit and file upload and delete showed in the admin's Edit form, and the original values were restored afterwards
+- As the patient, at 1366 px and on a 375 px phone, Attached Files listed the file with no add or delete controls, refused a wrong password, and opened the file with the right one; a patient's upload and delete were refused (403) and the file count stayed the same; the therapist's file viewer still opened files, and all 50 patient tour steps fit
+- In PC windows at 1920, 1366, 1280, 1200, 1024, 800, and 390 px and touch tablets at 1366 and 768 px, the ☰ menu opened, closed when the dimmed page was clicked, and closed with Escape, and no page was wider than the screen; every How to Use step for the three roles fit at PC sizes (66 admin, 64 therapist, 50 patient) and as a touch tablet
+- With the page-load sign-in check held back 2.5 seconds to force the race, the admin, therapist, and patient logins each reached their dashboard, and five normal logins per role all did
+- At 360 and 375 px Active Users showed one role badge per user beside the email, and at 1366 px the table with its Role column, with nothing scrolling sideways
+- As the patient at 1366 and 375 px, Delete video opened the app's window instead of the browser's box, and Escape and Cancel closed it with no delete sent and the video kept
+- For the patient, therapist, and admin at 360×740, 375×667, 414×896, 768×1024, and 1366×768, the notifications panel stayed inside the screen and below the header
+- Before the script ran, the admin's page asked for it and a delete was refused with the file kept; afterwards, a test file deleted by the therapist was hidden from the patient and refused when opened, restored with both notified, then deleted for good; session 25's video, deleted by the patient, went to its renamed folder and came back on Restore with both notified; Arm Raises' replaced YouTube video was restored and the one replacing it moved to Recently Deleted; the admin tours, Recently Deleted included, fit on desktop and touch tablets
+- At 360, 375, and 414 px, a check of every admin page found nothing wider than the screen, nothing scrolling sideways, and no overlapping text; at 375 px the same held for the Add User, Confirm New User, View, Edit, Confirm Edit, Add Exercise, Edit Exercise, and Unassign windows, and for Recently Deleted holding a long-named test file; the admin tours still fit on desktop
 - Both tabs of the video guide fit the screen with every screenshot loaded on the therapist's form at 1280×800, the admin's at 1366×768, and a 375 px phone, and every How to Use step for the three roles still fit after the screenshot change
 - As the admin, View showed a patient and a therapist read-only with no links, and fit a 375 px screen; marking a file for deletion and choosing a new one sent nothing until Confirm & Save Changes, and saving a test file then deleting it left the patient's own file untouched
 
@@ -163,6 +229,11 @@
 - A therapist who leaves the app in a background tab shows offline after 2 minutes
 - The Demo Clock page and its menu item remain until they are removed before deployment
 - The layouts were checked with phone and tablet emulation, not on real devices
+- The Log Out and Camera tour screenshots were taken when the menu was always open, so they show its contents as they used to look
+- A running `npm run dev` sometimes keeps serving an older globals.css after it changes; restart it once if the menu or phone layouts look unchanged
+- Before Recently Deleted works on the server, scripts\deleted_items_pg.sql must be run once as the database owner
+- Delete for good on a session video was not tried, so as not to erase a real recording
+- Items in Recently Deleted keep using disk and database space until an admin deletes them for good, and copies stay in nightly backups until those are removed
 
 ---
 
@@ -3361,9 +3432,9 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
 - Fully rewrote Patient Profile page — removed all localStorage (admin_users, admin_exercises, patient_exercises, exercise_templates, patient_sessions keys)
 - Fetches patient info from `GET /api/users/[id]` and exercises from `GET /api/patient-exercises?patientId=` in parallel
-- Shows Personal Information: Full Name, Age, Email, Progress Status badge, Assigned Specialist name
+- Shows Personal Information: Full Name, Age, Email, Progress Status badge, Assigned Therapist name
 - Progress Status is derived from exercise statuses (not started / in progress / progressing / completed)
-- Assigned Specialist name is joined from the therapist's row in the users table
+- Assigned Therapist name is joined from the therapist's row in the users table
 - Ongoing Exercises section: exercises with status `pending` or `in_progress`, color-coded badge, View Exercise button
 - Finished Exercises section: exercises with status `completed`, green Completed badge
 - Sessions Record section: empty state (no sessions table yet)

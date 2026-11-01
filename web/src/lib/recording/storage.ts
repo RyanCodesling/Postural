@@ -204,6 +204,44 @@ export function deleteRecording(sessionId: number): Promise<void> {
   return withLock(sessionId, () => rm(sessionDir(sessionId), { recursive: true, force: true }));
 }
 
+// Recently Deleted: a deleted video's folder is renamed, beside the live ones,
+// so an admin can put it back. Only these folder names are ever restored or
+// erased, never a path taken from elsewhere.
+const BIN_FOLDER = /^deleted-session-(\d+)-(\d+)$/;
+
+/** Moves a session's video aside for Recently Deleted; null when it has none. */
+export function moveRecordingToBin(sessionId: number): Promise<string | null> {
+  return withLock(sessionId, async () => {
+    if (!(await readManifest(sessionId))) return null;
+    const folder = `deleted-session-${sessionId}-${Date.now()}`;
+    await rename(sessionDir(sessionId), path.join(recordingsRoot(), folder));
+    return folder;
+  });
+}
+
+/** Puts a binned video back; "occupied" when the session has a video again. */
+export function restoreRecordingFromBin(sessionId: number, folder: string): Promise<"restored" | "occupied" | "missing"> {
+  const match = BIN_FOLDER.exec(folder);
+  if (!match || Number(match[1]) !== sessionId) return Promise.resolve("missing");
+  return withLock(sessionId, async () => {
+    if (await readManifest(sessionId)) return "occupied";
+    try {
+      await stat(path.join(recordingsRoot(), folder));
+    } catch {
+      return "missing";
+    }
+    await rm(sessionDir(sessionId), { recursive: true, force: true });
+    await rename(path.join(recordingsRoot(), folder), sessionDir(sessionId));
+    return "restored";
+  });
+}
+
+/** Erases a binned video for good. */
+export async function eraseBinnedRecording(folder: string): Promise<void> {
+  if (!BIN_FOLDER.test(folder)) throw new Error("Invalid deleted recording folder");
+  await rm(path.join(recordingsRoot(), folder), { recursive: true, force: true });
+}
+
 /** The stored file of one part, for streaming. */
 export async function openPart(sessionId: number, index: number) {
   const manifest = await readManifest(sessionId);

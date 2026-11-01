@@ -35,11 +35,12 @@ export function rosterStatus(p: RosterPatient): { label: string; classes: string
 /** Completed over due, with any missed exercises or pain stops beside it. */
 export function RosterProgress({ patient: p }: { patient: RosterPatient }) {
   return (
-    <>
-      {p.dueCount > 0 ? `${p.completedCount}/${p.dueCount}` : "—"}
-      {p.missedCount > 0 && <span className="ml-2 text-xs text-amber-600">{p.missedCount} missed</span>}
-      {p.painStoppedCount > 0 && <span className="ml-2 text-xs font-medium text-red-600">{p.painStoppedCount} pain stop</span>}
-    </>
+    // Each count keeps to one line and lines up with the others when they wrap.
+    <span className="inline-flex flex-wrap items-baseline gap-x-2">
+      <span>{p.dueCount > 0 ? `${p.completedCount}/${p.dueCount}` : "—"}</span>
+      {p.missedCount > 0 && <span className="whitespace-nowrap text-xs text-amber-600">{p.missedCount} missed</span>}
+      {p.painStoppedCount > 0 && <span className="whitespace-nowrap text-xs font-medium text-red-600">{p.painStoppedCount} pain stop</span>}
+    </span>
   );
 }
 

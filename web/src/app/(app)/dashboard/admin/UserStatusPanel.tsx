@@ -93,12 +93,12 @@ export default function UserStatusPanel({
               </li>
             ) : (
               shown.map((user) => (
-                <li key={user.id} className="flex items-center gap-3 px-2 py-2.5">
+                <li key={user.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2.5 sm:flex-nowrap">
                   <span
                     className={`h-2.5 w-2.5 shrink-0 rounded-full ${user.online ? "bg-green-500 ring-4 ring-green-100" : "bg-gray-300"}`}
                     aria-hidden
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">{user.name}</span>
+                  <span className="min-w-0 flex-1 break-words text-sm font-medium text-gray-800">{user.name}</span>
                   <span
                     className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
                       user.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"
@@ -106,7 +106,7 @@ export default function UserStatusPanel({
                   >
                     {user.role === "therapist" ? "Therapist" : "Patient"}
                   </span>
-                  <span className={`w-36 shrink-0 text-right text-xs ${user.online ? "font-semibold text-green-700" : "text-gray-500"}`}>
+                  <span className={`w-full shrink-0 pl-5.5 text-xs sm:w-36 sm:pl-0 sm:text-right ${user.online ? "font-semibold text-green-700" : "text-gray-500"}`}>
                     {describePresence(user, now)}
                   </span>
                 </li>

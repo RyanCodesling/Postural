@@ -122,6 +122,7 @@ export function SessionVideoPlayer({
   const [mediaDurationMs, setMediaDurationMs] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
   const [overlays, setOverlays] = useState<Record<number, OverlayFrame[] | "loading" | "error">>({});
@@ -339,24 +340,62 @@ export function SessionVideoPlayer({
           <button
             type="button"
             disabled={deleting}
-            onClick={async () => {
-              if (!window.confirm("Delete this session video? This cannot be undone.")) return;
-              setDeleting(true);
-              setDeleteError(false);
-              try {
-                await onDelete();
-              } catch (error) {
-                console.error("Video delete failed:", error);
-                setDeleteError(true);
-              } finally {
-                setDeleting(false);
-              }
-            }}
+            onClick={() => setConfirmDelete(true)}
             className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
             {deleting ? "Deleting…" : "Delete video"}
           </button>
           {deleteError && <span role="alert" className="text-xs text-red-600">The video could not be deleted.</span>}
+        </div>
+      )}
+      {onDelete && confirmDelete && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 print:hidden"
+          role="presentation"
+          onKeyDown={(event) => { if (event.key === "Escape" && !deleting) setConfirmDelete(false); }}
+        >
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-video-title" className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl">
+            <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-red-100" aria-hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+              </svg>
+            </div>
+            <h2 id="delete-video-title" className="mb-1 text-lg font-bold text-gray-900">Delete this session video?</h2>
+            <p className="mb-5 text-sm text-gray-600">
+              It is removed from your progress. If you need it back, ask the clinic: the admin can restore it.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  setDeleteError(false);
+                  try {
+                    await onDelete();
+                  } catch (error) {
+                    console.error("Video delete failed:", error);
+                    setDeleteError(true);
+                  } finally {
+                    setDeleting(false);
+                    setConfirmDelete(false);
+                  }
+                }}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:bg-gray-300"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </section>
         </div>
       )}
     </div>

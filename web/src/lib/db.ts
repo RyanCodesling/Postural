@@ -592,11 +592,12 @@ export interface PatientAttachment {
 }
 
 export async function listPatientAttachments(patientId: string) {
+  const live = (await hasDeletedItemsBin()) ? "AND deleted_at IS NULL" : "";
   const result = await pool.query(
     `SELECT id, file_name AS "fileName", mime_type AS "mimeType",
             octet_length(data)::integer AS size, created_at AS "createdAt"
        FROM patient_image_attachments
-      WHERE patient_id = $1
+      WHERE patient_id = $1 ${live}
       ORDER BY created_at DESC, id DESC`,
     [patientId],
   );
@@ -628,23 +629,79 @@ export async function createPatientAttachments(
 }
 
 export async function getPatientAttachment(attachmentId: number) {
+  const live = (await hasDeletedItemsBin()) ? "AND deleted_at IS NULL" : "";
   const result = await pool.query(
     `SELECT id, patient_id AS "patientId", file_name AS "fileName",
             mime_type AS "mimeType", data, created_at AS "createdAt"
        FROM patient_image_attachments
-      WHERE id = $1`,
+      WHERE id = $1 ${live}`,
     [attachmentId],
   );
   return result.rows[0] ?? null;
 }
 
-/** Deletes one of a patient's attached files; false when it is not theirs or is already gone. */
-export async function deletePatientAttachment(patientId: string, attachmentId: number): Promise<boolean> {
+/**
+ * Moves one of a patient's attached files to Recently Deleted, where only an
+ * admin can restore it or delete it for good. False when it is not theirs or
+ * is already deleted. Refuses, rather than losing the file, until
+ * scripts/deleted_items_pg.sql has been run.
+ */
+export async function deletePatientAttachment(patientId: string, attachmentId: number, deletedBy: string): Promise<boolean> {
+  if (!(await hasDeletedItemsBin())) throw new DeletedItemsBinUnavailableError();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE patient_image_attachments SET deleted_at = NOW(), deleted_by = $3
+        WHERE id = $1 AND patient_id = $2 AND deleted_at IS NULL
+        RETURNING file_name`,
+      [attachmentId, patientId, deletedBy],
+    );
+    if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query(
+      `INSERT INTO deleted_items (kind, patient_id, attachment_id, label, deleted_by)
+       VALUES ('patient_file', $1, $2, $3, $4)`,
+      [patientId, attachmentId, result.rows[0].file_name, deletedBy],
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Recently Deleted needs scripts/deleted_items_pg.sql before anything can be deleted into it. */
+export class DeletedItemsBinUnavailableError extends Error {
+  constructor() {
+    super("Recently Deleted needs scripts/deleted_items_pg.sql to be run on the database first.");
+  }
+}
+
+let deletedItemsBinReady: boolean | null = null;
+let deletedItemsBinCheckedAt = 0;
+
+/**
+ * Whether scripts/deleted_items_pg.sql has run: the deleted_items table and
+ * the attachments' deleted_at column both exist. A missing result is
+ * rechecked each minute so running the script needs no restart.
+ */
+export async function hasDeletedItemsBin(): Promise<boolean> {
+  if (deletedItemsBinReady) return true;
+  if (deletedItemsBinReady === false && Date.now() - deletedItemsBinCheckedAt < 60_000) return false;
   const result = await pool.query(
-    "DELETE FROM patient_image_attachments WHERE id = $1 AND patient_id = $2",
-    [attachmentId, patientId],
+    `SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'deleted_items')::int
+           + (SELECT COUNT(*) FROM information_schema.columns
+               WHERE table_name = 'patient_image_attachments' AND column_name = 'deleted_at')::int AS count`,
   );
-  return (result.rowCount ?? 0) > 0;
+  deletedItemsBinReady = Number(result.rows[0]?.count) === 2;
+  deletedItemsBinCheckedAt = Date.now();
+  return deletedItemsBinReady;
 }
 
 export type PermanentUserDeletionBlocker =
@@ -927,14 +984,18 @@ export function isMissingColumnError(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "42703";
 }
 
-/** Records an uploaded file as the exercise's video, replacing a YouTube video. */
-export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string) {
+/**
+ * Records an uploaded file as the exercise's video, replacing a YouTube video.
+ * The video it replaces goes to Recently Deleted; its file stays on disk.
+ */
+export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string, changedBy?: string) {
+  const binReady = await hasDeletedItemsBin();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // Serialize metadata publication, including the exact file it supersedes.
     const previous = await client.query(
-      `SELECT video_mime_type, video_file_name FROM exercises
+      `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
@@ -947,6 +1008,7 @@ export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMi
         WHERE id = $1 RETURNING *`,
       [id, mimeType, fileName],
     );
+    if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
     await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
   } catch (error) {
@@ -959,15 +1021,17 @@ export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMi
 
 /**
  * Points a custom exercise at a YouTube video, or at no video (null), from its
- * edit form. Any uploaded file it had is returned so the caller can delete it;
- * the row lock keeps a concurrent upload from being the one removed.
+ * edit form. The video it replaces goes to Recently Deleted, an uploaded file
+ * staying on disk; the row lock keeps a concurrent upload from being the one
+ * recorded.
  */
-export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null) {
+export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null, changedBy?: string) {
+  const binReady = await hasDeletedItemsBin();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const previous = await client.query(
-      `SELECT video_mime_type, video_file_name FROM exercises
+      `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
@@ -980,6 +1044,7 @@ export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string
         WHERE id = $1 RETURNING *`,
       [id, youtubeVideoId],
     );
+    if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
     await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
   } catch (error) {
@@ -988,6 +1053,27 @@ export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string
   } finally {
     client.release();
   }
+}
+
+/** Puts the guide video an exercise just stopped using, if any, in Recently Deleted. */
+async function binReplacedExerciseVideo(
+  client: PoolClient,
+  exerciseId: string,
+  previous: { name: string; video_mime_type: unknown; video_file_name: unknown; youtube_video_id: unknown },
+  deletedBy: string | undefined,
+): Promise<void> {
+  const file = exerciseVideoFileFromRow(previous);
+  const details = file
+    ? { source: "file", mimeType: file.mimeType, fileName: file.fileName }
+    : typeof previous.youtube_video_id === "string" && previous.youtube_video_id
+      ? { source: "youtube", youtubeVideoId: previous.youtube_video_id }
+      : null;
+  if (!details) return;
+  await client.query(
+    `INSERT INTO deleted_items (kind, exercise_id, label, details, deleted_by)
+     VALUES ('exercise_video', $1, $2, $3, $4)`,
+    [exerciseId, previous.name, JSON.stringify(details), deletedBy ?? null],
+  );
 }
 
 let exerciseVideoColumnsReady: boolean | null = null;

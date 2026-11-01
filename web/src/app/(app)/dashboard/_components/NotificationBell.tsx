@@ -53,6 +53,8 @@ export default function NotificationBell() {
   const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  // Where the panel starts on a phone: just under the header, whose height grows when a long name wraps.
+  const [phoneTop, setPhoneTop] = useState(76);
   // The newest notification id already seen; null until the first load, so
   // what was there before the page opened never pops up.
   const lastSeenIdRef = useRef<number | null>(null);
@@ -295,7 +297,11 @@ export default function NotificationBell() {
 
       {/* Bell Trigger */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={(event) => {
+          const header = event.currentTarget.closest("header");
+          if (header) setPhoneTop(Math.round(header.getBoundingClientRect().bottom) + 8);
+          setIsOpen(!isOpen);
+        }}
         className="relative p-2.5 text-gray-500 hover:text-green-700 bg-white hover:bg-green-50 border border-gray-200 rounded-xl transition duration-150 focus:outline-none cursor-pointer"
         aria-label="Notifications"
       >
@@ -321,7 +327,9 @@ export default function NotificationBell() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2.5 w-[calc(100vw-2rem)] max-w-[28rem] bg-white rounded-xl shadow-xl z-50 flex flex-col">
+        // On a phone the bell is not at the screen's edge, so the panel is pinned
+        // to the screen under the header instead of to the bell.
+        <div style={{ "--bell-top": `${phoneTop}px` } as React.CSSProperties} className="fixed inset-x-3 top-(--bell-top) z-50 flex flex-col rounded-xl bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2.5 sm:w-[calc(100vw-2rem)] sm:max-w-[28rem]">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-green-50/50 rounded-t-xl">
             <span className="text-sm font-semibold text-green-800">Notifications</span>
@@ -368,7 +376,7 @@ export default function NotificationBell() {
           </div>
 
           {/* List */}
-          <div className="divide-y divide-gray-50 max-h-[24rem] overflow-y-auto scrollbar-thin">
+          <div className="divide-y divide-gray-50 max-h-[min(24rem,calc(100dvh-17rem))] overflow-y-auto scrollbar-thin sm:max-h-[24rem]">
             {notifications.length === 0 ? (
               <div className="py-8 px-4 text-center text-sm text-gray-400">{emptyText}</div>
             ) : (

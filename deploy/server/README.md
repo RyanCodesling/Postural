@@ -104,6 +104,14 @@ database created before it existed:
 `sudo -u postgres psql -d postural -f /opt/postural/app/scripts/user_presence_pg.sql`.
 Until then the panel says so and the rest of the app works as before.
 
+The admin's Recently Deleted needs `scripts/deleted_items_pg.sql` run once, after
+`patient_image_attachments_pg.sql`:
+`sudo -u postgres psql -d postural -f /opt/postural/app/scripts/deleted_items_pg.sql`.
+Until then, patients cannot delete session videos and staff cannot delete attached files,
+so nothing is lost. Deleted session videos are kept as `deleted-session-<id>-<time>`
+folders in the recordings folder, and replaced guide videos stay in the exercise-videos
+folder, until an admin deletes them for good; both are in the nightly backup.
+
 The unused therapist ID column is removed by `scripts/drop_therapist_id_num_pg.sql`, run once
 after a backup: `sudo -u postgres psql -d postural -f /opt/postural/app/scripts/drop_therapist_id_num_pg.sql`.
 The app no longer uses the column, so it works the same before and after.

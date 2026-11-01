@@ -18,6 +18,10 @@ function LoginContent() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
+  // Log In works only once the page's script is running; a press before that
+  // would reload the page and empty the form.
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
 
   useEffect(() => {
     if (searchParams.get("reset") === "success") {
@@ -57,7 +61,7 @@ function LoginContent() {
 
   return (
     <AuthFrame>
-    <form onSubmit={handleLogin} className="flex w-full flex-col gap-5">
+    <form onSubmit={handleLogin} method="post" className="flex w-full flex-col gap-5">
       <div>
         <h2 className="text-2xl font-bold text-gray-900">Welcome back</h2>
         <p className="text-sm text-gray-600">Log in to access your dashboard</p>
@@ -117,7 +121,7 @@ function LoginContent() {
 
       <button
         type="submit"
-        disabled={loading}
+        disabled={loading || !ready}
         className="w-full rounded-lg bg-green-600 py-3 text-base font-semibold tracking-wide text-white transition-colors hover:bg-green-700 disabled:bg-green-300"
       >
         {loading ? "Logging in..." : "Log In"}

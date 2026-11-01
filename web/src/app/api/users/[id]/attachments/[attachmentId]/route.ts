@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deletePatientAttachment, getPatientAttachment, getUserById, getUserRawById } from "@/lib/db";
+import { DeletedItemsBinUnavailableError, deletePatientAttachment, getPatientAttachment, getUserById, getUserRawById } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { comparePassword } from "@/lib/crypto";
 import { isPatientImageMimeType } from "@/lib/patientAttachments";
@@ -53,7 +53,7 @@ export async function POST(
   }
 }
 
-/** Admin only: deletes one of the patient's attached files, permanently. */
+/** The admin or the patient's therapist moves an attached file to Recently Deleted. */
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; attachmentId: string }> },
@@ -70,11 +70,14 @@ export async function DELETE(
       }
     }
     const attachmentId = Number(rawAttachmentId);
-    if (!Number.isInteger(attachmentId) || attachmentId < 1 || !(await deletePatientAttachment(id, attachmentId))) {
+    if (!Number.isInteger(attachmentId) || attachmentId < 1 || !(await deletePatientAttachment(id, attachmentId, user.id))) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof DeletedItemsBinUnavailableError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error("DELETE /api/users/[id]/attachments/[attachmentId] error:", error);
     return NextResponse.json({ error: "Failed to delete the file" }, { status: 500 });
   }

@@ -3,8 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
-import { PATIENT_ATTACHMENT_ACCEPT, isPatientImageMimeType } from "@/lib/patientAttachments";
+import { PATIENT_ATTACHMENT_ACCEPT } from "@/lib/patientAttachments";
+import PatientFileViewer from "../../../_components/PatientFileViewer";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
 import type { DynamicRepQuality } from "@/lib/pose/repQuality";
@@ -307,10 +307,6 @@ export default function PatientDetailPage() {
   const [deletingFile, setDeletingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [imageToView, setImageToView] = useState<PatientAttachment | null>(null);
-  const [imagePassword, setImagePassword] = useState("");
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [imagePasswordError, setImagePasswordError] = useState("");
-  const [verifyingImagePassword, setVerifyingImagePassword] = useState(false);
   const [exercises, setExercises] = useState<PatientExercise[]>([]);
   const [occurrences, setOccurrences] = useState<ReportOccurrence[]>([]);
   const [tab, setTab] = useState<PatientTab>("overview");
@@ -327,11 +323,6 @@ export default function PatientDetailPage() {
   const [sessionDetails, setSessionDetails] = useState<Record<number, SessionDetail>>({});
   const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
   const sessionsCardRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!imagePreviewUrl) return;
-    return () => URL.revokeObjectURL(imagePreviewUrl);
-  }, [imagePreviewUrl]);
 
   useEffect(() => {
     if (!patientId) return;
@@ -480,49 +471,13 @@ export default function PatientDetailPage() {
         setFilesMessage({ tone: "error", text: data.error || "The file could not be deleted." });
       } else {
         setPatientImages((current) => current.filter((file) => file.id !== fileToDelete.id));
-        setFilesMessage({ tone: "ok", text: `${fileToDelete.fileName} was deleted.` });
+        setFilesMessage({ tone: "ok", text: `${fileToDelete.fileName} was moved to Recently Deleted.` });
       }
     } catch {
       setFilesMessage({ tone: "error", text: "The file could not be deleted. Please try again." });
     } finally {
       setDeletingFile(false);
       setFileToDelete(null);
-    }
-  };
-
-  const closeImageViewer = () => {
-    setImageToView(null);
-    setImagePassword("");
-    setImagePreviewUrl(null);
-    setImagePasswordError("");
-    setVerifyingImagePassword(false);
-  };
-
-  const verifyPasswordAndViewImage = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!imageToView || !imagePassword) return;
-    setVerifyingImagePassword(true);
-    setImagePasswordError("");
-    try {
-      const response = await fetch(
-        `/api/users/${encodeURIComponent(patientId)}/attachments/${imageToView.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: imagePassword }),
-        },
-      );
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        setImagePasswordError(data.error || "Unable to open this file.");
-        return;
-      }
-      setImagePreviewUrl(URL.createObjectURL(await response.blob()));
-      setImagePassword("");
-    } catch {
-      setImagePasswordError("Unable to open this image. Please try again.");
-    } finally {
-      setVerifyingImagePassword(false);
     }
   };
 
@@ -709,7 +664,7 @@ export default function PatientDetailPage() {
           <div className="flex items-start gap-3">
             <div className="mt-0.5 shrink-0 text-green-600"><PulseIcon /></div>
             <div>
-              <p className="text-xs text-gray-500 mb-0.5">Assigned Specialist</p>
+              <p className="text-xs text-gray-500 mb-0.5">Assigned Therapist</p>
               <p className="text-sm font-semibold text-gray-900">
                 {patient.therapistName || "—"}
               </p>
@@ -849,9 +804,6 @@ export default function PatientDetailPage() {
                   type="button"
                   onClick={() => {
                     setImageToView(attachment);
-                    setImagePassword("");
-                    setImagePasswordError("");
-                    setImagePreviewUrl(null);
                   }}
                   className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 text-left transition hover:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-600"
                 >
@@ -886,7 +838,7 @@ export default function PatientDetailPage() {
           <section role="alertdialog" aria-modal="true" aria-labelledby="delete-file-title" className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl">
             <h2 id="delete-file-title" className="mb-1 text-lg font-bold text-gray-900">Delete this file?</h2>
             <p className="mb-5 break-words text-sm text-gray-600">
-              <span className="font-semibold text-gray-900">{fileToDelete.fileName}</span> will be removed from the patient&apos;s record for everyone, including the admin. This cannot be undone.
+              <span className="font-semibold text-gray-900">{fileToDelete.fileName}</span> will be removed from the patient&apos;s record and moved to the admin&apos;s Recently Deleted, where the admin can restore it if needed.
             </p>
             <div className="flex gap-3">
               <button type="button" autoFocus onClick={() => setFileToDelete(null)} disabled={deletingFile}
@@ -903,100 +855,7 @@ export default function PatientDetailPage() {
       )}
 
       {imageToView && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="presentation">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="patient-image-dialog-title"
-            className="w-full max-w-3xl rounded-xl bg-white p-5 shadow-2xl sm:p-6"
-          >
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h2 id="patient-image-dialog-title" className="text-lg font-semibold text-gray-900">
-                  Confidential patient file
-                </h2>
-                <p className="mt-1 truncate text-sm text-gray-500">{imageToView.fileName}</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeImageViewer}
-                className="shrink-0 rounded px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100"
-              >
-                Close
-              </button>
-            </div>
-            {imagePreviewUrl ? (
-              <div className="space-y-4">
-                {isPatientImageMimeType(imageToView.mimeType) ? (
-                  <Image
-                    src={imagePreviewUrl}
-                    alt={imageToView.fileName}
-                    width={1200}
-                    height={900}
-                    unoptimized
-                    className="mx-auto max-h-[70vh] w-auto max-w-full rounded-lg object-contain"
-                  />
-                ) : imageToView.mimeType === "application/pdf" ? (
-                  <iframe
-                    src={imagePreviewUrl}
-                    title={imageToView.fileName}
-                    className="h-[70vh] w-full rounded-lg border border-gray-200"
-                  />
-                ) : (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-6 text-center">
-                    <p className="mb-4 text-sm text-gray-700">This document is ready to download.</p>
-                    <a
-                      href={imagePreviewUrl}
-                      download={imageToView.fileName}
-                      className="inline-flex rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800"
-                    >
-                      Download file
-                    </a>
-                  </div>
-                )}
-                <p className="text-center text-xs text-gray-500">Close this window to lock the file again.</p>
-              </div>
-            ) : (
-              <form onSubmit={verifyPasswordAndViewImage} className="space-y-4">
-                <p className="text-sm text-gray-600">
-                  Enter your account password to open this file.
-                </p>
-                <label className="block text-sm font-medium text-gray-700" htmlFor="patient-image-password">
-                  Password
-                  <input
-                    id="patient-image-password"
-                    type="password"
-                    autoComplete="current-password"
-                    autoFocus
-                    required
-                    value={imagePassword}
-                    onChange={(event) => setImagePassword(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-green-600 focus:outline-none focus:ring-2 focus:ring-green-200"
-                  />
-                </label>
-                {imagePasswordError && (
-                  <p role="alert" className="text-sm text-red-700">{imagePasswordError}</p>
-                )}
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={closeImageViewer}
-                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={verifyingImagePassword || !imagePassword}
-                    className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:cursor-wait disabled:opacity-60"
-                  >
-                    {verifyingImagePassword ? "Verifying…" : "Verify & View"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </section>
-        </div>
+        <PatientFileViewer patientId={patientId} file={imageToView} onClose={() => setImageToView(null)} />
       )}
 
       </TabPanel>

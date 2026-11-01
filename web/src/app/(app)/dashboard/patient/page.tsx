@@ -27,6 +27,7 @@ import SessionVideo from "../_components/SessionVideo";
 import CustomExerciseVideo from "../_components/CustomExerciseVideo";
 import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
+import PatientFileViewer, { type PatientFile } from "../_components/PatientFileViewer";
 import { NEW_NOTIFICATIONS_EVENT } from "../_components/NotificationBell";
 import {
   classifyScheduleOccurrence,
@@ -590,7 +591,7 @@ export default function PatientDashboardPage() {
                   <ProfileField icon={<PersonIcon />} label="Full Name" value={patientProfile.name} />
                   <ProfileField icon={<PersonIcon />} label="Age" value={patientProfile.age != null ? `${patientProfile.age} years old` : null} />
                   <ProfileField icon={<EmailIcon />} label="Email" value={patientProfile.email} />
-                  <ProfileField icon={<PulseIcon />} label="Assigned Specialist" value={patientProfile.therapistName} />
+                  <ProfileField icon={<PulseIcon />} label="Assigned Therapist" value={patientProfile.therapistName} />
                 </div>
               )
             }
@@ -600,6 +601,7 @@ export default function PatientDashboardPage() {
                 <ProfileField label="Username" value={patientProfile?.email?.split("@")[0] ?? "—"} />
                 <ProfileField label="Account Type" value="Patient" />
                 <ProfileField label="Member Since" value={formatMemberSince(patientProfile?.createdAt ?? null)} />
+                {user?.id && <MyAttachedFiles patientId={user.id} />}
               </div>
             }
             bottomTitle="Assigned Exercises"
@@ -652,6 +654,64 @@ interface ScheduleDateGroup {
   date: string;
   label: string;
   items: PatientOccurrence[];
+}
+
+/**
+ * The files the clinic or the patient's therapist attached to the patient's
+ * record. The patient can open them, after re-entering their password, but
+ * cannot add, replace or delete them; the server refuses those for patients.
+ */
+function MyAttachedFiles({ patientId }: { patientId: string }) {
+  const [files, setFiles] = useState<PatientFile[] | null>(null);
+  const [error, setError] = useState(false);
+  const [viewing, setViewing] = useState<PatientFile | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = await response.json();
+        if (!cancelled) setFiles(Array.isArray(data.attachments) ? data.attachments : []);
+      })
+      .catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, [patientId]);
+
+  return (
+    <div id="tour-profile-files" className="border-t border-gray-100 pt-4">
+      <p className="text-xs text-gray-500">Attached Files</p>
+      {error ? (
+        <p className="mt-1 text-sm text-red-600">Unable to load your attached files.</p>
+      ) : files === null ? (
+        <p className="mt-1 text-sm text-gray-400">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="mt-1 text-sm text-gray-400">No files attached.</p>
+      ) : (
+        <>
+          <ul className="mt-2 space-y-2">
+            {files.map((file) => (
+              <li key={file.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-[#fafcfa] px-3 py-2">
+                <span className="min-w-0 break-all text-sm font-medium text-gray-800">{file.fileName}</span>
+                <button
+                  type="button"
+                  onClick={() => setViewing(file)}
+                  className="shrink-0 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800"
+                  aria-label={`View ${file.fileName}`}
+                >
+                  View
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-gray-500">
+            Added by your therapist or the clinic. You can view them; ask your therapist to add or remove a file.
+          </p>
+        </>
+      )}
+      {viewing && <PatientFileViewer patientId={patientId} file={viewing} onClose={() => setViewing(null)} />}
+    </div>
+  );
 }
 
 function formatScheduleDate(dateKey: string | null): string {

@@ -664,6 +664,7 @@ async function run() {
 
   await test("the API routes enforce consent and ownership and serve byte ranges", async () => {
     let access: any = { ok: true, sessionId: 50, role: "owner", ended: false, videoConsent: true };
+    let binnedFolder: string | null = null;
     const load = (file: string) => {
       const context: any = vm.createContext({
         exports: {}, console, Response, Headers, URL,
@@ -671,6 +672,11 @@ async function run() {
           if (name === "next/server") return { NextResponse: { json: (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200, headers: init?.headers }) } };
           if (name === "@/lib/auth-server") return { getAuthenticatedUser: async () => ({ id: "fixture", role: "patient" }) };
           if (name === "@/lib/recording/access") return { recordingAccess: async () => access };
+          if (name === "@/lib/db") return { DeletedItemsBinUnavailableError: class extends Error {} };
+          if (name === "@/lib/deletedItems") return { binSessionVideo: async (id: number) => {
+            binnedFolder = await storage.moveRecordingToBin(id);
+            return binnedFolder !== null;
+          } };
           if (name === "@/lib/recording/storage") return storage;
           if (name === "@/lib/recording/http") return { parseRange };
           if (name === "node:stream") return stream;
@@ -737,6 +743,12 @@ async function run() {
     access = { ok: true, sessionId: 50, role: "owner", ended: true, videoConsent: true };
     assert.equal((await list.DELETE(request(), params())).status, 200);
     assert.deepEqual(await (await list.GET(request(), params())).json(), { parts: [], canDelete: true }, "deleted");
+    assert(binnedFolder, "the owner deletion retains a recovery folder");
+    assert.equal(await storage.restoreRecordingFromBin(50, binnedFolder!), "restored");
+    const recovered = await file.GET(request(), params(1));
+    assert.equal(recovered.status, 200);
+    assert.deepEqual([...new Uint8Array(await recovered.arrayBuffer())], [10, 11, 12, 13, 14]);
+    await storage.deleteRecording(50); // Reset this disposable session before the next transport case.
 
     // A part the browser never closed reads as incomplete once the session has ended.
     access = { ok: true, sessionId: 50, role: "owner", ended: false, videoConsent: true };

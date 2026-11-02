@@ -69,7 +69,7 @@ async function main() {
     todayKeyPH: () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }),
     // The demo clock is off here, so the app time is the real time.
     getEffectiveNow: async () => new Date() });
-  const functions = ["insertSetEvents", "getSessionsForPatient", "getSessionDetail", "getTherapistRoster", "appendSessionReview", "SessionReviewUnavailableError"];
+  const functions = ["insertSetEvents", "getSessionsForPatient", "getSessionDetail", "getTherapistRoster", "getPatientRoster", "appendSessionReview", "SessionReviewUnavailableError"];
   vm.runInContext(transpile(extract(readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf8"), functions)), db);
   const route: any = vm.createContext({ exports: {}, console, require: (name: string) => {
     if (name === "next/server") return { NextResponse: { json: (body: any, init?: any) => new Response(JSON.stringify(body), { status: init?.status ?? 200 }) } };

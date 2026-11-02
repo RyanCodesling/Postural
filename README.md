@@ -1,5 +1,15 @@
 # Sprint Updates 
 
+## 📌 Update-11-02-26 | *RyanCodesling*
+
+- Kept the October 31 interface, tours, clinical files, manual exercise sessions and admin recovery features, while carrying forward the progress-chart exclusion for replaced attempts
+- Kept a failed manual pain stop available for a real retry, and showed saving or failure feedback until the server acknowledges it
+- Refused manual starts and completion acknowledgements for a scheduled task stopped because of pain; it waits for therapist rescheduling
+- Used the scheduled prescription consistently in manual session history and the guide, and marked a started task in progress
+- Explained that removed session videos stay in Recently Deleted until an admin restores or permanently deletes them; the updated recording notice asks again when a device remembers the older wording
+- Preserved historical consent records and restored guide videos that use older filenames
+- Updated the regression harnesses for the new callers, and added manual-session client, route and private-database lifecycle checks
+
 ## 📌 Update-10-31-26 | *Enah*
 
 - Simplified the landing page's wording without changing its design or the clinic's name, phone numbers, email, and address, and moved the progress report to the therapists' list and the daily email to the patients'

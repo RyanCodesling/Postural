@@ -1,6 +1,6 @@
 /**
- * Attached files: only an admin can delete one, only the named patient's own
- * file is deleted, the edit form lists the files with a Delete that asks
+ * Attached files: an admin or the assigned therapist can bin one, only the
+ * named patient's file is changed, the edit form's Delete asks
  * first, and the upload box asks for the patient's permission.
  *
  *   npx tsx src/lib/patientAttachmentDelete.test.ts
@@ -41,7 +41,10 @@ function attachmentRoute(user: { id: string; role: string } | null, deletes: boo
       if (name === "@/lib/db") {
         return {
           deletePatientAttachment: async (...args: unknown[]) => { calls.push(args); return deletes; },
-          getPatientAttachment: async () => null, getUserById: async () => null, getUserRawById: async () => null,
+          DeletedItemsBinUnavailableError: class extends Error {},
+          getPatientAttachment: async () => null,
+          getUserById: async () => ({ id: "patient_007", role: "patient", therapistId: "assigned_therapist" }),
+          getUserRawById: async () => null,
         };
       }
       if (name === "@/lib/crypto") return { comparePassword: () => false };
@@ -59,7 +62,7 @@ const request = () => new Request("http://localhost/api/users/patient_007/attach
 async function run() {
   console.log("\nPatient attachments: delete\n");
 
-  await test("only an admin deletes, and only the named patient's file", async () => {
+  await test("only an admin or the assigned therapist bins the named patient's file", async () => {
     for (const [user, status] of [
       [null, 401],
       [{ id: "therapist_001", role: "therapist" }, 403],
@@ -79,32 +82,46 @@ async function run() {
     const response = await ok.route.DELETE(request(), target("patient_007", "5"));
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { success: true });
-    assert.deepEqual(ok.calls, [["patient_007", 5]], "the patient and the file are both named");
+    assert.deepEqual(ok.calls, [["patient_007", 5, admin.id]], "the patient, file and deleting actor are named");
+    const therapist = attachmentRoute({ id: "assigned_therapist", role: "therapist" }, true);
+    assert.equal((await therapist.route.DELETE(request(), target("patient_007", "5"))).status, 200);
+    assert.deepEqual(therapist.calls, [["patient_007", 5, "assigned_therapist"]]);
   });
 
-  await test("the database delete matches the file and the patient", async () => {
+  await test("the database bins only the patient's matching live file, atomically", async () => {
     const source = read("./db.ts");
     const ast = ts.createSourceFile("db.ts", source, ts.ScriptTarget.Latest, true);
     const fn = ast.statements.find((n) => ts.isFunctionDeclaration(n) && n.name?.text === "deletePatientAttachment")!;
     const queries: Array<[string, unknown[]]> = [];
-    let rowCount = 1;
+    let matches = true;
+    const query = async (sql: string, values: unknown[] = []) => {
+      queries.push([sql, Array.from(values)]);
+      return { rows: sql.includes("RETURNING file_name") && matches ? [{ file_name: "fixture.pdf" }] : [] };
+    };
     const context: any = vm.createContext({
-      // Array.from copies the values out of the sandbox's realm for deepEqual.
-      exports: {}, pool: { query: async (sql: string, values: unknown[]) => { queries.push([sql, Array.from(values)]); return { rows: [], rowCount }; } },
+      exports: {}, hasDeletedItemsBin: async () => true,
+      pool: { connect: async () => ({ query, release() {} }) },
     });
     vm.runInContext(transpile(fn.getText(ast)), context);
-    assert.equal(await context.exports.deletePatientAttachment("patient_007", 5), true);
-    rowCount = 0;
-    assert.equal(await context.exports.deletePatientAttachment("patient_008", 5), false, "another patient's file is not touched");
-    assert.equal(queries[0][0], "DELETE FROM patient_image_attachments WHERE id = $1 AND patient_id = $2");
-    assert.deepEqual(queries.map(([, values]) => values), [[5, "patient_007"], [5, "patient_008"]]);
+    assert.equal(await context.exports.deletePatientAttachment("patient_007", 5, "fixture-admin"), true);
+    assert.match(queries[1][0], /WHERE id = \$1 AND patient_id = \$2 AND deleted_at IS NULL/);
+    assert.deepEqual(queries[1][1], [5, "patient_007", "fixture-admin"]);
+    assert.match(queries[2][0], /INSERT INTO deleted_items/);
+    assert.deepEqual(queries[2][1], ["patient_007", 5, "fixture.pdf", "fixture-admin"]);
+    assert.equal(queries[3][0], "COMMIT");
+    matches = false;
+    const before = queries.length;
+    assert.equal(await context.exports.deletePatientAttachment("patient_008", 5, "fixture-admin"), false);
+    assert.equal(queries.at(-1)![0], "ROLLBACK");
+    assert.equal(queries.length - before, 3, "an unmatched file never receives a bin entry");
   });
 
   await test("the edit form lists the files with a Delete that asks first; the upload asks for permission (source)", () => {
     const admin = read("../app/(app)/dashboard/admin/page.tsx");
-    assert.match(admin, /<PatientAttachmentList patientId=\{editingUser\.id\} \/>/, "listed in the edit form");
+    assert.match(admin, /<PatientAttachmentList\s+files=\{editAttachments\.files\}/, "lists the loaded patient's files");
+    assert.match(admin, /removedIds=\{editRemovedAttachmentIds\}/, "deletions stay staged until the edit is confirmed");
     assert.match(admin, /method: "DELETE"/);
-    assert.match(admin, /Delete for good\?/, "asks before deleting");
+    assert.match(admin, /Recently Deleted/, "explains recovery rather than claiming immediate erasure");
     assert.match(admin, /Upload a patient&apos;s documents only with their permission\./);
   });
 

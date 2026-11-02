@@ -58,6 +58,12 @@ assert.ok(
 );
 const clean = report([session(1, 90), session(3, 70)]);
 assert.ok(!clean.html.includes("data-held-out-note"), "no note when nothing is left out");
+const replaced = report([session(1, 90), session(2, 12, { endReason: "superseded" }), session(3, 70)]);
+assert.deepEqual(linePoints(replaced.svg), [2, 2], "replaced attempts are excluded from both report-chart lines");
+assert.ok(!replaced.svg.includes("Left 12"), "the replaced peak is not surfaced as a report point");
+assert.ok(replaced.html.includes("Replaced attempts stay in session history"));
+const replacedOnly = renderToStaticMarkup(<PatientReports sessions={[session(2, 12, { endReason: "superseded" })]} occurrences={[]} />);
+assert.ok(replacedOnly.includes("No sessions available for these charts."));
 
 // 2. Normalized press readings keep two decimals and stay apart.
 const press = (n: number, value: number) => session(n, value, { exerciseId: "ex_007", exerciseName: "Overhead Shoulder Press" });

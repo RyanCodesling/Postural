@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
           }
         : undefined,
     });
-    return NextResponse.json({ sessionId: session.id, startedAt: session.startedAt });
+    return NextResponse.json({ sessionId: session.id, startedAt: session.startedAt, runtimePrescription: session.runtimePrescription });
   } catch (error) {
     if (error instanceof SessionNotScheduledError) {
       return NextResponse.json({ error: error.message }, { status: 409 });

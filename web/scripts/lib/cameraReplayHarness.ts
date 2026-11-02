@@ -146,12 +146,17 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   context.steadinessRef = ref(globals.newSteadinessState());
   context.trackingMessageRef = ref(globals.NO_TRACKING_MESSAGE);
   context.trackingMarksRef = ref([]);
+  context.selectedExerciseRef = ref(definition.id);
+  context.assignedExercisesRef = ref([{ id: definition.id, isCustom: false }]);
   context.neckRepDebugRef = ref([]); context.neutralCalibrationSamplesRef = ref([]);
   context.neutralCalibrationClockRef = ref(globals.newNeutralCalibrationClock());
   const params = definition.kind === "dynamic" ? definition.primaryMetric.smoothing : undefined;
   for (const side of ["left", "right"]) context[`${side}PrimaryFilterRef`] = ref(new globals.OneEuroFilter(params?.minCutoff ?? 1, params?.beta ?? 0.1, params?.dCutoff));
   const names = ["createRepCountersForDefinition", "isSideSplitIsometric", "emptyFrameMetrics", "newHoldSideAccum", "newHoldQualityAccum", "resetHoldQualityAccum", "finalizeHoldQuality", "bufferSetEvent", "bufferRepEvent", "resetCompensationWarnings", "compensationWarningStateIsDirty", "discardInProgressMovement", "resetAfterSustainedCaptureDropout", "commitCaptureState", "predictWebcam", "computeAsymmetryIndex", "prescribedCreditedValue", "handleSessionEnd"];
   const constants = ["MAX_ISO_TICK_MS", "CAPTURE_READINESS_RESET_GRACE_MS", "EX005_DEBUG_THROTTLE_MS", "MAX_NECK_REP_DEBUG_RECORDS"];
+  // The loop reads the current selection through this closure. Include its
+  // real declaration, while keeping comparisons with older camera source usable.
+  if ((options.cameraSource ?? cameraSource).includes("const customExerciseSelected =")) names.push("customExerciseSelected");
   const code = cameraDeclarations([...constants, ...names], options.cameraSource);
   // UI state setters are sinks. Capture their outputs for caller assertions.
   for (const m of code.matchAll(/\b(set[A-Z]\w+)\(/g)) context[m[1]] = (value: any) => { context[`${m[1]}Output`] = value; };

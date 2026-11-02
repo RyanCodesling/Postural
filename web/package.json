@@ -16,6 +16,7 @@
     "verify:coaching:db": "tsx scripts/verify-coaching-readers.ts",
     "verify:exercises:db": "tsx scripts/verify-exercise-lifecycle.ts",
     "verify:session-dates": "tsx src/lib/sessionDateCorrection.test.tsx --db",
+    "verify:manual:db": "tsx scripts/verify-manual-sessions.ts",
     "replay:coaching": "tsx scripts/replay-coaching.ts",
     "backup:local": "tsx scripts/backup-local.ts",
     "profile:filter": "tsx scripts/profileOneEuroFilter.ts",

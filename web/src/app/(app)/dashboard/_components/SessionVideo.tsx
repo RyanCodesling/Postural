@@ -362,7 +362,7 @@ export function SessionVideoPlayer({
             </div>
             <h2 id="delete-video-title" className="mb-1 text-lg font-bold text-gray-900">Delete this session video?</h2>
             <p className="mb-5 text-sm text-gray-600">
-              It is removed from your progress. If you need it back, ask the clinic: the admin can restore it.
+              It is removed from your progress and kept in Recently Deleted until an admin restores it or permanently deletes it. Ask the clinic if you want it permanently deleted.
             </p>
             <div className="flex gap-3">
               <button

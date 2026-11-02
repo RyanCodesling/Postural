@@ -988,7 +988,7 @@ export function isMissingColumnError(error: unknown): boolean {
  * Records an uploaded file as the exercise's video, replacing a YouTube video.
  * The video it replaces goes to Recently Deleted; its file stays on disk.
  */
-export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string, changedBy?: string) {
+export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string | null, changedBy?: string) {
   const binReady = await hasDeletedItemsBin();
   const client = await pool.connect();
   try {
@@ -1952,7 +1952,7 @@ export async function completeManualOccurrence(
         AND e.archived_at IS NULL
         AND e.monitoring_mode = 'manual'
         AND eo.cancelled_at IS NULL
-        AND eo.status <> 'completed'
+        AND eo.status IN ('pending', 'in_progress')
         AND eo.due_date <= $3::date
         AND COALESCE(eo.makeup_until, eo.due_date) >= $3::date
       RETURNING e.name AS exercise_name, u.therapist_id`,
@@ -1990,14 +1990,15 @@ export async function createCustomExerciseSession(data: {
   deviceInfo?: unknown;
   videoConsent?: SessionVideoConsent;
   preSessionPain?: PreSessionPain;
-}): Promise<{ id: number; startedAt: string }> {
+}): Promise<{ id: number; startedAt: string; runtimePrescription: RuntimePrescription }> {
   const effectiveAt = await getEffectiveNow();
   const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const occ = await client.query(
-      `SELECT eo.id, eo.due_date, COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
+      `SELECT eo.id, eo.due_date, eo.status, eo.prescription_snapshot,
+              COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
               pe.id AS patient_exercise_id, pe.exercise_id, pe.sets, pe.reps, pe.rest_seconds,
               pe.hold_seconds, pe.sequence_index, pe.prescribed_side, pe.resistance_type,
               pe.resistance_value, pe.resistance_unit, pe.resistance_label, e.name
@@ -2012,33 +2013,45 @@ export async function createCustomExerciseSession(data: {
           AND e.archived_at IS NULL
           AND e.monitoring_mode = 'manual'
           AND eo.cancelled_at IS NULL
-          AND eo.status <> 'completed'
+          AND eo.status IN ('pending', 'in_progress')
           AND eo.due_date <= $5::date
           AND COALESCE(eo.makeup_until, eo.due_date) >= $5::date
-        LIMIT 1`,
+        LIMIT 1
+        FOR UPDATE OF eo`,
       [data.occurrenceId, data.patientExerciseId, data.patientId, data.exerciseId, today],
     );
     if (occ.rows.length === 0) throw new SessionNotScheduledError();
     const o = occ.rows[0] as Record<string, unknown>;
     const capturedAt = effectiveAt.toISOString();
     const schedule = { dueDate: String(o.due_date), makeupUntil: String(o.makeup_until) };
+    const existingSnapshot = o.prescription_snapshot as PrescriptionSnapshot | null;
+    // The guide uses this scheduled snapshot. Later assignment edits must not
+    // rewrite the task this attempt records.
+    const prescription: PrescriptionSnapshotV2 =
+      existingSnapshot?.version === PRESCRIPTION_SNAPSHOT_VERSION
+        ? existingSnapshot
+        : existingSnapshot?.version === 1
+          ? { ...existingSnapshot, version: PRESCRIPTION_SNAPSHOT_VERSION, sequenceIndex: Number(o.sequence_index) }
+          : {
+              version: PRESCRIPTION_SNAPSHOT_VERSION, capturedAt,
+              patientExerciseId: Number(o.patient_exercise_id), exerciseId: String(o.exercise_id),
+              sets: Number(o.sets), reps: Number(o.reps), restSeconds: Number(o.rest_seconds),
+              holdSeconds: Number(o.hold_seconds), sequenceIndex: Number(o.sequence_index),
+              prescribedSide: (o.prescribed_side ?? "both") as PrescribedSide,
+              resistance: resistanceContextFromRow(o), schedule,
+            };
+    const runtimePrescription: RuntimePrescription = {
+      occurrenceId: Number(o.id), patientExerciseId: prescription.patientExerciseId,
+      exerciseId: prescription.exerciseId, sets: prescription.sets, reps: prescription.reps,
+      restSeconds: prescription.restSeconds, holdSeconds: prescription.holdSeconds,
+      sequenceIndex: prescription.sequenceIndex, prescribedSide: prescription.prescribedSide,
+      resistance: prescription.resistance, dueDate: prescription.schedule.dueDate,
+      makeupUntil: prescription.schedule.makeupUntil,
+    };
     const context = {
       version: SESSION_CONTEXT_VERSION,
       capturedAt,
-      prescription: {
-        version: PRESCRIPTION_SNAPSHOT_VERSION,
-        capturedAt,
-        patientExerciseId: Number(o.patient_exercise_id),
-        exerciseId: String(o.exercise_id),
-        sets: Number(o.sets),
-        reps: Number(o.reps),
-        restSeconds: Number(o.rest_seconds),
-        holdSeconds: Number(o.hold_seconds),
-        sequenceIndex: Number(o.sequence_index),
-        prescribedSide: (o.prescribed_side ?? "both") as PrescribedSide,
-        resistance: resistanceContextFromRow(o),
-        schedule,
-      },
+      prescription,
       schedule: { ...schedule, startedDuringMakeupWindow: today > schedule.dueDate },
       // A custom exercise has no camera definition: nothing is measured.
       exercise: { id: data.exerciseId, name: String(o.name), kind: "manual", bilateralMode: null, definition: null },
@@ -2071,9 +2084,19 @@ export async function createCustomExerciseSession(data: {
         context.versions.appRevision,
       ],
     );
+    await client.query(
+      `UPDATE exercise_occurrences
+          SET status = 'in_progress',
+              prescription_snapshot = CASE WHEN $5::boolean THEN $2 ELSE prescription_snapshot END,
+              prescription_snapshot_version = CASE WHEN $5::boolean THEN $3 ELSE prescription_snapshot_version END,
+              prescription_captured_at = CASE WHEN $5::boolean THEN $4 ELSE prescription_captured_at END
+        WHERE id = $1`,
+      [Number(o.id), JSON.stringify(prescription), PRESCRIPTION_SNAPSHOT_VERSION, prescription.capturedAt,
+        o.status === "pending" && (existingSnapshot == null || existingSnapshot.version === 1)],
+    );
     await client.query("COMMIT");
     const row = result.rows[0] as Record<string, unknown>;
-    return { id: Number(row.id), startedAt: new Date(String(row.started_at)).toISOString() };
+    return { id: Number(row.id), startedAt: new Date(String(row.started_at)).toISOString(), runtimePrescription };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

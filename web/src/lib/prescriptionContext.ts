@@ -35,13 +35,13 @@ export const PRE_SESSION_PAIN_CAUTION_SCORE = 7;
  */
 export type SessionVideoConsent = { consentedAt: string; notice: string; remembered?: boolean };
 /**
- * Version of the recording notice the camera page shows; change it when its
- * wording changes. v3 (2026-10-04) is for videos stored on the project's cloud
- * server and allows use after the study's evaluation; videos consented under
- * v2 keep that notice's promises (stored on the clinic's computer, never used
- * to train or tune the system).
+ * Version of the recording notice the camera page shows; remembered choices
+ * expire when it changes. v4 explains admin-managed recovery and permanent
+ * deletion. Stored historical consents retain their original notice version.
+ * v3 introduced server storage and use after the study's evaluation; v2
+ * recordings retain their earlier storage and never-training promises.
  */
-export const SESSION_VIDEO_NOTICE_VERSION = "session_video_notice_v3";
+export const SESSION_VIDEO_NOTICE_VERSION = "session_video_notice_v4";
 export type SessionEndReason = "completed" | "user" | "pain" | "superseded";
 export type TherapistReviewLabel =
   | "agree"

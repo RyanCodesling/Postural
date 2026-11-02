@@ -29,6 +29,8 @@ function load(relative: string, mocks: Record<string, any>, globals: Record<stri
   const context: any = vm.createContext({ exports: {}, console: { error() {} }, Response, ...globals,
     require(name: string) {
       if (Object.hasOwn(mocks, name)) return mocks[name];
+      if (name === "@/lib/deletedItems") return { binnedExerciseVideos: async () => [], eraseExerciseVideoContents: async () => undefined };
+      if (name === "./VideoGuide") return { default: () => null };
       if (name.startsWith("node:")) return nodeRequire(name);
       throw new Error(`Unexpected dependency: ${name}`);
     },
@@ -146,7 +148,9 @@ for (const first of ["mp4", "webm"] as const) {
       const playback = await fixture.route.GET({ headers: new Headers() }, params);
       assert.equal(playback.status, 200);
       assert.deepEqual(new Uint8Array(await playback.arrayBuffer()), last === "mp4" ? MP4 : WEBM);
-      assert.deepEqual(readdirSync(root), [fixture.row.video_file_name]);
+      const retained = readdirSync(root);
+      assert.equal(retained.length, 3, "the original and both successful uploads stay available for admin recovery");
+      assert(retained.includes(fixture.row.video_file_name), "the later upload remains playable");
     });
   });
 }
@@ -157,6 +161,35 @@ test("obsolete-file cleanup failure does not turn a committed upload into an err
     await saveExisting(fixture);
     assert.equal((await fixture.route.PUT(request("video/webm", WEBM), params)).status, 200);
     assert(await storage.openExerciseVideo("ex_fixture", "video/webm", fixture.row.video_file_name));
+  });
+});
+
+test("admin recovery restores an older guide with a legacy filename", async () => {
+  await withFiles(async root => {
+    writeFileSync(path.join(root, "ex_fixture.mp4"), MP4);
+    const fixture = videoFixture();
+    let removed = false;
+    const bin = load("../deletedItems.ts", {
+      "@/lib/db": {
+        __esModule: true, default: { query: async (sql: string) => {
+          if (sql.startsWith("DELETE")) { removed = true; return { rows: [] }; }
+          return { rows: [{ id: 1, kind: "exercise_video", exercise_id: "ex_fixture", label: "Fixture",
+            details: { source: "file", mimeType: "video/mp4", fileName: null } }] };
+        } },
+        setExerciseVideoFile: async (id: string, mime: string, name: string | null, actor: string) => {
+          assert.equal(id, "ex_fixture"); assert.equal(name, null); assert.equal(actor, "fixture-admin");
+          fixture.row = { ...fixture.row, video_mime_type: mime, video_file_name: name };
+          return { exercise: fixture.row };
+        },
+      },
+      "@/lib/recording/storage": {}, "@/lib/exercises/customVideoStorage": storage,
+      "@/lib/exercises/customVideo": customVideo,
+    });
+    assert.equal((await bin.restoreDeletedItem(1, "fixture-admin")).ok, true);
+    assert.equal(removed, true);
+    const playback = await fixture.route.GET({ headers: new Headers() }, params);
+    assert.equal(playback.status, 200);
+    assert.deepEqual(new Uint8Array(await playback.arrayBuffer()), MP4);
   });
 });
 

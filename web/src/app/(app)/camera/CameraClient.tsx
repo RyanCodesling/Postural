@@ -4381,7 +4381,7 @@ export default function CameraClient() {
    * ends and, with consent, its video. Resolves false when the patient pressed
    * Back, which cancels the start.
    */
-  const beginCustomSession = async (exercise: Exercise): Promise<boolean> => {
+  const beginCustomSession = async (exercise: Exercise): Promise<CustomStartResult> => {
     customSessionIdRef.current = null;
     customRecordingConsentRef.current = false;
     if (
@@ -4424,20 +4424,32 @@ export default function CameraClient() {
     }).catch(() => null);
     const body: unknown = await response?.json().catch(() => null);
     if (!response?.ok || !isRecord(body) || typeof body.sessionId !== "number") {
-      // An outdated notice must be read first; otherwise the exercise still
-      // runs, and finishing marks the day complete without a session.
-      if (isRecord(body) && body.code === "video_notice_changed") {
-        setError(typeof body.error === "string" ? body.error : "Reload this page, then start again.");
-        return false;
-      }
       setError(
         isRecord(body) && typeof body.error === "string"
           ? body.error
-          : "This attempt could not be saved as a session. You can still do the exercise.",
+          : "This attempt could not be started. Please try again.",
       );
-      return true;
+      return false;
+    }
+    const runtime = body.runtimePrescription as RuntimePrescription | undefined;
+    if (
+      !runtime || runtime.patientExerciseId !== exercise.patientExerciseId ||
+      runtime.occurrenceId !== exercise.occurrenceId || runtime.exerciseId !== exercise.id ||
+      !Number.isInteger(runtime.sets) || runtime.sets < 1 ||
+      !Number.isInteger(runtime.reps) || runtime.reps < 1 ||
+      !Number.isFinite(runtime.restSeconds) || runtime.restSeconds < 0 ||
+      (runtime.prescribedSide !== "both" && runtime.prescribedSide !== "left" && runtime.prescribedSide !== "right")
+    ) {
+      setError("The saved prescription could not be read. Reload this page before starting.");
+      return false;
     }
     customSessionIdRef.current = body.sessionId;
+    const authoritative = assignedExercisesRef.current.map((item) => item.occurrenceId === exercise.occurrenceId
+      ? { ...item, sets: runtime.sets, reps: runtime.reps, restSeconds: runtime.restSeconds,
+          holdSeconds: runtime.holdSeconds, prescribedSide: runtime.prescribedSide, resistance: runtime.resistance }
+      : item);
+    assignedExercisesRef.current = authoritative;
+    setAssignedExercises(authoritative);
     if (record) {
       // The recorder stamps each part through perfToIso, which reads these anchors.
       sessionWallStartMsRef.current = Date.now();
@@ -4447,7 +4459,7 @@ export default function CameraClient() {
       setCustomRecordingOpen(true);
       setRecordingState("off");
     }
-    return true;
+    return { sets: runtime.sets, restSeconds: runtime.restSeconds };
   };
 
   /** Each custom set is its own recording part; rest is not recorded. */
@@ -4484,10 +4496,12 @@ export default function CameraClient() {
     stopSessionRecording(true);
     const sessionId = customSessionIdRef.current;
     if (reason === "completed" || sessionId === null) return null;
-    customSessionIdRef.current = null;
     const error = await patchCustomSession(sessionId, { endReason: reason });
-    if (reason === "pain") customReportSessionIdRef.current = error ? null : sessionId;
-    return error;
+    if (error) return error;
+    // A retry must retain the same target until the server acknowledges it.
+    if (customSessionIdRef.current === sessionId) customSessionIdRef.current = null;
+    if (reason === "pain") customReportSessionIdRef.current = sessionId;
+    return null;
   };
 
   /** After the last set: the day is marked complete, through the session when there is one. */
@@ -13681,8 +13695,10 @@ type CustomPainReport =
   | { status: "declined" }
   | { status: "reported"; score: number; timing: PainTiming | null; bodyArea: string | null };
 
+type CustomStartResult = boolean | Pick<RuntimePrescription, "sets" | "restSeconds">;
+
 function CustomGuidedSession({
-  sets, restSeconds, onComplete, onNext, onBackToSchedule,
+  sets: scheduledSets, restSeconds: scheduledRestSeconds, onComplete, onNext, onBackToSchedule,
   onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport,
 }: {
   sets: number;
@@ -13692,7 +13708,7 @@ function CustomGuidedSession({
   onNext?: () => void;
   onBackToSchedule?: () => void;
   /** Runs before the first set (pain and video questions); resolving false cancels the start. */
-  onBeforeStart?: () => Promise<boolean>;
+  onBeforeStart?: () => Promise<CustomStartResult>;
   /** A set begins: its recording part starts. */
   onSetStart?: () => void;
   /** Rest begins: the set's recording part stops. */
@@ -13707,6 +13723,9 @@ function CustomGuidedSession({
   painReport?: { pending: () => boolean; save: (report: CustomPainReport) => Promise<string | null> };
 }) {
   const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
+  const [runDose, setRunDose] = useState({ sets: scheduledSets, restSeconds: scheduledRestSeconds });
+  const sets = phase === "idle" || phase === "starting" ? scheduledSets : runDose.sets;
+  const restSeconds = phase === "idle" || phase === "starting" ? scheduledRestSeconds : runDose.restSeconds;
   const [currentSet, setCurrentSet] = useState(1);
   const [restEndsAt, setRestEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -13721,6 +13740,7 @@ function CustomGuidedSession({
   const [reportSaving, setReportSaving] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [painStopError, setPainStopError] = useState<string | null>(null);
+  const [painStopping, setPainStopping] = useState(false);
   // Leaving the exercise mid-session (another exercise, another page) ends
   // its recording the same way End session does.
   const phaseRef = useRef(phase);
@@ -13792,7 +13812,9 @@ function CustomGuidedSession({
 
   const start = async () => {
     setPhase("starting");
-    if (onBeforeStart && !(await onBeforeStart().catch(() => true))) { setPhase("idle"); return; }
+    const started = onBeforeStart ? await onBeforeStart().catch(() => false) : true;
+    if (!started) { setPhase("idle"); return; }
+    setRunDose(typeof started === "object" ? started : { sets: scheduledSets, restSeconds: scheduledRestSeconds });
     setCurrentSet(1);
     setRestEndsAt(null);
     setSave({ state: "idle" });
@@ -13813,10 +13835,12 @@ function CustomGuidedSession({
   const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
   const endEarly = () => { setPhase("idle"); setRestEndsAt(null); onEnd?.("user"); };
   const stopForPain = async () => {
-    if (!onPainStop) return;
+    if (!onPainStop || painStopping) return;
     setPhase("pain");
     setRestEndsAt(null);
+    setPainStopping(true);
     const error = await onPainStop().catch(() => "The pain stop could not be saved.");
+    setPainStopping(false);
     setPainStopError(error);
     if (!error) askPainAfter();
   };
@@ -13826,7 +13850,11 @@ function CustomGuidedSession({
     : phase === "rest"
       ? `Resting · set ${currentSet + 1} of ${sets} starts automatically`
       : phase === "pain"
-        ? "Stopped because of pain. Your therapist has been notified and will review it before you try again."
+        ? painStopping
+          ? "Stopped because of pain. Saving the pain stop…"
+          : painStopError
+            ? "Stopped because of pain. The pain stop has not been saved; please try saving again."
+            : "Stopped because of pain. Your therapist has been notified and will review it before you try again."
         : phase === "done"
           ? onComplete
             ? save.state === "saved"
@@ -13919,13 +13947,13 @@ function CustomGuidedSession({
               <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
                 {painStopError}
               </p>
-              <button type="button" onClick={() => void stopForPain()}
+              <button type="button" onClick={() => void stopForPain()} disabled={painStopping}
                 style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
-                Try saving again
+                {painStopping ? "Saving…" : "Try saving again"}
               </button>
             </>
           )}
-          {!painStopError && onBackToSchedule && (
+          {!painStopError && !painStopping && onBackToSchedule && (
             <button type="button" onClick={onBackToSchedule}
               style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600 }}>
               Back to schedule

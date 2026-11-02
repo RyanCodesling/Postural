@@ -17,7 +17,7 @@ const client = new Client({ connectionString: process.env.DATABASE_URL });
 const tables = ["exercises", "patient_exercises", "exercise_occurrences", "program_exercises", "exercise_programs", "sessions"];
 const source = readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf8");
 const names = ["getExercises", "getExerciseById", "ExerciseInUseError", "archiveExercise", "restoreExercise",
-  "discardNewExercise", "deleteArchivedExercise", "setExerciseVideoFile", "canViewExerciseVideo",
+  "discardNewExercise", "deleteArchivedExercise", "setExerciseVideoFile", "binReplacedExerciseVideo", "canViewExerciseVideo",
   "ExerciseAssignmentNotAllowedError", "normalizeRestSeconds", "normalizeHoldSeconds", "assignExercisesToPatient",
   "ProgramExerciseNotAllowedError", "validateProgramExerciseAccess", "insertProgramExercises", "createProgram"];
 const ast = ts.createSourceFile("db.ts", source, ts.ScriptTarget.Latest, true);
@@ -33,6 +33,7 @@ async function main() {
   try {
     // CTAS copies types only: no patient data, defaults, public sequences or FKs.
     for (const table of tables) await client.query(`CREATE TEMP TABLE ${table} AS SELECT * FROM public.${table} WITH NO DATA`);
+    await client.query("CREATE TEMP TABLE deleted_items (kind text, exercise_id text, label text, details jsonb, deleted_by text)");
     await client.query("SET search_path TO pg_temp");
     for (const table of tables) {
       const resolved = await client.query("SELECT to_regclass($1)::oid = to_regclass($2)::oid AS isolated", [table, `pg_temp.${table}`]);
@@ -55,7 +56,7 @@ async function main() {
     const queries: string[] = [];
     const query = (sql: string, values?: any[]) => {
       assert(!/\bpublic\s*\./i.test(sql), "production SQL must not escape the private fixtures");
-      assert(/^\s*(SELECT\b|BEGIN\b|COMMIT\b|ROLLBACK\b|INSERT INTO (patient_exercises|exercise_occurrences|exercise_programs|program_exercises)\b|UPDATE (exercises|patient_exercises|exercise_occurrences|program_exercises)\b|DELETE FROM exercises\b)/i.test(sql), sql);
+      assert(/^\s*(SELECT\b|BEGIN\b|COMMIT\b|ROLLBACK\b|INSERT INTO (patient_exercises|exercise_occurrences|exercise_programs|program_exercises|deleted_items)\b|UPDATE (exercises|patient_exercises|exercise_occurrences|program_exercises)\b|DELETE FROM exercises\b)/i.test(sql), sql);
       queries.push(sql);
       return client.query(sql, values);
     };
@@ -63,6 +64,7 @@ async function main() {
     const context: any = vm.createContext({ exports: {}, pool, console,
       todayKeyPH: async () => "2026-10-30", DEFAULT_REST_SECONDS: 60, DEFAULT_HOLD_SECONDS: 30,
       generateSchedule, MAX_INTERVAL_DAYS, PRESCRIPTION_SNAPSHOT_VERSION, exerciseVideoFileFromRow,
+      hasDeletedItemsBin: async () => true,
     });
     vm.runInContext(production, context);
     const db = context.exports;
@@ -158,6 +160,10 @@ async function main() {
       assert.equal(a.previousVideo.mimeType,"video/mp4"); assert.equal(a.previousVideo.fileName,null);
       const b = await db.setExerciseVideoFile("fixture_video","video/webm",`fixture_video.${"b".repeat(32)}.webm`);
       assert.equal(b.previousVideo.fileName,a.exercise.video_file_name);
+      const binned = await client.query("SELECT details FROM pg_temp.deleted_items WHERE exercise_id='fixture_video'");
+      assert.equal(binned.rows.length, 2);
+      assert.equal(binned.rows[0].details.fileName, null, "the legacy guide reference is retained");
+      assert.equal(binned.rows[1].details.fileName, a.exercise.video_file_name, "the exact replaced upload is retained");
       assert.equal((await db.getExerciseById("fixture_video")).video_file_name,b.exercise.video_file_name);
       await db.archiveExercise("fixture_video","fixture-owner");
       assert.equal(await db.setExerciseVideoFile("fixture_video","video/mp4",`fixture_video.${"c".repeat(32)}.mp4`),null);

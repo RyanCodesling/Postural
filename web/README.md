@@ -77,7 +77,32 @@ For sessions reached through a temporary HTTPS tunnel, follow
 `npm run backup:local` (database and session videos, with a restore check), the release
 check and the second-device test.
 
+## Progress session eligibility
+
+Progress charts, the Reports view and progress PDFs exclude attempts marked
+`superseded` (replaced by a new start). The patient progress count and latest date
+use that same subset. Original sessions, events, recordings and schedule history
+are retained. Ended-early and pain-stopped outcomes remain eligible, as do legacy
+summaries without a terminal-status field. Completed sessions are never removed
+because their values are low or their repetitions did not reach the target.
+The displayed GP is recomputed on the eligible sessions with the existing frozen
+settings; this is not a model retraining or a new evaluation.
+
 ## Common checks
+
+Manual exercise starts use the scheduled prescription snapshot, mark the task
+in progress, and reject completed or pain-stopped tasks. The guide adopts the
+server's returned prescription. A failed start does not begin an unsaved guide;
+a failed pain stop keeps its session target available for retry.
+
+With `DATABASE_URL` set to a loopback PostgreSQL database, `npm run verify:manual:db`
+exercises the actual manual start/end SQL against new connection-private
+temporary tables. It does not read or modify public patient rows or sequences.
+
+Removed session videos stay in Recently Deleted until an admin restores or
+permanently deletes them. The recording notice and delete confirmation explain
+this retention. A device's remembered recording answer expires when the notice
+changes; historical session consent records keep their original version.
 
 `npm run dev` and `npm run build` first bundle the trend Web Worker with esbuild.
 The generated `public/workers/trend-fit.js` is ignored by Git and must be included

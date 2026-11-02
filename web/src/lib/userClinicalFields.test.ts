@@ -46,7 +46,7 @@ async function unitChecks() {
     return { rows: sql.includes("pg_attribute") ? available.map(attname => ({ attname })) : [{ id: person.id, name: person.name }] };
   });
   await db.createUser({ ...person, ...blank });
-  assert.equal(queries.at(-1)!.params.length, 13);
+  assert.equal(queries.at(-1)!.params.length, 12);
   assert.doesNotMatch(queries.at(-1)!.sql, /diagnosis|prescription|condition/);
   const input = { name: "Updated", ...blank };
   await db.updateUser(person.id, input);
@@ -64,12 +64,12 @@ async function unitChecks() {
   }
   available = ["diagnosis"]; // partial migration supports only the column that exists
   await db.createUser({ ...person, diagnosis: "Fictional entry", condition: "" });
-  assert.equal(queries.at(-1)!.params.length, 14);
+  assert.equal(queries.at(-1)!.params.length, 13);
   assert.match(queries.at(-1)!.sql, /"diagnosis"/);
   assert.doesNotMatch(queries.at(-1)!.sql, /"condition"/);
   available = clinicalKeys;
   await db.createUser({ ...person, diagnosis: "D", prescription: "P", condition: "C" });
-  assert.deepEqual(Array.from(queries.at(-1)!.params.slice(13)), ["D", "P", "C"]);
+  assert.deepEqual(Array.from(queries.at(-1)!.params.slice(12)), ["D", "P", "C"]);
   await db.updateUser(person.id, { condition: null });
   assert.match(queries.at(-1)!.sql, /"condition" = \$1/);
   assert.equal(queries.at(-1)!.params[0], null, "migrated fields can be cleared");

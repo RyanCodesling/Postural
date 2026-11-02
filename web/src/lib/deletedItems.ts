@@ -177,7 +177,8 @@ export async function restoreDeletedItem(id: number, restoredBy: string): Promis
     return { ok: false, status: 409, error: `Restore the ${item.label} exercise from Archived first.` };
   }
   let changed;
-  if (details.source === "file" && isExerciseVideoMimeType(details.mimeType) && typeof details.fileName === "string") {
+  if (details.source === "file" && isExerciseVideoMimeType(details.mimeType) &&
+      (typeof details.fileName === "string" || details.fileName === null)) {
     changed = await setExerciseVideoFile(item.exercise_id, details.mimeType, details.fileName, restoredBy);
   } else if (details.source === "youtube" && typeof details.youtubeVideoId === "string") {
     changed = await setExerciseYouTubeVideo(item.exercise_id, details.youtubeVideoId, restoredBy);

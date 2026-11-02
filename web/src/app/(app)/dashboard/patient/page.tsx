@@ -350,7 +350,7 @@ export default function PatientDashboardPage() {
         {/* ── My Progress ── */}
         {activeTab === "my-progress" && (() => {
           const trendGroups = groupSessionsByExercise(sessions);
-          const recorded = sessions.filter((x) => x.setCount > 0 || x.totalReps > 0);
+          const recorded = trendGroups.flatMap((group) => group.sessions);
           const lastSession = recorded.reduce<string | null>((latest, x) => (!latest || x.startedAt > latest ? x.startedAt : latest), null);
           return (
             <div className="mx-auto flex max-w-6xl flex-col gap-4">
@@ -370,7 +370,7 @@ export default function PatientDashboardPage() {
 
               <div id="tour-progress-tiles" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatTile label="Exercises tracked" value={trendGroups.length} icon={Glyph.dumbbell} tone="green" />
-                <StatTile label="Sessions recorded" value={recorded.length} icon={Glyph.pulse} tone="teal" />
+                <StatTile label="Sessions in trends" value={recorded.length} icon={Glyph.pulse} tone="teal" />
                 <StatTile
                   label="Last session"
                   value={lastSession ? new Date(lastSession).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Manila" }) : "None"}

@@ -278,7 +278,7 @@ export default function PatientReports({
             ))}
           </select>
         ) : (
-          <span className="text-base text-gray-500">No recorded sessions yet.</span>
+          <span className="text-base text-gray-500">No sessions available for these charts.</span>
         )}
         <div className="flex flex-wrap items-center gap-2 print:hidden">
           <span className="rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white">{rangeText}</span>
@@ -298,6 +298,7 @@ export default function PatientReports({
         </div>
       </div>
 
+      <p className="text-sm text-gray-500">Replaced attempts stay in session history and are excluded from these charts.</p>
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card title={chartTitle} right={<Legend />}>
           {romPoints.length === 0 ? (

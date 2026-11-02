@@ -54,6 +54,8 @@ export interface TrendSession extends TrendModelSession {
   exerciseName: string;
   exerciseKind: "dynamic" | "isometric" | null;
   startedAt: string;
+  /** Replaced attempts stay in history but are not separate progress sessions. */
+  endReason?: string | null;
   avgPeakValue: number | null;
   avgLeftPeakValue?: number | null;
   avgRightPeakValue?: number | null;
@@ -135,11 +137,15 @@ function sessionContext(s: TrendSession) {
 // Group sessions by exact exercise + prescription + scoring configuration.
 // This prevents a side/load/threshold change from being presented as one
 // continuous clinical trend. Outcome-bearing sessions only (a started-then-
-// abandoned session has no reps/sets and would add spurious zero points). Input
+// abandoned session has no reps/sets and would add spurious zero points).
+// A superseded attempt was replaced by a new start, so it stays in history but
+// does not contribute a separate chart point or model input. Input
 // is newest-first (the API orders started_at DESC), so each group is reversed to
 // oldest→newest for the time axis; groups are ordered by most-recent activity.
 export function groupSessionsByExercise<S extends TrendSession>(sessions: S[]): TrendGroup<S>[] {
-  const real = sessions.filter((s) => s.setCount > 0 || s.totalReps > 0);
+  const real = sessions.filter((s) =>
+    s.endReason !== "superseded" && (s.setCount > 0 || s.totalReps > 0),
+  );
   const map = new Map<string, S[]>();
   for (const s of real) {
     const key = sessionContext(s).contextKey;
@@ -441,7 +447,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
   const dates = sessions.map((session) => fmtAxisDate(session.startedAt));
   const primaryTitle = `${meta.label} over time${isIso ? " (% of the prescribed hold)" : ""}`;
   const completedTitle =
-    prescribedSide === "both" ? "Completed reps — left vs right" : "Completed reps — prescribed side";
+    prescribedSide === "both" ? "Reps reaching the target — left vs right" : "Reps reaching the target — prescribed side";
   const formTitle = "Form score over time (rule-based, 0–100)";
 
   // The session whose repetitions are open, by id so a refresh that adds
@@ -573,6 +579,9 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
                 counts
                 {...chartProps("completeReps", completedTitle)}
               />
+              <p className="text-[13px] leading-4 text-gray-500 mt-1">
+                Partial reps are recorded too. Zero here means no reps reached the target.
+              </p>
             </div>
           )}
 
@@ -638,6 +647,7 @@ export function ExerciseTrendCard({ group }: { group: TrendGroup }) {
           {isIso
             ? "Holds are compared as time in the target band relative to the prescribed hold."
             : "Sessions with fewer than 3 repetitions on a side are not counted."}{" "}
+          Replaced attempts stay in session history and are excluded from these charts.{" "}
           Supplementary information, not a diagnosis. Model {TREND_MODEL.version}.
         </p>
       )}

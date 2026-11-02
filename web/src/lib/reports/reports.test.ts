@@ -305,6 +305,7 @@ async function run() {
       { ...trend(0, 0), exerciseId: iso.id, exerciseName: iso.name, exerciseKind: "isometric", avgPeakValue: null,
         avgLeftPeakValue: null, avgRightPeakValue: null, totalPairedHoldMs: 25000, setCount: 1, totalReps: 0 },
       { ...trend(4, 0), setCount: 0, totalReps: 0 },
+      trend(5, 15, { endReason: "superseded" }),
     ];
     const bytes = progressReportPdf(sessions, {
       patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila",
@@ -331,7 +332,7 @@ async function run() {
       "Left full-range reps", "7/10 · neck", "skipped", "declined", "1/10", "Ended early", "Completed",
       iso.name, "Hold time", "25.0s", "machine-learning trend model",
       "Other measure", "Repetitions reaching the target range",
-      "Limitations Angles labelled", "Sessions that were started but recorded no set are left out.",
+      "Limitations Angles labelled", "Sessions with no recorded outcomes and replaced attempts are left out of these trends.",
       "How to read this report Reading the trends:", "Form score: the app's rule-based score from 0 to 100",
       "Notes Supplementary information for review with a physical therapist. It is not a diagnosis.",
       "For the app's developers: trend model",
@@ -343,6 +344,7 @@ async function run() {
       assert(!text.includes(jargon), `engineering wording left: ${jargon}`);
     }
     assert.equal((text.match(/Sep 14, 2026/g) ?? []).length, 0, "a session without a set is left out");
+    assert.equal((text.match(/Sep 15, 2026/g) ?? []).length, 0, "a replaced attempt does not extend the report's date range");
 
     const unloaded = drawnText(progressReportPdf(sessions.slice(0, 1), {
       patientName: "Test Patient", generatedAt: new Date("2026-09-26T01:00:00Z"), timeZone: "Asia/Manila", patient: null, program: null,

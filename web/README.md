@@ -77,6 +77,17 @@ For sessions reached through a temporary HTTPS tunnel, follow
 `npm run backup:local` (database and session videos, with a restore check), the release
 check and the second-device test.
 
+## Progress session eligibility
+
+Progress charts, the Reports view and progress PDFs exclude attempts marked
+`superseded` (replaced by a new start). The patient progress count and latest date
+use that same subset. Original sessions, events, recordings and schedule history
+are retained. Ended-early and pain-stopped outcomes remain eligible, as do legacy
+summaries without a terminal-status field. Completed sessions are never removed
+because their values are low or their repetitions did not reach the target.
+The displayed GP is recomputed on the eligible sessions with the existing frozen
+settings; this is not a model retraining or a new evaluation.
+
 ## Common checks
 
 `npm run dev` and `npm run build` first bundle the trend Web Worker with esbuild.

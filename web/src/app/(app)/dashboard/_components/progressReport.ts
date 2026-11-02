@@ -278,7 +278,7 @@ export function progressReportPdf(
   const note = (text: string) => layout.paragraph(text, { size: 8.5, color: COLORS.muted });
   layout.heading("Limitations");
   note(ANGLE_NOTE);
-  note("Sessions that were started but recorded no set are left out.");
+  note("Sessions with no recorded outcomes and replaced attempts are left out of these trends. The original attempts remain in session history.");
 
   layout.heading("How to read this report");
   note(

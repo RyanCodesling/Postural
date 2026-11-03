@@ -1,14 +1,93 @@
 # Sprint Updates 
 
-## 📌 Update-11-02-26 | *RyanCodesling*
+## 📌 Update-11-03-26 | *RyanCodesling*
 
-- Kept the October 31 interface, tours, clinical files, manual exercise sessions and admin recovery features, while carrying forward the progress-chart exclusion for replaced attempts
-- Kept a failed manual pain stop available for a real retry, and showed saving or failure feedback until the server acknowledges it
-- Refused manual starts and completion acknowledgements for a scheduled task stopped because of pain; it waits for therapist rescheduling
-- Used the scheduled prescription consistently in manual session history and the guide, and marked a started task in progress
-- Explained that removed session videos stay in Recently Deleted until an admin restores or permanently deletes them; the updated recording notice asks again when a device remembers the older wording
-- Preserved historical consent records and restored guide videos that use older filenames
-- Updated the regression harnesses for the new callers, and added manual-session client, route and private-database lifecycle checks
+- Combined Enah's Update-10-31-26 with the progress chart change, keeping all of her features
+- Left attempts replaced by a new start out of the exercise trends, Reports, and progress PDFs while keeping them in session history, and counted My Progress's sessions and last session the same way
+- Renamed the completed-repetition charts "Reps reaching the target", noting that partial repetitions are recorded too
+- Started a custom exercise only once its session is saved, for a task still pending or in progress, with the sets, rest, side, and resistance saved with that scheduled task
+- Kept a failed pain stop for Try saving again, showing that it is saving or not yet saved until the server confirms it
+- Refused to mark a task stopped because of pain as done through the older completion route as well, so it waits for the therapist
+- Said in the recording notice and the delete window that a removed session video stays in Recently Deleted until an admin restores it or deletes it for good, and asked again on devices that remembered the older notice
+- Fixed restoring a guide video saved under its exercise's id, as videos were before Update-10-30-26, from Recently Deleted
+- Kept a therapist's newer Diagnosis, Condition, and Prescription, and a reassignment, when the admin saves an Edit form opened before them
+- Cleared the files picked in the admin's Add User form when it is cancelled
+- Asked for pain after the attempt when a custom exercise ends with End session too
+- Recorded each set of a custom exercise as its own video part when there is no rest between sets too
+- Showed the remembered video choice, with Ask me each time, under a custom exercise's Start session
+- Brought the video guide's steps and the YouTube hint up to date with the form
+
+### *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\PatientReports.tsx*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, and *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Left out of the exercise trends, the Reports charts, and the progress PDF the attempts marked superseded, which a new start replaced; their sessions, events, recordings, and schedule history stay
+- Kept ended-early, pain-stopped, and older sessions without an end reason, and completed sessions whose values are low or whose repetitions missed the target
+- Fitted the trend model to the remaining sessions with its frozen settings, without retraining it
+- Counted My Progress's "Sessions in trends", formerly "Sessions recorded", and its last session from the sessions the charts use
+- Renamed "Completed reps" to "Reps reaching the target", with the note "Partial reps are recorded too. Zero here means no reps reached the target."
+- Noted under the charts, on Reports, and in the PDF that replaced attempts stay in session history and are left out, and showed "No sessions available for these charts." on Reports when none remain
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\db.ts*, *web\src\app\api\sessions\manual\route.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Started a custom exercise's session only for a task that is pending or in progress, locked while the session is created, and marked the task in progress
+- Saved the task's prescription with its first attempt, or reused the one already saved, so a later edit of the assignment does not change what the task records; the start route returns it
+- Ran the guide with that prescription's sets and rest, and the session with its reps, side, and resistance
+- Left the guide at Start session when its session could not be started or the returned prescription could not be read, instead of running the exercise without a session
+- Refused the older completion route for a task stopped because of pain
+- Kept a failed pain stop's session until the server confirms it, so Try saving again sends it again; the screen says "Saving the pain stop…" or that it has not been saved, and shows Back to schedule and the pain report only once it is saved
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\recording\consent.ts*, *web\src\lib\prescriptionContext.ts*, *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*, *web\src\lib\deletedItems.ts*, and *web\src\lib\db.ts*
+
+- Replaced the recording notice's "You can delete it at any time." with: a removed video stays in Recently Deleted until an admin restores it or permanently deletes it, is not erased automatically, and the clinic's admin can be asked to delete it permanently
+- Named this notice session_video_notice_v4, so a device that remembered an answer to the older notice asks again; consents already saved keep their notice's version
+- Said the same in the patient's delete window
+- Let Recently Deleted restore a guide video saved under its exercise's id, which has no file name of its own
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\adminUserEdit.ts* and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Sent Diagnosis, Condition, and Prescription from the admin's Edit form only when the admin changed them, and stopped sending the patient's therapist, which the form does not edit, so a therapist's edit or a reassignment made while the form was open is kept
+- Cleared the files picked in Add User when it is cancelled, so they are not uploaded with the next new user
+
+### Changes to Enah's Update-10-31-26: *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Asked "Pain after this attempt" after End session too, once the early end is saved, as after Finish and a pain stop; a new attempt no longer keeps an earlier attempt's unanswered question
+- Closed each set's video part and opened the next even with no rest between sets; opening a part ends one still recording on the server, so the next part waits for the last one to close, and none opens once the session has ended
+- Showed the remembered video choice, with Ask me each time, under a custom exercise's Start session, as camera exercises do
+
+### Changes to Enah's Update-10-31-26: *web\src\app\(app)\dashboard\_components\VideoGuide.tsx* and *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*
+
+- Started the video guide's steps for choosing a video with "Press Attach video file" and "Press YouTube embed code", since the form has no Guide video heading
+- Ended the YouTube box's hint with "The step-by-step guide above shows each step." instead of naming a How to add a video link
+
+### *web\src\lib\manualSessions.test.tsx*, *web\scripts\verify-manual-sessions.ts*, *web\src\lib\adminUserEdit.test.ts*, *web\package.json*, and ten other test and check files
+
+- Tested the camera page's own custom-exercise start, pain stop, End session, and recording code and the guide itself with fixtures, and the manual start route's sign-in and notice checks
+- Added npm run verify:manual:db, which runs the custom-exercise start and end queries against connection-private temporary tables
+- Tested what the admin's Edit form sends
+- Covered leaving out replaced attempts in the trend, Reports, and PDF tests, restoring an older guide video in the exercise route and exercise database tests, and recovering a deleted session video in the recording tests
+- Updated the attachment delete test for the therapist's Delete in Enah's update, the clinical field test for the removed Therapist ID, and the camera replay and session reader checks for the code they now load
+
+### *web\README.md*
+
+- Described which sessions the progress views use, how custom-exercise starts and pain stops are saved, npm run verify:manual:db, and how long removed session videos are kept
+
+### *Validation*
+
+- 99 framework-free TypeScript suites pass, including the manual session, admin edit, trend, Reports, recording, and exercise route tests
+- Undoing each 11-03 change to the custom exercise code and the admin's Edit form, one at a time, made the test written for it fail
+- The custom exercise database check passes all 4 cases on connection-private temporary tables, the exercise check all 13, and the session reader and all 16 date correction checks pass too
+- Replaying the pilot recordings through the camera code gives the same summary as before
+- Type check, lint (no errors), and a production build on Next.js 16.4.3 pass
+
+### *Remaining boundaries*
+
+- None of this update has been tried in a signed-in session, as the laptop database lacks the tables and columns it needs
+- The server already runs the progress chart change; the rest of this update is not deployed and needs the SQL steps in Enah's section first
+- With no rest between sets, the start of a set is not recorded until the last set's part has finished uploading
+- An admin's own change to Diagnosis, Condition, or Prescription still replaces a therapist's newer one, and the Edit form's other fields are sent as they were loaded
+- The video guide's screenshots of the form, video-file-chosen.png and video-youtube-found.png, still show the Guide video heading and must be taken again
+- Blender authoring changes and six guide-validation records are excluded from this update
+
+---
 
 ## 📌 Update-10-31-26 | *Enah*
 

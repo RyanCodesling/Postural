@@ -78,7 +78,7 @@ export async function createCustomExercise<T extends { id: string }>(
  * Saves an edited custom exercise: its name and description, then its guide
  * video when that changed. Removing it or switching to YouTube goes with the
  * edit; a replacement file is uploaded after it, and replaces the old video
- * (the server deletes the file it replaced).
+ * (the server moves the video it replaced to Recently Deleted).
  */
 export async function saveCustomExerciseEdit<T extends { id: string }>(
   id: string,
@@ -219,7 +219,7 @@ export default function ExerciseVideoField({ value, onChange, onError, name = "e
             rows={3}
           />
           <p className="mt-1 text-xs text-gray-500">
-            On YouTube, choose Share → Embed → Copy and paste the code here. A YouTube link also works. How to add a video shows each step.
+            On YouTube, choose Share → Embed → Copy and paste the code here. A YouTube link also works. The step-by-step guide above shows each step.
             {value.embed.trim() !== "" && (
               parseYouTubeVideoId(value.embed)
                 ? <span className="ml-1 font-medium text-green-700">Video found.</span>

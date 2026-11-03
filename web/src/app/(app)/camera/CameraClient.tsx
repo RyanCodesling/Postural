@@ -4383,6 +4383,8 @@ export default function CameraClient() {
    */
   const beginCustomSession = async (exercise: Exercise): Promise<CustomStartResult> => {
     customSessionIdRef.current = null;
+    // A pain report left unanswered belongs to the earlier attempt, not this one.
+    customReportSessionIdRef.current = null;
     customRecordingConsentRef.current = false;
     if (
       user?.role !== "patient" ||
@@ -4462,11 +4464,24 @@ export default function CameraClient() {
     return { sets: runtime.sets, restSeconds: runtime.restSeconds };
   };
 
-  /** Each custom set is its own recording part; rest is not recorded. */
+  /**
+   * Each custom set is its own recording part; rest is not recorded. Opening a
+   * part ends any part still recording, so while the last set's part is still
+   * closing (no rest, or a short one) the next part waits for it, and does not
+   * open if the session ended or its recording was stopped meanwhile.
+   */
   const recordCustomSet = () => {
-    if (customSessionIdRef.current !== null && customRecordingConsentRef.current && !customRecordingStoppedRef.current) {
-      startSessionRecording(customSessionIdRef.current);
+    const sessionId = customSessionIdRef.current;
+    if (sessionId === null || !customRecordingConsentRef.current || customRecordingStoppedRef.current) return;
+    const closing = recorderRef.current;
+    if (!closing) {
+      startSessionRecording(sessionId);
+      return;
     }
+    stopSessionRecording();
+    void closing.stop().finally(() => {
+      if (customSessionIdRef.current === sessionId && recorderRef.current === null) recordCustomSet();
+    });
   };
   const pauseCustomRecording = () => stopSessionRecording();
 
@@ -4493,6 +4508,8 @@ export default function CameraClient() {
    */
   const endCustomSession = async (reason: "completed" | "user" | "pain"): Promise<string | null> => {
     setCustomRecordingOpen(false);
+    // No later part opens for this session, not even one waiting for the last to close.
+    customRecordingConsentRef.current = false;
     stopSessionRecording(true);
     const sessionId = customSessionIdRef.current;
     if (reason === "completed" || sessionId === null) return null;
@@ -4500,7 +4517,8 @@ export default function CameraClient() {
     if (error) return error;
     // A retry must retain the same target until the server acknowledges it.
     if (customSessionIdRef.current === sessionId) customSessionIdRef.current = null;
-    if (reason === "pain") customReportSessionIdRef.current = sessionId;
+    // "Pain after this attempt" follows an early end as it follows a pain stop.
+    customReportSessionIdRef.current = sessionId;
     return null;
   };
 
@@ -8933,6 +8951,27 @@ export default function CameraClient() {
     user?.role === "patient" && (sessionState === "idle" || sessionState === "ended")
       ? readVideoChoice(user.id)
       : null;
+  // Shown beside Start session, camera or custom, with "Ask me each time" to undo it.
+  const videoChoiceNote = rememberedVideoChoice && (
+    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+      Session video: {rememberedVideoChoice.record ? "recorded" : "not recorded"}, as you asked this
+      device to remember.{" "}
+      <button
+        type="button"
+        onClick={() => { forgetVideoChoice(user?.id); setVideoChoiceVersion((v) => v + 1); }}
+        style={{
+          padding: 0,
+          border: "none",
+          background: "none",
+          color: ACCENT.text,
+          textDecoration: "underline",
+          fontFamily: "var(--sans)",
+          fontSize: 13,
+          cursor: "pointer",
+        }}
+      >Ask me each time</button>
+    </p>
+  );
   const selectedExerciseIndex = assignedExercises.findIndex((e) => e.id === selectedExercise);
   const hasPrevExercise = selectedExerciseIndex > 0;
   const hasNextExercise =
@@ -11623,10 +11662,11 @@ export default function CameraClient() {
                       onBeforeStart={() => beginCustomSession(selectedExerciseObj)}
                       onSetStart={recordCustomSet}
                       onRestStart={pauseCustomRecording}
-                      onEnd={(reason) => void endCustomSession(reason)}
+                      onEnd={(reason) => endCustomSession(reason)}
                       onRestChange={setCustomRest}
                       onPainStop={user?.role === "patient" ? () => endCustomSession("pain") : undefined}
                       painReport={user?.role === "patient" ? { pending: customPainReportPending, save: saveCustomPainReport } : undefined}
+                      startNote={videoChoiceNote}
                     />
                   ) : (
                   <button
@@ -11651,26 +11691,7 @@ export default function CameraClient() {
                         : "Start session"}
                   </button>
                   )}
-                  {rememberedVideoChoice && !selectedExerciseObj?.isCustom && (
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
-                      Session video: {rememberedVideoChoice.record ? "recorded" : "not recorded"}, as you asked this
-                      device to remember.{" "}
-                      <button
-                        type="button"
-                        onClick={() => { forgetVideoChoice(user?.id); setVideoChoiceVersion((v) => v + 1); }}
-                        style={{
-                          padding: 0,
-                          border: "none",
-                          background: "none",
-                          color: ACCENT.text,
-                          textDecoration: "underline",
-                          fontFamily: "var(--sans)",
-                          fontSize: 13,
-                          cursor: "pointer",
-                        }}
-                      >Ask me each time</button>
-                    </p>
-                  )}
+                  {!selectedExerciseObj?.isCustom && videoChoiceNote}
 
                   {(blockedBySchedule || scheduleNotice) && (
                     <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.55 0.14 45)" }}>
@@ -13699,7 +13720,7 @@ type CustomStartResult = boolean | Pick<RuntimePrescription, "sets" | "restSecon
 
 function CustomGuidedSession({
   sets: scheduledSets, restSeconds: scheduledRestSeconds, onComplete, onNext, onBackToSchedule,
-  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport,
+  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote,
 }: {
   sets: number;
   restSeconds: number;
@@ -13713,14 +13734,16 @@ function CustomGuidedSession({
   onSetStart?: () => void;
   /** Rest begins: the set's recording part stops. */
   onRestStart?: () => void;
-  /** The session ends, after the last set or early; any recording stops. */
-  onEnd?: (reason: "completed" | "user") => void;
+  /** The session ends, after the last set or early; any recording stops. An early end resolves to an error, or null once saved. */
+  onEnd?: (reason: "completed" | "user") => void | Promise<string | null>;
   /** The rest countdown, for the camera view's rest overlay; null when not resting. */
   onRestChange?: (rest: { remainingSec: number; totalSec: number; nextSet: number; sets: number } | null) => void;
   /** "Stop — I have pain" (patients): ends the session as stopped for pain; resolves to an error, or null. */
   onPainStop?: () => Promise<string | null>;
   /** "Pain after this attempt" (patients), asked once the session has ended. */
   painReport?: { pending: () => boolean; save: (report: CustomPainReport) => Promise<string | null> };
+  /** Shown under Start session before the session starts, such as a remembered video choice. */
+  startNote?: React.ReactNode;
 }) {
   const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
   const [runDose, setRunDose] = useState({ sets: scheduledSets, restSeconds: scheduledRestSeconds });
@@ -13732,7 +13755,7 @@ function CustomGuidedSession({
   const [save, setSave] = useState<{ state: "idle" | "saving" | "saved" } | { state: "error"; message: string }>(
     { state: "idle" },
   );
-  // "Pain after this attempt": asked after the last set and after a pain stop.
+  // "Pain after this attempt": asked after the last set, an early end and a pain stop.
   const [asking, setAsking] = useState(false);
   const [painScore, setPainScore] = useState(0);
   const [painTiming, setPainTiming] = useState<PainTiming | "">("");
@@ -13825,7 +13848,8 @@ function CustomGuidedSession({
   };
   const finishSet = () => {
     if (currentSet >= sets) { setPhase("done"); onEnd?.("completed"); void saveCompletion(); return; }
-    if (restSeconds <= 0) { setCurrentSet((set) => set + 1); return; }
+    // With no rest the set's recording part still closes and the next set's opens.
+    if (restSeconds <= 0) { onRestStart?.(); setCurrentSet((set) => set + 1); onSetStart?.(); return; }
     onRestStart?.();
     const startedAt = Date.now();
     setNow(startedAt);
@@ -13833,7 +13857,13 @@ function CustomGuidedSession({
     setPhase("rest");
   };
   const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
-  const endEarly = () => { setPhase("idle"); setRestEndsAt(null); onEnd?.("user"); };
+  const endEarly = async () => {
+    setPhase("idle");
+    setRestEndsAt(null);
+    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    const error = await Promise.resolve(onEnd?.("user")).catch(() => "Your session could not be saved.");
+    if (!error) askPainAfter();
+  };
   const stopForPain = async () => {
     if (!onPainStop || painStopping) return;
     setPhase("pain");
@@ -14002,8 +14032,9 @@ function CustomGuidedSession({
           {phase === "starting" ? "Starting…" : phase === "done" ? "Restart" : "Start session"}
         </button>
       )}
+      {phase === "idle" && startNote}
       {(phase === "set" || phase === "rest") && (
-        <button type="button" onClick={endEarly}
+        <button type="button" onClick={() => void endEarly()}
           style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "10px 14px", fontSize: 14 }}>
           End session
         </button>

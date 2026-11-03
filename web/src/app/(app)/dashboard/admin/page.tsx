@@ -8,6 +8,7 @@ import { ADMIN_TOURS } from "../_components/tours";
 import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/DashboardKit";
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
+import { adminEditBody } from "@/lib/adminUserEdit";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
@@ -153,6 +154,8 @@ export default function AdminDashboard() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  // The user as it was when Edit opened, to tell which fields the admin changed.
+  const [editingLoaded, setEditingLoaded] = useState<User | null>(null);
   const editAttachments = usePatientAttachments(editingUser?.role === "patient" ? editingUser.id : null);
   const [newPatientImages, setNewPatientImages] = useState<File[]>([]);
   const [editPatientImages, setEditPatientImages] = useState<File[]>([]);
@@ -437,6 +440,7 @@ export default function AdminDashboard() {
 
   const handleEditUser = (user: User) => {
     setEditingUser({ ...user });
+    setEditingLoaded({ ...user });
     setEditingUserId(user.id);
     setEditPatientImages([]);
     setEditRemovedAttachmentIds([]);
@@ -456,7 +460,7 @@ export default function AdminDashboard() {
       const res = await fetch(`/api/users/${editingUserId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editingUser),
+        body: JSON.stringify(editingLoaded ? adminEditBody(editingLoaded, editingUser) : editingUser),
       });
       const data = await res.json();
       if (res.ok) {
@@ -931,6 +935,7 @@ export default function AdminDashboard() {
                         condition: "",
                       });
                       setEmailError(null);
+                      setNewPatientImages([]);
                     }
                   }
                 }}

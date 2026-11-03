@@ -40,6 +40,33 @@ function cameraClient(fetchImpl: typeof fetch) {
   return context;
 }
 
+/** The camera page's recorder calls, with a fixture recorder whose part closes when released. */
+function recordingClient() {
+  const recorders: Array<{ started: number; release: () => void }> = [];
+  class FixtureRecorder {
+    started = 0;
+    release: () => void = () => {};
+    private stopping: Promise<void> | null = null;
+    constructor() { recorders.push(this); }
+    async start() { this.started++; return true; }
+    stop() { return this.stopping ??= new Promise<void>(resolve => { this.release = resolve; }); }
+  }
+  let fetchImpl: typeof fetch = async () => response(200, { success: true });
+  const context: any = vm.createContext({
+    exports: {}, fetch: (...args: Parameters<typeof fetch>) => fetchImpl(...args), SessionRecorder: FixtureRecorder,
+    streamRef: { current: {} }, recorderRef: { current: null }, recordingWantedRef: { current: false },
+    customSessionIdRef: { current: 71 }, customRecordingConsentRef: { current: true },
+    customRecordingStoppedRef: { current: false }, customReportSessionIdRef: { current: null },
+    perfToIso: () => new Date(0).toISOString(), performance: { now: () => 0 }, Date,
+    setRecordingState() {}, setCustomRecordingOpen() {},
+    isRecord: (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value),
+  });
+  vm.runInContext(compile(cameraDeclarations(["startSessionRecording", "stopSessionRecording", "recordCustomSet",
+    "patchCustomSession", "endCustomSession"]) +
+    "\nglobalThis.subject = {stopSessionRecording, recordCustomSet, endCustomSession};"), context);
+  return { context, recorders, setFetch: (impl: typeof fetch) => { fetchImpl = impl; } };
+}
+
 function guided(props: Record<string, any>) {
   const state: any[] = [];
   let index = 0;
@@ -79,7 +106,9 @@ async function main() {
   const offline = cameraClient((async () => { throw new Error("offline"); }) as typeof fetch);
   assert.equal(await offline.subject.beginCustomSession(exercise), false);
   const accepted = cameraClient((async () => response(200, { sessionId: 71, runtimePrescription: runtime })) as typeof fetch);
+  accepted.customReportSessionIdRef.current = 70;
   const dose = await accepted.subject.beginCustomSession(exercise);
+  assert.equal(accepted.customReportSessionIdRef.current, null, "an unanswered report target stays with its own attempt");
   assert.deepEqual(JSON.parse(JSON.stringify(dose)), { sets: 2, restSeconds: 0 });
   assert.equal(accepted.assignedExercisesRef.current[0].reps, 5);
   assert.equal(accepted.assignedExercisesRef.current[0].prescribedSide, "left");
@@ -132,6 +161,56 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert(pain.html().includes("has been notified"));
   console.log("PASS pain-stop feedback distinguishes pending, failed and acknowledged saves");
+
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const rec = recordingClient();
+  rec.context.subject.recordCustomSet();
+  assert.equal(rec.recorders.length, 1);
+  assert.equal(rec.recorders[0].started, 1, "the first set's part opens at once");
+  rec.context.subject.stopSessionRecording();
+  rec.context.subject.recordCustomSet();
+  assert.equal(rec.recorders.length, 1, "with no rest the next part waits for the last one to close");
+  rec.recorders[0].release();
+  await flush();
+  assert.equal(rec.recorders.length, 2);
+  assert.equal(rec.recorders[1].started, 1, "then it opens");
+  let finishPatch!: (value: Response) => void;
+  rec.setFetch((() => new Promise<Response>(resolve => { finishPatch = resolve; })) as typeof fetch);
+  rec.context.subject.stopSessionRecording();
+  rec.context.subject.recordCustomSet();
+  const ending = rec.context.subject.endCustomSession("user");
+  rec.recorders[1].release();
+  await flush();
+  assert.equal(rec.recorders.length, 2, "no part opens once the session is ending");
+  finishPatch(response(200, { success: true }));
+  assert.equal(await ending, null);
+  assert.equal(rec.context.customReportSessionIdRef.current, 71, "pain after this attempt follows an early end");
+  console.log("PASS a custom set's part opens only after the last one closes, and never once the session ends");
+
+  for (const [saved, asked] of [[null, true], ["Not saved", false]] as const) {
+    const ends: string[] = [];
+    const early = guided({ onEnd: async (reason: string) => { ends.push(reason); return saved; },
+      painReport: { pending: () => true, save: async () => null } });
+    await early.click("Start session");
+    await early.click("End session");
+    assert.deepEqual(ends, ["user"]);
+    assert.equal(early.html().includes("Pain after this attempt"), asked, `early end ${saved ?? "saved"}`);
+  }
+  const parts: string[] = [];
+  const noRest = guided({ onBeforeStart: async () => ({ sets: 2, restSeconds: 0 }),
+    onSetStart: () => parts.push("open"), onRestStart: () => parts.push("close") });
+  await noRest.click("Start session");
+  await noRest.click("Set done");
+  assert(noRest.html().includes("Set 2 of 2"));
+  assert.deepEqual(parts, ["open", "close", "open"], "with no rest each set still gets its own part");
+  const noted = guided({ startNote: "Session video: recorded, as you asked this device to remember." });
+  assert(noted.html().includes("as you asked this device to remember"));
+  await noted.click("Start session");
+  assert(!noted.html().includes("as you asked this device to remember"), "the note shows only beside Start session");
+  const camera = readFileSync(new URL("../app/(app)/camera/CameraClient.tsx", import.meta.url), "utf8");
+  assert.match(camera, /startNote=\{videoChoiceNote\}/, "a custom exercise shows the remembered video choice");
+  assert.match(camera, /\{!selectedExerciseObj\?\.isCustom && videoChoiceNote\}/, "a camera exercise keeps it");
+  console.log("PASS End session asks pain after this attempt once saved, each set records its own part, and a remembered video choice shows beside a custom Start session");
 
   const oldConsent = { consentedAt: "2026-10-01T00:00:00Z", notice: "session_video_notice_v3" };
   assert.deepEqual(videoConsentFromContext({ videoConsent: oldConsent }), oldConsent);

@@ -38,7 +38,7 @@ const FILE_STEPS: GuideStep[] = [
   {
     title: "Choose the file",
     lines: [
-      "Under Guide video, press Attach video file, then Choose File and pick the video.",
+      "Press Attach video file, then Choose File and pick the video.",
       "Its name and size appear under the button. If it is refused, the message says why.",
       "When editing an exercise, press Replace with video file instead. Keep current video leaves its video as it is.",
     ],
@@ -95,7 +95,7 @@ const YOUTUBE_STEPS: GuideStep[] = [
   {
     title: "Paste it in the form",
     lines: [
-      "Under Guide video, press YouTube embed code, click in the box and paste (Ctrl+V, or long-press and Paste on a phone).",
+      "Press YouTube embed code, click in the box and paste (Ctrl+V, or long-press and Paste on a phone).",
       "\"Video found.\" in green means the code is right. \"No YouTube video found in this code.\" in red means part of it is missing; copy it again.",
       "When editing an exercise, press Replace with YouTube instead.",
     ],

@@ -390,7 +390,7 @@ export default function PatientDashboardPage() {
                   Finish a few sessions to see your progress here.
                 </div>
               ) : (
-                <div id="tour-progress-trends" className="grid items-start gap-4">
+                <div id="tour-progress-trends" className="grid grid-cols-1 items-start gap-4">
                   {trendGroups.map((g) => (
                     <ExerciseTrendCard key={g.contextKey} group={g} />
                   ))}

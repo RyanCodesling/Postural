@@ -284,9 +284,8 @@ interface ReportOccurrence {
   status: OccurrenceStatus;
 }
 
-// A tab's panel; every panel stays visible when the page is printed.
 function TabPanel({ active, children }: { active: boolean; children: React.ReactNode }) {
-  return <div className={active ? "" : "hidden print:block"}>{children}</div>;
+  return <div className={active ? "" : "hidden"}>{children}</div>;
 }
 
 export default function PatientDetailPage() {
@@ -545,17 +544,10 @@ export default function PatientDetailPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto print:px-0 print:py-0 print:max-w-none">
-
-      {/* Print-only report header */}
-      <div className="hidden print:block mb-6 border-b border-gray-300 pb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Patient Progress Report</h1>
-        <p className="text-sm text-gray-700 mt-1">{patient.name}</p>
-        <p className="text-xs text-gray-500">Generated {fmtDateTime(new Date().toISOString())}</p>
-      </div>
+    <div className="max-w-6xl mx-auto">
 
       {/* Header */}
-      <div className="print:hidden">
+      <div>
         <Link
           href="/dashboard/therapist/patients"
           className="inline-flex items-center gap-1 text-sm text-green-700 hover:text-green-800 mb-3"
@@ -582,13 +574,6 @@ export default function PatientDetailPage() {
               }}
               className="inline-flex flex-1 items-center justify-center gap-2 whitespace-nowrap px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60 sm:flex-none"
             />
-            <button
-              onClick={() => window.print()}
-              className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap px-4 py-2 border border-green-700 text-green-700 text-sm font-medium rounded-lg hover:bg-green-50 transition sm:w-auto"
-            >
-              <PrinterIcon />
-              Print / Save as PDF
-            </button>
           </div>
         </div>
 
@@ -620,7 +605,7 @@ export default function PatientDetailPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0 text-green-600"><PersonIcon /></div>
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700"><PersonIcon /></div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Full Name</p>
               <p className="text-sm font-semibold text-gray-900">{patient.name}</p>
@@ -628,7 +613,7 @@ export default function PatientDetailPage() {
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0 text-green-600"><PersonIcon /></div>
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700"><PersonIcon /></div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Age</p>
               <p className="text-sm font-semibold text-gray-900">
@@ -638,7 +623,7 @@ export default function PatientDetailPage() {
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0 text-green-600"><EmailIcon /></div>
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700"><EmailIcon /></div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Email</p>
               <p className="text-sm font-semibold text-gray-900">{patient.email || "—"}</p>
@@ -646,7 +631,7 @@ export default function PatientDetailPage() {
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0 text-green-600"><TrendingIcon /></div>
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700"><TrendingIcon /></div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Progress Status</p>
               <span className={`inline-block mt-1 px-3 py-1 text-xs rounded-full font-medium ${
@@ -662,7 +647,7 @@ export default function PatientDetailPage() {
           </div>
 
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 shrink-0 text-green-600"><PulseIcon /></div>
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-green-50 text-green-700"><PulseIcon /></div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Assigned Therapist</p>
               <p className="text-sm font-semibold text-gray-900">
@@ -689,14 +674,14 @@ export default function PatientDetailPage() {
                   prescription: patient.prescription ?? "",
                 });
               }}
-              className="inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 print:hidden"
+              className="inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800"
             >
               Edit
             </button>
           )}
         </div>
         {clinicalDraft ? (
-          <div className="space-y-4 print:hidden">
+          <div className="space-y-4">
             {([
               ["diagnosis", "Diagnosis", 3],
               ["condition", "Condition", 3],
@@ -771,7 +756,7 @@ export default function PatientDetailPage() {
               <span className="text-xs text-gray-500">{patientImages.length} file{patientImages.length === 1 ? "" : "s"}</span>
             )}
           </div>
-          <label className={`cursor-pointer inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 print:hidden ${uploadingFiles ? "pointer-events-none opacity-60" : ""}`}>
+          <label className={`cursor-pointer inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800 ${uploadingFiles ? "pointer-events-none opacity-60" : ""}`}>
             {uploadingFiles ? "Uploading…" : "+ Add files"}
             <input
               ref={fileInputRef}
@@ -783,7 +768,7 @@ export default function PatientDetailPage() {
             />
           </label>
         </div>
-        <p className="-mt-3 mb-4 text-xs text-gray-500 print:hidden">
+        <p className="-mt-3 mb-4 text-xs text-gray-500">
           Up to 5 files at a time, 5 MB each: images, PDF, Word, Excel, PowerPoint, RTF or TXT.
         </p>
         {filesMessage && (
@@ -822,7 +807,7 @@ export default function PatientDetailPage() {
                 <button
                   type="button"
                   onClick={() => setFileToDelete(attachment)}
-                  className="mt-1 self-start rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 print:hidden"
+                  className="mt-1 self-start rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50"
                 >
                   Delete
                 </button>
@@ -834,7 +819,7 @@ export default function PatientDetailPage() {
       </div>
 
       {fileToDelete && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 print:hidden" role="presentation">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="presentation">
           <section role="alertdialog" aria-modal="true" aria-labelledby="delete-file-title" className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl">
             <h2 id="delete-file-title" className="mb-1 text-lg font-bold text-gray-900">Delete this file?</h2>
             <p className="mb-5 break-words text-sm text-gray-600">
@@ -867,7 +852,7 @@ export default function PatientDetailPage() {
           <h2 className="text-gray-900 font-semibold text-xl">Current Prescriptions</h2>
           <button
             onClick={scrollToSessions}
-            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-base font-medium rounded-lg transition print:hidden"
+            className="px-4 py-2 bg-green-700 hover:bg-green-800 text-white text-base font-medium rounded-lg transition"
           >
             View Patient Progress
           </button>
@@ -988,7 +973,7 @@ export default function PatientDetailPage() {
       </TabPanel>
 
       <TabPanel active={tab === "reports"}>
-      <div id="tour-detail-reports" className="mb-6 print:hidden">
+      <div id="tour-detail-reports" className="mb-6">
         <PatientReports sessions={sessions} occurrences={occurrences} />
       </div>
 
@@ -1092,7 +1077,7 @@ export default function PatientDetailPage() {
           };
           return (
             <>
-              <div className="relative mb-4 w-full max-w-sm print:hidden">
+              <div className="relative mb-4 w-full max-w-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                   <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                 </svg>
@@ -1125,8 +1110,7 @@ export default function PatientDetailPage() {
                             <span aria-hidden>{open ? "▲" : "▼"}</span>
                           </span>
                         </button>
-                        {/* Printing keeps every day's sessions. */}
-                        <div className={`space-y-3 p-3 ${open ? "" : "hidden print:block"}`}>
+                        <div className={`space-y-3 p-3 ${open ? "" : "hidden"}`}>
                           {group.sessions.map((s) => (
                             <SessionCard
                               key={s.id}
@@ -1152,12 +1136,6 @@ export default function PatientDetailPage() {
       </div>
 
       </TabPanel>
-
-      {/* Print-only disclaimer footer */}
-      <p className="hidden print:block text-xs text-gray-500 mt-6 pt-3 border-t border-gray-300">
-        Supplementary monitoring output — not a medical device and not clinically validated.
-        Figures are estimated from a single front-facing camera and require professional interpretation.
-      </p>
 
     </div>
   );
@@ -1856,14 +1834,6 @@ function PulseIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
       <path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99l1.5 1.5z"/>
-    </svg>
-  );
-}
-
-function PrinterIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v3h12V3z"/>
     </svg>
   );
 }

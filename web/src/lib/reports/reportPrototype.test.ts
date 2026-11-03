@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const html = readFileSync(new URL("../../../public/pt_session_summary_printable_report.html", import.meta.url), "utf8");
-assert.equal(html, readFileSync(new URL("../../../../pt_session_summary_printable_report.html", import.meta.url), "utf8"));
 const markup = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "");
 const fields = new Map<string, { value: string }>();
 for (const match of markup.matchAll(/<input\b[^>]*\bid="([^"]+)"[^>]*>/g)) {

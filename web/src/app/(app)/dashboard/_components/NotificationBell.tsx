@@ -51,6 +51,8 @@ export default function NotificationBell() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
+  // Notifications waiting on the delete confirmation; null while none is asked.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[] | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Where the panel starts on a phone: just under the header, whose height grows when a long name wraps.
@@ -219,19 +221,14 @@ export default function NotificationBell() {
     await sendUpdate("PUT", { action: "mark_all_read" }, "Failed to mark all notifications as read:");
   };
 
-  const handleDeleteSingle = async (id: number) => {
-    setData((prev) => ({ ...prev, notifications: prev.notifications.filter((n) => n.id !== id) }));
-    setSelectedIds((prev) => prev.filter((x) => x !== id));
-    setActiveNotification(null);
-    await sendUpdate("DELETE", { id }, "Failed to delete notification:");
-  };
-
-  const handleDeleteSelected = async () => {
-    if (selectedIds.length === 0) return;
-    const targetIds = [...selectedIds];
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteIds || pendingDeleteIds.length === 0) return;
+    const targetIds = pendingDeleteIds;
+    setPendingDeleteIds(null);
     setData((prev) => ({ ...prev, notifications: prev.notifications.filter((n) => !targetIds.includes(n.id)) }));
-    setSelectedIds([]);
-    await sendUpdate("DELETE", { ids: targetIds }, "Failed to delete selected notifications:");
+    setSelectedIds((prev) => prev.filter((x) => !targetIds.includes(x)));
+    if (activeNotification && targetIds.includes(activeNotification.id)) setActiveNotification(null);
+    await sendUpdate("DELETE", { ids: targetIds }, "Failed to delete notifications:");
   };
 
   const handleToggleSelect = (e: React.MouseEvent, id: number) => {
@@ -336,7 +333,7 @@ export default function NotificationBell() {
             <div className="flex items-center gap-3">
               {selectedIds.length > 0 && (
                 <button
-                  onClick={handleDeleteSelected}
+                  onClick={() => setPendingDeleteIds([...selectedIds])}
                   className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition cursor-pointer flex items-center"
                   title="Delete selected"
                 >
@@ -496,7 +493,7 @@ export default function NotificationBell() {
             {/* Modal Actions */}
             <div className="mt-6 flex justify-end gap-3 border-t border-gray-100 pt-4">
               <button
-                onClick={() => handleDeleteSingle(activeNotification.id)}
+                onClick={() => setPendingDeleteIds([activeNotification.id])}
                 className="px-4 py-2 border border-red-500 hover:bg-red-50 text-red-600 rounded-lg text-sm font-semibold transition cursor-pointer"
               >
                 Delete
@@ -517,6 +514,46 @@ export default function NotificationBell() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Delete confirmation, above the details popup */}
+      {pendingDeleteIds && (
+        <div
+          className="fixed inset-0 z-[70] grid place-items-center bg-black/50 p-4"
+          role="presentation"
+          onKeyDown={(event) => { if (event.key === "Escape") setPendingDeleteIds(null); }}
+        >
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-notification-title" className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-xl">
+            <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-red-100" aria-hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-red-600" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+              </svg>
+            </div>
+            <h2 id="delete-notification-title" className="mb-1 text-lg font-bold text-gray-900">
+              {pendingDeleteIds.length === 1 ? "Delete this notification?" : `Delete ${pendingDeleteIds.length} notifications?`}
+            </h2>
+            <p className="mb-5 text-sm text-gray-600">
+              {pendingDeleteIds.length === 1 ? "It is" : "They are"} removed from your notifications and cannot be recovered.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setPendingDeleteIds(null)}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

@@ -1,5 +1,47 @@
 # Sprint Updates 
 
+## 📌 Update-11-03-26 | *Enah*
+
+- Kept the patient's My Progress charts inside the screen on phones and tablets, also when a chart's point table is open, as on the therapist's Patient Profile
+- Removed Print / Save as PDF from the therapist's Patient Profile with its print-only layout, keeping Progress report (PDF)
+- Deleted the root copy of the session report demo, pt_session_summary_printable_report.html, keeping the one the app serves
+- Asked before deleting notifications, for admins, therapists, and patients, in the app's own delete confirmation window, saying they cannot be recovered
+- Gave the Patient Profile's Personal Information icons the round light-green style of the View Profile's
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Sized My Progress's exercise trend cards to the page's width, so a wide point table opened under a chart scrolls inside its card instead of widening the whole page
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Removed the Print / Save as PDF button and its printer icon; Progress report (PDF) is the Patient Profile's report
+- Removed the print-only Patient Progress Report header and disclaimer footer, the printing of every tab and every day's sessions, and the classes that hid buttons and windows when printing
+- Put the Full Name, Age, Email, Progress Status, and Assigned Therapist icons in round light-green circles, as on the patient's and therapist's View Profile
+
+### *pt_session_summary_printable_report.html* and *web\src\lib\reports\reportPrototype.test.ts*
+
+- Deleted the root copy of the session report demo; web\public\pt_session_summary_printable_report.html stays, so /dashboard/therapist/session-report still shows it
+- Stopped the report prototype test comparing the served copy with the deleted root copy
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+
+- Opened a delete confirmation window from the notification window's Delete and from Delete selected, titled "Delete this notification?" or "Delete N notifications?", with Cancel and Delete
+- Said in it that the notifications are removed and cannot be recovered; Cancel or Escape closes it without deleting
+- Showed it above the notification window, in the style of the session video's delete window
+
+### *Validation*
+
+- Type check passes, and lint passes on the notification bell and the Patient Profile
+- The report prototype test passes
+
+### *Remaining boundaries*
+
+- None of this update has been tried in a signed-in session or at phone and tablet widths
+- A deleted notification is still only marked deleted in the database; nothing in the app restores it
+- The print styling in the shared page frame stays for other pages
+
+---
+
 ## 📌 Update-11-03-26 | *RyanCodesling*
 
 - Combined Enah's Update-10-31-26 with the progress chart change, keeping all of her features

@@ -1,5 +1,68 @@
 # Sprint Updates 
 
+## 📌 Update-11-04-26 | *RyanCodesling*
+
+- Removed code that nothing in the app used, and corrected comments that no longer described the code; what the app does is unchanged
+- Added CODE_MAP.md, which says which file does what
+
+### *CODE_MAP.md*
+
+- Added a map of the code: the repository's folders, how a camera session runs from the camera to the saved session, a table from each feature to its files, answers to common questions, an outline of CameraClient.tsx by line range, the decision numbers that comments cite, and the checks to run
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Corrected the T-pose hold timer notes: each arm is credited while it is in the band, a both-arm set ends when the slower arm reaches the hold, and the time both arms spend in the band together does not decide it
+- Corrected notes that called finished parts placeholders or future work: the paired repetition and asymmetry fields, the repetition and set logs that Resume, the recap and the upload queue use, and the progress bar for holds
+- Described the side-split hold once, as the former ex_004 hold kept as the fallback, instead of in ten separate notes, and marked the ex_005 diagnostic as opt-in and off by default
+
+### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\poseMetrics.ts*
+
+- Corrected the notes on which exercises use the shoulder rise, and on its per-session baseline in the camera page, which is in use rather than leftover code
+- Labelled the side-bend neck fit as the earlier fit in the units used before the 2026-10-21 correction, and replaced a retired exercise's TODO with why it was not pursued
+- Renamed the "metric stubs" section, whose measures are all built, and removed its stub wording, two names that no longer exist in the code, and a stale ex_008 "TBD"
+- Removed references to documents outside the repository
+
+### *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\TrendChart.test.ts*, *web\src\lib\pose\faceLandmarkerShadow.ts*, and *web\src\lib\pose\faceLandmarkerShadow.test.ts*
+
+- Removed primaryPointDetail and faceRollImageDegrees, which only tests used; the face tests now read the roll from faceOrientationDegrees
+- Noted that trendStatus, the dashboard's earlier trend rule, is no longer called by the app
+
+### *web\src\lib\email.ts*, *web\src\app\api\users\[id]\route.ts*, and *web\src\lib\db.ts*
+
+- Removed the unused role argument of the account archived and account restored emails
+- Removed the unused therapist argument of validateProgramExerciseAccess, and noted that it checks only that each exercise exists and is not archived, not who created it
+
+### *web\src\lib\prescriptionContext.ts*, *web\src\lib\recording\storage.ts*, *web\src\lib\pose\velocityBidirectionalRepCounter.ts*, *web\src\lib\auth.ts*, and *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Noted that preSessionPainNeedsCaution and deleteRecording are called only by tests, and that no current exercise uses the velocity counter
+- Replaced auth.ts's "Temporary" header, and a function name in a patient dashboard comment that no longer exists
+
+### *web\src\app\(app)\dashboard\therapist\profile\page.tsx*, *web\public*, *apps\web*, *docs*, and *services\api*
+
+- Removed an unused React import, five unused starter images, and three empty placeholder folders
+
+### *web\scripts\export-trend-measures.ts*, *ml\README.md*, and three test files
+
+- Removed references to evidence folders outside the repository
+- Noted in ml\README.md that ex_004 was a side-split hold when that layer was built, and has been counted as neck side bends since 2026-09-24
+
+### *Validation*
+
+- Type check, lint (no errors or warnings), and a production build on Next.js 16.4.3 pass
+- 99 framework-free TypeScript suites pass
+- Replaying the pilot recordings through the camera code gives the same summary as before
+- The exercise database check passes all 13 cases
+
+### *Remaining boundaries*
+
+- No behaviour changed, so nothing was tried in a browser or with the camera
+- CODE_MAP.md gives CameraClient.tsx's outline as line ranges, which have to be redone when that file changes
+- CameraClient.tsx stays one large file, outlined in CODE_MAP.md rather than split
+- Left for a later decision: the Skip rest button, still marked temporary; the unused velocity counter and the ex_005 diagnostic; the [rep] console messages; the unlinked pose simulator page; web\scripts\check_notifications.ts, which lists admin users despite its name; the root package files behind the build's workspace warning; and the unused @types/bcryptjs package
+- Not deployed; deploying it needs no SQL
+
+---
+
 ## 📌 Update-11-03-26 | *Enah*
 
 - Kept the patient's My Progress charts inside the screen on phones and tablets, also when a chart's point table is open, as on the therapist's Patient Profile

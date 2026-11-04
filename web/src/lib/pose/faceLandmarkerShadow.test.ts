@@ -5,7 +5,6 @@
 import {
   angleDeltaDegrees,
   faceOrientationDegrees,
-  faceRollImageDegrees,
   fixedFaceRoiFromPose,
   type FaceTransformMatrix,
 } from "./faceLandmarkerShadow";
@@ -107,8 +106,8 @@ function orientationMatrixColumnMajor(
   );
 }
 
-close(faceRollImageDegrees(rotationMatrixColumnMajor(27)), -27);
-close(faceRollImageDegrees(rotationMatrixColumnMajor(-18, 2.5)), 18);
+close(faceOrientationDegrees(rotationMatrixColumnMajor(27))?.rollImageDeg ?? null, -27);
+close(faceOrientationDegrees(rotationMatrixColumnMajor(-18, 2.5))?.rollImageDeg ?? null, 18);
 {
   const orientation = faceOrientationDegrees(
     orientationMatrixColumnMajor(12, -23, 17, 2.5),
@@ -133,7 +132,7 @@ close(faceRollImageDegrees(rotationMatrixColumnMajor(-18, 2.5)), 18);
   close(orientation.pitchDeg, -9);
 }
 assert(
-  faceRollImageDegrees({ rows: 3, columns: 3, data: Array(16).fill(0) }) === null,
+  (faceOrientationDegrees({ rows: 3, columns: 3, data: Array(16).fill(0) })?.rollImageDeg ?? null) === null,
   "invalid matrix shape was accepted",
 );
 assert(

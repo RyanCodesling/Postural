@@ -376,8 +376,7 @@ export async function sendEmailChangedAdminNotification(
 
 export async function sendAccountArchivedUserEmail(
   email: string,
-  name: string,
-  role: string
+  name: string
 ): Promise<boolean> {
   const subject = "Your Account Has Been Archived";
   const body = `
@@ -439,8 +438,7 @@ export async function sendAccountArchivedAdminEmail(
 
 export async function sendAccountRestoredUserEmail(
   email: string,
-  name: string,
-  role: string
+  name: string
 ): Promise<boolean> {
   const subject = "Your Account Has Been Restored";
   const body = `

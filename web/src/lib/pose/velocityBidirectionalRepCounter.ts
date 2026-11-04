@@ -1,3 +1,11 @@
+/**
+ * The "velocity-zero-crossing" strategy for signed bidirectional rep counting
+ * (`bidirectionalRepStrategy` in the exercise registry). No current exercise
+ * selects it: ex_004 is counted per side by two rep counters, and ex_005 uses
+ * the default magnitude-settle counter in `bidirectionalRepCounter.ts`. Kept
+ * for future bidirectional exercises; `coachingAudit.ts` and this file's tests
+ * still use it.
+ */
 import {
   type BidirectionalRepCounterDebugSnapshot,
   type BidirectionalRepEvent,

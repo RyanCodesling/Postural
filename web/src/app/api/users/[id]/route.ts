@@ -221,8 +221,7 @@ export async function PATCH(
 
       sendAccountRestoredUserEmail(
         userToRestore.email as string,
-        userToRestore.name as string,
-        userToRestore.role as string
+        userToRestore.name as string
       ).catch(console.error);
 
       if (adminEmail) {
@@ -301,8 +300,7 @@ export async function DELETE(
 
         sendAccountArchivedUserEmail(
           userToProcess.email as string,
-          userToProcess.name as string,
-          userToProcess.role as string
+          userToProcess.name as string
         ).catch(console.error);
 
         if (adminEmail) {

@@ -372,6 +372,11 @@ export function preSessionPainFromContext(context: unknown): PreSessionPain | nu
   return parsed.ok ? (parsed.value ?? null) : null;
 }
 
+/**
+ * The caution rule for a pre-session pain answer. Only tests call it; the
+ * camera page applies the same `PRE_SESSION_PAIN_CAUTION_SCORE` to the live
+ * survey directly.
+ */
 export function preSessionPainNeedsCaution(pain: PreSessionPain | null): boolean {
   return pain?.status === "reported" && pain.score >= PRE_SESSION_PAIN_CAUTION_SCORE;
 }

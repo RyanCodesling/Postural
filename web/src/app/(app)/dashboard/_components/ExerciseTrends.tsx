@@ -231,7 +231,8 @@ export function primaryMetricMeta(
 // change must clear max(3 for angle metrics, 5 % of the mean). The trend model
 // replaced it on the dashboard and in the progress report because, at the
 // session-to-session variation measured in recorded sessions, this rule labels
-// many histories with no real change as improving or regressing.
+// many histories with no real change as improving or regressing. Nothing in
+// the app calls it now; `ml/trend/baselines.py` is its Python port.
 export function trendStatus(values: number[], isAngle: boolean): TrendStatus | null {
   const n = values.length;
   if (n < 3) return null;
@@ -265,24 +266,6 @@ function fmtAxisDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-/** Hover detail for a primary-trend point: its value, then the session's volume. */
-export function primaryPointDetail(
-  s: TrendSession,
-  value: number,
-  meta: { label: string; unit: string; isAngle: boolean },
-  isIso: boolean,
-): string {
-  const shown = isIso
-    ? value.toFixed(1)
-    : meta.isAngle
-      ? String(Math.round(value))
-      : value.toFixed(2);
-  const sets = `${s.setCount} set${s.setCount === 1 ? "" : "s"}`;
-  return isIso
-    ? `${meta.label}: ${shown}${meta.unit} · ${sets}`
-    : `${meta.label}: ${shown}${meta.unit} · ${sets} · ${s.totalReps} rep${s.totalReps === 1 ? "" : "s"}`;
 }
 
 /** Hover detail for one side of the completed-reps trend. */

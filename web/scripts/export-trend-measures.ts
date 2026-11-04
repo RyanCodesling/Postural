@@ -85,8 +85,7 @@ type SessionOut = {
  *   c  the arm against the trunk (abduction):                    atan2(k sin r, cos r)
  * The press reads a trunk-length ratio and is left as stored. Converting a
  * stored peak this way lands within 0.05 +/- 1.07 of recomputing it from the
- * landmarks on the traced pilot repetitions
- * (Review_Artifacts/2026-10-21_aspect_lift/conversion_error.txt).
+ * landmarks on the traced pilot repetitions (checked 2026-10-21).
  */
 const ANGLE_GEOMETRY: Record<string, "a" | "b" | "c"> = {
   ex_001: "c", ex_002: "c", ex_004: "a", ex_005: "b", ex_006: "c", ex_008: "c",

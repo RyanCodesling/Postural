@@ -290,7 +290,7 @@ export default function PatientDashboardPage() {
 
   // Most-recent session per exercise — used to decide the in_progress sub-label
   // (In Progress vs Ended Early) from the latest attempt only (see
-  // exerciseStatusTag). Sessions arrive newest-first, but pick by startedAt
+  // dashboardOccurrenceStatusTag). Sessions arrive newest-first, but pick by startedAt
   // defensively in case ordering ever changes.
   const latestSessionByExercise = new Map<string, SessionLite>();
   for (const s of sessions) {

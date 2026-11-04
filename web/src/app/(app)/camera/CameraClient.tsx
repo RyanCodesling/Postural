@@ -404,7 +404,7 @@ type ResumeSnapshot = {
   pairedHoldMs: number;
   /**
    * Per-side hold totals for the current set of a side-split isometric
-   * (ex_004). Optional so snapshots written before the field existed still
+   * hold. Optional so snapshots written before the field existed still
    * parse; absent/zero for per-limb isometrics (which use pairedHoldMs).
    */
   sideHoldMs?: { left: number; right: number };
@@ -637,8 +637,10 @@ type SessionState =
 /**
  * Session set summary. The live UI keeps a local log, and patient sessions also
  * persist this shape to `set_events` so timed isometric holds have a durable
- * clinical outcome. `pairedReps` / `asymmetryIndex` are tracked as placeholders
- * for now (paired-rep matching is not implemented yet).
+ * clinical outcome. `pairedReps` is min(left, right) for a counted set (reps
+ * are not matched one-to-one in time) and 0 for a hold; `asymmetryIndex` is
+ * computeAsymmetryIndex of the set's left and right reps (hold times for a
+ * hold).
  */
 type CompletedSetRecord = {
   setIndex: number;
@@ -658,16 +660,17 @@ type CompletedSetRecord = {
    * Isometric-only: milliseconds of credited hold for this set, plus the
    * target. For a per-limb isometric (ex_006 T-pose) this is the time BOTH
    * arms were in the target band simultaneously. For a side-split isometric
-   * (ex_004 — per-side holds attributed from the sign of one bidirectional
-   * signal) this is min(leftHoldMs, rightHoldMs): the slower side gates
-   * completion, so the min is the per-side hold credited toward the target.
+   * (the former ex_004 neck hold; per-side holds attributed from the sign
+   * of one bidirectional signal) this is min(leftHoldMs, rightHoldMs): the
+   * slower side gates completion, so the min is the per-side hold credited
+   * toward the target.
    * Absent for dynamic (rep-counted) sets, where reps/pairedReps carry the
    * equivalent information.
    */
   pairedHoldMs?: number;
   targetHoldMs?: number;
   /**
-   * Side-split isometric only (ex_004): the per-side hold totals behind the
+   * Side-split isometric only: the per-side hold totals behind the
    * `pairedHoldMs` min. Kept separate — NEVER summed — so the live recap can
    * surface the left/right asymmetry the min alone would hide. (The persisted
    * set event carries the same per-side detail via holdQuality left/right
@@ -2252,14 +2255,14 @@ export default function CameraClient() {
   const ex005DebugStartMsRef = useRef<number | null>(null);
   const ex005DebugSeqRef = useRef(0);
   const ex005DebugEnabledRef = useRef(false);
-  // TEMPORARY (2026-05-26): throttle anchor for the ex_005 head-lean console
-  // diagnostic below. Remove once ex_005 thresholds/framing are tuned.
+  // Throttle anchor for the opt-in ex_005 head-lean console diagnostic below
+  // (off unless `enableEx005Debug()` is run in the browser console).
   const lastEx005DebugMsRef = useRef(0);
 
-  // In-memory per-rep event log, keyed by side. Cleared when the exercise
-  // changes. This is the buffer that will eventually feed Postgres in a later
-  // step — for now, console.log on each rep is the only output beyond the
-  // live counter.
+  // In-memory per-rep event log for this page, keyed by side. Cleared when the
+  // exercise changes. The Resume snapshot and the end-of-session recap read
+  // it; each repetition is also saved to the database on its own
+  // (bufferRepEvent → the event outbox → `rep_events`).
   const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
     left: [],
     right: [],
@@ -2273,12 +2276,17 @@ export default function CameraClient() {
 
   // ── Isometric time-in-band accumulation ──────────────────────────────────
   // Two isometric modes share this machinery:
-  //  - per-limb (ex_006 T-pose): time accrues only while BOTH arms are in the
-  //    target band simultaneously (a real T-pose) → ONE paired accumulator
-  //    (`pairedHoldMsRef`); the per-side hold refs stay 0.
-  //  - side-split (ex_004 neck hold): one signed signal, side attributed from
-  //    its sign → per-side accumulators (`left/rightHoldMsRef`); the paired
-  //    accumulator stays 0. Sides are surfaced separately (never merged).
+  //  - per-limb (ex_006 T-pose): each arm's accumulator (`left/rightHoldMsRef`)
+  //    grows while THAT arm is in the target band. A both-arm prescription
+  //    completes the set when the slower arm reaches the hold
+  //    (`prescribedTargetReached`). `pairedHoldMsRef` grows only while both
+  //    arms are in the band together; it does not decide completion.
+  //  - side-split: one signed signal, side attributed from its sign →
+  //    per-side accumulators (`left/rightHoldMsRef`); the paired accumulator
+  //    stays 0. Sides are surfaced separately (never merged). Built for the
+  //    former ex_004 neck hold. No current exercise uses it (ex_004 is now
+  //    counted side bends); it is kept as the fallback if the neck exercise
+  //    returns to a hold.
   // `left/rightInBandRef` carry the current per-side in-band status for the
   // live panel. Reset on set completion, exercise change, session start, and
   // sustained capture dropout. `holdState` mirrors these for the UI at the
@@ -2308,7 +2316,7 @@ export default function CameraClient() {
   // in-band bookkeeping and a compensation-score aggregate. Folded into a
   // HoldQuality summary at set boundary (finalizeHoldQuality) and reset alongside
   // the hold accumulators. All inputs are RAW angles (smoothing would erase the
-  // steadiness signal): per-arm angles for ex_006; for the side-split ex_004 each
+  // steadiness signal): per-arm angles for ex_006; for a side-split hold each
   // side's stream is the |signed angle| while the sign points at that side (so
   // left-tilt frames feed only the left stats). The "paired" fields read as
   // "holding either side" for side-split sets. `t` is ms since the set started.
@@ -3142,16 +3150,15 @@ export default function CameraClient() {
    * Semantic note: `repCounts` now means "CURRENT SET reps,"
    * not "session-total reps." It resets to {0,0} on each set completion
    * and on session restart. Current-session rep events still
-   * accumulate in `repLogRef.current.{left,right}` (a P4-friendly buffer
-   * shape-aligned with the future `rep_events` table).
+   * accumulate in `repLogRef.current.{left,right}`.
    */
   const repCountsRef = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
 
   /**
-   * P4-friendly log of completed sets in the current session. Shape-aligned
-   * with the future Postgres `sets` table. In-memory
-   * only for v1; a future P4 swap reads this and writes to DB. Cleared
-   * on session start (Start button) and on exercise change.
+   * In-memory log of completed sets in the current session, read by the
+   * Resume snapshot and the end-of-session recap. Each set is also saved to
+   * the database on its own (the event outbox → `set_events`). Cleared on
+   * session start (Start button) and on exercise change.
    */
   const completedSetsLogRef = useRef<CompletedSetRecord[]>([]);
 
@@ -4584,7 +4591,7 @@ export default function CameraClient() {
    * Check whether the current set is complete under Model C
    * (`min(left,right) >= targetReps` for bilateral, `left >= targetReps`
    * for unilateral). If complete:
-   *  - Log a `CompletedSetRecord` to `completedSetsLogRef` (P4-friendly).
+   *  - Log a `CompletedSetRecord` to `completedSetsLogRef`.
    *  - Bump `completedSets`.
    *  - Reset `repCounts` / `repCountsRef` to {0,0} for the next set.
    *  - Reset the underlying `RepCounter` instances so each set starts
@@ -4628,7 +4635,7 @@ export default function CameraClient() {
         asymmetryIndex: computeAsymmetryIndex(left, right),
       };
     } else if (isSideSplitIsometric(def)) {
-      // Side-split isometric (ex_004): each side accrues hold time on its own
+      // Side-split isometric: each side accrues hold time on its own
       // (sign-attributed), so the set completes only when BOTH sides reach the
       // prescribed per-side hold — Model C, the slower side gates. The credited
       // `pairedHoldMs` is the min; the per-side totals ride along so the recap
@@ -4981,7 +4988,7 @@ export default function CameraClient() {
       repCountsRef.current = { left: 0, right: 0 };
       setRepCounts({ left: 0, right: 0 });
       pairedHoldMsRef.current = snap.pairedHoldMs;
-      // Per-side holds for a side-split isometric (ex_004). `sideHoldMs` is
+      // Per-side holds for a side-split isometric. `sideHoldMs` is
       // optional (older snapshots predate it) — missing means 0/0.
       leftHoldMsRef.current = snap.sideHoldMs?.left ?? 0;
       rightHoldMsRef.current = snap.sideHoldMs?.right ?? 0;
@@ -5065,7 +5072,7 @@ export default function CameraClient() {
     if (def?.kind === "isometric") {
       // Isometric partial: log the hold time accumulated this set. Per-limb
       // (ex_006): the valid-T-pose (both-arms-in-band) paired accumulator.
-      // Side-split (ex_004): per-side accumulators; credited pairedHoldMs is
+      // Side-split: per-side accumulators; credited pairedHoldMs is
       // the min (slower side gates), which can legitimately be 0 when only
       // one side was held — the per-side fields keep that partial visible.
       const leftMs = leftHoldMsRef.current;
@@ -6256,8 +6263,9 @@ export default function CameraClient() {
    *                                   doesn't advance progress further).
    *   Divided by (targetSets * targetReps) for a 0–100 percentage.
    *
-   * Isometric exercises (ex_006) don't track reps yet (P3b unbuilt) — we
-   * fall back to 0 so the bar doesn't show a misleading value.
+   * Isometric exercises (ex_006) use the hold analogue below: completed sets
+   * count in full and the current set adds its credited hold time, capped at
+   * the per-set hold.
    */
   const currentSetMinReps = activeDefinition?.bilateral
     ? prescription.prescribedSide === "left"
@@ -6279,11 +6287,9 @@ export default function CameraClient() {
         ? (() => {
             // Hold analogue of the rep formula: each completed set contributes
             // a full hold; the current set contributes its credited hold
-            // seconds, capped at the per-set target. Per-limb (ex_006): the
-            // paired (both-arms-in-band) accumulator. Side-split (ex_004):
-            // each side owes the full hold, so the set is the average of the
-            // two capped per-side holds — finishing one side reads as half
-            // the set, and the faster side's surplus can't advance it further.
+            // seconds, capped at the per-set target. The credited hold is the
+            // prescribed side's time, or for a both-side prescription the
+            // slower side's, so the faster side's surplus can't advance it.
             const creditedSec =
               prescription.prescribedSide === "left"
                 ? holdState.leftSec
@@ -7966,11 +7972,11 @@ export default function CameraClient() {
                       ? smoothedMetricVelocities[primaryName]
                       : null;
 
-                  // ── TEMPORARY ex_005 head-lean diagnostic (2026-05-26) ──
+                  // ── ex_005 head-lean diagnostic (added 2026-05-26) ──
                   // Opt-in with `enableEx005Debug()` from the browser console.
                   // Logs structured copy-pasteable JSON lines INCLUDING null
                   // metric frames so off-frame ears are visible.
-                  // Remove this block once ex_005 is tuned.
+                  // A tuning aid: off by default and not part of the coaching.
                   if (
                     activeDefinition.id === "ex_005" &&
                     tNow - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
@@ -8193,10 +8199,10 @@ export default function CameraClient() {
               } else if (activeDefinition.kind === "isometric") {
                 // ── Isometric time-in-band accumulation ──────────────────
                 // Two modes, dispatched on bilateralMode:
-                //  - per-limb (ex_006 T-pose): a valid T-pose requires BOTH
-                //    arms in the target band at the same time, so the paired
-                //    hold accrues only on both-in-band frames.
-                //  - side-split (ex_004 neck hold): ONE signed bidirectional
+                //  - per-limb (ex_006 T-pose): each arm accrues its own hold
+                //    time while it is in the band; the paired hold accrues only
+                //    on both-in-band frames and does not decide completion.
+                //  - side-split (former ex_004 neck hold): ONE signed bidirectional
                 //    signal (positive = patient's LEFT, the pinned sign
                 //    convention); each side accrues its own hold time while
                 //    the signed angle sits inside that side's band. At most
@@ -8351,7 +8357,7 @@ export default function CameraClient() {
 
                     // Compensation aggregate. Reuses the single per-frame
                     // score computed above (per-side worst for per-limb holds
-                    // like ex_006, single-primary for side-split ex_004), so
+                    // like ex_006, single-primary for side-split holds), so
                     // the hold-quality accumulator and the UI card never
                     // disagree.
                     const score = frameCompensationScore;

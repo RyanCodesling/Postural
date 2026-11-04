@@ -15,7 +15,9 @@ three structural framings are implemented and software-evaluated on their synthe
 distributions: dynamic per-limb (`ex_001`, `ex_007`, `ex_008`), bidirectional
 alternating (`ex_005`), and isometric holds (`ex_004` side-split, `ex_006` per-limb
 with a paired both-sides-in-band feature). This is not real-data or clinical
-validation. Isometric "reps" are
+validation. `ex_004` was a side-split hold when this layer was built, and its copy
+in `config/registry.json` still describes the hold; the app has counted it as neck
+side bends since 2026-09-24. Isometric "reps" are
 holds: one feature row per (set, side) with time-in-band, settle, drift, exit, and
 steadiness features instead of peak/tempo, and `target_reps` in the sets output
 carries the prescribed hold seconds.

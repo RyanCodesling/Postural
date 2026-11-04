@@ -1,4 +1,4 @@
-// Temporary auth utility functions for client-side use
+// Client-side calls to the login and logout APIs.
 export async function loginUser(email: string, password: string) {
   const response = await fetch("/api/auth/login", {
     method: "POST",

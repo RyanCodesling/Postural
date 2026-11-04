@@ -1733,9 +1733,12 @@ export class ProgramExerciseNotAllowedError extends Error {
   }
 }
 
+/**
+ * Checks that every exercise in a program exists and is not archived. It does
+ * not check who created a custom exercise.
+ */
 async function validateProgramExerciseAccess(
   client: PoolClient,
-  therapistId: string,
   exercises: ProgramExerciseInput[],
 ) {
   const exerciseIds = Array.from(
@@ -1798,7 +1801,7 @@ export async function createProgram(data: {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await validateProgramExerciseAccess(client, data.therapistId, data.exercises);
+    await validateProgramExerciseAccess(client, data.exercises);
     await client.query(
       "INSERT INTO exercise_programs (id, therapist_id, name) VALUES ($1, $2, $3)",
       [id, data.therapistId, data.name]
@@ -1827,7 +1830,7 @@ export async function updateProgram(
       [id, therapistId]
     );
     if (check.rows.length === 0) throw new Error("Not found or forbidden");
-    await validateProgramExerciseAccess(client, therapistId, data.exercises);
+    await validateProgramExerciseAccess(client, data.exercises);
     await client.query(
       "UPDATE exercise_programs SET name = $1, updated_at = NOW() WHERE id = $2",
       [data.name, id]

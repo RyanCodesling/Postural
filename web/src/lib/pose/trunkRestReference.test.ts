@@ -97,7 +97,7 @@ async function main() {
   });
 
   await test("the reading is the lean minus the calibration's median lean, whatever the frozen tilt", () => {
-    // The survey's resting reference (Review_Artifacts/2026-10-29_trunk_lean_reference_survey):
+    // The resting reference from the 2026-10-29 trunk-lean survey:
     // each lean under the frozen tilt minus its median over the calibration's samples.
     const samples = [at(2.1), at(2.9), at(3.4), at(2.6), at(3)];
     const rest = restingTrunkLineDeg(samples);

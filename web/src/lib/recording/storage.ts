@@ -200,6 +200,12 @@ export function finishPart(
   });
 }
 
+/**
+ * Erases a session's recording at once. Only tests call it, to reset a
+ * session between cases; the app moves a deleted session's video to Recently
+ * Deleted instead (`moveRecordingToBin`, later `eraseBinnedRecording`, both
+ * called from deletedItems.ts).
+ */
 export function deleteRecording(sessionId: number): Promise<void> {
   return withLock(sessionId, () => rm(sessionDir(sessionId), { recursive: true, force: true }));
 }

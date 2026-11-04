@@ -1,5 +1,35 @@
 # Sprint Updates 
 
+## 📌 Update-11-04-26-Fixes | *Clarence*
+
+- Names can no longer contain numbers when an admin creates an account or edits a user
+
+### *web\src\lib\personName.ts* and *web\src\lib\personName.test.ts*
+
+- Added stripNameDigits, which removes digits from a name, and nameFieldWithDigits, which names the first of First, Middle and Last Name that holds a digit or was sent as a number
+- Added a test for both
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- The First, Middle and Last Name fields of the Create User and Edit User forms drop digits as they are typed or pasted, so "J0hn" becomes "Jhn"; no message is shown
+
+### *web\src\app\api\users\route.ts* and *web\src\app\api\users\[id]\route.ts*
+
+- Creating or editing a user with a number in a name is refused with a message such as "Last Name cannot contain numbers.", which covers requests that do not come through the form
+
+### *Validation*
+
+- Type check and lint (no errors or warnings) pass
+- The new personName test passes
+
+### *Remaining boundaries*
+
+- Not tried in a browser
+- Names already saved with numbers are not changed; saving an edit to such a user is refused until the number is removed, which the Edit form does once the name field is typed in
+- Not deployed; deploying it needs no SQL
+
+---
+
 ## 📌 Update-11-04-26 | *RyanCodesling*
 
 - Removed code that nothing in the app used, and corrected comments that no longer described the code; what the app does is unchanged

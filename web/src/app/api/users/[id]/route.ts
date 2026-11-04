@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nameFieldWithDigits } from "@/lib/personName";
 import {
   PermanentUserDeletionError,
   UserClinicalFieldsUnavailableError,
@@ -79,6 +80,11 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
+
+    const nameFieldWithNumber = nameFieldWithDigits(body);
+    if (nameFieldWithNumber) {
+      return NextResponse.json({ error: `${nameFieldWithNumber} cannot contain numbers.` }, { status: 400 });
+    }
 
     if (body.firstName !== undefined || body.lastName !== undefined) {
       const parts = [body.firstName, body.middleName, body.lastName].filter(Boolean);

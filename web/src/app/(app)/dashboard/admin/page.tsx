@@ -9,6 +9,7 @@ import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/Dashboa
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { adminEditBody } from "@/lib/adminUserEdit";
+import { stripNameDigits } from "@/lib/personName";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
@@ -1020,7 +1021,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.firstName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, firstName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
@@ -1032,7 +1033,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.middleName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, middleName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, middleName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
@@ -1043,7 +1044,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.lastName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, lastName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
@@ -1224,7 +1225,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.firstName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, firstName: e.target.value })
+                          setEditingUser({ ...editingUser, firstName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
@@ -1237,7 +1238,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.middleName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, middleName: e.target.value })
+                          setEditingUser({ ...editingUser, middleName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
@@ -1250,7 +1251,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.lastName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, lastName: e.target.value })
+                          setEditingUser({ ...editingUser, lastName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />

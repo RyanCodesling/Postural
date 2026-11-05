@@ -29,6 +29,7 @@ import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/po
 import { restReferencedTrunkLean, restingTrunkLineDeg } from "@/lib/pose/trunkRestReference";
 import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "@/lib/pose/neckCalibrationReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
+import { cameraFrameCapEnabledFromSearch, newCameraFrameCap, takeCameraFrameSlot } from "@/lib/pose/cameraFrameCap";
 import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
 import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
 import { CoachingAuditBuffer, observeMovement, type CoachingObservation } from "@/lib/pose/coachingAudit";
@@ -1977,6 +1978,13 @@ export default function CameraClient() {
   const [fps, setFps] = useState<number | null>(null);
   const fpsFrameCountRef = useRef(0);
   const fpsWindowStartMsRef = useRef(0);
+  // The loop processes at most CAMERA_LOOP_MAX_FPS frames a second
+  // (cameraFrameCap.ts). `fpsCap=off` in the page address turns the limit off
+  // for that page load, as a fallback.
+  const cameraFrameCapRef = useRef(newCameraFrameCap(true));
+  useEffect(() => {
+    cameraFrameCapRef.current = newCameraFrameCap(cameraFrameCapEnabledFromSearch(window.location.search));
+  }, []);
   // Diagnostic timing split, averaged over the same ~1 s window as FPS:
   // `infer` is time spent in detectForVideo, `frame` is the whole per-frame
   // pipeline (detect + readiness + metrics + drawing). The gap is JS/draw
@@ -6880,7 +6888,10 @@ export default function CameraClient() {
     // previous exercise's definition. The ref is sync'd by a useEffect.
     const activeDefinition = activeDefinitionRef.current;
 
-    if (video.readyState === 4 && video.videoWidth > 0) {
+    // At most CAMERA_LOOP_MAX_FPS processed frames a second (cameraFrameCap.ts).
+    // A refresh without a free slot does nothing: the skeleton and readouts stay
+    // as the last processed frame left them, as on a computer that is no faster.
+    if (video.readyState === 4 && video.videoWidth > 0 && takeCameraFrameSlot(cameraFrameCapRef.current, performance.now())) {
       if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
       if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
 

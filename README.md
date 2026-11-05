@@ -32,18 +32,62 @@
 
 ## 📌 Update-11-04-26 | *RyanCodesling*
 
+- Combined Enah's Update-11-03-26 with the fixes below, keeping all of Enah's changes
+- Placed the fixes on top of Clarence's Update-11-04-26-Fixes above, keeping all of Clarence's changes
+- Restored an item from Recently Deleted only once, even when two admin tabs restore it at the same time, and never deleted for good a guide video its exercise is showing
+- Kept a guide video's file until the last Recently Deleted entry naming it is deleted for good, and refused to restore a guide video whose file is missing
+- Kept a sign-in made while a page was still loading, which that page's earlier session check could sign straight back out
+- Kept a custom exercise ended with End session on screen as saving or not saved, with Try saving again, and offered Start session again only once the end is saved
+- Noted that Update-11-03-26 was deployed on 2026-11-03
 - Removed code that nothing in the app used, and corrected comments that no longer described the code; what the app does is unchanged
 - Added CODE_MAP.md, which says which file does what
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\deletedItems.ts*, *web\src\lib\db.ts*, and *web\src\app\api\admin\deleted-items\[id]\route.ts*
+
+- Restored an item in one database transaction that holds its Recently Deleted entry from the first read to the last write, so a second restore of the same item, from another tab for example, waits and then finds it gone: "This item is no longer in Recently Deleted."
+- Published a restored guide video and removed its entry in that same transaction, so the exercise's video and Recently Deleted change together or not at all, and sent the restore's notification only once it is saved
+- Held the entry while deleting for good too, so an item cannot be erased while it is being restored, and refused an item already restored or deleted with the same message
+- Refused to delete for good a guide video file its exercise is showing: "This video is the exercise's current guide video, so it cannot be deleted for good."
+- Kept the file when another entry still names it, as two restores at once could leave before this fix, and erased it with the last such entry
+- Refused to restore a guide video whose file is no longer on the server, "The guide video's file is missing from the server, so it cannot be restored.", and one that is already the exercise's guide, which would only put it in Recently Deleted again: "This video is already the exercise's guide video."
+- Held the exercise's row while deleting a guide video for good, as a restore does to publish one, so restores and permanent deletes of one exercise's guide videos run one at a time
+- Let the guide video changes in db.ts run inside the restore's transaction; called on their own, they still open and commit their own
+
+### *web\src\app\api\auth\me\route.ts*
+
+- Stopped the session check clearing the sign-in cookie when it finds no signed-in user; every page sends the check as it loads, so its answer can arrive after a sign-in made meanwhile, and clearing the cookie then signed that person out again
+- Left clearing the cookie to Log Out, and to web\src\proxy.ts, which clears an invalid cookie when a protected page opens
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Kept a custom exercise ended with End session on screen until the server has saved the end, with "Session ended early. Saving…" and, if the save fails, "Session ended early, but it has not been saved; please try saving again." and Try saving again
+- Offered Start session again only once the end is saved, so a new attempt cannot replace the unsaved one, and sent the end once more if the page is left before it is saved
+- Asked for pain after the attempt once the end is saved, as before
+- Corrected the T-pose hold timer notes: each arm is credited while it is in the band, a both-arm set ends when the slower arm reaches the hold, and the time both arms spend in the band together does not decide it
+- Corrected notes that called finished parts placeholders or future work: the paired repetition and asymmetry fields, the repetition and set logs that Resume, the recap and the upload queue use, and the progress bar for holds
+- Described the side-split hold once, as the former ex_004 hold kept as the fallback, instead of in ten separate notes, and marked the ex_005 diagnostic as opt-in and off by default
+
+### *web\scripts\verify-recently-deleted.ts*, *web\src\lib\authMeRoute.test.ts*, *web\src\lib\manualSessions.test.tsx*, *web\src\lib\exercises\customExerciseRoutes.test.ts*, *web\scripts\verify-exercise-lifecycle.ts*, and *web\package.json*
+
+- Added npm run verify:deleted:db, which restores and deletes for good against connection-private temporary tables and a temporary video folder: a second restore of the same item, deleting an item already restored, the exercise's current guide file, a replaced file, a YouTube restore, two entries naming one file, a missing file, and an archived exercise
+- Tested the session check and Log Out routes themselves: the check leaves the cookie alone with or without a signed-in user, and Log Out still clears it
+- Tested the guide's End session with a slow save, a failed save, and Try saving again
+- Updated the guide video restore test for the single transaction, and the exercise database check for the shared transaction helper
+
+### *web\src\lib\userClinicalFields.test.ts*
+
+- Gave the test's copy of the users routes the name check from Clarence's update above, which the routes now call; without it, each route stopped with a server error before reaching the clinical fields refusal the test checks
+
+### *web\README.md* and *README.md*
+
+- Described how End session is saved, how Recently Deleted holds an item while restoring or deleting it, npm run verify:deleted:db, and why the session check leaves the cookie alone
+- Replaced Update-11-03-26's "not deployed" line with its deployment on 2026-11-03
 
 ### *CODE_MAP.md*
 
 - Added a map of the code: the repository's folders, how a camera session runs from the camera to the saved session, a table from each feature to its files, answers to common questions, an outline of CameraClient.tsx by line range, the decision numbers that comments cite, and the checks to run
-
-### *web\src\app\(app)\camera\CameraClient.tsx*
-
-- Corrected the T-pose hold timer notes: each arm is credited while it is in the band, a both-arm set ends when the slower arm reaches the hold, and the time both arms spend in the band together does not decide it
-- Corrected notes that called finished parts placeholders or future work: the paired repetition and asymmetry fields, the repetition and set logs that Resume, the recap and the upload queue use, and the progress bar for holds
-- Described the side-split hold once, as the former ex_004 hold kept as the fallback, instead of in ten separate notes, and marked the ex_005 diagnostic as opt-in and off by default
+- Ended the outline's last CameraClient.tsx range at line 14244, after the End session changes
+- Listed lib\personName.ts, from Clarence's update above, with the admin's account files
 
 ### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\poseMetrics.ts*
 
@@ -78,18 +122,22 @@
 
 ### *Validation*
 
-- Type check, lint (no errors or warnings), and a production build on Next.js 16.4.3 pass
-- 99 framework-free TypeScript suites pass
+- 101 framework-free TypeScript suites pass on the whole branch, with Clarence's update above, including the new session check test, the manual session test, and the exercise route test
+- The new session check and End session tests fail on the code deployed on 2026-11-03, and the Recently Deleted check fails when any one of the locks or checks above is taken out
+- The Recently Deleted database check passes all 12 cases, the custom exercise check all 4, the exercise check all 13, and the session reader and all 16 date correction checks pass too
 - Replaying the pilot recordings through the camera code gives the same summary as before
-- The exercise database check passes all 13 cases
+- Type check, lint with no warnings, and a production build on Next.js 16.4.3 pass on the whole branch
+- npm audit finds no vulnerabilities in the packages the app runs with; the 8 moderate ones it reports are in the lint tools, through minimatch, and its only fix is an older eslint-config-next
+- The code cleanup alone, on Enah's Update-11-03-26, passes the type check, lint with no warnings, a production build, 99 suites, the pilot replay with an unchanged summary, and all 13 exercise database cases
 
 ### *Remaining boundaries*
 
-- No behaviour changed, so nothing was tried in a browser or with the camera
-- CODE_MAP.md gives CameraClient.tsx's outline as line ranges, which have to be redone when that file changes
+- None of this update has been tried in a signed-in browser: the database check runs two tabs' restores one after the other, the order the lock gives them, and the session check test reads the route's response, not a real sign-in race
+- Not deployed; deploying it needs no SQL
+- deploy\server\README.md still describes updating the server by copying over the app folder, not the release folders the server now uses
+- Uncommitted work outside this branch, Blender authoring changes and six guide-validation records, is not part of this update
 - CameraClient.tsx stays one large file, outlined in CODE_MAP.md rather than split
 - Left for a later decision: the Skip rest button, still marked temporary; the unused velocity counter and the ex_005 diagnostic; the [rep] console messages; the unlinked pose simulator page; web\scripts\check_notifications.ts, which lists admin users despite its name; the root package files behind the build's workspace warning; and the unused @types/bcryptjs package
-- Not deployed; deploying it needs no SQL
 
 ---
 
@@ -216,7 +264,7 @@
 ### *Remaining boundaries*
 
 - None of this update has been tried in a signed-in session, as the laptop database lacks the tables and columns it needs
-- The server already runs the progress chart change; the rest of this update is not deployed and needs the SQL steps in Enah's section first
+- Deployed to the evaluation server on 2026-11-03, after the two SQL steps in Enah's Update-10-31-26 section
 - With no rest between sets, the start of a set is not recorded until the last set's part has finished uploading
 - An admin's own change to Diagnosis, Condition, or Prescription still replaces a therapist's newer one, and the Edit form's other fields are sent as they were loaded
 - The video guide's screenshots of the form, video-file-chosen.png and video-youtube-found.png, still show the Guide video heading and must be taken again

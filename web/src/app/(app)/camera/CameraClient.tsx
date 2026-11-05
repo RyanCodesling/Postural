@@ -13751,7 +13751,8 @@ function CustomGuidedSession({
   /** Shown under Start session before the session starts, such as a remembered video choice. */
   startNote?: React.ReactNode;
 }) {
-  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
+  // "ending": ended early, its save pending or failed.
+  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain" | "ending">("idle");
   const [runDose, setRunDose] = useState({ sets: scheduledSets, restSeconds: scheduledRestSeconds });
   const sets = phase === "idle" || phase === "starting" ? scheduledSets : runDose.sets;
   const restSeconds = phase === "idle" || phase === "starting" ? scheduledRestSeconds : runDose.restSeconds;
@@ -13770,8 +13771,11 @@ function CustomGuidedSession({
   const [reportError, setReportError] = useState<string | null>(null);
   const [painStopError, setPainStopError] = useState<string | null>(null);
   const [painStopping, setPainStopping] = useState(false);
+  const [endSaving, setEndSaving] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
   // Leaving the exercise mid-session (another exercise, another page) ends
-  // its recording the same way End session does.
+  // its recording the same way End session does, and sends an early end
+  // that is not saved yet once more.
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const onEndRef = useRef(onEnd);
@@ -13780,7 +13784,7 @@ function CustomGuidedSession({
   onRestChangeRef.current = onRestChange;
   useEffect(() => () => {
     onRestChangeRef.current?.(null);
-    if (phaseRef.current === "set" || phaseRef.current === "rest") onEndRef.current?.("user");
+    if (phaseRef.current === "set" || phaseRef.current === "rest" || phaseRef.current === "ending") onEndRef.current?.("user");
   }, []);
 
   const askPainAfter = () => {
@@ -13849,6 +13853,7 @@ function CustomGuidedSession({
     setSave({ state: "idle" });
     setAsking(false);
     setPainStopError(null);
+    setEndError(null);
     setPhase("set");
     onSetStart?.();
   };
@@ -13864,11 +13869,19 @@ function CustomGuidedSession({
   };
   const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
   const endEarly = async () => {
-    setPhase("idle");
+    if (endSaving) return;
+    // Until the server has the end, it stays on screen with a retry, and no
+    // Start session is offered that could replace the attempt.
+    setPhase("ending");
     setRestEndsAt(null);
-    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    setEndSaving(true);
     const error = await Promise.resolve(onEnd?.("user")).catch(() => "Your session could not be saved.");
-    if (!error) askPainAfter();
+    setEndSaving(false);
+    setEndError(error || null);
+    if (error) return;
+    setPhase("idle");
+    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    askPainAfter();
   };
   const stopForPain = async () => {
     if (!onPainStop || painStopping) return;
@@ -13891,6 +13904,10 @@ function CustomGuidedSession({
           : painStopError
             ? "Stopped because of pain. The pain stop has not been saved; please try saving again."
             : "Stopped because of pain. Your therapist has been notified and will review it before you try again."
+        : phase === "ending"
+          ? endSaving
+            ? "Session ended early. Saving…"
+            : "Session ended early, but it has not been saved; please try saving again."
         : phase === "done"
           ? onComplete
             ? save.state === "saved"
@@ -13996,6 +14013,18 @@ function CustomGuidedSession({
             </button>
           )}
         </>
+      ) : phase === "ending" ? (
+        endError ? (
+          <>
+            <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+              {endError}
+            </p>
+            <button type="button" onClick={() => void endEarly()} disabled={endSaving}
+              style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+              {endSaving ? "Saving…" : "Try saving again"}
+            </button>
+          </>
+        ) : null
       ) : phase === "done" && onComplete ? (
         <>
           {save.state === "error" && (

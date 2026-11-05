@@ -987,66 +987,70 @@ export function isMissingColumnError(error: unknown): boolean {
 /**
  * Records an uploaded file as the exercise's video, replacing a YouTube video.
  * The video it replaces goes to Recently Deleted; its file stays on disk.
+ * A restore from Recently Deleted passes its own transaction and commits it.
  */
-export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string | null, changedBy?: string) {
+export async function setExerciseVideoFile(
+  id: string, mimeType: ExerciseVideoMimeType, fileName: string | null, changedBy?: string, transaction?: PoolClient,
+) {
   const binReady = await hasDeletedItemsBin();
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return inVideoTransaction(transaction, async (client) => {
     // Serialize metadata publication, including the exact file it supersedes.
     const previous = await client.query(
       `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
-    if (previous.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if (previous.rows.length === 0) return null;
     const result = await client.query(
       `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL, video_file_name = $3
         WHERE id = $1 RETURNING *`,
       [id, mimeType, fileName],
     );
     if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
-    await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**
  * Points a custom exercise at a YouTube video, or at no video (null), from its
  * edit form. The video it replaces goes to Recently Deleted, an uploaded file
  * staying on disk; the row lock keeps a concurrent upload from being the one
- * recorded.
+ * recorded. A restore from Recently Deleted passes its own transaction.
  */
-export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null, changedBy?: string) {
+export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null, changedBy?: string, transaction?: PoolClient) {
   const binReady = await hasDeletedItemsBin();
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return inVideoTransaction(transaction, async (client) => {
     const previous = await client.query(
       `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
-    if (previous.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if (previous.rows.length === 0) return null;
     const result = await client.query(
       `UPDATE exercises SET youtube_video_id = $2, video_mime_type = NULL, video_file_name = NULL
         WHERE id = $1 RETURNING *`,
       [id, youtubeVideoId],
     );
     if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
-    await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
+  });
+}
+
+/**
+ * Runs a guide video change in the caller's transaction when one is given,
+ * otherwise in its own, which a null result (no such exercise) rolls back.
+ */
+async function inVideoTransaction<T>(
+  transaction: PoolClient | undefined,
+  change: (client: PoolClient) => Promise<T | null>,
+): Promise<T | null> {
+  if (transaction) return change(transaction);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await change(client);
+    await client.query(result === null ? "ROLLBACK" : "COMMIT");
+    return result;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

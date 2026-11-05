@@ -32,8 +32,15 @@ export async function DELETE(request: NextRequest, { params }: Context) {
   try {
     const checked = await adminAndId(request, params);
     if ("error" in checked) return checked.error;
-    if (!(await purgeDeletedItem(checked.id))) {
+    const outcome = await purgeDeletedItem(checked.id);
+    if (outcome === "missing") {
       return NextResponse.json({ error: "This item is no longer in Recently Deleted." }, { status: 404 });
+    }
+    if (outcome === "in-use") {
+      return NextResponse.json(
+        { error: "This video is the exercise's current guide video, so it cannot be deleted for good." },
+        { status: 409 },
+      );
     }
     return NextResponse.json({ success: true });
   } catch (error) {

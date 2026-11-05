@@ -50,7 +50,7 @@ Paths below are under `web/src/` unless they start with another top-level folder
 |---|---|
 | Sign-in and roles | `app/(auth)/login`, `app/api/auth/*`, `lib/session-token.ts` (signed session cookie), `lib/auth-server.ts`, `proxy.ts` (route guard), `lib/AuthContext.tsx`, `lib/auth.ts`, `lib/crypto.ts` (password hashing) |
 | Password reset and change | `app/(auth)/forgot-password`, `change-password`, `first-time-password`; `api/auth/forgot-password`, `verify-otp`, `reset-password`, `change-password`; `dashboard/_components/ChangePasswordModal.tsx` |
-| Accounts (admin) | `app/(app)/dashboard/admin/page.tsx`, `app/api/users/*`, `lib/adminUserEdit.ts`; who is online: `admin/UserStatusPanel.tsx`, `lib/presence.ts`, `lib/usePresenceHeartbeat.ts`, `api/presence` |
+| Accounts (admin) | `app/(app)/dashboard/admin/page.tsx`, `app/api/users/*`, `lib/adminUserEdit.ts`, `lib/personName.ts` (no digits in names); who is online: `admin/UserStatusPanel.tsx`, `lib/presence.ts`, `lib/usePresenceHeartbeat.ts`, `api/presence` |
 | Patient clinical fields and files | `api/users/[id]/clinical`, `api/users/[id]/attachments/*`, `lib/patientAttachments.ts`, `dashboard/_components/PatientFileViewer.tsx` |
 | Exercise definitions (camera exercises) | `lib/exercises/registry.ts`: each exercise's measured angle, counting thresholds, coaching checks and their provenance |
 | Custom exercises and guide videos | `api/exercises/*`, `dashboard/therapist/exercises/page.tsx`, `lib/exercises/customVideo.ts`, `customVideoStorage.ts`, `dashboard/_components/ExerciseVideoField.tsx`, `VideoGuide.tsx` |
@@ -123,7 +123,7 @@ Paths below are under `web/src/` unless they start with another top-level folder
 | 8758-9203 | Stopping the camera; page mount and unmount; starting a session with the camera | `stopCamera`, `startSessionWithCamera` |
 | 9204-11885 | The page layout: camera view, set display, recap, prompts, staff panels | |
 | 11886-12910 | The camera page tour | `CameraTour`, `TourGraphic` |
-| 12911-14215 | Small display components and the manual-exercise guided session | `CameraSetHud`, `RestOverlay`, `CustomGuidedSession`, `metricLabel` |
+| 12911-14244 | Small display components and the manual-exercise guided session | `CameraSetHud`, `RestOverlay`, `CustomGuidedSession`, `metricLabel` |
 
 ## Decision numbers in code comments
 

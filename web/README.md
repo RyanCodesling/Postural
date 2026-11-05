@@ -93,7 +93,9 @@ settings; this is not a model retraining or a new evaluation.
 Manual exercise starts use the scheduled prescription snapshot, mark the task
 in progress, and reject completed or pain-stopped tasks. The guide adopts the
 server's returned prescription. A failed start does not begin an unsaved guide;
-a failed pain stop keeps its session target available for retry.
+a failed pain stop keeps its session target available for retry. An early End
+session does the same: the guide shows the end as saving or not saved, with a
+retry, and offers Start session again only once the end is saved.
 
 With `DATABASE_URL` set to a loopback PostgreSQL database, `npm run verify:manual:db`
 exercises the actual manual start/end SQL against new connection-private
@@ -103,6 +105,18 @@ Removed session videos stay in Recently Deleted until an admin restores or
 permanently deletes them. The recording notice and delete confirmation explain
 this retention. A device's remembered recording answer expires when the notice
 changes; historical session consent records keep their original version.
+
+A restore or a permanent delete from Recently Deleted holds the item's row for
+its whole transaction, so one item cannot be restored twice or restored while it
+is being erased, and a guide file its exercise is showing is never erased. A
+guide file that another entry still names is kept until the last such entry is
+deleted for good, and a guide whose file is missing is not restored.
+`npm run verify:deleted:db` runs these queries against connection-private
+temporary tables and a temporary video folder, with a loopback `DATABASE_URL`.
+
+The session check, `/api/auth/me`, never changes the sign-in cookie: a page sends
+it as it loads, so its answer can arrive after a sign-in. Log Out clears the
+cookie, and the proxy clears an invalid one when a protected page opens.
 
 `npm run dev` and `npm run build` first bundle the trend Web Worker with esbuild.
 The generated `public/workers/trend-fit.js` is ignored by Git and must be included

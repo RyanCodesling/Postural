@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { Client } from "pg";
+import { nameFieldWithDigits } from "./personName";
 
 const clinicalKeys = ["diagnosis", "prescription", "condition"];
 function extract(file: URL, names: string[]) {
@@ -86,7 +87,7 @@ async function unitChecks() {
       exports: {}, console: { error() {} },
       UserClinicalFieldsUnavailableError: db.UserClinicalFieldsUnavailableError,
       NextResponse: { json: (body: unknown, options?: { status: number }) => ({ body, status: options?.status ?? 200 }) },
-      getAuthenticatedUser: async () => auth,
+      getAuthenticatedUser: async () => auth, nameFieldWithDigits,
       isEmailTaken: async () => false, getNextUserId: async () => person.id,
       getUserById: async () => person,
       createUser: async () => { throw new db.UserClinicalFieldsUnavailableError(); },

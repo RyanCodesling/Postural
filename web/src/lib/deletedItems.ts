@@ -13,8 +13,9 @@ import pool, {
   setExerciseVideoFile,
   setExerciseYouTubeVideo,
 } from "@/lib/db";
+import type { PoolClient } from "pg";
 import { eraseBinnedRecording, moveRecordingToBin, restoreRecordingFromBin } from "@/lib/recording/storage";
-import { deleteExerciseVideoFile } from "@/lib/exercises/customVideoStorage";
+import { deleteExerciseVideoFile, openExerciseVideo } from "@/lib/exercises/customVideoStorage";
 import { isExerciseVideoMimeType } from "@/lib/exercises/customVideo";
 
 export type DeletedItemKind = "session_video" | "patient_file" | "exercise_video";
@@ -115,87 +116,119 @@ async function notifyPatientAndTherapist(patientId: string, title: string, messa
   }
 }
 
-/** Puts an item back where it was deleted from and takes it out of the bin. */
+type HeldRestore = { result: RestoreResult; notify?: () => Promise<unknown> };
+
+/**
+ * Puts an item back where it was deleted from and takes it out of the bin, in
+ * one transaction that keeps the bin entry locked: a second restore or a
+ * permanent delete of the same item waits for it, then finds the item gone.
+ */
 export async function restoreDeletedItem(id: number, restoredBy: string): Promise<RestoreResult> {
-  const found = await pool.query(
+  const client = await pool.connect();
+  let restore: HeldRestore;
+  try {
+    await client.query("BEGIN");
+    restore = await restoreHeldItem(client, id, restoredBy);
+    await client.query(restore.result.ok ? "COMMIT" : "ROLLBACK");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  // Sent once the restore is saved; a failed notice does not undo it.
+  await restore.notify?.().catch((error) => console.error("Failed to send the restore notification:", error));
+  return restore.result;
+}
+
+async function restoreHeldItem(client: PoolClient, id: number, restoredBy: string): Promise<HeldRestore> {
+  const found = await client.query(
     `SELECT d.*, e.archived_at AS exercise_archived_at, e.owner_therapist_id
        FROM deleted_items d LEFT JOIN exercises e ON e.id = d.exercise_id
-      WHERE d.id = $1`,
+      WHERE d.id = $1 FOR UPDATE OF d`,
     [id],
   );
   const item = found.rows[0];
-  if (!item) return { ok: false, status: 404, error: "This item is no longer in Recently Deleted." };
+  if (!item) return { result: { ok: false, status: 404, error: "This item is no longer in Recently Deleted." } };
   const details = (item.details ?? {}) as Record<string, unknown>;
 
   if (item.kind === "session_video") {
     const restored = await restoreRecordingFromBin(Number(item.session_id), String(details.folder ?? ""));
     if (restored === "occupied") {
-      return { ok: false, status: 409, error: "That session has a video again, so this one cannot be put back." };
+      return { result: { ok: false, status: 409, error: "That session has a video again, so this one cannot be put back." } };
     }
     if (restored === "missing") {
-      return { ok: false, status: 409, error: "The video's files are missing from the server, so it cannot be restored." };
+      return { result: { ok: false, status: 409, error: "The video's files are missing from the server, so it cannot be restored." } };
     }
-    await pool.query("DELETE FROM deleted_items WHERE id = $1", [id]);
+    await client.query("DELETE FROM deleted_items WHERE id = $1", [id]);
     const day = sessionDay(details);
-    await notifyPatientAndTherapist(
-      item.patient_id,
-      "Session Video Restored",
-      `The clinic restored the video of the ${item.label} session${day ? ` on ${day}` : ""}.`,
-      "session_video_restored",
-    );
-    return { ok: true, message: `The ${item.label} session video was restored.` };
+    return {
+      result: { ok: true, message: `The ${item.label} session video was restored.` },
+      notify: () => notifyPatientAndTherapist(
+        item.patient_id,
+        "Session Video Restored",
+        `The clinic restored the video of the ${item.label} session${day ? ` on ${day}` : ""}.`,
+        "session_video_restored",
+      ),
+    };
   }
 
   if (item.kind === "patient_file") {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(
-        "UPDATE patient_image_attachments SET deleted_at = NULL, deleted_by = NULL WHERE id = $1",
-        [item.attachment_id],
-      );
-      await client.query("DELETE FROM deleted_items WHERE id = $1", [id]);
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-    await notifyPatientAndTherapist(
-      item.patient_id,
-      "Attached File Restored",
-      `The clinic restored the attached file ${item.label}.`,
-      "patient_file_restored",
+    await client.query(
+      "UPDATE patient_image_attachments SET deleted_at = NULL, deleted_by = NULL WHERE id = $1",
+      [item.attachment_id],
     );
-    return { ok: true, message: `${item.label} was restored to the patient's attached files.` };
+    await client.query("DELETE FROM deleted_items WHERE id = $1", [id]);
+    return {
+      result: { ok: true, message: `${item.label} was restored to the patient's attached files.` },
+      notify: () => notifyPatientAndTherapist(
+        item.patient_id,
+        "Attached File Restored",
+        `The clinic restored the attached file ${item.label}.`,
+        "patient_file_restored",
+      ),
+    };
   }
 
   // exercise_video: it becomes the exercise's video again; the one it
-  // replaces goes to Recently Deleted in the same step.
+  // replaces goes to Recently Deleted in the same transaction.
   if (item.exercise_archived_at) {
-    return { ok: false, status: 409, error: `Restore the ${item.label} exercise from Archived first.` };
+    return { result: { ok: false, status: 409, error: `Restore the ${item.label} exercise from Archived first.` } };
   }
   let changed;
   if (details.source === "file" && isExerciseVideoMimeType(details.mimeType) &&
       (typeof details.fileName === "string" || details.fileName === null)) {
-    changed = await setExerciseVideoFile(item.exercise_id, details.mimeType, details.fileName, restoredBy);
+    // A permanent delete keeps a file while another entry names it, so a file
+    // found here is still on disk when it is published.
+    if (!(await openExerciseVideo(item.exercise_id, details.mimeType, details.fileName).catch(() => null))) {
+      return { result: { ok: false, status: 409, error: "The guide video's file is missing from the server, so it cannot be restored." } };
+    }
+    changed = await setExerciseVideoFile(item.exercise_id, details.mimeType, details.fileName, restoredBy, client);
+    // An older duplicate entry can name the guide already in use; publishing it
+    // again would only put that guide in Recently Deleted once more.
+    if (changed?.previousVideo && changed.previousVideo.mimeType === details.mimeType &&
+        changed.previousVideo.fileName === details.fileName) {
+      return { result: { ok: false, status: 409, error: "This video is already the exercise's guide video." } };
+    }
   } else if (details.source === "youtube" && typeof details.youtubeVideoId === "string") {
-    changed = await setExerciseYouTubeVideo(item.exercise_id, details.youtubeVideoId, restoredBy);
+    changed = await setExerciseYouTubeVideo(item.exercise_id, details.youtubeVideoId, restoredBy, client);
   } else {
-    return { ok: false, status: 409, error: "This guide video's details are incomplete, so it cannot be restored." };
+    return { result: { ok: false, status: 409, error: "This guide video's details are incomplete, so it cannot be restored." } };
   }
-  if (!changed) return { ok: false, status: 404, error: "The exercise no longer exists." };
-  await pool.query("DELETE FROM deleted_items WHERE id = $1", [id]);
-  if (item.owner_therapist_id) {
-    await createNotification(
-      item.owner_therapist_id,
-      "Guide Video Restored",
-      `The clinic restored an earlier guide video of ${item.label}.`,
-      "exercise_video_restored",
-    );
-  }
-  return { ok: true, message: `The earlier guide video of ${item.label} is back in use.` };
+  if (!changed) return { result: { ok: false, status: 404, error: "The exercise no longer exists." } };
+  await client.query("DELETE FROM deleted_items WHERE id = $1", [id]);
+  const ownerId = item.owner_therapist_id;
+  return {
+    result: { ok: true, message: `The earlier guide video of ${item.label} is back in use.` },
+    notify: ownerId
+      ? () => createNotification(
+        ownerId,
+        "Guide Video Restored",
+        `The clinic restored an earlier guide video of ${item.label}.`,
+        "exercise_video_restored",
+      )
+      : undefined,
+  };
 }
 
 /** Removes the stored file or folder behind a bin entry. */
@@ -209,18 +242,72 @@ async function eraseContents(item: { kind: string; exercise_id: string | null; d
   }
 }
 
-/** Deletes an item for good: its stored contents, then its bin entry. */
-export async function purgeDeletedItem(id: number): Promise<boolean> {
-  const found = await pool.query("SELECT * FROM deleted_items WHERE id = $1", [id]);
-  const item = found.rows[0];
-  if (!item) return false;
-  await eraseContents(item);
-  if (item.kind === "patient_file") {
-    // Removing the file's row removes its bin entry with it.
-    await pool.query("DELETE FROM patient_image_attachments WHERE id = $1 AND deleted_at IS NOT NULL", [item.attachment_id]);
+type GuideFile = { exerciseId: string; mimeType: unknown; fileName: string | null };
+
+/** The uploaded guide file a bin entry names, or null for any other entry. */
+function binnedGuideFile(
+  item: { kind: string; exercise_id: string | null; details: Record<string, unknown> | null },
+): GuideFile | null {
+  const details = item.details ?? {};
+  if (item.kind !== "exercise_video" || details.source !== "file" || !item.exercise_id) return null;
+  return { exerciseId: item.exercise_id, mimeType: details.mimeType, fileName: typeof details.fileName === "string" ? details.fileName : null };
+}
+
+/** Whether the exercise is showing the guide file. */
+async function guideVideoInUse(client: PoolClient, file: GuideFile): Promise<boolean> {
+  const found = await client.query(
+    "SELECT 1 FROM exercises WHERE id = $1 AND video_mime_type = $2 AND video_file_name IS NOT DISTINCT FROM $3",
+    [file.exerciseId, file.mimeType, file.fileName],
+  );
+  return found.rows.length > 0;
+}
+
+/** Whether a bin entry other than this one names the same guide file. */
+async function guideFileNamedElsewhere(client: PoolClient, id: number, file: GuideFile): Promise<boolean> {
+  const found = await client.query(
+    `SELECT 1 FROM deleted_items
+      WHERE id <> $1 AND kind = 'exercise_video' AND exercise_id = $2 AND details->>'source' = 'file'
+        AND details->>'mimeType' = $3 AND details->>'fileName' IS NOT DISTINCT FROM $4`,
+    [id, file.exerciseId, file.mimeType, file.fileName],
+  );
+  return found.rows.length > 0;
+}
+
+export type PurgeResult = "deleted" | "missing" | "in-use";
+
+/**
+ * Deletes an item for good: its stored contents, then its bin entry. The
+ * entry stays locked meanwhile, so a restore of the same item cannot run
+ * alongside. A guide file its exercise is showing is never erased, and one
+ * that another entry still names is kept for that entry.
+ */
+export async function purgeDeletedItem(id: number): Promise<PurgeResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query("SELECT * FROM deleted_items WHERE id = $1 FOR UPDATE", [id]);
+    const item = found.rows[0];
+    const file = item ? binnedGuideFile(item) : null;
+    // The exercise's row lock, which a restore takes to publish a guide, orders
+    // this with restores and other permanent deletes of its guide videos.
+    if (file) await client.query("SELECT 1 FROM exercises WHERE id = $1 FOR UPDATE", [file.exerciseId]);
+    const outcome: PurgeResult = !item ? "missing" : file && (await guideVideoInUse(client, file)) ? "in-use" : "deleted";
+    if (outcome === "deleted") {
+      if (!file || !(await guideFileNamedElsewhere(client, id, file))) await eraseContents(item);
+      if (item.kind === "patient_file") {
+        // Removing the file's row removes its bin entry with it.
+        await client.query("DELETE FROM patient_image_attachments WHERE id = $1 AND deleted_at IS NOT NULL", [item.attachment_id]);
+      }
+      await client.query("DELETE FROM deleted_items WHERE id = $1", [id]);
+    }
+    await client.query(outcome === "deleted" ? "COMMIT" : "ROLLBACK");
+    return outcome;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  await pool.query("DELETE FROM deleted_items WHERE id = $1", [id]);
-  return true;
 }
 
 /**

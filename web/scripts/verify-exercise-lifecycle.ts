@@ -17,7 +17,7 @@ const client = new Client({ connectionString: process.env.DATABASE_URL });
 const tables = ["exercises", "patient_exercises", "exercise_occurrences", "program_exercises", "exercise_programs", "sessions"];
 const source = readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf8");
 const names = ["getExercises", "getExerciseById", "ExerciseInUseError", "archiveExercise", "restoreExercise",
-  "discardNewExercise", "deleteArchivedExercise", "setExerciseVideoFile", "binReplacedExerciseVideo", "canViewExerciseVideo",
+  "discardNewExercise", "deleteArchivedExercise", "setExerciseVideoFile", "inVideoTransaction", "binReplacedExerciseVideo", "canViewExerciseVideo",
   "ExerciseAssignmentNotAllowedError", "normalizeRestSeconds", "normalizeHoldSeconds", "assignExercisesToPatient",
   "ProgramExerciseNotAllowedError", "validateProgramExerciseAccess", "insertProgramExercises", "createProgram"];
 const ast = ts.createSourceFile("db.ts", source, ts.ScriptTarget.Latest, true);

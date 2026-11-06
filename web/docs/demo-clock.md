@@ -1,8 +1,14 @@
 # Demo clock
 
-The demo clock is available in local development and production deployments.
-It is **off by default**. An administrator can enable or disable it from the
-dashboard without editing environment settings or restarting the server.
+The Demo Clock tab, its controls and the floating clock badge are hidden in
+production builds. They remain available during local development (`npm run dev`).
+This only changes visibility: saved clock settings, effective dates, recorded
+history and the authenticated APIs are preserved. Hiding the interface does not
+disable an already enabled clock or clear its offset.
+
+The clock is **off by default**. In local development, an administrator can enable
+or disable it from the dashboard without editing environment settings or restarting
+the server.
 
 ## Prepare without changing the date
 
@@ -19,11 +25,11 @@ installations keep separate settings when they use separate databases.
 
 ## Use later
 
-Start the app normally (`npm run dev` locally, or the deployed production service).
+Start the local development app with `npm run dev`.
 After the code and one-time schema setup are installed:
 
-1. Sign in as an administrator and open **Demo Clock**. This tab is always visible
-   to admins, even while the tools are off.
+1. Sign in as an administrator and open **Demo Clock**. In development this tab is
+   visible to admins even while the tools are off; production hides it.
 2. Click **Enable demo tools**. The app initially stays on real time. The recorded
    date correction form is now available without choosing a simulated date.
 3. To simulate another date for new work, enter the date/time in the device's
@@ -39,8 +45,8 @@ enabled. Disabling/resetting does not rewrite previously saved records.
 
 For administrators of the server, `DEMO_CLOCK=off` remains an optional hard lock:
 it ignores persisted mode/offset and refuses changes. The dashboard explains the
-lock. Removing an existing environment lock needs a service restart once; normal
-dashboard switching then needs none. `DEMO_CLOCK=on` and the older `dev:demo` /
+lock in development. Removing an existing environment lock needs a service restart
+once; normal dashboard switching then needs none. `DEMO_CLOCK=on` and the older `dev:demo` /
 `start:demo` aliases merely permit the dashboard controls; they no longer enable
 the stored mode automatically. Keep `NODE_ENV=production` on deployed services.
 
@@ -75,8 +81,10 @@ permissions; it does not alter any existing session or scheduled day. Install it
 separately in each database where corrections will be used. Keep demo mode off
 until needed; no correction is made simply by enabling it.
 
-In either local or production demo mode, an administrator can open **Demo Clock →
-Correct a recorded date**. The clock offset may stay at zero:
+In local development demo mode, an administrator can open **Demo Clock →
+Correct a recorded date**. Production hides this interface along with the clock
+tab; the existing authenticated correction API and audit history remain available.
+The clock offset may stay at zero:
 
 1. Find and select a finished session by patient, exercise, or session number.
 2. Choose the destination scheduled day (Asia/Manila). It must already exist in

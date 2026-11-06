@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { manilaDayKey } from "./demoClock";
+import { DEMO_CLOCK_UI_VISIBLE, manilaDayKey } from "./demoClock";
 
 interface DemoClockContextValue {
   /** The app's current time: the real time, moved by the demo date only while the demo clock is set. */
@@ -106,7 +106,7 @@ export function DemoClockProvider({ children }: { children: ReactNode }) {
   return (
     <DemoClockContext.Provider value={value}>
       {children}
-      {overrideActive && <DemoClockBadge now={now} />}
+      {DEMO_CLOCK_UI_VISIBLE && overrideActive && <DemoClockBadge now={now} />}
     </DemoClockContext.Provider>
   );
 }

@@ -11,6 +11,7 @@ import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/pati
 import { adminEditBody } from "@/lib/adminUserEdit";
 import { stripNameDigits } from "@/lib/personName";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
+import { DEMO_CLOCK_UI_VISIBLE } from "@/lib/demoClock";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
   KEEP_EXERCISE_VIDEO,
@@ -78,7 +79,7 @@ async function uploadPatientAttachments(patientId: string, files: File[]) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const router = useRouter();
-  // Today's Manila day by the demo clock; the clock's tab exists only in demo mode.
+  // Keep the effective Manila day even when production hides the demo controls.
   const { todayKey, enabled: demoClockOn } = useDemoClock();
 
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -777,7 +778,7 @@ export default function AdminDashboard() {
         { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
         { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
         { key: "deleted", label: "Recently Deleted", icon: <AdminBinIcon />, active: activeTab === "deleted", onSelect: () => setActiveTab("deleted") },
-        { key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") },
+        ...(DEMO_CLOCK_UI_VISIBLE ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }] : []),
         { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
       ]}
       userName={user?.name}
@@ -786,7 +787,7 @@ export default function AdminDashboard() {
       onLogout={async () => { await logout(); router.push("/"); }}
     >
         {activeTab === "deleted" && <RecentlyDeletedPanel />}
-        {activeTab === "demo-clock" && (
+        {DEMO_CLOCK_UI_VISIBLE && activeTab === "demo-clock" && (
           <>
             <DemoClockPanel />
             {demoClockOn && <SessionDateCorrectionPanel />}

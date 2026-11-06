@@ -30,7 +30,9 @@
  *                                the classification comments in repCounter.ts and the
  *                                ex_001 inline comment for the authoritative
  *                                semantics.)
- *   - `targetROM`              — clinically prescribed full ROM. THIS is the
+ *   - `targetROM`              — the exercise's full-range target, an
+ *                                engineering setting in the reading's own
+ *                                units (not a clinical norm). THIS is the
  *                                "complete" vs "partial" classification boundary:
  *                                peak ≥ targetROM             → "complete";
  *                                minimumPeakThreshold ≤ peak < targetROM → "partial";
@@ -39,7 +41,8 @@
  * For an `isometric` exercise, the state machine is NOT used. Instead, the
  * camera loop accumulates time-in-target-band using `isometric.targetBand` —
  * per limb for per-limb isometrics (ex_006), or per sign-attributed side for
- * bidirectional-alternating isometrics (ex_004).
+ * bidirectional-alternating isometrics (the side-split path; no current
+ * exercise uses it).
  *
  * ── COMPENSATION METRICS ─────────────────────────────────────────────────────
  * Listed metrics are displayed alongside the primary metric and logged per
@@ -54,11 +57,13 @@
  * (per project memory) and must not be averaged away.
  *
  * ── THRESHOLD CALIBRATION STATUS ─────────────────────────────────────────────
- * All thresholds in this file are defensible starting values grounded in
- * clinical ROM literature for healthy adults. They are NOT pilot-calibrated.
- * Pilot recordings during the testing phase (per the proposal calendar,
- * Aug–Nov 2026) should be used to refine these values. Each threshold is
- * marked with a citation or rationale comment.
+ * The thresholds in this file are engineering settings, established through
+ * pilot calibration on recorded sessions (single-subject tuning data, D-08)
+ * and later engineering revisions. None is derived from clinical
+ * range-of-motion norms, and none is a clinically validated cutoff (CST1
+ * check, 2026-10-23). Since 2026-10-21 their numbers are in the
+ * aspect-corrected unit (D-48; see the UNITS note above the registry). Each
+ * threshold's comment records its provenance.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,11 +86,16 @@ export type MetricName =
   | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
   | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
   | "trunkLean"              // existing — used as compensation metric on ex_001/ex_004/ex_006/ex_007/ex_008 (NOT ex_005 — side bends score neckTilt + scapularElevation instead)
-  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_006 (and deprecated ex_003; removed from ex_004 2026-06-11 — sloped shoulders are prescribed technique in the assisted stretch)
+  | "shoulderSymmetry"       // existing — used as compensation metric on ex_001/ex_004/ex_006 (and deprecated ex_003; restored on ex_004 2026-09-24 with the active version — the shoulders should stay level, unlike the former assisted stretch's prescribed slope)
   | "neckTilt"               // existing — used as compensation metric on ex_005
   | "elbowFlexion"           // NEW 2026-05-21 — compensation on ex_007 + ex_008 (interior-angle convention: 180° = straight, ~30° = fully bent)
   | "wristShoulderVertical"  // NEW 2026-05-21 — primary metric for ex_007 overhead shoulder press (trunk-normalized; negatives legal at rest)
-  | "shoulderElbowDistance"; // NEW 2026-05-21 — retained for future Wall Angels variants; removed from active ex_008 v1 compensation after live testing showed 2D foreshortening was too noisy
+  | "shoulderElbowDistance"  // NEW 2026-05-21 — retained for future Wall Angels variants; removed from active ex_008 v1 compensation after live testing showed 2D foreshortening was too noisy
+  | "hipShift"               // NEW 2026-10-02 — display-only coaching check on ex_005 (hips pushed sideways, in hip widths), computed in hipShiftWarning.ts rather than poseMetrics.ts; never scored or stored (see CoachingCheckSpec)
+  | "elbowBend"              // NEW 2026-10-04 — display-only coaching check on ex_001/ex_006 (elbow interior angle with the arm raised, 180 = straight), computed in elbowBendWarning.ts; never scored or stored (see CoachingCheckSpec)
+  | "overRaise"              // NEW 2026-10-25 — display-only coaching check on ex_001 (an arm raised well past shoulder height, from the primary), computed in overRaiseWarning.ts; never scored or stored (see CoachingCheckSpec)
+  | "armAboveHold"           // Display-only: a prescribed hold arm above the existing target band.
+  | "otherArmDown";          // NEW 2026-10-25 — display-only coaching check on ex_006 (an unfinished arm below the band during a bilateral hold), computed in otherArmDownWarning.ts; never scored or stored (see CoachingCheckSpec)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRY TYPES
@@ -100,7 +110,10 @@ export type Side = "left" | "right";
  * "per-limb": Two limbs work in parallel and are tracked independently.
  *   Camera loop runs ONE state machine per side, each fed its own
  *   per-side signed angle. Examples: lateral arm raise, overhead arm
- *   raise, shoulder shrug, T-pose hold.
+ *   raise, shoulder shrug, T-pose hold. A metric measured as ONE signed
+ *   angle (ex_004 neck flexion) is split by sign instead: the left side
+ *   sees the positive part, the right side the negative part's magnitude
+ *   (`splitSignedBySide` in poseMetrics.ts).
  *
  * "bidirectional-alternating": One bidirectional motion on a single signed
  *   scale (positive = patient's LEFT, negative = patient's RIGHT — the sign
@@ -108,9 +121,10 @@ export type Side = "left" | "right";
  *   Patient alternates sides. For a DYNAMIC exercise (ex_005) the camera loop
  *   runs ONE state machine fed the ABSOLUTE value of the signed angle, with
  *   the sign at peak time recorded separately so each rep can be tagged left
- *   or right. For an ISOMETRIC exercise (ex_004) no state machine runs; the
- *   camera loop accrues time-in-band PER SIDE from the sign of the angle —
- *   see the ex_004 entry for the band semantics.
+ *   or right. For an ISOMETRIC exercise no state machine runs; the camera
+ *   loop accrues time-in-band PER SIDE from the sign of the angle (the
+ *   side-split path, which ex_004 used as an assisted stretch until
+ *   2026-09-24 and which is kept intact).
  *
  * Unilateral exercises (bilateral: false) ignore this field.
  */
@@ -178,6 +192,14 @@ export type PrimaryMetricSpec = {
     beta: number;
     dCutoff?: number;
   };
+  /**
+   * What the primary metric is measured from when it is not the camera tilt
+   * frozen in the neutral calibration. "calibration-ear-line": the ear line
+   * frozen over the same baseline, so the still head reads 0 and each side's
+   * counter starts from the patient's own resting head (`neckLateralFlexion`
+   * only; see neckCalibrationReference.ts). Part of the measurement version.
+   */
+  reference?: "calibration-ear-line";
 };
 
 /**
@@ -244,10 +266,84 @@ export type CompensationScoring =
  * logic could not express. Defaulting to "above" preserves existing
  * behavior for all pre-2026-05-21 compensation declarations.
  */
+/**
+ * The coaching cue for one compensation metric on one exercise.
+ *
+ * Only ONE cue is surfaced at a time — `web/src/lib/pose/coachingCue.ts` picks
+ * it from the already-latched warnings. This declaration supplies the data that
+ * arbitration needs; it holds no thresholds and does not decide whether a
+ * compensation is present.
+ *
+ * `id` must be unique across the whole registry (enforced by
+ * `validateRegistry()`), so a logged decision identifies its exercise and
+ * metric without a join. Use `<exerciseId>.<metric-in-kebab-case>`.
+ *
+ * `priority` orders simultaneous cues, LOWEST NUMBER FIRST. The values in this
+ * file restate the order the compensation metrics are already declared in,
+ * which each exercise's comments reason about ("textbook compensation",
+ * "second-most-common"). Ties fall to the larger threshold-normalized excess.
+ *
+ * `message` is patient-facing wording. It is carried through the selector and
+ * the shadow log but is NOT rendered yet — the canvas overlay keeps its
+ * existing labels until a clinician has reviewed these strings. Both the
+ * wording and the priority ordering are ENGINEERING DEFAULTS pending that
+ * review; neither is a clinical parameter.
+ *
+ * The timing fields override the selector's defaults for this cue alone. They
+ * are display-behaviour values in milliseconds, not clinical durations:
+ *   - `minActiveMs`  how long the warning must stay latched before the cue may
+ *                    appear (on top of the latch's own debounce)
+ *   - `minDisplayMs` how long the cue keeps the slot before a higher-priority
+ *                    cue may replace it
+ *   - `cooldownMs`   how long the cue stays out of the running after it clears
+ *   - `minVisibleMs` how long a shown cue stays on screen even if its warning
+ *                    clears sooner, so a brief cue is still readable
+ *
+ * `trigger` gives the cue its own switch-on and switch-off levels, in the
+ * metric's units, when the metric's `warningThreshold` sits inside the range of
+ * correct form. It changes only when the cue appears and disappears: the
+ * measurement threshold, the stored time over it and the score are unchanged.
+ * For an upper-bound metric `on` must exceed `off`.
+ *
+ * `evaluation: { mode: "rep-ascent", upTo, persistMs }` judges the warning once
+ * per repetition instead of continuously (`repWindowWarning.ts`): per limb,
+ * while the movement rises from the repetition start up to `upTo` (primary
+ * units; the arm in an arm raise, the head's tilt in a neck side bend),
+ * a deviation that stays at or above the switch-on level for `persistMs` flags
+ * the repetition, and the flag holds until the repetition ends. Per-limb
+ * dynamic exercises only.
+ *
+ * `hidden` marks a cue that failed the pilot replay check (it was drawn on
+ * correct form, or never on the fault it names), or that a review found
+ * unsupported or confounded; its reason says which. The warning is still evaluated,
+ * latched and logged in the coaching audit, but the selector never gives it the
+ * cue slot, so the patient never sees it. Like every cue field, it is coaching
+ * configuration only and never enters the measurement version.
+ */
+export type CompensationCueSpec = {
+  id: string;
+  message: string;
+  priority: number;
+  minActiveMs?: number;
+  minDisplayMs?: number;
+  cooldownMs?: number;
+  minVisibleMs?: number;
+  trigger?: { on: number; off: number };
+  evaluation?: { mode: "rep-ascent"; upTo: number; persistMs: number };
+  hidden?: { reason: string; since: string };
+};
+
 export type CompensationMetricSpec = {
   name: MetricName;
   warningThreshold: number;
   compareDirection?: "above" | "below";
+  /**
+   * Coaching-cue declaration for this metric on this exercise. Optional: a
+   * metric without one still warns, using a synthesized fallback cue at the
+   * lowest priority (see `resolveCoachingCue`), so adding a compensation
+   * metric can never silently remove its patient-visible warning.
+   */
+  cue?: CompensationCueSpec;
   /**
    * When true, this compensation is only meaningful at the PEAK of the
    * movement, so its warning must NOT surface during the rest of the rep.
@@ -286,6 +382,17 @@ export type CompensationMetricSpec = {
    * `CompensationScoring` for the modes.
    */
   scoring?: CompensationScoring;
+  /**
+   * Leaves this metric out of the compensation (form) score while it is still
+   * recorded. The per-repetition raw features, the exposure trends and the ML
+   * features keep it, because they follow `scoring.mode`; `{ mode: "off" }`
+   * would drop it from those too. Use when the metric cannot identify a fault
+   * on this exercise, so that a correct movement does not lose points to it.
+   * Record the reason and the date, as for a hidden cue. Unlike `cue`, this
+   * field stays in the measurement version (`versioning.ts`), because it
+   * changes the score.
+   */
+  excludedFromFormScore?: { reason: string; since: string };
   /**
    * Per-exercise override of the metric's global `COMPENSATION_BANDS` entry.
    * When present, the score deducts against THESE bands for this exercise
@@ -326,6 +433,87 @@ export function getCompensationBands(
   return spec.bandsOverride ?? COMPENSATION_BANDS[spec.name];
 }
 
+/**
+ * A display-only coaching check: a cue driven by a signal that is NOT a
+ * compensation measurement.
+ *
+ * It goes through the same warning latch, single-cue selector, overlay and
+ * coaching audit as a compensation metric's cue. It is never scored, never
+ * written to set or repetition measurements, and is removed from the
+ * measurement version (`exerciseVersionPayload`), so adding or changing one
+ * cannot split a patient's trend. Its threshold and settings
+ * are part of the coaching configuration fingerprint instead.
+ *
+ * `check.mode`:
+ *   - "hip-shift-from-stance" (`hipShiftWarning.ts`): the hips' sideways
+ *     movement away from the bend side, in hip widths, against the stance just
+ *     before each bend (the median of the upright frames in the last
+ *     `stanceMs`). Judged from a head lean of `from` (primary units); a shift
+ *     that stays at or above the switch-on level for `persistMs` flags the
+ *     bend. Bidirectional-alternating dynamic exercises only.
+ *   - "elbow-bend" (`elbowBendWarning.ts`): each arm's elbow angle on the
+ *     image (180 = straight), warned BELOW the line. An arm is judged while
+ *     its own primary is at least `from`. With `hold: "repetition"` an angle
+ *     below the line for `persistMs` flags the arm until it is back below the
+ *     repetition start; with `hold: "live"` (holds; `persistMs` 0) the live
+ *     angle passes through. Per-limb bilateral exercises only.
+ *   - "over-raise" (`overRaiseWarning.ts`): each arm's own primary (how far
+ *     the arm is raised), warned ABOVE the line, which must sit above the
+ *     full-range line. A reading at or above it for `persistMs` flags the arm
+ *     until corrected below the cue's existing clear level. Per-limb bilateral
+ *     dynamic exercises only.
+ *   - "other-arm-down" / "arm-above-hold" (`otherArmDownWarning.ts`): while a
+ *     bilateral hold is timed after either prescribed arm earns current-set
+ *     credit, each unfinished arm is checked independently against the target
+ *     band's lower/upper edge for `persistMs`. Per-limb
+ *     bilateral holds only; neither check changes hold credit.
+ */
+export type CoachingCheckSpec =
+  | {
+      name: "hipShift";
+      warningThreshold: number;
+      cue: CompensationCueSpec;
+      check: { mode: "hip-shift-from-stance"; stanceMs: number; from: number; persistMs: number };
+    }
+  | {
+      name: "elbowBend";
+      warningThreshold: number;
+      compareDirection: "below";
+      cue: CompensationCueSpec;
+      check: { mode: "elbow-bend"; from: number; persistMs: number; hold: "repetition" | "live" };
+    }
+  | {
+      name: "overRaise";
+      warningThreshold: number;
+      compareDirection: "above";
+      cue: CompensationCueSpec;
+      check: { mode: "over-raise"; persistMs: number };
+    }
+  | {
+      name: "otherArmDown";
+      warningThreshold: number;
+      compareDirection: "below";
+      cue: CompensationCueSpec;
+      check: { mode: "other-arm-down"; persistMs: number };
+    }
+  | {
+      name: "armAboveHold";
+      warningThreshold: number;
+      compareDirection: "above";
+      cue: CompensationCueSpec;
+      check: { mode: "arm-above-hold"; persistMs: number };
+    };
+
+/**
+ * Every spec whose warning can raise a coaching cue: the compensation metrics,
+ * then the display-only coaching checks. The warning latch, cue selector,
+ * overlay and coaching configuration read this; scoring and storage read
+ * `compensationMetrics` alone.
+ */
+export function coachingWarningSpecs(definition: ExerciseDefinition): CompensationMetricSpec[] {
+  return [...definition.compensationMetrics, ...(definition.coachingChecks ?? [])];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPENSATION SCORE BANDS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,7 +536,8 @@ export type Band = { max: number; deductionMin: number; deductionMax: number };
  * lack its bands.
  *
  * Units match the metric:
- *   - angle metrics (neck, shoulder symmetry, trunk lean):    degrees
+ *   - angle metrics (neck, shoulder symmetry, trunk lean):    aspect-corrected
+ *     image-plane degrees (camera estimate; D-48, 2026-10-21)
  *   - displacement metrics (scapular elevation):              torso-length fraction
  *
  * Each metric's first band is its measurement noise floor (no deduction).
@@ -364,26 +553,29 @@ export type Band = { max: number; deductionMin: number; deductionMax: number };
  * N is the number of scored compensation metrics available in the frame.
  */
 export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
-  // Neck tilt: 5° normal floor (matches the severity classifier)
+  // The three angle band sets below were re-derived on 2026-10-21 (D-48) from
+  // their pipeline-unit edges on 16:9 frames, so each band covers the same
+  // movement as before (Review_Artifacts/2026-10-21_aspect_lift/).
+  // Neck tilt: normal floor matching the severity classifier (was 5/10/20/30).
   neckTilt: [
-    { max: 5,  deductionMin: 0,   deductionMax: 0   },
-    { max: 10, deductionMin: 0,   deductionMax: 35  },
-    { max: 20, deductionMin: 35,  deductionMax: 75  },
-    { max: 30, deductionMin: 75,  deductionMax: 100 },
+    { max: 2.8,  deductionMin: 0,   deductionMax: 0   },
+    { max: 5.7,  deductionMin: 0,   deductionMax: 35  },
+    { max: 11.6, deductionMin: 35,  deductionMax: 75  },
+    { max: 18,   deductionMin: 75,  deductionMax: 100 },
   ],
-  // Shoulder symmetry: 3° landmark noise floor
+  // Shoulder symmetry: landmark noise floor (was 3/7/12/20).
   shoulderSymmetry: [
-    { max: 3,  deductionMin: 0,   deductionMax: 0   },
-    { max: 7,  deductionMin: 0,   deductionMax: 35  },
-    { max: 12, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
+    { max: 1.7,  deductionMin: 0,   deductionMax: 0   },
+    { max: 4,    deductionMin: 0,   deductionMax: 35  },
+    { max: 6.8,  deductionMin: 35,  deductionMax: 75  },
+    { max: 11.6, deductionMin: 75,  deductionMax: 100 },
   ],
-  // Trunk lean: 2° standing-sway floor
+  // Trunk lean: standing-sway floor (was 2/5/10/20).
   trunkLean: [
-    { max: 2,  deductionMin: 0,   deductionMax: 0   },
-    { max: 5,  deductionMin: 0,   deductionMax: 35  },
-    { max: 10, deductionMin: 35,  deductionMax: 75  },
-    { max: 20, deductionMin: 75,  deductionMax: 100 },
+    { max: 3.6,  deductionMin: 0,   deductionMax: 0   },
+    { max: 8.8,  deductionMin: 0,   deductionMax: 35  },
+    { max: 17.4, deductionMin: 35,  deductionMax: 75  },
+    { max: 32.9, deductionMin: 75,  deductionMax: 100 },
   ],
   // Scapular elevation as compensation: thresholds in normalized torso-length
   // CHANGE from baseline. Below 0.02 = within noise floor.
@@ -411,11 +603,13 @@ export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
 // clean frames (mean deduction ~21). Raising the floor to 6° puts honest sway
 // in the no-deduction band while still flagging a real torso shift. The braced
 // overhead exercises (ex_007/ex_008, clean trunk <2°) keep the global floor.
+// The figures in this note are pipeline units; the edges were re-derived on
+// 2026-10-21 (D-48) from 6/10/15/25.
 const TRUNK_LEAN_UNBRACED_BANDS: Band[] = [
-  { max: 6,  deductionMin: 0,   deductionMax: 0   },
-  { max: 10, deductionMin: 0,   deductionMax: 35  },
-  { max: 15, deductionMin: 35,  deductionMax: 75  },
-  { max: 25, deductionMin: 75,  deductionMax: 100 },
+  { max: 10.6, deductionMin: 0,   deductionMax: 0   },
+  { max: 17.4, deductionMin: 0,   deductionMax: 35  },
+  { max: 25.5, deductionMin: 35,  deductionMax: 75  },
+  { max: 39.7, deductionMin: 75,  deductionMax: 100 },
 ];
 
 // shoulderSymmetry, exercises where the subject's resting shoulder-line
@@ -424,12 +618,13 @@ const TRUNK_LEAN_UNBRACED_BANDS: Band[] = [
 // resting asymmetry out of the deduction while still flagging a genuine uneven
 // shoulder line. (Future: a per-side, baseline-relative shoulder check would
 // replace this with a true zero-baseline; that needs per-exercise baseline
-// capture — out of scope here.)
+// capture — out of scope here.) Figures in this note are pipeline units; the
+// edges were re-derived on 2026-10-21 (D-48) from 7/12/17/25.
 const SHOULDER_SYMMETRY_ASYMMETRIC_BANDS: Band[] = [
-  { max: 7,  deductionMin: 0,   deductionMax: 0   },
-  { max: 12, deductionMin: 0,   deductionMax: 35  },
-  { max: 17, deductionMin: 35,  deductionMax: 75  },
-  { max: 25, deductionMin: 75,  deductionMax: 100 },
+  { max: 4,    deductionMin: 0,   deductionMax: 0   },
+  { max: 6.8,  deductionMin: 0,   deductionMax: 35  },
+  { max: 9.8,  deductionMin: 35,  deductionMax: 75  },
+  { max: 14.7, deductionMin: 75,  deductionMax: 100 },
 ];
 
 /**
@@ -498,6 +693,8 @@ export type ExerciseDefinition =
       requiresLateralRoom?: boolean;
       primaryMetric: PrimaryMetricSpec;
       compensationMetrics: CompensationMetricSpec[];
+      /** Display-only coaching checks; see `CoachingCheckSpec`. */
+      coachingChecks?: CoachingCheckSpec[];
     }
   | {
       id: string;
@@ -511,12 +708,22 @@ export type ExerciseDefinition =
       requiresLateralRoom?: boolean;
       isometric: IsometricSpec;
       compensationMetrics: CompensationMetricSpec[];
+      /** Display-only coaching checks; see `CoachingCheckSpec`. */
+      coachingChecks?: CoachingCheckSpec[];
     };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REGISTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
+// UNITS, 2026-10-21 (D-48): every angle in this registry is the aspect-corrected
+// image-plane angle the camera loop now measures (camera estimate, not
+// anatomical degrees). Each value was re-derived from its earlier pipeline-unit
+// value, measured on 16:9 frames with x and y normalised separately, so that
+// counting and cues behave as before; the one deliberate change is ex_001's
+// minimum peak. The notes beside each value give the old number ("was"). Prose
+// written before 2026-10-21 quotes pipeline units throughout. Table and method:
+// Review_Artifacts/2026-10-21_aspect_lift/threshold_conversion.md.
 export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // ────────────────────────────────────────────────────────────────────────
   // ex_001 — Lateral Arm Raises (Shoulder Abduction)
@@ -535,27 +742,54 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Resting arm-at-side gives ~5–10° apparent abduction from landmark
         // noise and slight standing posture variance. 20° is well above that
         // floor and below the angle of any deliberate movement.
-        startThreshold: 20,
-        // 10° gap below start gives a hysteresis band wide enough to absorb
-        // post-smoothing residual jitter without missing real returns to rest.
-        repCompleteThreshold: 10,
+        startThreshold: 32.9, // was 20 (pipeline units); D-48
+        // A repetition ends only when the reading falls back to this line
+        // (`repCounter.ts`); until then the side waits and counts nothing.
+        // Raised from 10 to 15 on 2026-10-14 by user decision. At 10, a
+        // return that stopped just short of the line
+        // merged two raises into one count, and a resting reading above it
+        // left that side uncounted for a whole set. That happened in the
+        // cropped, mirrored guide-clip run: one arm rested at 10.4 to 10.9
+        // on an 870x720 frame, and the set read L 33, R 0. Six of the pilot
+        // subject's 189 returns stopped between 9 and 9.8. At 15, a replay of
+        // every traced pilot set gives the same counts and labels, and the
+        // cropped case counts both sides. The start line of 20 keeps a
+        // 5-point hysteresis band. Camera-estimate units, not anatomical
+        // degrees: on 16:9 frames 15 is about 25 degrees from the trunk in
+        // the picture.
+        repCompleteThreshold: 25.5, // was 15 (pipeline units); D-48
         // Minimum peak to count as a rep at all. Peaks below this are
         // silently discarded as false starts (NOT classified "partial" — that
         // boundary is `targetROM`; see `RepCounter` semantics in repCounter.ts).
         // 45° (lowered from 60° on 2026-05-21 for reduced-ROM leniency; user
         // decision via the global-floor approach, NOT classification tiers.
         // ex_001 is per-limb, so the bidirectional `abs()` phantom that
-        // gated ex_004's reduced-ROM does not apply here. `targetROM` stays
-        // 90°, so peaks in [45°, 90°) still classify as `partial` — the
+        // gated ex_004's reduced-ROM does not apply here. Peaks from 45 up to
+        // `targetROM` (85) still classify as `partial` — the
         // weakness/asymmetry signal is preserved, the rep is no longer
         // silently dropped. Patients in early rehab often plateau around
         // 45–60° before regaining full ROM.
+        // A REAL 45 since 2026-10-21 (user decision, D-48): the old 45 was in
+        // pipeline units and sat at a corrected 60.6, about 65 degrees on a
+        // body against motion capture (REHAB24-6), so raises peaking 45-60
+        // were dropped against the intent above. Not converted, unlike every
+        // other line here.
         minimumPeakThreshold: 45,
         // Clinical full ROM for shoulder abduction in the frontal plane is
         // ~180° anatomically, but home-exercise prescription typically targets
         // 90° (arm horizontal) for upper-body rehab. Source: standard PT
         // shoulder protocol, Kisner & Colby, Therapeutic Exercise.
-        targetROM: 90,
+        // Set to 85 on 2026-10-11 by user decision, down from 90: the camera
+        // estimate of a horizontal arm reads just under 90, so at a 90 line a
+        // correct raise passed or failed by chance. The guide figure, built to
+        // raise its arms to exactly 90 (tools/blender/build_ex001_mpfb_figure.py,
+        // PEAK_DEG), averaged 89.8 and 88.0 with 1 of 6 repetitions complete, and
+        // the pilot subject's session 168 (medians 89.3 and 89.8) had 19 of 40.
+        // At 85, 95% of the 261 ordinary pilot repetitions count as complete,
+        // and a raise clearly short of horizontal stays partial. A
+        // single-subject engineering value in camera-estimate units, not a
+        // clinical target; the groupmates' recordings test it.
+        targetROM: 87.2, // was 85 (pipeline units); D-48
       },
     },
     compensationMetrics: [
@@ -563,7 +797,29 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // patients shift their torso away from the working arm to assist
       // the lift. Trunk lean ≥ 5° during the rep should flag. Unbraced-floor
       // band override (6° vs the global 2°): clean standing sway here is 3–5°.
-      { name: "trunkLean", warningThreshold: 5, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
+      // Sources (cue review, 2026-10-03; "textbook" above had none): the trunk
+      // takes part in arm elevation, a few degrees in healthy people and more
+      // when the shoulder is restricted, though mainly as extension and
+      // twisting, which this side-lean metric does not measure (Fayad et al.
+      // 2008, Brain Res, doi:10.1016/j.brainres.2007.11.046). Trunk tilt is a
+      // compensation class in a webcam rehabilitation coach (Cóias et al. 2022,
+      // J NeuroEng Rehabil, doi:10.1186/s12984-022-01053-z), and a browser-webcam
+      // study agreed with clinicians on trunk lean (Pavlikov et al. 2026,
+      // Sensors, doi:10.3390/s26165054). These support the cue in general for
+      // arm-raising exercises, not this exercise specifically.
+      // No cooldown (display only, D-65, 2026-10-29). The cooldown is kept per
+      // cue, not per side, so with the 3 s default a lean to the other side
+      // straight after the first was shown late or not at all (live sessions
+      // 251, 253 and 254). The warning must still drop to its switch-off level
+      // and pass its switch-on level again before the cue returns.
+      { name: "trunkLean",
+        cue: {
+          id: "ex_001.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+          cooldownMs: 0,
+        },
+        warningThreshold: 8.8, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS }, // was 5; D-48
       // Shoulder shrug (scapular elevation) is the second-most-common
       // compensation — patients hike the trapezius to substitute for
       // weak deltoid. Surfaced as a warning when shrug exceeds the
@@ -572,14 +828,149 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // rhythm), so the deduction runs on the residual from the expected
       // elevation at the current abduction, not the raw value. Fit: expected
       // ≈ -0.0077 + 0.00124·|abduction°| (clean-rep recording, n≈930).
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" } },
+      // Added 2026-09-06, matching the caveat ex_005 already carries: the
+      // intercept is an IN-REP ENVELOPE EXTRAPOLATION back to zero abduction,
+      // not an anatomical resting claim — no frames near 0° informed it.
+      // Single-subject pilot fit; not clinician-reviewed.
+      // ── `warningThreshold: 0.04` — provenance, recorded 2026-09-06 ──────────
+      // An ENGINEERING DEFAULT from a single-subject observation, not a
+      // published value. Basis: the raw trunk-up projection sits at ~0.30 at
+      // rest, and a deliberate shrug was observed to change it by only
+      // ~0.03–0.05 (observed during live tuning, 2026-05-21). 0.04 is the
+      // midpoint of that observed delta. It is therefore a "smallest shrug
+      // worth flagging" figure for ONE subject on one setup, and carries no
+      // normative claim about scapular elevation in any population.
+      // The same 0.04 appears on ex_002/ex_005/ex_006; this is the origin note
+      // for all of them. No published source has been found for it.
+      // Cue evaluation (display only, 2026-10-02): judged once per repetition
+      // while the arm rises from the start to 60°, where a shrug used to lift the
+      // arm is observed clinically and where the pilot recordings showed it.
+      // Continuously, the coupled expectation masked it at the top and it never
+      // held for the latch debounce. One smoothed reading at or above the line
+      // inside the window flags the repetition (the arm crosses 20-60° in about
+      // 0.3 s, two to three frames at the pilot trace rate), and the flag holds
+      // to the end of the repetition, so the cue may appear at once. No
+      // cooldown: a held per-repetition flag cannot flicker, and each shrugging
+      // repetition should get its own cue.
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_001.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+          minActiveMs: 0,
+          cooldownMs: 0,
+          evaluation: { mode: "rep-ascent", upTo: 72, persistMs: 0 }, // upTo was 60; D-48
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
+        // Refitted 2026-10-21 for the corrected abduction (D-48): the same
+        // estimator in the corrected plane, n=1836, R2=0.79, on sessions
+        // 200-205 (Review_Artifacts/2026-09-10_coupled_refits/, mode
+        // "corrected"). Was -0.0077 + 0.00124 per pipeline unit.
+        scoring: { mode: "primary-coupled", intercept: -0.0435, slopePerPrimaryUnit: 0.00162, source: "pilot-fit" } },
       // Uneven shoulder line during the raise — one whole shoulder rides
       // higher than the other (distinct from a symmetric shrug). Drives the
       // per-shoulder overlay boxes + "LOWER" arrow. Starting threshold 5°
       // (above the 3° landmark noise floor); tune live. Band override raises
       // the score floor to 7° (resting asymmetry here is ~3.6°).
-      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+      // Cue trigger (display only, 2026-10-01): on at 7, off at 5. Correct
+      // posture read 3 to 4.9 with blips to 5.9 in the pilot replay, so the
+      // 5 warning line switched the cue on during correct form and its 2.5
+      // off level sat below correct posture. 7 is this exercise's own
+      // no-deduction floor (SHOULDER_SYMMETRY_ASYMMETRIC_BANDS).
+      // HIDDEN 2026-10-03 (cue review; logged, never drawn). Hitching one
+      // shoulder to lift the arm is a recognised compensation (Jia et al. 2008,
+      // Clin Orthop Relat Res, doi:10.1007/s11999-008-0331-3; Kibler et al.
+      // 2013, Br J Sports Med, doi:10.1136/bjsports-2013-092425). In this two-arm
+      // raise, though, the shoulder of the higher arm rises with it, so an
+      // uneven shoulder line cannot tell a hitch from an uneven raise. The
+      // per-arm shrug check above judges each shoulder against its own arm.
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_001.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 30,
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
+          hidden: {
+            reason: "Cue review: in a two-arm raise the higher arm's shoulder rises with it, so the shoulder line cannot tell a hitch from an uneven raise; the per-arm shrug check covers one-sided shrugging.",
+            since: "2026-10-03",
+          },
+        },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
+    ],
+    // Display-only coaching check, added 2026-10-04 by user decision. A
+    // clinical exercise library raises the arm to the side "with your elbow
+    // straight" (Physitrack, How to perform the Arm Abduction,
+    // https://www.physitrack.com/exercise-library/how-to-perform-the-arm-abduction-exercise).
+    // The reading is the elbow's interior angle on the image, 180 when
+    // straight. A straight arm reads close to 180 from any camera angle; a bend
+    // toward the camera reads smaller than it is, so the check can miss a bend
+    // rather than cue a straight arm. One image-based comparison also reported
+    // poor elbow-flexion accuracy (Moreira et al. 2024, Sensors, PMID
+    // 39771719), which is why only a clear bend is cued.
+    // `warningThreshold: 130`, below which the elbow is clearly bent: with the
+    // arm raised to 75 or more, the pilot subject's correct raises read 144 at
+    // the lowest and slouched raises 136 (one subject; tuning data); no frame
+    // read below 135. An engineering line, not a clinical cut-off. Detection
+    // is untested, since no pilot recording contains the fault; the
+    // groupmates' recordings test it with this value fixed beforehand. `from:
+    // 75` matches that analysis. `persistMs: 100` (two trace frames, about
+    // three live) keeps one noisy frame from flagging a repetition, and the
+    // flag is held until the arm is back at rest. No wait and no cooldown, so
+    // each repetition can show its own cue. After the compensation cues above
+    // in priority.
+    // Re-derived 2026-10-21 (D-48): 130 and 75 above are pipeline units. The
+    // line is converted at a horizontal upper arm with the forearm bending in
+    // the image plane (146.2); no pilot frame reaches it, so it could not be
+    // re-derived from recorded decisions. `from` is the converted 75.
+    //
+    // Display-only past-shoulder-height check, added 2026-10-25 by user
+    // decision. The exercise is prescribed to shoulder height ("Raise arms to
+    // the side at shoulder height", its description), and the same clinical
+    // library raises the arms "until they are parallel to the floor". In
+    // recreational lifters, lateral raises above 90 degrees were associated
+    // with clinical signs of subacromial impingement, and the authors suggest
+    // staying below it (Kolber et al. 2014, J Strength Cond Res 28(4):1081-1089,
+    // doi:10.1519/JSC.0000000000000250; an association, not a cause).
+    // `warningThreshold: 115`, an engineering line: against motion capture
+    // (REHAB24-6, 8 people) the corrected reading of 115 falls at a median of
+    // 113 degrees on bodies (5th-95th percentile 106-119), well above
+    // horizontal; the pilot subject's correct raises since metric correction peaked at
+    // 102.5 at most (one subject; tuning data). Judged from the arm's own
+    // primary at any height; `persistMs: 100` as on the elbow check, and the
+    // warning clears at its existing clear level once corrected. Last in priority, with no
+    // minimum visible/display time: shown first, it would otherwise keep the slot for
+    // the selector's 1.5 s and hide "Straighten arms" for the repetition (8 of
+    // 37 REHAB24-6 raises lost it; replay review, 2026-10-25), so a
+    // higher-priority cue replaces it at once.
+    coachingChecks: [
+      {
+        name: "elbowBend",
+        warningThreshold: 146.2,
+        compareDirection: "below",
+        check: { mode: "elbow-bend", from: 81.4, persistMs: 100, hold: "repetition" },
+        cue: {
+          id: "ex_001.elbow-bend",
+          message: "Keep your elbows straight as you raise your arms.",
+          priority: 40,
+          minActiveMs: 0,
+          cooldownMs: 0,
+        },
+      },
+      {
+        name: "overRaise",
+        warningThreshold: 115,
+        compareDirection: "above",
+        check: { mode: "over-raise", persistMs: 100 },
+        cue: {
+          id: "ex_001.over-raise",
+          message: "Raise your arms only to shoulder height.",
+          priority: 50,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
+          cooldownMs: 0,
+        },
+      },
     ],
   },
 
@@ -597,6 +988,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
    * filtered out of the staff DEBUG_IDS list in `CameraClient.tsx`, not
    * assigned to patients. `computeShoulderFlexion` stays live (delegates to
    * `computeShoulderAbduction`; no harm in keeping the path).
+   * Its angle values stay in the pipeline units used before 2026-10-21 (D-48)
+   * as a historical record; re-derive them before any revival.
    */
   ex_002: {
     id: "ex_002",
@@ -610,8 +1003,13 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // Same noise-floor logic as abduction.
         startThreshold: 20,
         repCompleteThreshold: 10,
-        // Forward elevation above 90° engages full deltoid + serratus
-        // recruitment; below this counts as partial.
+        // Forward elevation above 90° was taken as the partial/complete
+        // boundary; below this counts as partial.
+        // NOTE 2026-09-06: the original comment here asserted that this angle
+        // "engages full deltoid + serratus recruitment". That is a
+        // physiological claim with NO cited source, so it is WITHDRAWN rather
+        // than sourced — this exercise is deprecated and no re-derivation is
+        // planned. Treat 90 as an unvalidated engineering default.
         minimumPeakThreshold: 90,
         // Clinical full ROM for shoulder flexion is ~180°. For front-camera
         // 2D estimation, foreshortening means the apparent measured angle
@@ -627,8 +1025,20 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // weak shoulder flexion. We don't have a sagittal-plane trunk angle
       // metric yet; trunkLean (lateral) catches asymmetric leans only.
       // TODO: add `trunkExtension` metric for sagittal compensation.
-      { name: "trunkLean", warningThreshold: 5 },
-      { name: "scapularElevation", warningThreshold: 0.04 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_002.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_002.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+        },
+        warningThreshold: 0.04 },
     ],
   },
 
@@ -659,7 +1069,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
    * structurally (assertions on `EXERCISE_REGISTRY.ex_003.kind === "dynamic"`
    * and `primaryMetric.requiresBaselineCapture`). The entry MUST stay
    * unchanged in shape and field values — only this deprecation JSDoc was
-   * added. Do not "tidy up" the entry below.
+   * added. Do not "tidy up" the entry below. Its shoulderSymmetry line (5)
+   * therefore stays in the pipeline units used before 2026-10-21 (D-48).
    */
   ex_003: {
     id: "ex_003",
@@ -710,81 +1121,153 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Asymmetric shrug (one trap dominates) is the main quality issue.
       // shoulderSymmetry > 5° during the held position flags this.
-      { name: "shoulderSymmetry", warningThreshold: 5 },
+      // `warningThreshold: 5`: the shared shoulderSymmetry warning boundary.
+      // Engineering default set above the documented ~3° landmark noise floor;
+      // published CONTEXT, not grounding: inter-rater minimal detectable change
+      // for clinical goniometry on human shoulders is 5–11° (Kiatkulanusorn et
+      // al., Sci Rep 2023, PMID 38017058), so 5° sits at the lower edge of what
+      // the reference method can resolve.
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_003.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 10,
+        },
+        warningThreshold: 5 },
     ],
   },
 
   // ────────────────────────────────────────────────────────────────────────
-  // ex_004 — Neck Lateral Flexion (Cervical Side Bending, Isometric Hold)
-  // Patient tilts head ear-toward-shoulder, HOLDS at the target angle, then
-  // alternates to the other side. CONVERTED 2026-06-11 from a dynamic
-  // (rep-counted) exercise to an isometric hold: the slow, small-range
-  // alternating motion segments poorly as reps near MediaPipe's ear-line
-  // noise, while a held tilt maps cleanly onto the same time-in-band
-  // scoring ex_006 uses. The dynamic config (velocity-zero-crossing
-  // segmentation, 5/2/12/30 thresholds) lives in git history if needed.
+  // ex_004 — Neck Lateral Flexion (Active Alternating, Rep-Counted)
+  // Patient tilts the head ear-toward-shoulder without assistance, returns to
+  // centre, then tilts to the other side. RESTORED 2026-09-24 as an active
+  // repetition exercise, replacing the assisted isometric stretch used from
+  // 2026-06-11. Repetitions quantify what a hold cannot: active range per side
+  // per repetition (the per-side peak trend), count, tempo, left/right
+  // symmetry, trunk lean and a shoulder hike, with no hold angle or duration
+  // to prescribe and no overpressure on the head. The assisted-stretch
+  // definition is in git history and the camera loop's side-split isometric
+  // path is kept intact, so it can return unchanged if multi-person
+  // recordings show this counting is unreliable.
   //
-  // SCORING MODEL: one signed bidirectional signal (neckLateralFlexion;
-  // positive = patient's LEFT — pinned by neckSideAgreement.test.ts). The
-  // camera loop accrues hold time PER SIDE from the sign of the angle:
-  // left accrues while the signed angle is inside [center−tol, center+tol],
-  // right while inside [−center−tol, −center+tol]. The two sides are
-  // surfaced separately (never merged) and a set completes only when BOTH
-  // sides reach the prescribed hold — the slower side gates, preserving
-  // the asymmetry signal. No rep state machine runs (isometric).
+  // COUNTING MODEL: one signed signal (neckLateralFlexion; positive = patient's
+  // LEFT — pinned by neckSideAgreement.test.ts) is split by sign into per-side
+  // magnitudes (`splitSignedBySide` in poseMetrics.ts), and each side runs its
+  // own RepCounter, as the per-limb arm exercises do. Both designs tried in
+  // June 2026 failed live: one counter on |angle| could not tell a return
+  // stroke passing neutral from a small deliberate repetition, and a
+  // velocity/zero-crossing segmenter ghost-counted small posture adjustments.
+  // With the split, a return stroke past neutral lands on the OTHER side's
+  // counter, which discards it unless it reaches that side's minimum peak.
   // ────────────────────────────────────────────────────────────────────────
   ex_004: {
     id: "ex_004",
     name: "Neck Lateral Flexion",
-    kind: "isometric",
+    kind: "dynamic",
     bilateral: true,
-    bilateralMode: "bidirectional-alternating",
-    isometric: {
-      metric: "neckLateralFlexion",
-      targetBand: {
-        // PLACEHOLDER values — the clinical hold angle and tolerance are
-        // still pending a clinician decision; revise before validation.
-        // This exercise is the ASSISTED stretch (decided 2026-06-11): one
-        // hand applies gentle overpressure on the head, so the held angle
-        // sits at end-range, not at a sub-maximal target. The band is
-        // therefore one-sided in practice — "at least 12° toward that
-        // side": [12°, 88°] = center 50 ± 38.
-        center: 50,
-        // ±38° puts the lower band edge at 12°: strictly positive — required
-        // for sign-based side attribution (enforced in validateRegistry) —
-        // and at the noise-validated 12° floor, so landmark jitter near
-        // neutral cannot accrue hold time for either side. The upper edge
-        // (88°) sits above anything observable: a recorded clean assisted
-        // session measured holds at 44–63° (p95 55°, max 63°) — an earlier
-        // 48° ceiling based on anatomical neck range turned out wrong for
-        // this ear-line measurement (shoulder drop and head translation
-        // push it past anatomical cervical ROM) and was silently discarding
-        // 45% of legitimate hold time at the deepest stretch.
-        // Hold-quality note: for a stretch, drifting DEEPER during the hold
-        // is expected tissue creep, not failure — read drift/droop stats for
-        // this exercise with the opposite sign convention from the ex_006
-        // strength hold.
-        tolerance: 38,
+    bilateralMode: "per-limb",
+    primaryMetric: {
+      name: "neckLateralFlexion",
+      // Counted from the ear line frozen in the neutral calibration (D-49),
+      // not from the camera tilt frozen there. That tilt comes from the hip
+      // and ear lines, so whenever the resting ear line is not parallel to the
+      // hip line in the picture (uneven hips, standing at an angle to the
+      // camera) a still head read off zero all session, and one side reached
+      // every line that much early and the other late. From the calibration's
+      // own ear line the still head reads 0. The lines below are therefore
+      // degrees from the calibration posture; the trends still measure each
+      // peak from the rests between sets (trend data rule 4).
+      reference: "calibration-ear-line",
+      thresholds: {
+        // Engineering starting points, to be checked against multi-person
+        // recordings; not clinician-approved. The degree figures in these
+        // notes are pipeline units, where the near-horizontal ear line read
+        // larger than its tilt on a 16:9 frame; each line was re-derived on
+        // 2026-10-21 (D-48) to the corrected tilt it stood for.
+        // At rest the unsmoothed ear-line angle measured ~2.3° SD and ~11°
+        // peak-to-peak, the noisiest metric in the registry, and the June 2026
+        // thresholds (5° start, 12° minimum peak) sat inside that noise. 12° is
+        // the floor already validated for the former hold band's lower edge.
+        startThreshold: 6.8, // was 12 (pipeline units); D-48
+        // Half of start: a repetition completes once the head is back near
+        // centre, and always when it crosses into the other side (this side's
+        // magnitude then reads 0).
+        repCompleteThreshold: 3.4, // was 6; D-48
+        // Peaks below this are discarded as false starts, so a passive
+        // overshoot past neutral or a posture adjustment that briefly crosses
+        // the start threshold does not count. 18° ≈ 10° of true tilt on 16:9.
+        minimumPeakThreshold: 10.4, // was 18; D-48
+        // "complete" vs "partial" boundary. 30° (the June 2026 starting value)
+        // ≈ 18° of true tilt on 16:9: a modest active range, so reduced
+        // mobility records partial repetitions instead of losing them.
+        targetROM: 18, // was 30; D-48
       },
     },
     compensationMetrics: [
-      // Trunk lean during neck flexion = patient is bending the whole spine
-      // instead of isolating the neck. Strong quality indicator. Unbraced-floor
-      // band override (6° vs global 2°): clean assisted holds sway 1.8–3.4° and
-      // the global floor deducted on ~54% of clean-hold frames. The warning
-      // threshold stays the tighter 3° (warning ≠ score deduction here).
-      { name: "trunkLean", warningThreshold: 3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS },
-      // NOTE 2026-06-11: `shoulderSymmetry` was REMOVED from this
-      // compensation list. The exercise is the assisted stretch, where a
-      // sloped shoulder line is PRESCRIBED technique (the opposite shoulder
-      // is deliberately depressed while the hand pulls the head over) — a
-      // symmetric line-angle metric cannot distinguish that from the genuine
-      // cheat (hiking the bend-side shoulder up to meet the ear). Restoring
-      // shoulder-cheat detection needs a per-side, baseline-relative
-      // scapular check (direction-aware), which requires baseline capture
-      // on this exercise — future work. The raw shoulder line is still
-      // recorded every frame by the tuning trace, so the signal is measured
-      // even though it is not scored or warned on.
+      // Trunk lean during neck flexion = the whole spine bending instead of
+      // the neck. Unbraced-floor band override (6° vs global 2°), measured on
+      // the former assisted holds (clean sway 1.8–3.4°); re-check it on active
+      // repetitions. The warning threshold stays the tighter 3°.
+      // Cue trigger (display only, 2026-10-01): on at 6, off at 5. The 3 warning
+      // line sits inside the clean sway above (up to 3.4), so the cue would
+      // fire on correct form; 6 is this exercise's no-deduction floor. Not yet
+      // checked on a recording of the active exercise.
+      // Sources (cue review, 2026-10-03): neck side-bend measurement stabilises
+      // the shoulder girdle so the spine below does not add to the bend
+      // (University of West Alabama, Cervical Spine Goniometry, a teaching page,
+      // not peer reviewed). The neck reading is the head's tilt against the
+      // room, so a trunk tilt also adds to it.
+      // Cue evaluation (display only, 2026-10-03): judged once per bend, as the
+      // arm-raise shrug is. A bend lasts about 1 s, and a continuous cue needs
+      // about 0.9 s past its line (0.3 s to switch on, then 0.6 s before it is
+      // shown), so a lean inside one bend could not show. One smoothed reading
+      // at or above the switch-on level while the head tilts out flags the
+      // bend, and the flag holds until the bend is complete. upTo 90 covers the
+      // whole rise: no neck reading approaches it.
+      { name: "trunkLean",
+        cue: {
+          id: "ex_004.trunk-lean",
+          message: "Keep your torso upright — tilt only your head.",
+          priority: 10,
+          minActiveMs: 0,
+          cooldownMs: 0,
+          trigger: { on: 10.6, off: 8.8 }, // was 6/5; D-48
+          evaluation: { mode: "rep-ascent", upTo: 90, persistMs: 0 },
+        },
+        warningThreshold: 5.3, bandsOverride: TRUNK_LEAN_UNBRACED_BANDS }, // was 3; D-48
+      // Uneven shoulder line = hiking a shoulder toward the ear instead of
+      // tilting the head. Valid again for the active exercise, where both
+      // shoulders stay level (the assisted stretch depressed the opposite
+      // shoulder on purpose, so the metric was removed then). Same threshold
+      // and resting-asymmetry band override as ex_001. scapularElevation stays
+      // excluded: its ear-to-shoulder proxy shrinks by design as the head
+      // tilts toward the shoulder.
+      // Cue trigger (display only, 2026-10-01): on at 7, off at 5, as on ex_001.
+      // Sources (cue review, 2026-10-03), replacing the shoulder-hike reason
+      // above: neck side-bend measurement holds the shoulder girdle still
+      // (University of West Alabama, Cervical Spine Goniometry), and a published
+      // neck stretch anchors the shoulder on the side the head moves away from,
+      // to reduce its elevation (ClinicalTrials.gov NCT06635759). In a pilot
+      // recording the shoulder line turned with the head (far shoulder up, near
+      // shoulder down) instead of one shoulder rising toward the ear. This cue
+      // catches either, and because the neck reading is the head's tilt against
+      // the room, that turn adds to it.
+      // Cue evaluation (display only, 2026-10-03): judged once per bend, as for
+      // trunk lean above. The switch-on level 7 is this exercise's own
+      // no-deduction floor (SHOULDER_SYMMETRY_ASYMMETRIC_BANDS). It is an
+      // engineering default: it has not been checked on correct bends with
+      // still shoulders.
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_004.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 20,
+          minActiveMs: 0,
+          cooldownMs: 0,
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
+          evaluation: { mode: "rep-ascent", upTo: 90, persistMs: 0 },
+        },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
     ],
   },
 
@@ -824,15 +1307,24 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       thresholds: {
         // Small neutral band: the head sits ~above the hips at rest, so a few
         // degrees of lean is noise.
-        startThreshold: 5,
-        repCompleteThreshold: 2,
-        // 15° of head lean is a meaningful side bend; below this counts as
-        // partial. STARTING value — re-tune live.
-        minimumPeakThreshold: 15,
-        // Healthy adult lumbar lateral flexion ROM is 20–30°; the head's lean
-        // angle at full bend lands in a similar range. Target the conservative
-        // end for home prescription. STARTING value — re-tune live.
-        targetROM: 25,
+        startThreshold: 8.8, // was 5 (pipeline units); D-48
+        repCompleteThreshold: 3.6, // was 2; D-48
+        // 15 of head lean is a meaningful side bend; a bend peaking below it is
+        // not counted at all. Kept on 2026-10-02 by user decision: 12 would have
+        // counted only 2 more of the pilot subject's traced bends.
+        minimumPeakThreshold: 25.5, // was 15; D-48
+        // Set to 17 on 2026-10-02 by user decision, down from 25. The reading
+        // is a head-lean angle in pipeline units with no aspect correction, and
+        // on a 16:9 frame that squeezes this near-vertical line. The pilot
+        // subject's ordinary bends, all full range by the subject's account,
+        // read 15.2-26.4 (median 21.2), while the same line leans about 37
+        // degrees in the image. 25 had been set as if the reading were degrees
+        // and was reached by 3 of 126; at 17, 111 of 126 count as complete. A
+        // single-subject engineering value from pilot tuning data, not a
+        // clinical target; the groupmates' recordings test it. Since
+        // 2026-10-21 the reading is aspect-corrected (D-48) and this line is
+        // the converted 17; the image-lean figures above still hold.
+        targetROM: 28.5, // was 17; D-48
       },
     },
     compensationMetrics: [
@@ -844,14 +1336,97 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // current trunk flexion. Fit: expected ≈ 11.71 + 1.505·|trunkFlexion°|
       // (clean-rep recording, n≈1299; the intercept is an in-rep envelope
       // extrapolation, not an anatomical resting claim).
-      { name: "neckTilt", warningThreshold: 5,
-        scoring: { mode: "primary-coupled", intercept: 11.7093, slopePerPrimaryUnit: 1.50466, source: "pilot-fit" } },
+      // HIDDEN 2026-10-01 (logged, never drawn): in the pilot replay this cue was
+      // drawn on correct side bends and did not separate the deliberate
+      // head-tilt fault. The primary here is itself a head-lean angle, so a
+      // head tilt raises the primary as well and the coupled residual cannot
+      // isolate it. Needs a head-relative-to-trunk metric before it is shown.
+      { name: "neckTilt",
+        cue: {
+          id: "ex_005.neck-tilt",
+          message: "Bend from your waist, not your neck.",
+          priority: 10,
+          hidden: {
+            reason: "Pilot replay: drawn on correct side bends and not separated from the head-tilt fault; the head-lean primary moves with a head tilt, so the coupled residual cannot isolate it.",
+            since: "2026-10-01",
+          },
+        },
+        warningThreshold: 2.8, // was 5; D-48
+        // Refitted 2026-10-21 for the corrected readings (D-48): the same
+        // estimator in the corrected plane with the frozen tilt the live loop
+        // uses, n=1715, R2=0.93, on sessions 200-205
+        // (Review_Artifacts/2026-09-10_coupled_refits/, mode "corrected").
+        // Was 11.7093 + 1.50466 per pipeline unit, fitted with a per-frame tilt.
+        scoring: { mode: "primary-coupled", intercept: 1.5574, slopePerPrimaryUnit: 1.38065, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision: hidden as a
+        // cue because it cannot separate a head tilt from a correct bend, it
+        // was over its threshold for nearly the whole of every ordinary pilot
+        // side bend, and with the shoulder measure below it held correct
+        // bends at a median form score of about 60.
+        excludedFromFormScore: {
+          reason: "Cannot isolate a head tilt from a correct side bend (the head-lean primary moves with it); over its threshold on nearly all of every ordinary pilot bend.",
+          since: "2026-10-14",
+        } },
       // Shoulder shrug during side bend = bracing through the shoulder
       // girdle instead of moving from the spine. Also `primary-coupled`: the
       // shoulder line necessarily rises on the lengthening side of a clean
       // bend. Fit: expected ≈ -0.0230 + 0.01306·|trunkFlexion°|.
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0230, slopePerPrimaryUnit: 0.01306, source: "pilot-fit" } },
+      // `warningThreshold: 0.04`: engineering default, single-subject origin —
+      // see the provenance note on ex_001's scapularElevation entry.
+      // HIDDEN 2026-10-02 (logged, never drawn): no clinical source found names
+      // shoulder elevation as a compensation in a standing trunk side bend, and
+      // the ear-to-shoulder reading changes as the head follows the bend. With
+      // the coupled cues off at rest it never appeared in the pilot replay.
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_005.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 20,
+          hidden: {
+            reason: "No clinical source found for shoulder elevation as a side-bend compensation; the ear-to-shoulder reading follows the head during the bend.",
+            since: "2026-10-02",
+          },
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
+        // Refitted 2026-10-21 (D-48) with the same estimator in the corrected
+        // plane: n=1715, R2=0.06 (2026-09-10 review, mode "corrected"). The
+        // line describes this channel poorly once corrected, which is in line
+        // with its exclusion from the form score below. Was -0.0230 + 0.01306.
+        scoring: { mode: "primary-coupled", intercept: -0.0199, slopePerPrimaryUnit: 0.00204, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision, for the
+        // reason it is hidden as a cue (see neckTilt above).
+        excludedFromFormScore: {
+          reason: "No clinical source for shoulder elevation as a side-bend compensation; the ear-to-shoulder reading follows the head during the bend.",
+          since: "2026-10-14",
+        } },
+    ],
+    // Display-only coaching check, added 2026-10-02 by user decision. Both
+    // compensation cues above are hidden, and exercise and
+    // range-of-motion sources name the hips or pelvis shifting as a side-bend
+    // compensation. Hips pushed away from the bend side also inflate the
+    // head-lean primary, which runs from the hip midpoint to the ears.
+    // `warningThreshold: 0.45` hip widths: on 118 ordinary pilot repetitions
+    // (one subject; tuning data) the largest single-frame push was 0.42;
+    // 0.40 was crossed by 2 repetitions and 0.35 by 5.
+    // An engineering line, not a clinical cut-off. Detection is untested, since
+    // no pilot recording contains the fault; the groupmates' recordings test it
+    // with this value fixed beforehand. `stanceMs` and `from` match that
+    // analysis; `persistMs: 100` (two trace frames, about three live) keeps one
+    // noisy frame from flagging a bend. No wait and no cooldown, so each bend
+    // can show its own cue.
+    coachingChecks: [
+      {
+        name: "hipShift",
+        warningThreshold: 0.45,
+        check: { mode: "hip-shift-from-stance", stanceMs: 1500, from: 17.4, persistMs: 100 }, // from was 10; D-48
+        cue: {
+          id: "ex_005.hip-shift",
+          message: "Keep your hips over your feet as you bend.",
+          priority: 30,
+          minActiveMs: 0,
+          cooldownMs: 0,
+        },
+      },
     ],
   },
 
@@ -877,7 +1452,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // ±10° is the standard clinical hold tolerance — tight enough to
         // require active engagement, loose enough to accommodate fatigue
         // tremor and landmark noise without fragmenting the hold.
-        tolerance: 10,
+        // The 10 was pipeline units: on 16:9 the band 80-100 covered a
+        // corrected 84.3-95.7. Since 2026-10-21 the tolerance is that
+        // converted 5.7, keeping the band's behaviour (user decision, D-48).
+        tolerance: 5.7,
       },
     },
     compensationMetrics: [
@@ -887,16 +1465,137 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // baseline scapular elevation, so the deduction runs on the residual
       // from the expected elevation at the current abduction. Fit: expected
       // ≈ -0.0142 + 0.00093·|abduction°| (clean-hold recording, n≈3348).
-      { name: "scapularElevation", warningThreshold: 0.04, requiresBaselineCapture: true,
-        scoring: { mode: "primary-coupled", intercept: -0.0142, slopePerPrimaryUnit: 0.00093, source: "pilot-fit" } },
+      // Added 2026-09-06, matching the caveat ex_005 already carries: the
+      // intercept is an IN-REP ENVELOPE EXTRAPOLATION back to zero abduction,
+      // not an anatomical resting claim — an isometric hold supplies almost no
+      // frames away from the target band. Single-subject pilot fit.
+      // `warningThreshold: 0.04`: engineering default, single-subject origin —
+      // see the provenance note on ex_001's scapularElevation entry.
+      // HIDDEN 2026-10-01 (logged, never drawn): in the pilot replay this cue was
+      // drawn on 100% of correct holds. The coupled expectation at 90° comes from
+      // one earlier session and did not transfer: a later session's correct
+      // holds sat about 0.08 above it, against a 0.04 threshold.
+      { name: "scapularElevation",
+        cue: {
+          id: "ex_006.scapular-elevation",
+          message: "Relax your shoulders down.",
+          priority: 10,
+          hidden: {
+            reason: "Pilot replay: drawn on 100% of correct holds; the pilot-fit expectation at 90° did not transfer between sessions (correct-hold residual about 0.08 against a 0.04 threshold).",
+            since: "2026-10-01",
+          },
+        },
+        warningThreshold: 0.04, requiresBaselineCapture: true,
+        // Refitted 2026-10-21 (D-48) with the same estimator in the corrected
+        // plane: n=4110, R2=0.46 (2026-09-10 review, mode "corrected"). Was
+        // -0.0142 + 0.00093 per pipeline unit.
+        scoring: { mode: "primary-coupled", intercept: 0.0028, slopePerPrimaryUnit: 0.00089, source: "pilot-fit" },
+        // Out of the form score since 2026-10-14 by user decision, for the
+        // reason it is hidden as a cue: in a replay of the pilot subject's
+        // correct holds it pulled the sets' lowest form scores to 56-79,
+        // against 80-85 without it.
+        excludedFromFormScore: {
+          reason: "The pilot-fit expectation at 90 degrees did not transfer between sessions (correct-hold residual about 0.08 against a 0.04 threshold).",
+          since: "2026-10-14",
+        } },
       // Trunk lean during T-pose hold = unbalanced load between arms. Keeps the
       // global floor — clean T-pose trunk lean is ~1° (mean deduction ~2.8).
-      { name: "trunkLean", warningThreshold: 5 },
+      // Sources (cue review, 2026-10-03): as for ex_001's trunk lean (Fayad et
+      // al. 2008; Cóias et al. 2022; Pavlikov et al. 2026). The pilot replay drew
+      // it on a recorded lean and never on correct holds.
+      // No cooldown, as on ex_001's trunk lean (D-65).
+      { name: "trunkLean",
+        cue: {
+          id: "ex_006.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 20,
+          cooldownMs: 0,
+        },
+        warningThreshold: 8.8 }, // was 5; D-48
       // Uneven shoulder line during the hold — one shoulder rides higher than
       // the other. Drives the per-shoulder overlay boxes + "LOWER" arrow.
       // Starting threshold 5° (above the 3° landmark noise floor); tune live.
       // Band override raises the score floor to 7° (resting asymmetry ~3.6°).
-      { name: "shoulderSymmetry", warningThreshold: 5, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS },
+      // Cue trigger (display only, 2026-10-01): on at 7, off at 5. With the old
+      // 5 on / 2.5 off levels a brief spike as the arms came up latched the cue
+      // and correct holds (about 3 to 4.9) never cleared it, so it stayed on
+      // through whole correct holds and was hidden for one round.
+      // Sources (cue review, 2026-10-03): hitching the shoulder girdle to hold
+      // the arm at 90° is the position of the clinical shrug sign (Jia et al.
+      // 2008, Clin Orthop Relat Res, doi:10.1007/s11999-008-0331-3). Both arms
+      // stay near 90° here, so arm height confounds the shoulder line less than
+      // in the two-arm raise. It is the hold's only visible shoulder cue.
+      { name: "shoulderSymmetry",
+        cue: {
+          id: "ex_006.shoulder-symmetry",
+          message: "Level your shoulders.",
+          priority: 30,
+          trigger: { on: 4, off: 2.8 }, // was 7/5; D-48
+        },
+        warningThreshold: 2.8, bandsOverride: SHOULDER_SYMMETRY_ASYMMETRIC_BANDS }, // was 5; D-48
+    ],
+    // Display-only coaching check, added 2026-10-04 by user decision: the same
+    // elbow reading, source and 130 line as on ex_001 (see the comment there).
+    // The same library keeps the "elbows straight" while the arm is out. In the
+    // pilot subject's arm holds (one subject; tuning data) the elbows read 163
+    // at the lowest. Judged from `from: 80`, the bottom of the target band. A
+    // hold has no repetitions, so `hold: "live"` passes the live angle and the
+    // cue clears once the arms are straightened; the warning latch's debounce
+    // and the default cue wait give the persistence (`persistMs` 0). Last in
+    // priority, after the compensation cues above. Re-derived 2026-10-21
+    // (D-48) as on ex_001: 146.2 is the converted 130, and `from` the
+    // converted 80 (the band's corrected lower edge, 84.3).
+    coachingChecks: [
+      {
+        name: "elbowBend",
+        warningThreshold: 146.2,
+        compareDirection: "below",
+        check: { mode: "elbow-bend", from: 84.3, persistMs: 0, hold: "live" },
+        cue: {
+          id: "ex_006.elbow-bend",
+          message: "Keep your elbows straight.",
+          priority: 40,
+        },
+      },
+      // Live arm-height guidance uses the hold's existing band and the same
+      // about-one-second wait (550 ms plus latch/tick). Guidance starts after
+      // either prescribed arm earns time in the current set. Both unfinished
+      // arms are then checked independently: the opposite arm need not be
+      // perfectly in band to guide a lowered arm. A finished
+      // arm may rest, and unsteady/capture/rest guards still apply. Actual
+      // latched trunk lean, or shoulder asymmetry with arms straddling the
+      // band, is left to its posture cue in the camera caller. No new angle
+      // line or hold-credit rule is introduced.
+      {
+        name: "otherArmDown",
+        warningThreshold: 84.3,
+        compareDirection: "below",
+        check: { mode: "other-arm-down", persistMs: 550 },
+        cue: {
+          id: "ex_006.other-arm-down",
+          message: "Raise both arms to shoulder height.",
+          priority: 5,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
+          cooldownMs: 0,
+        },
+      },
+      {
+        name: "armAboveHold",
+        warningThreshold: 95.7,
+        compareDirection: "above",
+        check: { mode: "arm-above-hold", persistMs: 550 },
+        cue: {
+          id: "ex_006.arm-above-hold",
+          message: "Lower your arm to shoulder height.",
+          priority: 5,
+          minActiveMs: 0,
+          minDisplayMs: 0,
+          minVisibleMs: 0,
+          cooldownMs: 0,
+        },
+      },
     ],
   },
 
@@ -974,7 +1673,30 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     },
     compensationMetrics: [
       // Trunk lean (esp. backward lean) is the classic shoulder press cheat.
-      { name: "trunkLean", warningThreshold: 5 },
+      { name: "trunkLean",
+        cue: {
+          id: "ex_007.trunk-lean",
+          // Deliberately direction-neutral, matching every other trunkLean cue.
+          // The comment above describes the compensation this metric is meant to
+          // CATCH, but `computeTrunkLateralLean` measures image-plane left/right
+          // lean only — it cannot see sagittal backward lean. Earlier wording said
+          // "don't lean back", which named an axis the metric does not detect.
+          message: "Keep your torso upright.",
+          priority: 10,
+          // No cooldown, as on ex_001's trunk lean (D-65).
+          cooldownMs: 0,
+        },
+        // `warningThreshold: 5`: the shared trunkLean warning boundary.
+        // Engineering default set above the documented ~3° landmark noise
+        // floor. Published CONTEXT, not grounding: inter-rater minimal
+        // detectable change for clinical goniometry on human shoulders is
+        // 5–11° (Kiatkulanusorn et al., Sci Rep 2023, PMID 38017058), so 5°
+        // sits at the lower edge of what the reference method can resolve.
+        // Cue review (2026-10-03): kept, on the general support for trunk lean
+        // in arm raising recorded on ex_001's trunk lean. Leaning back, the
+        // press's usual fault, is out of the image plane and is not measured.
+        // Re-derived 2026-10-21 (D-48) from 5 in pipeline units.
+        warningThreshold: 8.8 },
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list. The metric returns a raw signed projection that
       // is ~0.30 positive at rest (ear naturally sits above shoulder along
@@ -998,7 +1720,32 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // direction-aware ("below") banded deduction tuned from live data —
       // until that exists this metric must not score, and must not dilute
       // the weight of the metrics that do.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+      // HIDDEN 2026-10-01 (logged, never drawn): in the pilot replay this cue
+      // never appeared, including on deliberately bent-arm presses. Bent elbows
+      // lower the wrist, so a bent press tops out below the near-peak gate
+      // (0.9 × targetROM) and the warning is never allowed to latch. Needs a
+      // top-of-repetition gate rather than an absolute height before it is shown.
+      // Cue review (2026-10-03): stays hidden. A bent-arm press is a short
+      // press, which the repetition result already reports as partial, and the
+      // elbow angle is the least accurate monocular measure (Moreira et al.
+      // 2024, Sensors, PMID 39771719).
+      { name: "elbowFlexion",
+        cue: {
+          id: "ex_007.elbow-flexion",
+          message: "Straighten your arms at the top.",
+          priority: 20,
+          // Shorter windows than the defaults: this cue only surfaces inside
+          // the brief near-peak gate, so the standard 600 ms promote / 3 s
+          // cooldown would skip most repetitions entirely.
+          minActiveMs: 250,
+          cooldownMs: 1200,
+          hidden: {
+            reason: "Pilot replay: never drawn, including on bent-arm presses; a bent press tops out below the near-peak gate (0.9 x targetROM), so the warning cannot latch.",
+            since: "2026-10-01",
+          },
+        },
+        // 134.3 is the 150 above converted at a vertical upper arm (D-48).
+        warningThreshold: 134.3, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
     ],
   },
 
@@ -1047,21 +1794,30 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         // the W p75 of 50°). With these values every one of the recorded
         // session's 15 clean cycles per side counts. Single-subject pilot
         // values.
-        startThreshold: 85,
-        repCompleteThreshold: 70,
+        startThreshold: 87.2, // was 85 (pipeline units); D-48
+        repCompleteThreshold: 78.4, // was 70; D-48
         // 110° = clearly past horizontal into the W→Y slide. The recorded
         // clean Y-peaks ran 146–167°, so 110 keeps deliberate partial
         // slides countable while arm settles near the W (≤ ~50°) stay
         // discarded.
-        minimumPeakThreshold: 110,
+        // Since 2026-10-23 (D-51) the minimum keeps its place between the
+        // start line and the lowered full-range line below:
+        // 87.2 + (125 - 87.2) × (101.6 - 87.2) / (134.3 - 87.2) = 98.8.
+        minimumPeakThreshold: 98.8, // was 101.6 (D-48), 110 before; D-51
         // 150° ≈ arms-overhead position at full extension along the wall.
         // Foreshortening at full overhead is an accepted thesis limitation
         // (known foreshortening limitation in computeShoulderAbduction).
         // Confirmed plausible by the 2026-06-11 recorded clean session:
         // Y-peaks ran 146–167° (p50 ≈ 147), so clean full extension
         // straddles 150 the same way ex_001's clean peaks straddle its 90°
-        // target.
-        targetROM: 150,
+        // target. All degree figures here are pipeline units; on 16:9 the
+        // aspect-corrected reading compresses this overhead range.
+        // Lowered 2026-10-23 (D-51), as D-41 did for the arm raise: a line at
+        // the median of correct repetitions rates half of them partial. 125 is
+        // the 5th percentile of the researcher's 24 repetitions following the
+        // guide (session 236, 123.7-135.9), and the guide figure's own top
+        // reads 137.4-141.2, 12-16 above it.
+        targetROM: 125, // was 134.3 (D-48), 150 before; D-51
       },
       // No descentEpsilon override (degree-scale, global 0.5 is fine).
       // No smoothing override (global degree-scale default fine).
@@ -1069,7 +1825,21 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     compensationMetrics: [
       // Trunk lean = patient is using torso shift to slide arms up the wall
       // instead of recruiting shoulder muscles.
-      { name: "trunkLean", warningThreshold: 5 },
+      // Cue review (2026-10-03): kept, on the general support for trunk lean in
+      // arm raising recorded on ex_001's trunk lean only. Wall-angel instructions
+      // name keeping the arms on the wall and not shrugging, not a side lean
+      // (University of Illinois Extension, Wall Angels; Hinge Health, How to do
+      // wall angels), and the arms or back leaving the wall is out of the
+      // image plane.
+      // No cooldown, as on ex_001's trunk lean (D-65).
+      { name: "trunkLean",
+        cue: {
+          id: "ex_008.trunk-lean",
+          message: "Keep your torso upright.",
+          priority: 10,
+          cooldownMs: 0,
+        },
+        warningThreshold: 8.8 }, // was 5; D-48
       // NOTE 2026-05-22: `scapularElevation` (shrug) was REMOVED from this
       // compensation list for the same reason as ex_007 — see that comment
       // for full rationale. Trapezius-hiking is partially caught by
@@ -1087,7 +1857,29 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // direction-aware ("below") banded deduction tuned from live data —
       // until that exists this metric must not score, and must not dilute
       // the weight of the metrics that do.
-      { name: "elbowFlexion", warningThreshold: 150, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
+      // HIDDEN 2026-10-03 (cue review; logged, never drawn). Wall-angel
+      // instructions ask for the arms to stay on the wall as they slide up, not
+      // for straight elbows (University of Illinois Extension, Wall Angels;
+      // Hinge Health, How to do wall angels), so this cue could pull the arms
+      // off the wall. The elbow angle is also the least accurate monocular
+      // measure (Moreira et al. 2024, Sensors, PMID 39771719).
+      { name: "elbowFlexion",
+        cue: {
+          id: "ex_008.elbow-flexion",
+          message: "Straighten your arms at the top.",
+          priority: 20,
+          // Shorter windows than the defaults: this cue only surfaces inside
+          // the brief near-peak gate, so the standard 600 ms promote / 3 s
+          // cooldown would skip most repetitions entirely.
+          minActiveMs: 250,
+          cooldownMs: 1200,
+          hidden: {
+            reason: "Cue review: wall-angel instructions ask for the arms to stay on the wall, not for straight elbows, so the cue could pull the arms off the wall; the elbow angle is the least accurate camera measure.",
+            since: "2026-10-03",
+          },
+        },
+        // 134.3 is the 150 above converted along the new target line (D-48).
+        warningThreshold: 134.3, compareDirection: "below", peakRelevant: true, scoring: { mode: "off" } },
       // NOTE 2026-05-22: `shoulderElbowDistance` (foreshortening signal /
       // elbow-off-wall detection) was REMOVED from this compensation list
       // after live-tuning iter #4. The metric was designed to flag an elbow
@@ -1187,6 +1979,201 @@ function validateRegistry(): void {
   // Global band-table shape (see validateBandList for the invariants).
   for (const [metric, bands] of Object.entries(COMPENSATION_BANDS)) {
     validateBandList(bands, `COMPENSATION_BANDS["${metric}"]`);
+  }
+
+  // Coaching cue ids must be unique across the WHOLE registry, not just within
+  // one exercise. The single-cue selector keys its per-cue timing state by id,
+  // and a shadow-log decision is read back by id alone — a reused id would
+  // silently share cooldown state between two exercises and make a logged
+  // decision ambiguous about which exercise produced it.
+  const seenCueIds = new Map<string, string>();
+  for (const def of Object.values(EXERCISE_REGISTRY)) {
+    for (const comp of coachingWarningSpecs(def)) {
+      if (!comp.cue) continue;
+      const kind = def.compensationMetrics.includes(comp) ? "compensation metric" : "coaching check";
+      const owner = `${def.id} ${kind} "${comp.name}"`;
+      const previousOwner = seenCueIds.get(comp.cue.id);
+      if (previousOwner !== undefined) {
+        throw new Error(
+          `Registry invariant violated: coaching cue id "${comp.cue.id}" is ` +
+          `declared by both ${previousOwner} and ${owner}. Cue ids must be ` +
+          `unique across the registry — use "<exerciseId>.<metric-in-kebab-case>".`
+        );
+      }
+      if (comp.cue.id.trim() === "") {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue id must not be empty.`
+        );
+      }
+      if (comp.cue.message.trim() === "") {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue "${comp.cue.id}" ` +
+          `must declare a non-empty message.`
+        );
+      }
+      if (!Number.isFinite(comp.cue.priority)) {
+        throw new Error(
+          `Registry invariant violated for ${owner}: coaching cue ` +
+          `"${comp.cue.id}" priority (${comp.cue.priority}) must be a finite ` +
+          `number. Lower numbers are surfaced first.`
+        );
+      }
+      for (const [field, value] of [
+        ["minActiveMs", comp.cue.minActiveMs],
+        ["minDisplayMs", comp.cue.minDisplayMs],
+        ["cooldownMs", comp.cue.cooldownMs],
+        ["minVisibleMs", comp.cue.minVisibleMs],
+      ] as const) {
+        if (value !== undefined && !(Number.isFinite(value) && value >= 0)) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: coaching cue ` +
+            `"${comp.cue.id}" ${field} (${value}) must be a non-negative ` +
+            `finite number of milliseconds.`
+          );
+        }
+      }
+      if (comp.cue.trigger !== undefined) {
+        const { on, off } = comp.cue.trigger;
+        const below = comp.compareDirection === "below";
+        if (!Number.isFinite(on) || !Number.isFinite(off) || (below ? !(on < off) : !(on > off && off >= 0))) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: coaching cue ` +
+            `"${comp.cue.id}" trigger (on ${on}, off ${off}) must be finite, ` +
+            (below ? "with on below off." : "with on above off and off at least 0.")
+          );
+        }
+      }
+      if (comp.cue.evaluation !== undefined) {
+        const { mode, upTo, persistMs } = comp.cue.evaluation;
+        const perLimbDynamic = def.kind === "dynamic" && def.bilateral && def.bilateralMode === "per-limb";
+        if (
+          mode !== "rep-ascent" || !perLimbDynamic ||
+          !Number.isFinite(upTo) || !(upTo > def.primaryMetric.thresholds.startThreshold) ||
+          !Number.isFinite(persistMs) || persistMs < 0
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: coaching cue ` +
+            `"${comp.cue.id}" evaluation must be rep-ascent on a per-limb dynamic ` +
+            `exercise, with upTo above the repetition start and persistMs at least 0.`
+          );
+        }
+      }
+      seenCueIds.set(comp.cue.id, owner);
+    }
+  }
+
+  // Display-only coaching checks. Latches and cues are keyed by metric name,
+  // so a check must not share one with a compensation metric.
+  for (const def of Object.values(EXERCISE_REGISTRY)) {
+    if (!def.coachingChecks) continue;
+    const names = new Set<MetricName>(def.compensationMetrics.map((comp) => comp.name));
+    for (const check of def.coachingChecks) {
+      const owner = `${def.id} coaching check "${check.name}"`;
+      if (check.name === "hipShift") {
+        const { mode, stanceMs, from, persistMs } = check.check;
+        if (
+          def.kind !== "dynamic" || mode !== "hip-shift-from-stance" ||
+          !def.bilateral || def.bilateralMode !== "bidirectional-alternating"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the hip-shift-from-stance ` +
+            `check is named "hipShift" and needs a bidirectional-alternating dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > 0) ||
+          !(Number.isFinite(stanceMs) && stanceMs > 0) ||
+          !(Number.isFinite(from) && from >= def.primaryMetric.thresholds.startThreshold) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold and stanceMs ` +
+            `must be positive, from at least the repetition start, and persistMs at least 0.`
+          );
+        }
+      } else if (check.name === "overRaise") {
+        // The arm's own primary, warned above a line that must sit above the
+        // full-range line, so a correct full raise is never the warning.
+        const { mode, persistMs } = check.check;
+        if (
+          mode !== "over-raise" || check.compareDirection !== "above" ||
+          def.kind !== "dynamic" || !def.bilateral || def.bilateralMode !== "per-limb"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the over-raise check is named ` +
+            `"overRaise", warns above its line, and needs a per-limb bilateral dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > def.primaryMetric.thresholds.targetROM && check.warningThreshold < 180) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must lie above ` +
+            `the full-range line and below 180, and persistMs at least 0.`
+          );
+        }
+      } else if (check.name === "otherArmDown" || check.name === "armAboveHold") {
+        // Hold-height cues share the timer's band, without adding angle lines.
+        const below = check.name === "otherArmDown";
+        const { mode, persistMs } = check.check;
+        if (
+          mode !== (below ? "other-arm-down" : "arm-above-hold") || check.compareDirection !== (below ? "below" : "above") ||
+          def.kind !== "isometric" || !def.bilateral || def.bilateralMode !== "per-limb"
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: hold-height checks need their matching ` +
+            `mode/direction and a per-limb bilateral hold.`
+          );
+        }
+        const band = def.isometric.targetBand;
+        if (
+          !(Number.isFinite(check.warningThreshold) && Math.abs(check.warningThreshold - (band.center + (below ? -band.tolerance : band.tolerance))) < 1e-9) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must be the ` +
+            `target band's matching edge, and persistMs at least 0.`
+          );
+        }
+      } else {
+        // An elbow angle runs from 0 to 180 and is warned below the line; a
+        // repetition hold needs a dynamic exercise's repetition start, and a
+        // live hold has no persistence of its own.
+        const { mode, from, persistMs, hold } = check.check;
+        const repetition = hold === "repetition";
+        if (
+          mode !== "elbow-bend" || check.compareDirection !== "below" ||
+          !def.bilateral || def.bilateralMode !== "per-limb" ||
+          (repetition ? def.kind !== "dynamic" : hold !== "live")
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: the elbow-bend check is named ` +
+            `"elbowBend", warns below its line, needs a per-limb bilateral exercise, ` +
+            `and holds per repetition only on a dynamic exercise.`
+          );
+        }
+        if (
+          !(Number.isFinite(check.warningThreshold) && check.warningThreshold > 0 && check.warningThreshold < 180) ||
+          !Number.isFinite(from) ||
+          (def.kind === "dynamic" && !(from >= def.primaryMetric.thresholds.startThreshold)) ||
+          !(Number.isFinite(persistMs) && persistMs >= 0) || (!repetition && persistMs !== 0)
+        ) {
+          throw new Error(
+            `Registry invariant violated for ${owner}: warningThreshold must lie ` +
+            `between 0 and 180, from be finite (at least the repetition start on a ` +
+            `dynamic exercise), and persistMs at least 0 (0 for a live hold).`
+          );
+        }
+      }
+      if (names.has(check.name)) {
+        throw new Error(
+          `Registry invariant violated for ${owner}: the name is already used by ` +
+          `another compensation metric or check on this exercise.`
+        );
+      }
+      names.add(check.name);
+    }
   }
 
   for (const def of Object.values(EXERCISE_REGISTRY)) {
@@ -1292,6 +2279,17 @@ function validateRegistry(): void {
             `OneEuroFilter uses it to smooth derivative estimates.`
           );
         }
+      }
+      if (
+        def.primaryMetric.reference === "calibration-ear-line" &&
+        def.primaryMetric.name !== "neckLateralFlexion"
+      ) {
+        throw new Error(
+          `Registry invariant violated for ${def.id}: ` +
+          `reference "calibration-ear-line" applies only to neckLateralFlexion, ` +
+          `whose reading is the ear line itself. Any other metric would be ` +
+          `measured against an unrelated line.`
+        );
       }
     }
     if (def.kind === "isometric") {

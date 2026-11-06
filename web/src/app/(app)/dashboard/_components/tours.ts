@@ -1,0 +1,887 @@
+import { navTourId } from "./AppShell";
+import type { TourStep } from "./SpotlightTour";
+
+const bell: TourStep = {
+  targetId: "tour-bell",
+  title: "Notifications",
+  placement: "below",
+  flow: [
+    { kind: "shot", src: "bell-open.png", caption: "1. Press the bell to open your notifications" },
+    { kind: "result", text: "Use Mark all read to clear the unread count" },
+  ],
+  lines: [
+    "The bell shows what needs your attention, for example missed exercises or newly assigned exercises.",
+    "Open a notification to read it, mark everything as read, or delete the ones you no longer need.",
+    "New notifications also pop up at the top right for a few seconds. Use All, Unread and Read to filter the list, and Previous and Next to page through it.",
+  ],
+};
+
+const logout: TourStep = {
+  targetId: "tour-logout",
+  title: "Log Out",
+  placement: "right",
+  flow: [
+    { kind: "shot", src: "logout.png", caption: "Open the ☰ menu and press Log Out at the bottom" },
+    { kind: "result", text: "You are signed out" },
+  ],
+  lines: ["Use Log Out when you are finished, especially on a shared computer."],
+};
+
+const profileCard: TourStep[] = [
+  {
+    targetId: "tour-profile-card",
+    title: "Your account",
+    placement: "below",
+    lines: ["This card shows who you are signed in as: your name, email and role."],
+  },
+  {
+    targetId: "tour-profile-password",
+    title: "Change your password",
+    placement: "below",
+    flow: [
+      { kind: "shot", src: "profile-password-1.png", caption: "1. Press Change Password" },
+      { kind: "shot", src: "profile-password-2.png", caption: "2. Press Send OTP, then type the 6-digit code from your email" },
+      { kind: "result", text: "3. Press Verify OTP and type your new password twice" },
+      { kind: "email", text: "A confirmation email is sent" },
+    ],
+    lines: [
+      "Press Change Password to set a new password.",
+      "We first confirm your email with a 6-digit code, which is valid for a few minutes, and then you choose the new password.",
+      "A confirmation email is sent once it has been changed.",
+    ],
+  },
+];
+
+// ── Patient ──────────────────────────────────────────────────────────────────
+
+export const PATIENT_TOURS: Record<string, TourStep[]> = {
+  dashboard: [
+    {
+      targetId: navTourId("dashboard"),
+      title: "Your dashboard",
+      placement: "right",
+      lines: [
+        "This is your home page: today's exercises, your whole program and how you are doing, all on one screen.",
+        "Use the ☰ menu button at the top left to move between pages. Every page has its own How to Use button.",
+      ],
+    },
+    {
+      targetId: "tour-tiles",
+      title: "Your summary",
+      placement: "below",
+      lines: [
+        "Program completed — the share of all your scheduled exercises that you have finished.",
+        "Today — how many of today's exercises are done.",
+        "Next scheduled day — the next date that has exercises.",
+        "Missed — exercises whose last make-up day has passed.",
+      ],
+    },
+    {
+      targetId: "tour-program",
+      title: "Your exercise program",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "p-program-2.png", caption: "1. Click a day to see its exercises" },
+        { kind: "result", text: "2. Press Start on an exercise to begin" },
+      ],
+      lines: [
+        "Each card is one scheduled day. The icon shows whether it is completed, today, open for a make-up, missed or upcoming.",
+        "Click a day to open it and see each exercise with its sets and repetitions.",
+        "Press Start to open the exercise. A custom exercise shows its guide and manual sets; press Set done after each set and Finish after the last set.",
+        "If you miss a day you may still have a make-up period. It stays open until its last day.",
+        "Press Show the full schedule to see every day of your program.",
+      ],
+    },
+    {
+      targetId: "tour-calendar",
+      title: "Your consistency",
+      placement: "left",
+      flow: [
+        { kind: "shot", src: "p-calendar.png", caption: "Your calendar" },
+        { kind: "heading", text: "What the colours mean" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "green", label: "Completed" },
+            { tone: "amber", label: "Partly done" },
+            { tone: "amber", label: "Make-up still open", outline: true },
+            { tone: "red", label: "Missed" },
+            { tone: "green", label: "Coming up", outline: true },
+          ],
+        },
+      ],
+      lines: [
+        "The line at the top shows your current streak, your active days this month and your total sessions.",
+        "Green is a day completed, amber is partly done, an outlined amber day still has a make-up open, red is missed and an outlined green day is coming up.",
+        "Use the arrows to look at earlier months.",
+      ],
+    },
+    {
+      targetId: "tour-last-session",
+      title: "Last session",
+      placement: "above",
+      lines: [
+        "Your most recent session: the exercise, the side, the day and the number of sets.",
+        "Counted is how many repetitions the camera counted. Full range is how many of them reached the line your exercise counts as a full repetition. For a hold, it shows how long you held against the time prescribed.",
+        "Open My Progress shows your charts over time.",
+      ],
+    },
+    {
+      targetId: "tour-reminders",
+      title: "Reminders",
+      placement: "above",
+      lines: ["A short list based on your own schedule: what is left today, open make-ups and your next scheduled day."],
+    },
+    bell,
+    {
+      targetId: navTourId("camera"),
+      title: "The camera page",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "p-camera-nav.png", caption: "1. Open the ☰ menu and press Camera" },
+        { kind: "result", text: "2. Press How to Use on the camera page" },
+      ],
+      lines: [
+        "Camera is where you do your exercises. You can also reach it with Start from your program.",
+        "It has its own How to Use button that walks you through setting up the camera and starting a session.",
+      ],
+    },
+    logout,
+  ],
+
+  "my-progress": [
+    {
+      targetId: navTourId("my-progress"),
+      title: "My Progress",
+      placement: "right",
+      lines: ["This page shows how your exercises are going over time, one exercise at a time."],
+    },
+    {
+      targetId: "tour-progress-header",
+      title: "Download a report",
+      placement: "below",
+      flow: [
+        { kind: "shot", src: "p-progress-header.png", caption: "Press Download progress report (PDF)" },
+        { kind: "result", text: "The PDF is saved to your device" },
+      ],
+      lines: [
+        "After you have some sessions, press Download progress report (PDF) to save your results.",
+        "The trends are descriptive only. They are not a diagnosis.",
+      ],
+    },
+    {
+      targetId: "tour-progress-tiles",
+      title: "At a glance",
+      placement: "below",
+      lines: [
+        "How many exercises are tracked, how many sessions you have recorded, the date of your last session and how many session videos are saved.",
+      ],
+    },
+    {
+      targetId: "tour-progress-trends",
+      title: "Your trends",
+      placement: "above",
+      optional: true,
+      flow: [
+        { kind: "heading", text: "One point per session" },
+        { kind: "chart" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "blue", label: "Rising or Falling: a real change" },
+            { tone: "gray", label: "No clear change" },
+            { tone: "gray", label: "Collecting data", outline: true },
+          ],
+        },
+      ],
+      lines: [
+        "Each card follows one exercise set up the same way (same side and resistance), so like is compared with like.",
+        "The chart shows one point per session. Select a point to see that session's repetitions.",
+        "Rising or Falling appears only when the change is larger than your normal session-to-session variation. Otherwise the card says No clear change, or Collecting data until there are enough sessions.",
+        "Finish a few sessions if you do not see any cards yet.",
+      ],
+    },
+    bell,
+  ],
+
+  session: [
+    {
+      targetId: navTourId("session"),
+      title: "Session schedule",
+      placement: "right",
+      lines: ["This page lists every scheduled session, so you can see what is due and what is coming."],
+    },
+    {
+      targetId: "tour-session-tiles",
+      title: "Today, next and the end date",
+      placement: "below",
+      optional: true,
+      lines: [
+        "Today shows how many exercises are ready, or that you are all done.",
+        "Next session is the next date that has exercises.",
+        "The last tile shows when your prescription ends and how much you have completed so far.",
+      ],
+    },
+    {
+      targetId: "tour-session-current",
+      title: "Today and make-ups",
+      placement: "right",
+      optional: true,
+      flow: [
+        { kind: "row", title: "Today · Oct 31", meta: "2 exercises ready" },
+        { kind: "row", title: "Arm Abduction at 90°", meta: "3 sets × 30 s", button: "Start" },
+        { kind: "result", text: "Finished ones show a summary" },
+      ],
+      lines: [
+        "Open a date to see its exercises with their sets and repetitions.",
+        "Press Start to begin an exercise. If you missed an earlier day and its make-up period is still open, it is listed here too.",
+        "Finished exercises show a summary of what you did.",
+      ],
+    },
+    {
+      targetId: "tour-session-upcoming",
+      title: "Upcoming and past",
+      placement: "left",
+      optional: true,
+      lines: [
+        "Next scheduled date shows what you will do next.",
+        "Later schedule and Past schedule open to show the rest of your program and your history.",
+      ],
+    },
+    bell,
+  ],
+
+  "view-profile": [
+    {
+      targetId: navTourId("view-profile"),
+      title: "View profile",
+      placement: "right",
+      lines: ["Your personal and account information."],
+    },
+    ...profileCard,
+    {
+      targetId: "tour-profile-left",
+      title: "Personal information",
+      placement: "right",
+      lines: ["Your name, age, email and the specialist who looks after you. If something is wrong, ask your therapist or the clinic to correct it."],
+    },
+    {
+      targetId: "tour-profile-files",
+      title: "Attached files",
+      placement: "left",
+      lines: [
+        "Files your therapist or the clinic attached to your record, such as test results or referral letters.",
+        "Press View and enter your password to open one. Close the window to lock it again.",
+        "You can view these files but not add, change or delete them. Ask your therapist if a file should be added or removed.",
+      ],
+    },
+    {
+      targetId: "tour-profile-bottom",
+      title: "Assigned exercises",
+      placement: "above",
+      optional: true,
+      flow: [{ kind: "shot", src: "p-profile-exercises.png", caption: "Each exercise, with its label on the right" }],
+      lines: [
+        "Every exercise your therapist has assigned, with its sets and repetitions.",
+        "The label on the right shows whether the exercise is active, upcoming or ended.",
+        "The line under the sets counts your scheduled days: done, missed, stopped for pain and still to go. A day you started but did not finish counts as missed once its make-up period is over.",
+      ],
+    },
+  ],
+};
+
+// ── Therapist ────────────────────────────────────────────────────────────────
+
+const therapistNav = (href: string, title: string, text: string): TourStep => ({
+  targetId: navTourId(href),
+  title,
+  placement: "right",
+  lines: [text],
+});
+
+export const THERAPIST_TOURS: Record<string, TourStep[]> = {
+  dashboard: [
+    therapistNav("/dashboard/therapist", "Your dashboard", "A one-screen overview of your patients. Use the ☰ menu button at the top left to open the other pages; each has its own How to Use button."),
+    {
+      targetId: "tour-tiles",
+      title: "Your numbers",
+      placement: "below",
+      lines: [
+        "Patients assigned to you, sessions completed this week, how many programs you have saved, patients with no exercises yet, and patients who need attention.",
+      ],
+    },
+    {
+      targetId: "tour-roster",
+      title: "Patient roster",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "t-roster.png", caption: "Click a patient's name to open their profile" },
+        { kind: "heading", text: "What each status means" },
+        {
+          kind: "legend",
+          items: [
+            { tone: "green", label: "Active" },
+            { tone: "amber", label: "Needs attention" },
+            { tone: "red", label: "Pain follow-up" },
+            { tone: "gray", label: "No exercises" },
+          ],
+        },
+      ],
+      lines: [
+        "Click a patient's name to open their profile.",
+        "Progress shows completed over due exercises, with any missed exercises or pain stops next to it.",
+        "Status is Active, Needs attention, Pain follow-up or No exercises.",
+      ],
+    },
+    {
+      targetId: "tour-attention",
+      title: "Needs attention",
+      placement: "left",
+      flow: [{ kind: "shot", src: "t-attention.png", caption: "Click a patient to open their profile" }],
+      lines: [
+        "Patients with a pain stop to review, missed exercises, or no session this week, with the reason shown under each name.",
+        "Click one to open their profile.",
+      ],
+    },
+    {
+      targetId: "tour-actions",
+      title: "Quick actions",
+      placement: "left",
+      lines: ["Shortcuts to assign exercises, manage exercises and manage your programs."],
+    },
+    bell,
+    logout,
+  ],
+
+  profile: [
+    therapistNav("/dashboard/therapist/profile", "View profile", "Your account information and the patients assigned to you."),
+    ...profileCard,
+    {
+      targetId: "tour-profile-left",
+      title: "Personal information",
+      placement: "right",
+      lines: ["Your name, email and specialization. Ask the administrator if any of it needs correcting."],
+    },
+    {
+      targetId: "tour-profile-bottom",
+      title: "Assigned patients",
+      placement: "above",
+      lines: ["Every patient the administrator has assigned to you. Press View to open a patient's profile."],
+    },
+  ],
+
+  patients: [
+    therapistNav("/dashboard/therapist/patients", "Manage patients", "Your patients and the exercises each one has been given."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["How many patients you have, how many already have exercises, how many do not yet, and the total number of prescriptions."],
+    },
+    {
+      targetId: "tour-search",
+      title: "Search",
+      placement: "below",
+      lines: ["Type a name to filter the list."],
+    },
+    {
+      targetId: "tour-table",
+      title: "Your patients",
+      placement: "above",
+      flow: [
+        { kind: "shot", src: "t-patients.png", caption: "Press View on a patient" },
+        { kind: "result", text: "Their program, reports and sessions open" },
+      ],
+      lines: [
+        "Each row shows the patient's name and email and the exercises assigned to them with sets and repetitions.",
+        "Press View to open the patient's profile, where you can see their program, reports and sessions.",
+        "Patients are assigned to you by the administrator.",
+      ],
+    },
+  ],
+
+  exercises: [
+    therapistNav("/dashboard/therapist/exercises", "Manage exercises", "The exercise library you can prescribe from."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["How many built-in and custom exercises exist."],
+    },
+    {
+      targetId: "tour-search",
+      title: "Search",
+      placement: "below",
+      lines: ["Search by name or description."],
+    },
+    {
+      targetId: "tour-system",
+      title: "System exercises",
+      placement: "right",
+      lines: [
+        "The built-in, camera-monitored exercises. They are view only.",
+        "Press View to read the description of an exercise.",
+      ],
+    },
+    {
+      targetId: "tour-custom",
+      title: "Custom exercises",
+      placement: "left",
+      lines: [
+        "Manual tasks you created. The camera does not monitor them, and the patient marks them done.",
+        "Custom exercises added by the admin and other therapists are listed too. You can edit or archive only the ones you added.",
+        "Create new custom exercises on the Exercise Program page.",
+      ],
+    },
+    {
+      targetId: "tour-archived",
+      title: "Archived",
+      placement: "above",
+      optional: true,
+      flow: [
+        { kind: "row", title: "Wall Push-up", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with its details and video" },
+      ],
+      lines: ["Custom exercises you archived. Restore puts one back with its details and video. Only an admin can permanently delete one."],
+    },
+  ],
+
+  assign: [
+    therapistNav("/dashboard/therapist/assign", "Assign exercise", "Give exercises or a whole program to one or more of your patients."),
+    {
+      targetId: "tour-assign-patients",
+      title: "1. Select patients",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "t-assign-1.png", caption: "Tick each patient who should get the exercises" },
+        { kind: "result", text: "Their details show on the right" },
+      ],
+      lines: [
+        "Tick the patients who should receive the exercises. The panel on the right then shows their details.",
+        "With exactly one patient selected, their current exercises appear so you can end or change them.",
+        "Steps 2 and 3 stay locked until at least one patient is selected.",
+      ],
+    },
+    {
+      targetId: "tour-assign-program",
+      title: "2. Load from a program",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "t-assign-2.png", caption: "Optional: pick one of your saved programs" },
+        { kind: "result", text: "Its exercises and settings fill in" },
+      ],
+      lines: [
+        "Optional. Pick one of your saved programs to fill in its exercises and settings at once.",
+        "It merges with anything you have already chosen.",
+      ],
+    },
+    {
+      targetId: "tour-assign-exercises",
+      title: "3. Select and configure exercises",
+      placement: "right",
+      flow: [{ kind: "shot", src: "t-assign-3.png", caption: "Tick an exercise, then fill in its sets, reps, side and schedule" }],
+      lines: [
+        "Tick each exercise to prescribe, then set its order, sets, repetitions, rest, side, resistance and schedule.",
+        "A schedule needs a start date, an end date and how often it repeats. A new or changed date cannot be in the past.",
+      ],
+    },
+    {
+      targetId: "tour-assign-submit",
+      title: "Save",
+      placement: "above",
+      optional: true,
+      flow: [
+        { kind: "click", label: "Assign Exercises" },
+        { kind: "dialog", title: "Preview of what will be saved", confirm: "Confirm" },
+        { kind: "email", text: "The patient and you get an email" },
+      ],
+      lines: [
+        "Press Assign Exercises, or Update Changes when editing. A preview lists what will be saved before you confirm.",
+        "The patient and you both receive an email describing the exercises.",
+      ],
+    },
+    {
+      targetId: "tour-assign-aside",
+      title: "Selected patients",
+      placement: "left",
+      optional: true,
+      lines: ["Details of the patients you selected: last session, progress, active prescriptions and diagnosis."],
+    },
+  ],
+
+  programs: [
+    therapistNav("/dashboard/therapist/programs", "Exercise program", "Reusable programs and the shared custom exercises."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["How many programs you have, how many custom exercises are shared with you, and how many exercises are inside your programs."],
+    },
+    {
+      targetId: "tour-actions",
+      title: "Create",
+      placement: "below",
+      optional: true,
+      flow: [
+        { kind: "shot", src: "t-programs-1.png", caption: "1. Press + Create New Program" },
+        { kind: "shot", src: "t-programs-2.png", caption: "2. Name the program and tick its exercises" },
+        { kind: "result", text: "3. Press Create Program to save it" },
+      ],
+      lines: [
+        "Create New Program bundles exercises with their sets, repetitions, side and resistance so you can assign them in one step.",
+        "Add New Custom Exercise creates a manual exercise that you describe yourself, with an optional guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. The admin and every therapist can use it.",
+      ],
+    },
+    {
+      targetId: "tour-programs",
+      title: "Your programs",
+      placement: "right",
+      lines: [
+        "Each program lists its exercises in order.",
+        "Edit changes a program. Delete removes it from your list.",
+      ],
+    },
+    {
+      targetId: "tour-custom",
+      title: "Custom exercises",
+      placement: "left",
+      flow: [
+        { kind: "shot", src: "t-programs-custom.png", caption: "Press Archive on an exercise you added" },
+        { kind: "result", text: "It moves to Archived on Manage Exercises" },
+      ],
+      lines: [
+        "Custom exercises added by you, the admin and other therapists. Edit the description of, or archive, one you added; the others are view only.",
+        "Archiving keeps its history and moves it to Archived on Manage Exercises, where you can restore it. Only an admin can permanently delete a custom exercise.",
+      ],
+    },
+  ],
+
+  "patient-detail": [
+    {
+      targetId: "tour-detail-actions",
+      title: "Patient actions",
+      placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-actions.png", caption: "Assign Exercise, or download the Progress report (PDF)" }],
+      lines: [
+        "Assign Exercise opens the assign page for this patient.",
+        "Progress report (PDF) downloads a report of the patient's progress.",
+      ],
+    },
+    {
+      targetId: "tour-detail-tabs",
+      title: "Four tabs",
+      placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-tabs.png", caption: "Click a tab to switch between them" }],
+      lines: [
+        "Overview — personal and clinical information and attached files. Edit changes Diagnosis, Condition and Prescription; Add files and Delete manage the files. Opening a file asks for your password. Everything stays with the patient if they move to another therapist.",
+        "PT Program — current and ended prescriptions, and the exercises the patient has completed.",
+        "Reports — charts of the peak angle (camera estimate) or hold time, repetitions and adherence for one exercise over a date range, plus form quality and trends.",
+        "Sessions — every session with its repetitions, so you can review the details and mark a review.",
+      ],
+    },
+    {
+      targetId: "tour-detail-tab-reports",
+      title: "Reports",
+      placement: "below",
+      flow: [{ kind: "shot", src: "t-detail-reports.png", caption: "Pick an exercise, then a date range" }],
+      lines: [
+        "Pick an exercise, then Prior Week, Prior Month or All to change the date range.",
+        "Peak angles are camera estimates, not clinical measurements.",
+      ],
+    },
+    {
+      targetId: "tour-detail-tab-sessions",
+      title: "Sessions",
+      placement: "below",
+      flow: [
+        { kind: "tabs", tabs: ["Overview", "PT Program", "Reports", "Sessions"], active: 3 },
+        { kind: "row", title: "Oct 30 · Shoulder Shrugs", meta: "3 sets · 34 reps" },
+        { kind: "result", text: "Record your review in the session" },
+      ],
+      lines: [
+        "Sessions are grouped by the day they were done, newest first. Click a day to open or close it.",
+        "A session done after its scheduled day is labelled as a make-up for that day.",
+        "Search by exercise name to see that exercise on every day it was done.",
+        "Open a session to see its sets and repetitions, any pain the patient reported, and to record your review.",
+      ],
+    },
+  ],
+};
+
+// ── Administrator ───────────────────────────────────────────────────────────
+
+const adminNav = (key: string, title: string, text: string): TourStep => ({
+  targetId: navTourId(key),
+  title,
+  placement: "right",
+  lines: [text],
+});
+
+export const ADMIN_TOURS: Record<string, TourStep[]> = {
+  dashboard: [
+    adminNav("dashboard", "Your dashboard", "A one-screen overview of the whole system. Use the ☰ menu button at the top left to open the other pages; each has its own How to Use button."),
+    {
+      targetId: "tour-tiles",
+      title: "System numbers",
+      placement: "below",
+      lines: [
+        "Active patients and therapists, current patient-to-therapist assignments, total sessions recorded, archived users and the total number of exercises.",
+      ],
+    },
+    {
+      targetId: "tour-presence",
+      title: "User status",
+      placement: "right",
+      flow: [
+        { kind: "shot", src: "admin-presence.png", caption: "A green dot means the person has the app open right now" },
+      ],
+      lines: [
+        "Every patient and therapist, with who is online now listed first.",
+        "Online means they have the app open. After they close it or log out, it shows when they were last active.",
+        "Use All, Patients and Therapists to filter the list. A search box appears when the list gets long.",
+      ],
+    },
+    {
+      targetId: "tour-patients",
+      title: "Patients",
+      placement: "left",
+      lines: [
+        "Every active patient, with the same progress and status their therapist sees.",
+        "Progress shows completed over due exercises, with any missed exercises or pain stops next to it.",
+        "Status is Active, Needs attention, Pain follow-up or No exercises.",
+      ],
+    },
+    {
+      targetId: "tour-actions",
+      title: "Quick actions",
+      placement: "above",
+      optional: true,
+      lines: [
+        "Add New User opens the user form, Add Custom Exercise opens the exercise form, and Assign Patients opens the assignment page.",
+      ],
+    },
+    bell,
+    logout,
+  ],
+
+  users: [
+    adminNav("users", "Manage users", "Create and look after patient and therapist accounts."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["Active users, how many are patients and how many are therapists, and how many accounts are archived."],
+    },
+    {
+      targetId: "tour-add-user",
+      title: "Add a user",
+      placement: "below",
+      flow: [
+        { kind: "shot", src: "admin-add-user-1.png", caption: "1. Press + Add User" },
+        { kind: "shot", src: "admin-add-user-2.png", caption: "2. Choose Patient or Therapist" },
+        { kind: "shot", src: "admin-add-user-3.png", caption: "3. Fill in the details" },
+        { kind: "result", text: "4. Press Add User, then Confirm & Add User" },
+        { kind: "email", text: "The new user gets a welcome email with sign-in details" },
+      ],
+      lines: [
+        "Press + Add User, choose Patient or Therapist, then fill in the details. The email address must not already belong to another account.",
+        "A confirmation step appears before the account is created.",
+        "The new user receives a welcome email with their sign-in details and is asked to change the password at first sign-in. You get a confirmation email too.",
+      ],
+    },
+    {
+      targetId: "tour-user-search",
+      title: "Search users",
+      placement: "below",
+      lines: [
+        "Type a name, an email address or a role (patient or therapist).",
+        "Both Active Users and Archived Users narrow to the matches, and each count shows how many match.",
+      ],
+    },
+    {
+      targetId: "tour-active-users",
+      title: "Active users",
+      placement: "above",
+      flow: [
+        { kind: "shot", src: "admin-active-users.png", caption: "1. Press Archive on the account" },
+        { kind: "shot", src: "admin-archive-confirm.png", caption: "2. Confirm" },
+        { kind: "result", text: "Suspended. All records are kept" },
+        { kind: "email", text: "The user is emailed" },
+      ],
+      lines: [
+        "View opens a read-only copy of the account's profile with what was entered when it was added. Attached files are listed by name only; just the patient and their assigned therapist can open them. The patient views them, read-only, on their own View Profile.",
+        "Edit changes an account's details. Files you add or delete in Edit are saved only when you press Save Changes, and the confirmation lists each file being added or deleted.",
+        "If you change the email address, the old and new addresses and you are notified by email.",
+        "Archive suspends the account without deleting anything: its records stay and the user is emailed. Use it instead of deleting.",
+      ],
+    },
+    {
+      targetId: "tour-archived-users",
+      title: "Archived users",
+      placement: "above",
+      flow: [
+        { kind: "heading", text: "Bring an account back" },
+        { kind: "row", title: "Ana Cruz", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with all its records" },
+        { kind: "heading", text: "Delete (rarely needed)" },
+        { kind: "dialog", title: "Delete permanently?", confirm: "Delete", danger: true },
+        { kind: "result", text: "Only for accounts with no history", tone: "bad" },
+      ],
+      lines: [
+        "Restore brings an account back with all its records, and the user is emailed.",
+        "Delete is permanent and is only allowed for an archived account that has no history, meaning no prescriptions, sessions, assigned patients, owned exercises or programs, or reviews. You are asked to confirm twice.",
+      ],
+    },
+    bell,
+  ],
+
+  exercises: [
+    adminNav("exercises", "Manage exercises", "The exercise library that therapists prescribe from."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["How many system, custom, archived and total active exercises there are."],
+    },
+    {
+      targetId: "tour-add-exercise",
+      title: "Add an exercise",
+      placement: "below",
+      flow: [
+        { kind: "shot", src: "admin-add-exercise-1.png", caption: "1. Press + Add Exercise" },
+        { kind: "shot", src: "admin-add-exercise-2.png", caption: "2. Fill in the name and description, then press Add Exercise" },
+        { kind: "result", text: "Patients see the guide in their schedule" },
+      ],
+      lines: [
+        "Press + Add Exercise, enter a name and a description, and press Add Exercise to create a custom exercise.",
+        "You can attach a guide video: an MP4 or WebM file up to 100 MB, or a YouTube embed code. Patients see it on the exercise in their schedule.",
+      ],
+    },
+    {
+      targetId: "tour-search",
+      title: "Search",
+      placement: "below",
+      lines: ["Search exercises by name or description."],
+    },
+    {
+      targetId: "tour-system",
+      title: "System exercises",
+      placement: "right",
+      optional: true,
+      lines: ["The built-in exercises. Press View to read one, or Edit to change its description. They cannot be archived or deleted."],
+    },
+    {
+      targetId: "tour-custom",
+      title: "Custom exercises",
+      placement: "left",
+      optional: true,
+      lines: ["Exercises added by you or by therapists. View one, edit its description, or archive it. An archived exercise keeps its name, description and video."],
+    },
+    {
+      targetId: "tour-archived",
+      title: "Archived exercises",
+      placement: "above",
+      optional: true,
+      flow: [
+        { kind: "row", title: "Wall Push-up", meta: "Archived", button: "Restore" },
+        { kind: "result", text: "Back with its details and video" },
+      ],
+      lines: ["Restore puts an exercise back with its details and video. Permanently delete removes it, and is only allowed for one that was never prescribed."],
+    },
+    bell,
+  ],
+
+  assignments: [
+    adminNav("assignments", "Assign patients", "Link each patient to the therapist who will monitor them."),
+    {
+      targetId: "tour-tiles",
+      title: "Summary",
+      placement: "below",
+      lines: ["Patients, therapists, how many patients still have no therapist and how many are assigned."],
+    },
+    {
+      targetId: "tour-unassigned",
+      title: "1. Pick a patient",
+      placement: "right",
+      flow: [
+        { kind: "row", title: "Ana Cruz", meta: "No therapist yet" },
+        { kind: "result", text: "The patient is selected" },
+      ],
+      lines: ["Click a patient without a therapist to select them."],
+    },
+    {
+      targetId: "tour-pick-therapist",
+      title: "2. Pick a therapist",
+      placement: "left",
+      flow: [
+        { kind: "choose", options: ["J. Lim, PT", "M. Santos, PT"], picked: 0 },
+        { kind: "click", label: "Assign Patient" },
+        { kind: "email", text: "Patient and therapist are notified" },
+      ],
+      lines: [
+        "Choose a therapist from the list and press Assign Patient.",
+        "Both the patient and the therapist get a notification and an email about the assignment.",
+      ],
+    },
+    {
+      targetId: "tour-assigned",
+      title: "Currently assigned patients",
+      placement: "above",
+      flow: [
+        { kind: "shot", src: "admin-assigned.png", caption: "Press Unassign to remove the link" },
+        { kind: "result", text: "The patient moves back to Unassigned" },
+      ],
+      lines: ["Every patient who has a therapist. Press Unassign to remove the link."],
+    },
+    {
+      targetId: "tour-history",
+      title: "Assignment history",
+      placement: "above",
+      lines: ["The assignments and unassignments you have made during this visit."],
+    },
+    bell,
+  ],
+
+  deleted: [
+    adminNav("deleted", "Recently deleted", "Deleted session videos, attached files and guide videos, kept until you restore them or delete them for good."),
+    {
+      targetId: "tour-deleted-filters",
+      title: "Find an item",
+      placement: "below",
+      lines: [
+        "Show one kind at a time: session videos a patient deleted, attached files an admin or therapist deleted, or guide videos removed or replaced on a custom exercise.",
+        "Search by the item's name, the patient or exercise, or who deleted it.",
+      ],
+    },
+    {
+      targetId: "tour-deleted-list",
+      title: "Restore or delete for good",
+      placement: "above",
+      flow: [
+        { kind: "row", title: "Shoulder Shrugs session video", meta: "Juan Cruz · deleted by the patient", button: "Restore" },
+        { kind: "result", text: "Back where it was; the patient and therapist are notified" },
+        { kind: "dialog", title: "Delete for good?", confirm: "Delete for good", danger: true },
+        { kind: "result", text: "Removed from the system", tone: "warn" },
+      ],
+      lines: [
+        "Each row shows what was deleted, whose it is, who deleted it and when. You cannot open the contents here.",
+        "Restore puts it back. A restored guide video becomes the exercise's video again, and the one it replaces moves here.",
+        "Delete for good removes it from the system. Nothing here is removed automatically. Copies in earlier nightly backups stay until those backups are removed.",
+      ],
+    },
+    bell,
+  ],
+
+};
+
+/** The tour for a therapist page, chosen by its address. */
+export function therapistTourFor(pathname: string): TourStep[] | undefined {
+  if (/^\/dashboard\/therapist\/patients\/[^/]+/.test(pathname)) return THERAPIST_TOURS["patient-detail"];
+  if (pathname.startsWith("/dashboard/therapist/profile")) return THERAPIST_TOURS.profile;
+  if (pathname.startsWith("/dashboard/therapist/patients")) return THERAPIST_TOURS.patients;
+  if (pathname.startsWith("/dashboard/therapist/exercises")) return THERAPIST_TOURS.exercises;
+  if (pathname.startsWith("/dashboard/therapist/assign")) return THERAPIST_TOURS.assign;
+  if (pathname.startsWith("/dashboard/therapist/programs")) return THERAPIST_TOURS.programs;
+  if (pathname === "/dashboard/therapist") return THERAPIST_TOURS.dashboard;
+  return undefined;
+}

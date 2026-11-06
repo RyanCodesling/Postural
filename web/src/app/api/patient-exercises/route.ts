@@ -9,9 +9,24 @@ import {
   getPatientExercises,
   getPatientOccurrences,
   getUsers,
+  getUserById,
   createNotification,
+  getEffectiveNow,
 } from "@/lib/db";
+import {
+  sendRemovedExercisesEmail,
+  sendAssignedExercisesChangedEmail,
+  sendAssignedExercisesEmail,
+} from "@/lib/email";
+import { diffAssignedExercises, toPrescriptionDetail, type PrescriptionRow } from "@/lib/exercises/prescriptionEmail";
+import {
+  assignedExercisesMessage,
+  changedExercisesMessage,
+  removedExercisesMessage,
+} from "@/lib/notificationText";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { maxPrescriptionSets, prescriptionCountError } from "@/lib/prescriptionLimits";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import {
   MAX_RECURRENCE_SPAN_DAYS,
   MAX_INTERVAL_DAYS,
@@ -19,6 +34,10 @@ import {
   spanDays,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
+import {
+  parsePrescribedSide,
+  parseResistanceContext,
+} from "@/lib/prescriptionContext";
 
 type PatientExerciseAssignmentRequest = {
   exerciseId?: unknown;
@@ -31,6 +50,12 @@ type PatientExerciseAssignmentRequest = {
   intervalDays?: unknown;
   weekdays?: unknown;
   endDate?: unknown;
+  sequenceIndex?: unknown;
+  prescribedSide?: unknown;
+  resistanceType?: unknown;
+  resistanceValue?: unknown;
+  resistanceUnit?: unknown;
+  resistanceLabel?: unknown;
 };
 
 export async function GET(request: NextRequest) {
@@ -61,10 +86,14 @@ export async function GET(request: NextRequest) {
       }
 
       const includeArchived = request.nextUrl.searchParams.get("includeArchived") === "true";
-      const exercises = filterDeprecated(
-        await getPatientExercises(patientId, { includeArchived }),
-      );
-      return NextResponse.json({ exercises });
+      const [patientExercises, occurrences] = await Promise.all([
+        getPatientExercises(patientId, { includeArchived }),
+        getPatientOccurrences(patientId),
+      ]);
+      return NextResponse.json({
+        exercises: filterDeprecated(patientExercises),
+        occurrences: filterDeprecated(occurrences),
+      });
     }
 
     // Patient: gets only their own exercises
@@ -108,7 +137,33 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
+    const before = await getPatientExercises(patientId);
     await archivePatientExercises(patientId, exerciseIds as string[], user.id);
+
+    // Email the patient and the therapist which prescriptions were actually removed.
+    try {
+      const remaining = new Set((await getPatientExercises(patientId)).map((row) => row.exercise_id));
+      const removed = (before as PrescriptionRow[])
+        .filter((row) => (exerciseIds as string[]).includes(row.exercise_id as string) && !remaining.has(row.exercise_id))
+        .map(toPrescriptionDetail);
+      if (removed.length > 0) {
+        await createNotification(
+          patientId,
+          "Exercises Removed",
+          removedExercisesMessage(user.name, removed.map((d) => d.exerciseName)),
+          "therapist_removed_exercises",
+        ).catch((err) => console.error("Failed to create removed exercises notification:", err));
+        const patient = await getUserById(patientId);
+        if (patient?.email) {
+          sendRemovedExercisesEmail(patient.email as string, patient.name as string, "patient", user.name, removed).catch(console.error);
+        }
+        if (user.email) {
+          sendRemovedExercisesEmail(user.email as string, user.name, "therapist", (patient?.name as string) ?? "your patient", removed).catch(console.error);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to send removed exercises emails:", err);
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("DELETE /api/patient-exercises error:", error);
@@ -137,7 +192,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Patient not assigned to you" }, { status: 403 });
     }
 
-    const normalizedExercises = exercises.map((rawExercise: unknown) => {
+    let normalizedExercises;
+    try {
+      normalizedExercises = exercises.map((rawExercise: unknown, index: number) => {
       const exercise =
         rawExercise !== null && typeof rawExercise === "object"
           ? (rawExercise as PatientExerciseAssignmentRequest)
@@ -180,6 +237,10 @@ export async function POST(request: NextRequest) {
           )
         : [];
       const endDate = isDateKey(exercise.endDate) ? exercise.endDate : undefined;
+      const sequenceIndex =
+        exercise.sequenceIndex === undefined || exercise.sequenceIndex === null
+          ? index + 1
+          : Number(exercise.sequenceIndex);
 
       return {
         exerciseId: exercise.exerciseId,
@@ -192,19 +253,35 @@ export async function POST(request: NextRequest) {
         intervalDays,
         weekdays,
         endDate,
+        sequenceIndex,
+        prescribedSide: parsePrescribedSide(exercise.prescribedSide),
+        resistance: parseResistanceContext(exercise),
       };
-    });
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid movement context." },
+        { status: 400 },
+      );
+    }
+
+    const invalidCounts = normalizedExercises
+      .map((exercise) =>
+        prescriptionCountError(exercise.sets, exercise.reps, {
+          maxSets: maxPrescriptionSets(exercise.exerciseId),
+        }),
+      )
+      .find((error) => error !== null);
+    if (invalidCounts) {
+      return NextResponse.json({ error: invalidCounts }, { status: 400 });
+    }
 
     const invalidExercise = normalizedExercises.find(
       (exercise) =>
         typeof exercise.exerciseId !== "string" ||
         exercise.exerciseId.trim().length === 0 ||
-        typeof exercise.sets !== "number" ||
-        !Number.isFinite(exercise.sets) ||
-        exercise.sets < 1 ||
-        typeof exercise.reps !== "number" ||
-        !Number.isFinite(exercise.reps) ||
-        exercise.reps < 1,
+        !Number.isInteger(exercise.sequenceIndex) ||
+        exercise.sequenceIndex < 1,
     );
     if (invalidExercise) {
       return NextResponse.json(
@@ -213,11 +290,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Every schedule needs a start + an end within the span cap. Interval mode
+    const sequenceIndexes = normalizedExercises.map((exercise) => exercise.sequenceIndex);
+    if (new Set(sequenceIndexes).size !== sequenceIndexes.length) {
+      return NextResponse.json(
+        { error: "Exercise order values must be unique." },
+        { status: 400 },
+      );
+    }
+
+    const today = (await getEffectiveNow()).toLocaleDateString("en-CA", {
+      timeZone: "Asia/Manila",
+    });
+    const existingAssignments = await getPatientExercises(patientId);
+
+    // Every schedule needs a start + end within the span cap, and a new or changed date
+    // may not be in the past (a running prescription keeps its start). Interval mode
     // needs a valid N (1..cap); weekly mode needs ≥1 weekday.
     const invalidSchedule = normalizedExercises.find((exercise) => {
       if (!exercise.scheduledDate) return true;
       if (!exercise.endDate) return true;
+      const existing = existingAssignments.find(
+        (assignment) => assignment.exercise_id === exercise.exerciseId,
+      );
+      if (pastScheduleDate(
+        { startDate: exercise.scheduledDate, endDate: exercise.endDate },
+        existing ? storedScheduleDates(existing) : null,
+        today,
+      )) {
+        return true;
+      }
       const span = spanDays(exercise.scheduledDate, exercise.endDate);
       if (span === null || span > MAX_RECURRENCE_SPAN_DAYS) return true;
       if (exercise.recurrence === "weekly") {
@@ -234,7 +335,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days). ` +
+            `Each schedule needs a start and end date (within ${MAX_RECURRENCE_SPAN_DAYS} days), and a new or changed date can't be in the past. ` +
             `Choose a repeat interval (1–${MAX_INTERVAL_DAYS} days) or at least one weekday.`,
         },
         { status: 400 },
@@ -245,8 +346,8 @@ export async function POST(request: NextRequest) {
       patientId,
       normalizedExercises.map((exercise) => ({
         exerciseId:    exercise.exerciseId    as string,
-        sets:          Math.floor(exercise.sets as number),
-        reps:          Math.floor(exercise.reps as number),
+        sets:          exercise.sets as number,
+        reps:          exercise.reps as number,
         restSeconds:   exercise.restSeconds,
         scheduledDate: exercise.scheduledDate as string | undefined,
         holdSeconds: exercise.holdSeconds,
@@ -254,20 +355,61 @@ export async function POST(request: NextRequest) {
         intervalDays: exercise.intervalDays,
         weekdays:    exercise.weekdays,
         endDate:     exercise.endDate as string | undefined,
+        sequenceIndex: exercise.sequenceIndex,
+        prescribedSide: exercise.prescribedSide,
+        resistance: exercise.resistance,
       })),
       user.id,
     );
 
-    // Notify patient about assigned exercises
+    // Email the patient and the assigning therapist: new exercises and changed ones
+    // are separate templates, and each lists the full prescription. The patient's
+    // in-app notifications follow the same split: one for everything newly
+    // assigned, one for everything edited, each naming the exercises.
     try {
-      await createNotification(
-        patientId,
-        "Exercises Assigned",
-        `Therapist ${user.name} assigned exercises to you.`,
-        "therapist_assigned_exercises"
+      const after = await getPatientExercises(patientId);
+      const { assigned, changed } = diffAssignedExercises(
+        existingAssignments as PrescriptionRow[],
+        after as PrescriptionRow[],
+        normalizedExercises.map((exercise) => exercise.exerciseId as string),
       );
+      try {
+        if (assigned.length > 0) {
+          await createNotification(
+            patientId,
+            "Exercises Assigned",
+            assignedExercisesMessage(user.name, assigned.map((d) => d.exerciseName)),
+            "therapist_assigned_exercises",
+          );
+        }
+        if (changed.length > 0) {
+          await createNotification(
+            patientId,
+            "Exercises Edited",
+            changedExercisesMessage(user.name, changed),
+            "therapist_edited_exercises",
+          );
+        }
+      } catch (err) {
+        console.error("Failed to create assigned exercises notifications:", err);
+      }
+      const patient = await getUserById(patientId);
+      const therapistEmail = user.email as string | undefined;
+      const sends: Array<[typeof sendAssignedExercisesEmail, typeof assigned]> = [
+        [sendAssignedExercisesEmail, assigned],
+        [sendAssignedExercisesChangedEmail, changed],
+      ];
+      for (const [send, details] of sends) {
+        if (details.length === 0) continue;
+        if (patient?.email) {
+          send(patient.email as string, patient.name as string, "patient", user.name, details).catch(console.error);
+        }
+        if (therapistEmail) {
+          send(therapistEmail, user.name, "therapist", (patient?.name as string) ?? "your patient", details).catch(console.error);
+        }
+      }
     } catch (err) {
-      console.error("Failed to create exercises assigned notification:", err);
+      console.error("Failed to send assigned exercises emails:", err);
     }
 
     return NextResponse.json({ success: true });

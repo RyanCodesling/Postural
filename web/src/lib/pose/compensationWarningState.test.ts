@@ -11,9 +11,14 @@
 import type { CompensationMetricSpec } from "@/lib/exercises/registry";
 import {
   COMPENSATION_WARNING_DEBOUNCE_MS,
+  compensationWarningIsOneSided,
+  cueClearLevel,
+  cueTriggerLevel,
   compensationWarningMargin,
   updateCompensationWarningLatch,
   updateCompensationWarningMap,
+  warningValueCleared,
+  warningValueShortOfTrigger,
   type CompensationWarningLatch,
 } from "./compensationWarningState";
 
@@ -159,6 +164,120 @@ test("map updater returns only latched active warnings and drops stale specs", (
   active = updateCompensationWarningMap(latches, [elbowFlexion], { elbowFlexion: 90 }, 450);
   assertEq(active.has("trunkLean"), false, "stale trunk spec removed");
   assertEq(latches.has("trunkLean"), false, "stale trunk latch removed");
+});
+
+const coupledScapular: CompensationMetricSpec = {
+  name: "scapularElevation",
+  warningThreshold: 0.04,
+  scoring: { mode: "primary-coupled", intercept: -0.0077, slopePerPrimaryUnit: 0.00124, source: "pilot-fit" },
+};
+
+test("coupled residuals warn only on an excess over the expectation", () => {
+  assertEq(compensationWarningIsOneSided(coupledScapular), true, "coupled metric is one-sided");
+  assertEq(compensationWarningIsOneSided(scapularElevation), false, "static metric stays two-sided");
+  assertEq(compensationWarningIsOneSided(elbowFlexion), false, "below-direction metric unchanged");
+
+  let latch = update(undefined, coupledScapular, -0.06, 0);
+  latch = update(latch, coupledScapular, -0.06, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "a deficit beyond the threshold does not latch");
+
+  let staticLatch = update(undefined, scapularElevation, -0.06, 0);
+  staticLatch = update(staticLatch, scapularElevation, -0.06, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(staticLatch.active, true, "a static metric keeps the |value| test");
+
+  latch = update(latch, coupledScapular, 0.05, 400);
+  latch = update(latch, coupledScapular, 0.05, 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "an excess latches after the debounce");
+  latch = update(latch, coupledScapular, -0.06, 800);
+  latch = update(latch, coupledScapular, -0.06, 800 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "a swing to a deficit clears it");
+});
+
+const triggeredSymmetry: CompensationMetricSpec = {
+  name: "shoulderSymmetry",
+  warningThreshold: 5,
+  cue: { id: "t.shoulder-symmetry", message: "Level your shoulders.", priority: 30, trigger: { on: 7, off: 5 } },
+};
+
+test("a cue trigger replaces the warning line for switching on and off", () => {
+  assertEq(cueTriggerLevel(triggeredSymmetry), 7, "on level");
+  assertEq(cueTriggerLevel(trunkLean), 5, "without a trigger the warning line is used");
+
+  let latch = update(undefined, triggeredSymmetry, 6, 0);
+  latch = update(latch, triggeredSymmetry, 6, COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "6 is past the warning line but below the on level");
+
+  latch = update(latch, triggeredSymmetry, 7.5, 400);
+  latch = update(latch, triggeredSymmetry, 7.5, 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "on at the trigger level");
+
+  latch = update(latch, triggeredSymmetry, 5.5, 800);
+  latch = update(latch, triggeredSymmetry, 5.5, 800 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, true, "stays on above the off level");
+
+  latch = update(latch, triggeredSymmetry, 4.8, 1200);
+  latch = update(latch, triggeredSymmetry, 4.8, 1200 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "off at the off level");
+});
+
+test("the switch-off level is the cue's off level, else the warning line less the margin", () => {
+  assertEq(cueClearLevel(triggeredSymmetry), 5, "trigger off level");
+  assertEq(cueClearLevel(trunkLean), 5 - compensationWarningMargin("trunkLean", 5), "warning line less the margin");
+
+  let latch = update(undefined, triggeredSymmetry, 8, 0);
+  latch = update(latch, triggeredSymmetry, 8, COMPENSATION_WARNING_DEBOUNCE_MS);
+  latch = update(latch, triggeredSymmetry, cueClearLevel(triggeredSymmetry), 400);
+  latch = update(latch, triggeredSymmetry, cueClearLevel(triggeredSymmetry), 400 + COMPENSATION_WARNING_DEBOUNCE_MS);
+  assertEq(latch.active, false, "the latch switches off at that level");
+});
+
+const range = (from: number, to: number, step: number) =>
+  Array.from({ length: Math.round((to - from) / step) + 1 }, (_, i) => from + i * step);
+
+test("a value counts as recovered exactly where a latched warning would start to switch off", () => {
+  const latched: CompensationWarningLatch = { active: true, pendingActive: null, pendingSinceMs: null };
+  const cases: [CompensationMetricSpec, number[]][] = [
+    [trunkLean, range(-10, 10, 0.1)],
+    [elbowFlexion, range(140, 160, 0.1)],
+    [triggeredSymmetry, range(-10, 10, 0.1)],
+    [scapularElevation, range(-0.08, 0.08, 0.001)],
+    [coupledScapular, range(-0.08, 0.08, 0.001)],
+  ];
+  for (const [spec, values] of cases) {
+    for (const value of values) {
+      const switchesOff = !updateCompensationWarningLatch(latched, spec, value, 0, { debounceMs: 0 }).active;
+      assertEq(warningValueCleared(spec, value), switchesOff, `${spec.name} at ${value}`);
+    }
+  }
+  assertEq(warningValueCleared(trunkLean, null), false, "no reading is not a recovery");
+  assertEq(warningValueCleared(trunkLean, Number.NaN), false, "nor is a reading that is not a number");
+});
+
+test("a value is short of its switch-on level exactly where a warning that is off would not switch on", () => {
+  const cases: [CompensationMetricSpec, number[]][] = [
+    [trunkLean, range(-10, 10, 0.1)],
+    [elbowFlexion, range(140, 160, 0.1)],
+    [triggeredSymmetry, range(-10, 10, 0.1)],
+    [scapularElevation, range(-0.08, 0.08, 0.001)],
+    [coupledScapular, range(-0.08, 0.08, 0.001)],
+  ];
+  for (const [spec, values] of cases) {
+    for (const value of values) {
+      const switchesOn = updateCompensationWarningLatch(undefined, spec, value, 0, { debounceMs: 0 }).active;
+      assertEq(warningValueShortOfTrigger(spec, value), !switchesOn, `${spec.name} at ${value}`);
+    }
+  }
+  assertEq(warningValueShortOfTrigger(trunkLean, null), false, "no reading is not short of it");
+  assertEq(warningValueShortOfTrigger(trunkLean, Number.NaN), false, "nor is a reading that is not a number");
+});
+
+test("between the switch-off and switch-on levels a warning stays latched but is short of its switch-on level", () => {
+  const latched: CompensationWarningLatch = { active: true, pendingActive: null, pendingSinceMs: null };
+  assertEq(updateCompensationWarningLatch(latched, triggeredSymmetry, 6, 0, { debounceMs: 0 }).active, true, "6 keeps the latch on");
+  assertEq(warningValueShortOfTrigger(triggeredSymmetry, 6), true, "6 is short of the on level of 7");
+  assertEq(warningValueCleared(triggeredSymmetry, 6), false, "but not yet back past the off level of 5");
+  assertEq(warningValueShortOfTrigger(triggeredSymmetry, 7), false, "7 is at it");
+  assertEq(warningValueShortOfTrigger(triggeredSymmetry, -7.5), false, "a two-sided warning counts either side");
 });
 
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);

@@ -1,0 +1,242 @@
+{
+  "exercise": "ex_008",
+  "revision": "mpfb-wall-angels-2026-09-25",
+  "source_file": "ex_001_figure_mpfb.blend",
+  "source_sha256": "402a1da4346d1737b91b762d94f5b10175c558b2ae92905e905c8feaee57a511",
+  "frames": 468,
+  "fps": 30,
+  "status": "animation draft",
+  "phases": [
+    [
+      1,
+      12,
+      "Ready"
+    ],
+    [
+      13,
+      107,
+      "Slide up"
+    ],
+    [
+      108,
+      119,
+      "Pause"
+    ],
+    [
+      120,
+      214,
+      "Slide down"
+    ],
+    [
+      215,
+      234,
+      "Ready"
+    ],
+    [
+      235,
+      246,
+      "Ready"
+    ],
+    [
+      247,
+      341,
+      "Slide up"
+    ],
+    [
+      342,
+      353,
+      "Pause"
+    ],
+    [
+      354,
+      448,
+      "Slide down"
+    ],
+    [
+      449,
+      468,
+      "Ready"
+    ]
+  ],
+  "checkpoints": [
+    1,
+    12,
+    36,
+    60,
+    84,
+    108,
+    119,
+    143,
+    167,
+    191,
+    234
+  ],
+  "peak_frame": 108,
+  "pose_note": "Back against a wall; both arms slide in the wall's plane from a W (upper arms 60 degrees from the sides, elbows 90 degrees) up to a Y (upper arms 140 degrees, elbows 180) and back. Palms face forward and the elbows straighten ahead of the top. Girdle elevation and retraction are authored; no scapula bone or clinical shoulder rhythm is modelled.",
+  "mesh_vertex_sha256": {
+    "Figure_Body": "38014831cf727326ca4b7a44132275940a2ffa7b894f49f91714d6c7d46029bc",
+    "Figure_Top": "83db99ce39d664774092ee7fc72622fc1de730ddab8b2765b30f9a8c1063f544",
+    "Figure_Shorts": "29eeffcb9cb29c780265e91ec9abe0d7818690b07b3cc6429cbf712e5dbcade8"
+  },
+  "garment_weight_adjustment": {
+    "vertices_reweighted": 591,
+    "transfer": "upperarm to same-side clavicle"
+  },
+  "camera_fit": {
+    "body_envelope_min": [
+      -0.6797926425933838,
+      -0.20529410243034363,
+      1.1607345307140804e-08
+    ],
+    "body_envelope_max": [
+      0.6797926425933838,
+      0.09894102066755295,
+      1.8889390230178833
+    ],
+    "camera_location": [
+      0.0,
+      -5.385928630828857,
+      1.0281566381454468
+    ],
+    "frames_measured": 468
+  },
+  "scope": "Presentation asset only; no product integration or clinical validation.",
+  "wall": {
+    "surface_y_m": 0.10394081610441208,
+    "rearmost_point_y_m": 0.10094081610441208,
+    "torso_gap_m": 0.003,
+    "arm_skin_gap_target_m": 0.006,
+    "retraction_deg": 15.0,
+    "posture": {
+      "thoracic_extension_deg": 4.259192362615566,
+      "neck_retraction_deg": 6.134815256239053,
+      "upper_back_gap_mm": 5.000011503696444,
+      "head_gap_mm": 4.9997954368591335
+    },
+    "arm_lean_cubic": [
+      0.01474361321460605,
+      -0.004305704135723826,
+      -0.025216287300506818,
+      0.09499358196847492
+    ],
+    "arm_lean_calibration": [
+      {
+        "progress": 0.0,
+        "lean": 0.09524537758799397,
+        "arm_gap_mm": 5.999953925609591,
+        "nearest_point": [
+          -0.3917,
+          0.0979,
+          1.2882
+        ]
+      },
+      {
+        "progress": 0.125,
+        "lean": 0.09143836609976536,
+        "arm_gap_mm": 5.9998347163200405,
+        "nearest_point": [
+          -0.411,
+          0.0979,
+          1.3298
+        ]
+      },
+      {
+        "progress": 0.25,
+        "lean": 0.08834108980782163,
+        "arm_gap_mm": 5.9998347163200405,
+        "nearest_point": [
+          -0.4231,
+          0.0979,
+          1.3739
+        ]
+      },
+      {
+        "progress": 0.375,
+        "lean": 0.0860126872816126,
+        "arm_gap_mm": 5.999953925609591,
+        "nearest_point": [
+          -0.4276,
+          0.0979,
+          1.4193
+        ]
+      },
+      {
+        "progress": 0.5,
+        "lean": 0.08364560679226996,
+        "arm_gap_mm": 6.00000607967377,
+        "nearest_point": [
+          -0.444,
+          0.0979,
+          1.4853
+        ]
+      },
+      {
+        "progress": 0.625,
+        "lean": 0.08100193725786205,
+        "arm_gap_mm": 6.000140190124514,
+        "nearest_point": [
+          -0.4799,
+          0.0979,
+          1.5799
+        ]
+      },
+      {
+        "progress": 0.75,
+        "lean": 0.07958628400758476,
+        "arm_gap_mm": 5.999961376190188,
+        "nearest_point": [
+          -0.4625,
+          0.0979,
+          1.6212
+        ]
+      },
+      {
+        "progress": 0.875,
+        "lean": 0.079449228699493,
+        "arm_gap_mm": 6.000140190124514,
+        "nearest_point": [
+          -0.4371,
+          0.0979,
+          1.6601
+        ]
+      },
+      {
+        "progress": 1.0,
+        "lean": 0.08034370634644215,
+        "arm_gap_mm": 6.000140190124514,
+        "nearest_point": [
+          -0.4024,
+          0.0979,
+          1.6972
+        ]
+      }
+    ],
+    "side_view": {
+      "camera": "Side camera",
+      "main_camera": "Camera",
+      "location": [
+        3.5954012870788574,
+        -1.5058128833770752,
+        0.9444695115089417
+      ],
+      "rotation_euler": [
+        1.5707963705062866,
+        -1.1701908420036489e-07,
+        1.186824083328247
+      ],
+      "lens_mm": 35.0,
+      "shift": [
+        0.0,
+        0.04500000178813934
+      ],
+      "yaw_deg": 22.0,
+      "band": [
+        0.08,
+        0.92,
+        0.05,
+        0.86
+      ],
+      "switch_frame": 235
+    }
+  }
+}

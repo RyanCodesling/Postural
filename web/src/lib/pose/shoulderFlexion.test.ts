@@ -26,7 +26,7 @@
  * image-RIGHT (larger x), MediaPipe subject-perspective labelling.
  */
 
-import { computeShoulderFlexion } from "./poseMetrics";
+import { computeShoulderFlexion, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 
 let testsPassed = 0;
@@ -99,20 +99,20 @@ console.log("\ncomputeShoulderFlexion — synthetic data tests\n");
 
 test("rest → ~0° on both sides (delegation wired correctly)", () => {
   const lms = neutralPose();
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left"),  0, 1, "left rest");
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right"), 0, 1, "right rest");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0, 1, "left rest");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0, 1, "right rest");
 });
 
 test("LEFT arm horizontal → ~90° (matches abduction at clinical floor of ex_002 rep)", () => {
   const lms = neutralPose();
   lms[13] = { x: 0.75, y: 0.30, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left"), 90, 2, "left at 90°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 90, 2, "left at 90°");
 });
 
 test("RIGHT arm horizontal → ~90°", () => {
   const lms = neutralPose();
   lms[14] = { x: 0.25, y: 0.30, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right"), 90, 2, "right at 90°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 90, 2, "right at 90°");
 });
 
 // ── OVERHEAD RANGE (the reason this test file exists) ───────────────────────
@@ -125,7 +125,7 @@ test("LEFT arm overhead-lateral at ~150° → ~150° (ex_002 targetROM)", () => 
   // 0.30 + 0.15·sin(-60°)) = (0.675, 0.170).
   const lms = neutralPose();
   lms[13] = { x: 0.675, y: 0.170, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left"), 150, 2, "left at 150°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 150, 2, "left at 150°");
 });
 
 test("RIGHT arm overhead-lateral at ~150° → ~150°", () => {
@@ -135,7 +135,7 @@ test("RIGHT arm overhead-lateral at ~150° → ~150°", () => {
   // (0.325, 0.170).
   const lms = neutralPose();
   lms[14] = { x: 0.325, y: 0.170, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right"), 150, 2, "right at 150°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 150, 2, "right at 150°");
 });
 
 test("LEFT arm straight overhead (elbow directly above shoulder) → ~180°", () => {
@@ -144,13 +144,13 @@ test("LEFT arm straight overhead (elbow directly above shoulder) → ~180°", ()
   // For LEFT, flip → +180°. Function returns 180.
   const lms = neutralPose();
   lms[13] = { x: 0.60, y: 0.15, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left"), 180, 2, "left at 180°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 180, 2, "left at 180°");
 });
 
 test("RIGHT arm straight overhead → ~180°", () => {
   const lms = neutralPose();
   lms[14] = { x: 0.40, y: 0.15, visibility: 1 };
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right"), 180, 2, "right at 180°");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 180, 2, "right at 180°");
 });
 
 test("continuous 90° → 150° → 180° on LEFT side reads monotonically", () => {
@@ -160,13 +160,13 @@ test("continuous 90° → 150° → 180° on LEFT side reads monotonically", () 
   const lms = neutralPose();
 
   lms[13] = { x: 0.75, y: 0.30, visibility: 1 };
-  const at90  = computeShoulderFlexion(lms, TILT_REF, "left")!;
+  const at90  = computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION)!;
 
   lms[13] = { x: 0.675, y: 0.170, visibility: 1 };
-  const at150 = computeShoulderFlexion(lms, TILT_REF, "left")!;
+  const at150 = computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION)!;
 
   lms[13] = { x: 0.60, y: 0.15, visibility: 1 };
-  const at180 = computeShoulderFlexion(lms, TILT_REF, "left")!;
+  const at180 = computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION)!;
 
   if (!(at90 < at150 && at150 < at180)) {
     throw new Error(`expected monotone increase 90→150→180, got ${at90}, ${at150}, ${at180}`);
@@ -182,13 +182,13 @@ test("LEFT arm raised on the WRONG side of the trunk (cross-body overhead) → n
   // null return.
   const lms = neutralPose();
   lms[13] = { x: 0.45, y: 0.18, visibility: 1 };
-  assertNull(computeShoulderFlexion(lms, TILT_REF, "left"), "left overhead cross-body");
+  assertNull(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left overhead cross-body");
 });
 
 test("RIGHT arm cross-body overhead → null", () => {
   const lms = neutralPose();
   lms[14] = { x: 0.55, y: 0.18, visibility: 1 };
-  assertNull(computeShoulderFlexion(lms, TILT_REF, "right"), "right overhead cross-body");
+  assertNull(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), "right overhead cross-body");
 });
 
 // ── VISIBILITY GATING (delegation inherits) ─────────────────────────────────
@@ -196,8 +196,8 @@ test("RIGHT arm cross-body overhead → null", () => {
 test("missing elbow on one side → null on that side, other side still computable", () => {
   const lms = neutralPose();
   lms[13] = { x: 0.60, y: 0.45, visibility: 0.2 }; // below MIN_VIS
-  assertNull(computeShoulderFlexion(lms, TILT_REF, "left"), "left null with low-vis elbow");
-  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right"), 0, 1, "right still ok");
+  assertNull(computeShoulderFlexion(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), "left null with low-vis elbow");
+  assertCloseTo(computeShoulderFlexion(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0, 1, "right still ok");
 });
 
 console.log(`\n  ${testsPassed} passed, ${testsFailed} failed\n`);

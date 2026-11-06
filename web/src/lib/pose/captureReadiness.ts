@@ -10,6 +10,7 @@ export type ReadinessStatus =
   | "NOT_VISIBLE"
   | "HANDS_NOT_VISIBLE"
   | "KNEES_NOT_VISIBLE"
+  | "HIPS_NOT_VISIBLE"
   | "HEAD_NOT_POSITIONED";
 
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -108,7 +109,19 @@ function headYBounds(mode: FramingMode): { min: number; max: number } {
   if (mode === "lateral")  return { min: 0.00, max: 0.92 };
   return mode === "overhead"
     ? { min: 0.10, max: 0.45 }
-    : { min: 0.05, max: 0.25 };
+    // Default ceiling relaxed 0.25 -> 0.35 (2026-09-07), on measurement rather
+    // than preference. In a recorded ex_006 session a deliberate backward lean
+    // put the ear line at y = 0.250 — flush against the old 0.25 ceiling with
+    // no margin at all — and the transitions in and out of it crossed the gate.
+    // Each crossing was a sustained readiness dropout, and at the time a
+    // dropout re-ran neutral calibration, so the session silently re-captured
+    // its "neutral" baseline while the subject was leaning and again while
+    // slouching. The bound was rejecting ordinary postural movement, not bad
+    // framing. 0.35 leaves roughly 0.10 of margin over that measured worst case
+    // and stays well inside the overhead mode's 0.45. It is safe to relax
+    // because it was only ever a proxy for "does the body still fit below the
+    // head" — the knee-visibility gate tests that directly, and still does.
+    : { min: 0.05, max: 0.35 };
 }
 
 /**
@@ -147,6 +160,16 @@ const HEAD_X_CENTER = 0.5;
 const KNEE_VIS_MIN = 0.5;
 
 /**
+ * HIP VISIBILITY THRESHOLD (lateral mode)
+ *
+ * In lateral mode (side bends) the hips are checked directly, because the knee
+ * visibility score proved unreliable there (see Gate 4). 0.5 matches the
+ * landmark rule the side-bend metric itself applies (`MIN_VIS` in
+ * poseMetrics.ts).
+ */
+const HIP_VIS_MIN = 0.5;
+
+/**
  * WRIST VISIBILITY THRESHOLD
  *
  * Kept from the previous implementation. Wrist visibility ensures the full
@@ -163,6 +186,7 @@ export function evaluateCaptureReadiness(
   videoW: number,
   videoH: number,
   mode: FramingMode = "default",
+  requiredSide: "both" | "left" | "right" = "both",
 ): ReadinessResult {
   const { min: HEAD_Y_MIN, max: HEAD_Y_MAX } = headYBounds(mode);
   const HEAD_X_TOL = headXTol(mode);
@@ -236,7 +260,7 @@ export function evaluateCaptureReadiness(
     return {
       ok: false,
       status: "MOVE_BACK",
-      message: "Step back or lower the camera so your full body is visible.",
+      message: "Step back or lower the camera so you are visible from head to knees.",
       target,
       person,
       score01: vis(nose),
@@ -247,12 +271,12 @@ export function evaluateCaptureReadiness(
     // Head too low in frame — patient is too far or camera angled down.
     // In overhead mode the head is meant to sit in the upper-middle (not the
     // top quarter), so "near the top" would contradict the framing the patient
-    // was told to adopt — phrase it as full-body framing instead.
+    // was told to adopt — phrase it as head-to-knees framing instead.
     return {
       ok: false,
       status: "MOVE_CLOSER",
       message: isOverhead
-        ? "Step closer or raise the camera so your whole body is in frame."
+        ? "Step closer or raise the camera so you are in frame from head to knees."
         : "Step closer or raise the camera so your head is near the top.",
       target,
       person,
@@ -282,12 +306,22 @@ export function evaluateCaptureReadiness(
    *
    * We check inFrame01 here because a landmark can have reasonable visibility
    * score even when it's being extrapolated just outside the frame boundary.
+   *
+   * LATERAL MODE (side bends), changed 2026-10-02: the knees must still lie
+   * inside the picture, but their visibility score is not required. At the
+   * bottom of a deep side bend MediaPipe's knee visibility falls below 0.5
+   * although both knees are plainly visible: a live side-bend session lost 342
+   * frames (12.8 s) and 12 bends that way, with the knees at about 80% of the
+   * frame height and no hand over them. What this gate protects, the hips in
+   * frame and well detected, is checked directly below instead.
    */
   const leftKnee  = landmarks[25];
   const rightKnee = landmarks[26];
+  const kneeSeen = (knee: LM | undefined) =>
+    !!knee && inFrame01(knee) && (isLateral || vis(knee) >= KNEE_VIS_MIN);
 
-  const leftKneeOk  = !!leftKnee  && inFrame01(leftKnee)  && vis(leftKnee)  >= KNEE_VIS_MIN;
-  const rightKneeOk = !!rightKnee && inFrame01(rightKnee) && vis(rightKnee) >= KNEE_VIS_MIN;
+  const leftKneeOk  = kneeSeen(leftKnee);
+  const rightKneeOk = kneeSeen(rightKnee);
 
   if (!leftKneeOk || !rightKneeOk) {
     const msg = !leftKneeOk && !rightKneeOk
@@ -307,6 +341,29 @@ export function evaluateCaptureReadiness(
         vis(rightKnee ?? { x: 0, y: 0 })
       ),
     };
+  }
+
+  // ── Gate 4b: hip visibility (lateral mode only) ─────────────────────────
+  // Replaces the knee visibility score in lateral mode (see Gate 4): the side
+  // bend's metric runs from the hip midpoint, so both hips must be inside the
+  // picture and well detected.
+  if (isLateral) {
+    const leftHip  = landmarks[23];
+    const rightHip = landmarks[24];
+    const hipSeen = (hip: LM | undefined) => !!hip && inFrame01(hip) && vis(hip) >= HIP_VIS_MIN;
+    if (!hipSeen(leftHip) || !hipSeen(rightHip)) {
+      return {
+        ok: false,
+        status: "HIPS_NOT_VISIBLE",
+        message: "Step back so your hips and knees are in the picture.",
+        target,
+        person,
+        score01: Math.min(
+          vis(leftHip  ?? { x: 0, y: 0 }),
+          vis(rightHip ?? { x: 0, y: 0 })
+        ),
+      };
+    }
   }
 
   // ── Gate 5: wrist visibility (SKIPPED in overhead/lateral modes) ─────────
@@ -342,11 +399,44 @@ export function evaluateCaptureReadiness(
   const rightWrist = landmarks[16];
 
   if (!isOverhead && !isLateral) {
-    const leftHandOk  = !!leftWrist  && inFrame01(leftWrist)  && vis(leftWrist)  >= HAND_VIS_MIN;
-    const rightHandOk = !!rightWrist && inFrame01(rightWrist) && vis(rightWrist) >= HAND_VIS_MIN;
+    const rawLeftInFrame = !!leftWrist && inFrame01(leftWrist);
+    const rawRightInFrame = !!rightWrist && inFrame01(rightWrist);
+    const rawLeftHandOk = rawLeftInFrame && vis(leftWrist) >= HAND_VIS_MIN;
+    const rawRightHandOk = rawRightInFrame && vis(rightWrist) >= HAND_VIS_MIN;
+    // MediaPipe names the person's own sides on the raw camera frame it reads;
+    // only the screen is mirrored, by CSS. Its left wrist is the patient's left
+    // hand: the repetition counters read the same sides (a right-arm-only raise
+    // counted on the right in a live check), and so does the knee gate above.
+    // Until 2026-10-25 this gate assumed a mirrored frame and swapped them, so
+    // it named the other hand and a one-sided prescription required the other
+    // hand.
+    const leftHandOk = rawLeftHandOk;
+    const rightHandOk = rawRightHandOk;
+    const leftHandInFrame = rawLeftInFrame;
+    const rightHandInFrame = rawRightInFrame;
+    const requiredHandsOk =
+      requiredSide === "left"
+        ? leftHandOk
+        : requiredSide === "right"
+          ? rightHandOk
+          : leftHandOk && rightHandOk;
 
-    if (!leftHandOk || !rightHandOk) {
-      const msg = !leftHandOk && !rightHandOk
+    if (!requiredHandsOk) {
+      // A required hand inside the picture whose visibility is under the line
+      // is there but not made out: it blends into the background or is hidden
+      // behind the body. Asking to show it would name the wrong fix.
+      const missingLeft = requiredSide !== "right" && !leftHandOk;
+      const missingRight = requiredSide !== "left" && !rightHandOk;
+      const unclear = (!missingLeft || leftHandInFrame) && (!missingRight || rightHandInFrame);
+      const msg = unclear
+        ? missingLeft && missingRight
+          ? "The camera can't make out your hands. A plainer background or clothes that stand out may help."
+          : `The camera can't make out your ${missingLeft ? "left" : "right"} hand. A plainer background or clothes that stand out may help.`
+        : requiredSide === "left"
+        ? "Show your left hand to the camera."
+        : requiredSide === "right"
+          ? "Show your right hand to the camera."
+          : !leftHandOk && !rightHandOk
         ? "Show both hands to the camera."
         : !leftHandOk
         ? "Show your left hand to the camera."
@@ -358,10 +448,15 @@ export function evaluateCaptureReadiness(
         message: msg,
         target,
         person,
-        score01: Math.min(
-          vis(leftWrist  ?? { x: 0, y: 0 }),
-          vis(rightWrist ?? { x: 0, y: 0 })
-        ),
+        score01:
+          requiredSide === "left"
+            ? vis(leftWrist ?? { x: 0, y: 0 })
+            : requiredSide === "right"
+              ? vis(rightWrist ?? { x: 0, y: 0 })
+              : Math.min(
+                  vis(leftWrist ?? { x: 0, y: 0 }),
+                  vis(rightWrist ?? { x: 0, y: 0 }),
+                ),
       };
     }
   }
@@ -371,8 +466,18 @@ export function evaluateCaptureReadiness(
   // we required it (default mode). In overhead mode, missing wrists are
   // acceptable and don't penalize confidence — the metric pipeline
   // gracefully degrades. Use `??` fallbacks so we never call `vis(undefined)`.
-  const safeLeftWristVis  = leftWrist  ? vis(leftWrist)  : 1;
-  const safeRightWristVis = rightWrist ? vis(rightWrist) : 1;
+  const safeLeftWristVis =
+    requiredSide === "left" || requiredSide === "both"
+      ? leftWrist
+        ? vis(leftWrist)
+        : 1
+      : 1;
+  const safeRightWristVis =
+    requiredSide === "right" || requiredSide === "both"
+      ? rightWrist
+        ? vis(rightWrist)
+        : 1
+      : 1;
   return {
     ok: true,
     status: "OK",

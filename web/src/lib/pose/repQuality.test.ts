@@ -9,9 +9,13 @@ import { EXERCISE_REGISTRY, getCompensationScoring } from "@/lib/exercises/regis
 import type { RepEvent } from "./repCounter";
 import {
   DynamicRepQualityBuffer,
+  isDynamicRepQuality,
   isDynamicRepQualityV1,
+  isDynamicRepQualityV2,
+  isDynamicRepQualityV3,
   type DynamicRepQualitySample,
 } from "./repQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "./metricVersion";
 
 let passed = 0;
 let failed = 0;
@@ -125,7 +129,7 @@ test("raw features use raw samples and match the versioned ML feature contract",
   assert(raw !== null, "expected raw features");
   assert(raw!.source === "raw-unsmoothed", "raw source tag changed");
   assert(raw!.boundarySource === "smoothed-rep-counter", "boundary source changed");
-  assert(raw!.featureDefinition === "ml.features.extract.rep-v1", "feature version changed");
+  assert(raw!.featureDefinition === "ml.features.extract.rep-v2", "feature version changed");
   assert(raw!.resampledHz === 30, "expected 30 Hz resampling");
   assert(raw!.coveragePct === 100, "expected full raw coverage");
   assert(raw!.mlEligible, "full-coverage rep should be ML eligible");
@@ -135,9 +139,40 @@ test("raw features use raw samples and match the versioned ML feature contract",
   );
   assert(raw!.sampleCount === 11, "original sample count changed");
   assert(typeof raw!.negLogDimensionlessJerk === "number", "jerk feature missing");
-  assert(raw!.shapeP50 > 0.9, "triangle midpoint should be near peak");
+  assert(raw!.shapeP50 !== null && raw!.shapeP50 > 0.9, "triangle midpoint should be near peak");
   assert(raw!.compensations.trunkLean !== undefined, "trunkLean aggregate missing");
-  assert(isDynamicRepQualityV1(quality), "generated payload should pass API validation");
+  assert(quality.version === 3, "new payload should use quality schema version 3");
+  assert(
+    quality.metricAlgorithmVersion === POSE_METRIC_ALGORITHM_VERSION,
+    "pose metric algorithm version changed",
+  );
+  assert(isDynamicRepQualityV3(quality), "generated V3 payload should pass API validation");
+  assert(isDynamicRepQuality(quality), "generated payload should pass compatibility validation");
+  const tracking = {
+    version: 1 as const, check: "tracking_steadiness_v1" as const, frames: 30, rejectedFrames: 2, checkedFrames: 26, unsteadyFrames: 5,
+  };
+  assert(isDynamicRepQualityV3({ ...quality, tracking }), "a V3 payload with its tracking record should pass");
+  assert(
+    !isDynamicRepQualityV3({ ...quality, tracking: { ...tracking, unsteadyFrames: 40 } }),
+    "a tracking record with more flagged frames than frames should fail",
+  );
+  const withoutChecked: Record<string, unknown> = { ...tracking };
+  delete withoutChecked.checkedFrames;
+  assert(
+    !isDynamicRepQualityV3({ ...quality, tracking: withoutChecked }),
+    "a tracking record that does not say how many frames were checked should fail",
+  );
+
+  const legacyQuality = {
+    ...quality,
+    version: 1 as const,
+    metricAlgorithmVersion: undefined,
+    rawFeatures: { ...quality.rawFeatures, featureDefinition: "ml.features.extract.rep-v1" },
+  };
+  delete (legacyQuality as { metricAlgorithmVersion?: string }).metricAlgorithmVersion;
+  assert(isDynamicRepQualityV1(legacyQuality), "legacy V1 payload should remain valid");
+  assert(isDynamicRepQuality(legacyQuality), "compatibility validator should accept V1");
+  assert(isDynamicRepQualityV2({ ...legacyQuality, version: 2, metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION }), "legacy V2 remains readable");
 
   const missingChannel = new DynamicRepQualityBuffer();
   for (const sample of triangleSamples(() => 90)) {
@@ -251,7 +286,7 @@ test("validator rejects malformed or oversized payloads", () => {
   ) as Record<string, unknown>;
   (inconsistent.rawFeatures as Record<string, unknown>).mlEligible = false;
   assert(
-    !isDynamicRepQualityV1(inconsistent),
+    !isDynamicRepQuality(inconsistent),
     "inconsistent ML eligibility metadata accepted",
   );
 });

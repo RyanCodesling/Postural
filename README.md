@@ -1,6 +1,1848 @@
 # Sprint Updates 
 
-## 📌 Update-7-22-26
+## 📌 Update-11-03-26 | *Enah*
+
+- Kept the patient's My Progress charts inside the screen on phones and tablets, also when a chart's point table is open, as on the therapist's Patient Profile
+- Removed Print / Save as PDF from the therapist's Patient Profile with its print-only layout, keeping Progress report (PDF)
+- Deleted the root copy of the session report demo, pt_session_summary_printable_report.html, keeping the one the app serves
+- Asked before deleting notifications, for admins, therapists, and patients, in the app's own delete confirmation window, saying they cannot be recovered
+- Gave the Patient Profile's Personal Information icons the round light-green style of the View Profile's
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Sized My Progress's exercise trend cards to the page's width, so a wide point table opened under a chart scrolls inside its card instead of widening the whole page
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Removed the Print / Save as PDF button and its printer icon; Progress report (PDF) is the Patient Profile's report
+- Removed the print-only Patient Progress Report header and disclaimer footer, the printing of every tab and every day's sessions, and the classes that hid buttons and windows when printing
+- Put the Full Name, Age, Email, Progress Status, and Assigned Therapist icons in round light-green circles, as on the patient's and therapist's View Profile
+
+### *pt_session_summary_printable_report.html* and *web\src\lib\reports\reportPrototype.test.ts*
+
+- Deleted the root copy of the session report demo; web\public\pt_session_summary_printable_report.html stays, so /dashboard/therapist/session-report still shows it
+- Stopped the report prototype test comparing the served copy with the deleted root copy
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+
+- Opened a delete confirmation window from the notification window's Delete and from Delete selected, titled "Delete this notification?" or "Delete N notifications?", with Cancel and Delete
+- Said in it that the notifications are removed and cannot be recovered; Cancel or Escape closes it without deleting
+- Showed it above the notification window, in the style of the session video's delete window
+
+### *Validation*
+
+- Type check passes, and lint passes on the notification bell and the Patient Profile
+- The report prototype test passes
+
+### *Remaining boundaries*
+
+- None of this update has been tried in a signed-in session or at phone and tablet widths
+- A deleted notification is still only marked deleted in the database; nothing in the app restores it
+- The print styling in the shared page frame stays for other pages
+
+---
+
+## 📌 Update-11-03-26 | *RyanCodesling*
+
+- Combined Enah's Update-10-31-26 with the progress chart change, keeping all of her features
+- Left attempts replaced by a new start out of the exercise trends, Reports, and progress PDFs while keeping them in session history, and counted My Progress's sessions and last session the same way
+- Renamed the completed-repetition charts "Reps reaching the target", noting that partial repetitions are recorded too
+- Started a custom exercise only once its session is saved, for a task still pending or in progress, with the sets, rest, side, and resistance saved with that scheduled task
+- Kept a failed pain stop for Try saving again, showing that it is saving or not yet saved until the server confirms it
+- Refused to mark a task stopped because of pain as done through the older completion route as well, so it waits for the therapist
+- Said in the recording notice and the delete window that a removed session video stays in Recently Deleted until an admin restores it or deletes it for good, and asked again on devices that remembered the older notice
+- Fixed restoring a guide video saved under its exercise's id, as videos were before Update-10-30-26, from Recently Deleted
+- Kept a therapist's newer Diagnosis, Condition, and Prescription, and a reassignment, when the admin saves an Edit form opened before them
+- Cleared the files picked in the admin's Add User form when it is cancelled
+- Asked for pain after the attempt when a custom exercise ends with End session too
+- Recorded each set of a custom exercise as its own video part when there is no rest between sets too
+- Showed the remembered video choice, with Ask me each time, under a custom exercise's Start session
+- Brought the video guide's steps and the YouTube hint up to date with the form
+
+### *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\PatientReports.tsx*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, and *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Left out of the exercise trends, the Reports charts, and the progress PDF the attempts marked superseded, which a new start replaced; their sessions, events, recordings, and schedule history stay
+- Kept ended-early, pain-stopped, and older sessions without an end reason, and completed sessions whose values are low or whose repetitions missed the target
+- Fitted the trend model to the remaining sessions with its frozen settings, without retraining it
+- Counted My Progress's "Sessions in trends", formerly "Sessions recorded", and its last session from the sessions the charts use
+- Renamed "Completed reps" to "Reps reaching the target", with the note "Partial reps are recorded too. Zero here means no reps reached the target."
+- Noted under the charts, on Reports, and in the PDF that replaced attempts stay in session history and are left out, and showed "No sessions available for these charts." on Reports when none remain
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\db.ts*, *web\src\app\api\sessions\manual\route.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Started a custom exercise's session only for a task that is pending or in progress, locked while the session is created, and marked the task in progress
+- Saved the task's prescription with its first attempt, or reused the one already saved, so a later edit of the assignment does not change what the task records; the start route returns it
+- Ran the guide with that prescription's sets and rest, and the session with its reps, side, and resistance
+- Left the guide at Start session when its session could not be started or the returned prescription could not be read, instead of running the exercise without a session
+- Refused the older completion route for a task stopped because of pain
+- Kept a failed pain stop's session until the server confirms it, so Try saving again sends it again; the screen says "Saving the pain stop…" or that it has not been saved, and shows Back to schedule and the pain report only once it is saved
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\recording\consent.ts*, *web\src\lib\prescriptionContext.ts*, *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*, *web\src\lib\deletedItems.ts*, and *web\src\lib\db.ts*
+
+- Replaced the recording notice's "You can delete it at any time." with: a removed video stays in Recently Deleted until an admin restores it or permanently deletes it, is not erased automatically, and the clinic's admin can be asked to delete it permanently
+- Named this notice session_video_notice_v4, so a device that remembered an answer to the older notice asks again; consents already saved keep their notice's version
+- Said the same in the patient's delete window
+- Let Recently Deleted restore a guide video saved under its exercise's id, which has no file name of its own
+
+### Changes to Enah's Update-10-31-26: *web\src\lib\adminUserEdit.ts* and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Sent Diagnosis, Condition, and Prescription from the admin's Edit form only when the admin changed them, and stopped sending the patient's therapist, which the form does not edit, so a therapist's edit or a reassignment made while the form was open is kept
+- Cleared the files picked in Add User when it is cancelled, so they are not uploaded with the next new user
+
+### Changes to Enah's Update-10-31-26: *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Asked "Pain after this attempt" after End session too, once the early end is saved, as after Finish and a pain stop; a new attempt no longer keeps an earlier attempt's unanswered question
+- Closed each set's video part and opened the next even with no rest between sets; opening a part ends one still recording on the server, so the next part waits for the last one to close, and none opens once the session has ended
+- Showed the remembered video choice, with Ask me each time, under a custom exercise's Start session, as camera exercises do
+
+### Changes to Enah's Update-10-31-26: *web\src\app\(app)\dashboard\_components\VideoGuide.tsx* and *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*
+
+- Started the video guide's steps for choosing a video with "Press Attach video file" and "Press YouTube embed code", since the form has no Guide video heading
+- Ended the YouTube box's hint with "The step-by-step guide above shows each step." instead of naming a How to add a video link
+
+### *web\src\lib\manualSessions.test.tsx*, *web\scripts\verify-manual-sessions.ts*, *web\src\lib\adminUserEdit.test.ts*, *web\package.json*, and ten other test and check files
+
+- Tested the camera page's own custom-exercise start, pain stop, End session, and recording code and the guide itself with fixtures, and the manual start route's sign-in and notice checks
+- Added npm run verify:manual:db, which runs the custom-exercise start and end queries against connection-private temporary tables
+- Tested what the admin's Edit form sends
+- Covered leaving out replaced attempts in the trend, Reports, and PDF tests, restoring an older guide video in the exercise route and exercise database tests, and recovering a deleted session video in the recording tests
+- Updated the attachment delete test for the therapist's Delete in Enah's update, the clinical field test for the removed Therapist ID, and the camera replay and session reader checks for the code they now load
+
+### *web\README.md*
+
+- Described which sessions the progress views use, how custom-exercise starts and pain stops are saved, npm run verify:manual:db, and how long removed session videos are kept
+
+### *Validation*
+
+- 99 framework-free TypeScript suites pass, including the manual session, admin edit, trend, Reports, recording, and exercise route tests
+- Undoing each 11-03 change to the custom exercise code and the admin's Edit form, one at a time, made the test written for it fail
+- The custom exercise database check passes all 4 cases on connection-private temporary tables, the exercise check all 13, and the session reader and all 16 date correction checks pass too
+- Replaying the pilot recordings through the camera code gives the same summary as before
+- Type check, lint (no errors), and a production build on Next.js 16.4.3 pass
+
+### *Remaining boundaries*
+
+- None of this update has been tried in a signed-in session, as the laptop database lacks the tables and columns it needs
+- The server already runs the progress chart change; the rest of this update is not deployed and needs the SQL steps in Enah's section first
+- With no rest between sets, the start of a set is not recorded until the last set's part has finished uploading
+- An admin's own change to Diagnosis, Condition, or Prescription still replaces a therapist's newer one, and the Edit form's other fields are sent as they were loaded
+- The video guide's screenshots of the form, video-file-chosen.png and video-youtube-found.png, still show the Guide video heading and must be taken again
+- Blender authoring changes and six guide-validation records are excluded from this update
+
+---
+
+## 📌 Update-10-31-26 | *Enah*
+
+- Simplified the landing page's wording without changing its design or the clinic's name, phone numbers, email, and address, and moved the progress report to the therapists' list and the daily email to the patients'
+- Replaced the dashboards' How to Use drawings with screenshots of the real screens on 23 steps, showing each step in order with the button to press outlined
+- Kept every How to Use card inside the screen, with its title and Back / Next always visible and only its middle scrolling, and enlarged its text for readability
+- Replaced the admin's System Activity Feed with a User Status panel showing which patients and therapists are online now and when the others were last active
+- Added a search box on Manage Users that filters active and archived users by name, email, or role
+- Replaced the admin's Recent Patient Sessions with a Patients card showing each active patient's progress and status, as therapists see their own
+- Made the dashboards and the camera page fit phones and tablets: no page is wider than the screen, header rows and labels wrap, and wide tables scroll inside their cards
+- Let patients record a custom exercise, one video part per set with nothing recorded during rest, saved, shown, and deleted like a camera session's video
+- Gave custom exercises the camera session's rest overlay, pain question before starting, Stop — I have pain button, and pain report after the attempt
+- Removed the coaching, baseline, and live metrics from a custom exercise's camera view, keeping only the lighting check
+- Added a "please wait" message to the camera page's Home, Back to schedule, and session report buttons
+- Asked before stopping a recording, and moved the recording badge beside the camera view's buttons
+- Let admins and therapists keep, remove, or replace a custom exercise's guide video when editing it
+- Locked Assign Exercise's steps 2 and 3 until a patient is selected, and made its review and end windows scroll
+- Removed the Demo Clock's How to Use tour, as the Demo Clock will be removed before deployment
+- Let a patient's therapist edit their Diagnosis, Condition, and Prescription and add or delete their attached files; these belong to the patient, stay after reassignment, and are the same records the admin sees
+- Grouped the Patient Profile's Sessions by day in dropdowns, with a search box by exercise name and a "Make-up Exercise for" label on sessions done after their scheduled day
+- Named custom exercises "(Custom Exercise)" in the progress report PDF
+- Gave the Patient Profile's Edit and Add files buttons the solid green style of its other buttons
+- Removed the unused Therapist ID from the therapist's View Profile, the code, and the database scripts
+- Added a View button to Manage Users' Active Users, showing a read-only profile with what the Add User form collects; attached files are listed by name and cannot be opened
+- Saved the admin's attached file additions and deletions only on Save Changes or Add User, naming each file in the Confirm Edit and Confirm New User windows
+- Added a "How to add a video" guide to every custom exercise's Guide video field, with steps for attaching a video file and for getting a YouTube embed code, shown with screenshots of YouTube and the form
+- Let patients view, but not add, change, or delete, the files the admin or their therapist attached, on their own View Profile after entering their password
+- Made the side navigation a ☰ menu on every screen, PC windows, tablets, and phones alike, closing when a page is picked, outside it is clicked, or Escape is pressed
+- Fixed logging in sometimes returning to an empty login form even with the right email and password
+- Added a Recently Deleted page for admins: session videos a patient deleted, attached files an admin or therapist deleted, and guide videos removed or replaced on a custom exercise are kept there until the admin restores them or deletes them for good
+- Fitted the admin pages to phones in portrait: tables show each row as a small card instead of scrolling sideways, user cards read name, email with the role beside it, then the actions, and long names and emails wrap instead of overlapping
+- Replaced the browser's confirm box for deleting a session video with the app's own delete confirmation window
+- Kept the notifications panel fully on screen on phones in portrait, under the header
+
+### *web\src\app\page.tsx*
+
+- Rewrote the landing page's text in plain words for patients, keeping its layout, colors, and the clinic's name, phone numbers, email, and address
+- Listed "Download your patient's progress reports to PDF" for therapists and "Get a daily email of your finished and missed exercises" for patients
+
+### *web\src\app\(app)\dashboard\_components\TourFlow.tsx*, *web\src\app\(app)\dashboard\_components\SpotlightTour.tsx*, *web\src\app\(app)\dashboard\_components\tours.ts*, and *web\public\tour*
+
+- Added 30 screenshots of the real screens to the admin, therapist, and patient tours, numbered in order, with the button to press outlined in green and the outcome written under them
+- Kept drawings on the steps whose screens were empty in the test data, such as the archived lists and the assign Save button
+- Showed each screenshot at its real on-screen size, full width under the step's text, and no taller than a third of the screen
+- Limited the card to the screen's height and measured it again once its screenshots load, so Back / Next never fall off screen; the card goes to the side away from a large highlighted area
+- Raised the card's text to at least 11 px everywhere and 14 to 15 px for anything needed to follow a step, and widened the cards to fit
+- Removed Print / Save as PDF from the Patient Profile's Patient actions step and its screenshot, and removed the Demo Clock tour
+- Added steps for the User Status panel, the Patients card, the Manage Users search, and the Assign Exercise lock
+
+### *web\src\app\(app)\camera\CameraClient.tsx* (How to Use)
+
+- Enlarged the camera tour's text to match the dashboards', kept its title and Back / Next on screen with only its middle scrolling, and drew its pictures at 80% on tablet-sized screens
+- Opened the camera menu from wherever its button sits, so it never runs off the screen, and left it closed during step 1 on screens narrower than 1024 px, where it covered the Start camera button
+
+### *web\src\lib\presence.ts*, *web\src\lib\usePresenceHeartbeat.ts*, *web\src\app\api\presence\route.ts*, *web\src\app\(app)\dashboard\admin\UserStatusPanel.tsx*, *web\src\app\(app)\layout.tsx*, and *scripts\user_presence_pg.sql*
+
+- Added a User Status panel to the admin dashboard listing every active patient and therapist: online first, then by last activity, with All / Patients / Therapists filters and a search box past 8 users
+- Counted a user as online when a signed-in page, the camera page included, reported in within the last 2 minutes while visible; Log Out shows them offline at once
+- Decided online by the database clock, so the demo clock and a browser's clock cannot change it
+- Added scripts\user_presence_pg.sql, which adds last_seen_at and signed_out_at to users; until it runs, the panel says so and the rest of the app works
+- Stopped writing "User Logged In" and "User Logged Out" notifications, which only the removed feed showed, and removed Clear Feed
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\lib\db.ts*, and *web\src\app\(app)\dashboard\_components\rosterStatus.tsx*
+
+- Added a search box above Manage Users' lists, filtering both by name, email, or role, with each count showing how many match
+- Replaced Recent Patient Sessions with a Patients card of every active patient's progress and status, with no Manage patients link
+- Shared the roster's status rules and progress display between the therapist and admin dashboards, so both always agree
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\_components\AppShell.tsx*, *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, and the dashboard pages
+
+- Let cards shrink on narrow screens, with wide tables scrolling inside them, so no page is wider than the screen from 360 px up
+- Wrapped header rows, summary tile labels, profile names, and emails instead of cutting them, and showed Exercise Program's tiles two per row on phones
+- Showed How to Use, the bell, and the user's full name and role in the header on phones, wrapping a long name onto two lines
+- Hid the therapist roster's Last active and This week columns on phones, and showed a patient's email under their name on the therapist's profile
+- Fitted the Patient Profile to phones: its action buttons in rows, all four tabs across the width, less card padding, and its status badges above the text in PT Program and Completed Exercise Outcomes
+- Gave the therapist's Manage Exercises lists equal widths
+- Moved My Progress's session videos above the exercise trends
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\app\api\sessions\manual\route.ts*, *web\src\lib\db.ts*, and *web\src\lib\email.ts* (custom exercises)
+
+- Created a session for each patient attempt at a custom exercise, holding the pain answers, how it ended, and, with consent, its video; nothing is counted, so trends, counts, and reports leave it out
+- Asked the camera session's pain question, then its video question, before a custom exercise starts; Back on either cancels the start
+- Recorded each set as its own video part, stopping during rest, and labeled the parts Set 1, Set 2 for the patient and therapist; viewing, deleting, and consent follow the camera session's rules
+- Added Stop — I have pain, which pauses the day for pain and notifies the therapist and patient, and the pain report after the attempt, after Finish and after a pain stop
+- Described a custom exercise's pain pause as "a custom exercise, so no sets or reps are counted" in notifications and emails
+- Showed the camera session's rest overlay between custom sets, for every role
+- Cleared the skeleton, framing target, and form highlights from a custom exercise's camera view, kept only the dark-room message, labeled "Lighting", and hid the baseline card and the tracking and turn messages
+- Said "Not measured" under the staff diagnostics' Live Metrics for a custom exercise
+- Labeled a custom session "Custom exercise · guided, not measured" in the therapist's Sessions tab
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\app\(app)\dashboard\_components\PleaseWait.tsx*, *web\src\app\(app)\dashboard\_components\ReportButton.tsx*, and *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*
+
+- Showed "Opening your dashboard…" or "Opening your schedule…" until the next page loads after Home, Back to schedule, Return to schedule, and the automatic return, and "Preparing your PDF report…" while a session report is built
+- Asked "Stop recording?" before stopping a recording; the video up to that moment is kept even mid-set, and only the patient's Delete removes it
+- Put the recording badge in the camera view's top-left row beside its two buttons, wrapping below them on phones instead of covering the AI indicator
+
+### *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\api\exercises\[id]\route.ts*, *web\src\lib\db.ts*, and the exercise edit forms
+
+- Added Keep current video, Remove video, Replace with video file, and Replace with YouTube to editing a custom exercise on the admin's and therapist's Manage Exercises and the Exercise Program page; keep is chosen by default
+- Deleted the replaced uploaded file when a video is removed or replaced; a failed upload keeps the saved description and the old video
+- Allowed admins to change any custom exercise's video and therapists only their own, checked on the server; system exercises still edit only their description
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+
+- Locked Load from Program and Select Exercises until a patient is selected, with a note saying so
+- Kept the Review Changes and End Prescriptions windows inside the screen, with the list scrolling between the title and the buttons
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\api\users\[id]\clinical\route.ts*, and *web\src\app\api\users\[id]\attachments*
+
+- Added Edit to the Patient Profile's clinical information, saving Diagnosis, Condition, and Prescription to the patient's own record, so the admin's Edit form and the next therapist after a reassignment see the same values
+- Added + Add files and Delete to the patient's attached files for their therapist, with the admin's file types and limits
+- Allowed only the admin and the patient's current therapist to change either, checked on the server; a former therapist is refused
+- Grouped Sessions by day, newest first, each day a dropdown with the latest one open, and added a search box that finds sessions by exercise name and opens the matching days
+- Labeled a session done after its scheduled day "Make-up Exercise for" that day
+- Gave Edit and + Add files the solid green style of Assign Exercise and Progress Report (PDF)
+
+### *web\src\lib\reports\homeProgram.ts* and *web\src\lib\reports\reports.test.ts*
+
+- Added "(Custom Exercise)" after a custom exercise's name in the progress report PDF, for example "Shoulder Shrugs (Custom Exercise)"
+
+### *web\src\lib\db.ts*, *web\src\app\api\users\route.ts*, *web\src\app\(app)\dashboard\therapist\profile\page.tsx*, *web\scripts\seedDemo.ts*, *scripts\user_credentials_pg.sql*, and *scripts\drop_therapist_id_num_pg.sql*
+
+- Removed Therapist ID, which no form ever filled, from the therapist's View Profile, its tour step, the user code, the demo seed, and the user table script
+- Added scripts\drop_therapist_id_num_pg.sql, which drops the column from an existing database; the app works the same before and after it runs
+
+### *web\src\app\(app)\dashboard\_components\VideoGuide.tsx*, *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\(app)\dashboard\_components\TourFlow.tsx*, and *web\public\tour*
+
+- Added "How to add a video" under Guide video on the therapist's Exercise Program and Manage Exercises forms and the admin's Manage Exercises forms, adding and editing alike
+- Opened a step-by-step card in the How to Use style with two tabs, Video file and YouTube embed code, starting on the one chosen in the form, with Back, Next, and Done
+- Covered a video file in 4 steps: MP4 or WebM up to 100 MB and how to film it, converting an iPhone's MOV file or trimming a large one, choosing the file, and saving, including a failed upload
+- Covered YouTube in 6 steps, with screenshots of YouTube's Share button, the Embed choice, and the embed code's Copy button, then pasting in the form until "Video found." shows, and saving; it notes the phone app's Copy link, videos whose owners block embedding, and videos later removed
+- Added the screenshots yt-share-1.png to yt-share-3.png, from a public "Shoulder Shrugs" video, and video-file-chosen.png and video-youtube-found.png of the form
+- Pointed the YouTube box's hint to the guide
+- Kept tour screenshots in proportion when a tall one is shrunk to fit, which had left blank space beside it in every tour
+
+### *web\src\app\(app)\dashboard\admin\page.tsx* and *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*
+
+- Added View to each Active Users row, opening the patient's or therapist's View Profile layout read-only, without Change Password, showing the names, email, date of birth, age, gender, and the patient's clinical information and file names or the therapist's specialization
+- Listed attached files by name only, noting that only the patient and their therapist can open them
+- Changed the Edit form's file Delete to cross the file out with an Undo, deleting it only on Confirm & Save Changes; new files are uploaded only then too
+- Listed "Files to add" and "Files to delete" by name in Confirm Edit and "Files to add" in Confirm New User
+- Added the View action and the save-first rule to the Manage Users tour and retook its Active Users screenshot
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\app\(app)\dashboard\_components\PatientFileViewer.tsx*, and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Added Attached Files under Account Information on the patient's View Profile, listing each file attached by the admin or their therapist with a View button and no add, change, or delete controls
+- Opened a file only after the patient re-enters their password, showing an image or PDF and offering other documents as a download, locked again when the window closes
+- Relied on the existing server checks: a patient can open only their own files and is refused when uploading or deleting
+- Moved the password check and file preview into PatientFileViewer.tsx, shared by the patient's View Profile and the therapist's Patient Profile
+- Added an Attached files step to the patient's View Profile tour, and noted in the admin's View window and the Manage Users tour that the patient can view the files on their own View Profile
+
+### *AUTHENTICATION_SETUP.md*, *deploy\server\README.md*, and *deploy\server\02_app_db.sh*
+
+- Added scripts\user_presence_pg.sql to the SQL order and to a new server's setup, and noted the one command an existing server needs
+- Noted running scripts\drop_therapist_id_num_pg.sql once, after a backup, on a database created before this update
+- Added scripts\deleted_items_pg.sql to the SQL order, to a new server's setup, and to the existing-server notes, and added the missing scripts\patient_image_attachments_pg.sql to a new server's setup
+
+### *web\src\app\(app)\dashboard\_components\AppShell.tsx* and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Made the side navigation a ☰ menu at the top left on every screen, PC windows included, sliding in over the page, so pages use the full window width
+- Closed the menu when a page is picked, when the dimmed page beside it is clicked, or when Escape is pressed
+- Changed the How to Use text from "the menu on the left" to the ☰ menu button, and told users to open the ☰ menu first in the Log Out and Camera steps
+- Kept the dashboard pages' own width-based layouts and the camera page's side panels as they were
+
+### *web\src\lib\AuthContext.tsx* and *web\src\app\(auth)\login\page.tsx*
+
+- Fixed a race on the login page: the page-load check of who is signed in could answer "nobody" after a successful login and send the user back to an empty form; a login or logout now makes that earlier answer ignored
+- Kept Log In disabled until the page's script is running, a split second at most, since an earlier press reloaded the page and emptied the form, and made the form post so a too-early press never puts the password in the address bar
+
+### *web\src\lib\deletedItems.ts*, *web\src\app\api\admin\deleted-items*, *web\src\app\(app)\dashboard\admin\RecentlyDeletedPanel.tsx*, *web\src\lib\db.ts*, *web\src\lib\recording\storage.ts*, and *scripts\deleted_items_pg.sql*
+
+- Added scripts\deleted_items_pg.sql, which adds a deleted_items table and marks attached files as deleted instead of removing them, and gives the app's database user access to the new table
+- Moved a patient's deleted session video into a deleted-session-<id>-<time> folder beside the live ones instead of erasing it
+- Hid an attached file deleted by the admin or a therapist everywhere, including from the patient, while keeping it in the database
+- Kept a custom exercise's guide video, uploaded file or YouTube video, when it is removed or replaced; deleting the exercise for good still deletes its guide videos
+- Added Recently Deleted to the admin's menu, listing what was deleted, whose it is, who deleted it, and when, with filters by kind and a search box; the contents cannot be opened there
+- Added Restore, which puts the item back and notifies the patient and their therapist, or for a guide video the exercise's creator; a restored guide video becomes the exercise's video again and the one it replaces moves to Recently Deleted
+- Added Delete for good, which removes the item from the system after a confirmation noting that copies in earlier nightly backups remain
+- Removed nothing automatically; until the script runs, deleting session videos and attached files is refused so nothing is lost, and the admin's page says the script is needed
+- Showed the server's reason when the admin's edit form cannot delete a file
+- Changed the patient's, therapist's, and admin's delete messages to say the item goes to Recently Deleted, and added a Recently Deleted tour
+
+### *web\src\app\globals.css*, *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\dashboard\admin\RecentlyDeletedPanel.tsx*, *web\src\app\(app)\dashboard\admin\UserStatusPanel.tsx*, and *web\src\app\(app)\dashboard\_components\rosterStatus.tsx*
+
+- Added a `stack-table` rule that shows a table's rows as small cards on screens narrower than 640 px, and used it for Active Users, Archived Users, Currently Assigned Patients, Assignment History, and Recently Deleted
+- Showed Active and Archived Users on phones as the name, then the email with the role badge beside it, then a small space and View, Edit, Archive or Restore, Delete; the badge drops onto the next line, flush left, when a long email leaves no room
+- Labelled only values that are unclear on their own, such as "Archived on:", "Assigned therapist:", and "Deleted by:", on the same line as the value
+- Put the Add User and Edit User forms' First, Middle, and Last name fields one per row on phones
+- Wrapped long values, such as emails, inside their own column in the Confirm Edit and Confirm New User windows
+- Showed full names in the User Status panel, with the last-active time on its own line on phones
+- Kept each of the Patients card's progress counts on one line, lined up with the others when they wrap; the therapist's roster shares it
+
+### *web\src\app\(app)\dashboard\_components\SessionVideo.tsx* and *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+
+- Replaced the "localhost says" confirm box on Delete video with the app's confirmation window: a red trash icon, "Delete this session video?", the note that the clinic's admin can restore it, and Cancel and Delete; Escape or Cancel closes it without deleting
+- Pinned the notifications panel on phones to the screen, a small margin from each side and just under the header, measured when the bell is pressed so a two-line name never covers it, with its list scrolling inside so Previous and Next stay visible; tablets and PCs keep it under the bell
+
+### *Validation*
+
+- The new presence test passes 6 checks, and the existing notification email and prescription context tests pass
+- Type check and lint (no errors) pass
+- Every How to Use step for admin, therapist, and patient, 170 in all, stayed on screen at 1366×768 and 1280×620 after the text was enlarged, and the camera tour's 7 steps fit at 390, 570, 820, 1180, 1366, and 1920 px wide
+- No page of the three roles was wider than the screen at 360, 390, 600, 768, 840, and 1024 px
+- In signed-in sessions on the laptop, a recorded custom exercise saved two parts labeled Set 1 and Set 2, the User Status panel showed the patient online, and the custom exercise view drew nothing on the camera picture and said "Not measured"
+- The new routes refused missing consent, an old video notice, an invalid pain answer, an exercise not due today, a video change on a system exercise, and a therapist changing another's video, without saving anything
+- The reports test passes 15 checks, including the "(Custom Exercise)" name
+- A therapist's clinical edit and file upload and delete showed in the admin's Edit form, and the original values were restored afterwards
+- As the patient, at 1366 px and on a 375 px phone, Attached Files listed the file with no add or delete controls, refused a wrong password, and opened the file with the right one; a patient's upload and delete were refused (403) and the file count stayed the same; the therapist's file viewer still opened files, and all 50 patient tour steps fit
+- In PC windows at 1920, 1366, 1280, 1200, 1024, 800, and 390 px and touch tablets at 1366 and 768 px, the ☰ menu opened, closed when the dimmed page was clicked, and closed with Escape, and no page was wider than the screen; every How to Use step for the three roles fit at PC sizes (66 admin, 64 therapist, 50 patient) and as a touch tablet
+- With the page-load sign-in check held back 2.5 seconds to force the race, the admin, therapist, and patient logins each reached their dashboard, and five normal logins per role all did
+- At 360 and 375 px Active Users showed one role badge per user beside the email, and at 1366 px the table with its Role column, with nothing scrolling sideways
+- As the patient at 1366 and 375 px, Delete video opened the app's window instead of the browser's box, and Escape and Cancel closed it with no delete sent and the video kept
+- For the patient, therapist, and admin at 360×740, 375×667, 414×896, 768×1024, and 1366×768, the notifications panel stayed inside the screen and below the header
+- Before the script ran, the admin's page asked for it and a delete was refused with the file kept; afterwards, a test file deleted by the therapist was hidden from the patient and refused when opened, restored with both notified, then deleted for good; session 25's video, deleted by the patient, went to its renamed folder and came back on Restore with both notified; Arm Raises' replaced YouTube video was restored and the one replacing it moved to Recently Deleted; the admin tours, Recently Deleted included, fit on desktop and touch tablets
+- At 360, 375, and 414 px, a check of every admin page found nothing wider than the screen, nothing scrolling sideways, and no overlapping text; at 375 px the same held for the Add User, Confirm New User, View, Edit, Confirm Edit, Add Exercise, Edit Exercise, and Unassign windows, and for Recently Deleted holding a long-named test file; the admin tours still fit on desktop
+- Both tabs of the video guide fit the screen with every screenshot loaded on the therapist's form at 1280×800, the admin's at 1366×768, and a 375 px phone, and every How to Use step for the three roles still fit after the screenshot change
+- As the admin, View showed a patient and a therapist read-only with no links, and fit a 375 px screen; marking a file for deletion and choosing a new one sent nothing until Confirm & Save Changes, and saving a test file then deleting it left the patient's own file untouched
+
+### *Remaining boundaries*
+
+- Before User Status works on the server, scripts\user_presence_pg.sql must be run once as the database owner
+- scripts\drop_therapist_id_num_pg.sql has not been run locally or on the server; it permanently deletes the column, so take a backup first
+- If a file deletion or upload fails after Save Changes, the other details are still saved and the admin is told which files to retry
+- The custom exercise's pain steps, Stop recording confirmation, and Assign's End Prescriptions window have not been tried in a signed-in session
+- The tour screenshots show the test accounts' real names and emails; they must be taken again if the screens change
+- The video guide's YouTube screenshots show YouTube's layout as of 2026-11-01 and must be taken again if YouTube changes its Share box
+- Tour steps whose screens were empty in the test data still use drawings
+- A therapist who leaves the app in a background tab shows offline after 2 minutes
+- The Demo Clock page and its menu item remain until they are removed before deployment
+- The layouts were checked with phone and tablet emulation, not on real devices
+- The Log Out and Camera tour screenshots were taken when the menu was always open, so they show its contents as they used to look
+- A running `npm run dev` sometimes keeps serving an older globals.css after it changes; restart it once if the menu or phone layouts look unchanged
+- Before Recently Deleted works on the server, scripts\deleted_items_pg.sql must be run once as the database owner
+- Delete for good on a session video was not tried, so as not to erase a real recording
+- Items in Recently Deleted keep using disk and database space until an admin deletes them for good, and copies stay in nightly backups until those are removed
+
+---
+
+## 📌 Update-10-30-26 | *RyanCodesling*
+
+- Added "Stop at shoulder height" on the lateral arm raise when an arm goes past shoulder height, boxed around that arm and cleared once it is corrected in the same raise; saved videos redraw the box as it was shown
+- Coached each arm of the arm hold (Arm Abduction at 90°) on its own, with "Raise this arm" or "Lower to shoulder height" for an arm outside the target band and a raise or lower hint beside each arm's seconds, starting once an arm has earned hold time in the set
+- Showed "Turn to face the camera." once the hips have read a turn of 15° or more for half a second, until they read below 10°, also in place of the message about a hidden hand or knee
+- Added a message for a dark room, named the hand the camera cannot see, and named the arm in the unsteady-tracking message, leaving out "More light" when the picture is already bright
+- Fixed the capture check's hand sides, which were swapped, so a one-sided prescription needs its own hand in view
+- Measured "Keep your torso upright." from the trunk line held during calibration instead of the camera tilt saved there, so a lean already present at calibration no longer counts, and removed the cue's 3-second wait so a lean to the other side straight after is shown too
+- Kept a waiting warning off an empty screen until its reading is back at its switch-on level, and stopped a warning already back past its switch-off level from replacing the cue on screen
+- Made a camera page left open from before an update reload before it starts a session, so every session uses the server's current coaching
+- Refused to archive a custom exercise while a prescription or program still uses it, so one therapist's archive no longer ends another therapist's prescriptions without notice
+- Fixed three problems in the guide video uploads of Enah's update: a failed replacement deleted the working video, an MP4 and a WebM uploaded together could delete each other, and the clean-up after a failed new upload could end prescriptions made in the meantime
+- Sent patients only their own prescribed exercises, and answered malformed exercise input with an error message instead of a server error
+- Showed the server's refused-archive reason on the admin page and closed the confirmation without changing the exercise list
+- Included uploaded exercise guides in local and nightly server backups and their restore checks, while keeping older backup manifests readable
+- Added an Enable demo tools switch to the admin's Demo Clock tab, on the laptop and on a deployed server alike, so the demo clock needs no restart; it stays off until an admin turns it on, and turning it off restores real time
+- Let an admin move a finished session recorded on the wrong day, with its outcome, to an unused scheduled day of the same prescription, giving a reason that is kept with every move
+- Showed staff the share of tracked frames on which the points an exercise depends on were unsteady, in the therapist's session view and the session report
+- Documented the server's email setup and the notice telling participants their emails are sent through Gmail
+
+### *web\src\lib\pose\overRaiseWarning.ts*, *web\src\lib\pose\drawCompensationOverlay.ts*, *web\src\lib\recording\overlayTrack.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Drew "Stop at shoulder height" on the lateral arm raise once an arm passes shoulder height, and cleared it once the arm is lowered within the same raise
+- Boxed the label around the arm that is too high instead of across both wrists; with both arms too high, it stays on the arm it went to first while that arm is still too high
+- Saved the boxed arm with each frame of the overlay track, so saved videos draw the box where it was shown; recordings made before this update still draw it across both wrists
+
+### *web\src\lib\pose\otherArmDownWarning.ts*, *web\src\lib\pose\holdHint.ts*, *web\src\lib\holdDisplay.ts*, and *web\src\lib\pose\coachingCue.ts*
+
+- On the arm hold with both arms prescribed, cued "Raise this arm" at an arm below the target band and "Lower to shoulder height" at an arm above it, checking each arm that has not finished its hold on its own
+- Showed "raise ↑" or "lower ↓" beside an arm's seconds in the hold panel once that arm has been out of the band for half a second, except while that arm's tracking is unsteady
+- Started these cues and hints only after a prescribed arm has earned hold time in the current set; time restored after a reload counts, and a new set must earn its own
+- Kept the cue on the arm it went to first while that arm is still out of the band, when both arms are
+- Left each arm's hold time, when a set ends, and what is saved unchanged
+
+### *web\src\lib\pose\bodyTurn.ts*, *web\src\lib\pose\captureReadiness.ts*, *web\src\lib\pose\pictureBrightness.ts*, and *web\src\lib\pose\trackingSteadiness.ts*
+
+- Showed "Turn to face the camera." once the hip line has read 15° or more for half a second, and cleared it below 10°; a hand or knee hidden while the body is turned gets the same message instead of its own
+- Read MediaPipe's left wrist as the patient's left hand in the capture check, as the repetition counters already do, so a one-sided prescription needs its own hand, and the message names the hand that is missing
+- Added "The room is too dark for the camera. Turn on a light or face a window." for a dark picture
+- Named the arm in the unsteady-tracking message, and left out "More light" when the picture is already bright
+
+### *web\src\lib\pose\trunkRestReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\lib\exercises\registry.ts*
+
+- Measured the lean for "Keep your torso upright." from the trunk line held during the calibration rather than from the camera tilt saved there; without a calibration it reads as before
+- Removed the cue's 3-second wait after it clears
+- Changed the display only: the form score, stored measurements, and trends keep the earlier reading
+- Named the coaching configuration coaching_v21_trunk_lean_rest_reference
+
+### *web\src\lib\pose\compensationWarningState.ts* and *web\src\lib\pose\coachingAudit.ts*
+
+- Put a waiting warning on an empty screen only once its reading is back at its switch-on level
+- Stopped a warning whose reading has already recovered past its switch-off level from taking over from the cue on screen; a cue already shown is unaffected
+
+### *web\src\app\api\sessions\route.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Checked that a new camera session names the server's current coaching configuration as well as its measurement configuration
+- Told a camera page left open from an older version to reload before it starts a session
+
+### *web\src\lib\demoClock.ts*, *web\src\app\api\demo-clock\route.ts*, *web\src\lib\DemoClockContext.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, and *scripts\demo_clock_settings_pg.sql*
+
+- Showed the Demo Clock tab on every installation, with an Enable demo tools switch whose setting is shared by everyone using that database
+- Started the tools on real time when enabled, and restored real time and cleared the saved date when disabled; a saved date is ignored while the tools are off
+- Replaced the rule that only npm run dev:demo could use the clock with DEMO_CLOCK=off, an optional lock for a server; npm run dev:demo and the new npm run start:demo share web\scripts\demo-server.mjs, which replaces dev-demo.mjs
+- Added the switch's column to scripts\demo_clock_settings_pg.sql, starting off; running the script again keeps the admin's choice
+
+### *web\src\lib\sessionDateCorrection.ts*, *web\src\lib\sessionDateCorrectionApi.ts*, *web\src\app\api\demo-clock\sessions*, *web\src\app\(app)\dashboard\admin\SessionDateCorrectionPanel.tsx*, *web\src\lib\db.ts*, and *scripts\session_date_corrections_pg.sql*
+
+- Added Correct a recorded date to the Demo Clock tab while the tools are on: an admin finds a finished session, picks an unused, uncancelled day of the same prescription with the same dose, side, and resistance, previews the move, and gives a reason
+- Moved the session's start and end together, inside that day's make-up window, along with its completion, pain stop, or partial outcome; the day it left becomes pending, or stays in progress if earlier attempts remain there
+- Refused days with activity, active sessions, conflicting outcomes, a changed prescription, and edits made from a stale view; no day is created and no prescription changes
+- Kept every move, with the admin, the reason, and the dates before and after, in a table the app can only read and add to; measurements, recordings, and emails already sent stay as they were
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\reports\sessionReport.ts*
+
+- Showed the share of tracked frames on which the points the exercise depends on were unsteady, in the therapist's session view and in the session report
+- Marked the share in amber at 25% or more, the line the trend rules use to leave a repetition out, with a note that readings from those moments, such as an arm's hold time, may be unreliable
+
+### *AUTHENTICATION_SETUP.md*, *deploy\server\README.md*, *deploy\server\05_email.sh*, *scripts\replace_system_email_pg.sql*, *web\docs\evaluation-deployment.md*, and *web\docs\participant-email-information.md*
+
+- Added 05_email.sh, which asks for the Gmail app password at a hidden prompt, checks it with Gmail before changing anything, and puts the previous settings back if the app then fails to start
+- Added scripts\replace_system_email_pg.sql, which changes only the administrator's email to the system sender on an existing database
+- Added the notice telling participants that account and exercise emails, including pain-pause alerts, are sent through Gmail
+- Recorded the 2026-10-21 email checks on the server, and the setup steps for the demo clock and date corrections
+
+### *web\src\lib\session-token.test.ts*, *web\src\lib\sessionDateCorrection.test.tsx*, *web\src\lib\demoClock.test.ts*, *web\README.md*, *web\.env.example*, and *web\package.json*
+
+- Let the sign-in test accept a shared route guard only while that guard itself calls the database-backed sign-in check, so the date correction routes pass it
+- Gave the date correction test the exercise video check that Enah's update added to db.ts
+- Added npm run verify:session-dates, which runs the date corrections against connection-private temporary tables
+- Described the demo clock in web\README.md and web\.env.example
+
+### Changes to Enah's Update-10-30-26: *web\src\lib\db.ts* and the archive windows in *therapist\exercises\page.tsx*, *therapist\programs\page.tsx*, and *admin\page.tsx*
+
+- Refused to archive a custom exercise while any unarchived prescription or program still uses it; the server answers with what to do, and the archive windows say to end those prescriptions and remove the program entries first
+- Locked the exercise's row while assignments and program entries are checked and saved, so an archive cannot slip in between
+- This replaces the archive that ended every therapist's prescriptions of the exercise, now that custom exercises are shared
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\[id]\video\route.ts*, *web\src\lib\exercises\customVideo.ts*, *web\src\lib\exercises\customVideoStorage.ts*, and *scripts\exercises_pg.sql*
+
+- Saved each uploaded guide video under its own file name, kept in the new video_file_name column, so a failed replacement keeps the working video and two uploads close together keep the later one
+- Removed only the file a new upload replaced; videos saved under the exercise's id before this update still play
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\[id]\route.ts* and *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*
+
+- Removed a new exercise after its upload failed only if, in one transaction, it has no prescription, session, or program history; otherwise nothing changes
+- Made the add form say whether the exercise was removed, kept, or its removal could not be confirmed
+
+### Changes to Enah's Update-10-30-26: *web\src\app\api\exercises\route.ts* and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Listed only a patient's own prescribed exercises for that patient, so the YouTube videos of other exercises are no longer sent to them
+- Answered malformed requests, names or descriptions that are not text, and names over 255 characters with an error message instead of a server error
+- Replaced the patient tour's "Mark done" line: a custom exercise opens its guide and manual sets, with Set done after each set and Finish after the last
+
+### *web\src\app\(app)\dashboard\therapist\assign\selection.test.ts*, *web\src\lib\exercises\customExerciseRoutes.test.ts*, *web\scripts\verify-exercise-lifecycle.ts*, and *web\package.json*
+
+- Gave the Assign page's test the setter Enah's update added, which it stopped without, and checks for choosing and clearing a program
+- Added route tests for failed and overlapping uploads, older video files, an unconfirmed save, a refused clean-up, and the patient's exercise list
+- Added npm run verify:exercises:db, which runs the real assignment, program, archive, clean-up, and video queries against connection-private temporary tables
+
+### *README.md*, *web\src\lib\db.ts*, *web\src\lib\email.ts*, and five test files
+
+- Reworded comments, one test name, and two lines of the 10-19 section without changing any code
+
+### *Validation*
+
+- 96 framework-free TypeScript suites pass, including the route, admin archive-message, guide backup, Assign page, and date correction tests
+- The exercise database check passes all 13 cases on connection-private temporary tables, including an archive refused for another therapist's prescription and for a program; the session database check and all 16 date correction checks pass too
+- On 2026-10-26 the demo tools switch was turned on, given a demo date, and turned off again in the signed-in admin dashboard on the laptop, where the date correction list also loaded; the laptop's tools are off with no saved date
+- Replaying the pilot recordings through the camera code gives the same summary as before the merge with Enah's update
+- Type check, lint (no errors), and a production build on Next.js 16.4.3 pass, and npm audit finds no vulnerabilities
+- In live sessions on the laptop, the box stayed on the named arm in all 118 frames that showed it, and "Keep your torso upright." showed for 7 of 7 leans to both sides, including a left lean on the wall angels that the earlier reading missed, with no cue in the upright controls
+
+### *Remaining boundaries*
+
+- Before uploads are used on the server, scripts\exercises_pg.sql must be run again for the new video_file_name column
+- A therapist cannot archive their exercise while another therapist still prescribes it or keeps it in a program; that therapist has to end it first
+- A refused archive now shows its reason on the admin page; staff must end prescriptions or remove program entries before retrying
+- Enah's section's last boundary no longer applies, since archiving ends no prescription; her section's Next.js update was from 16.4.2, not 16.4.0
+- The changes to Enah's update were checked by tests and on temporary tables, not yet in a signed-in session
+- Three cues have shown only in tests, not in a live session: "Straighten arms" during the arm hold, the lean cue on the neck side bends, and the box moving to the other arm
+- A hand hidden from the camera can still read as visible, so the hand messages do not detect every hidden hand
+- The coaching lines are engineering lines from pilot recordings, not clinical norms, and the evaluation, already under way or finished, does not cover this update
+- From the next deploy the Demo Clock tab shows on the server, switched off; using it there needs scripts\demo_clock_settings_pg.sql run again, and date corrections also need scripts\session_date_corrections_pg.sql, both as the database owner
+- No date correction has been saved in a signed-in session, and neither the switch nor the corrections have been tried on the server
+- Blender authoring changes and guide-validation records are excluded from this update; the three August anatomy records also remain outside version control
+
+---
+
+## 📌 Update-10-30-26 | *Enah*
+
+- Added an Archived column to the admin's Manage Exercises: archiving a custom exercise moves it there with its name, description and video kept, and it offers only Restore and Permanently delete
+- Kept the six system exercises from being archived or deleted; only their description can be edited, and the server now ignores a changed name
+- Let the admin and therapists attach a guide video to a new custom exercise, an MP4 or WebM file of up to 100 MB or a pasted YouTube embed code or link
+- Played a custom exercise's video in the exercise View windows, in the camera page's Reference Guide, and on the patient's schedule card, and widened the camera page's right column for custom exercises so the video is larger
+- Listed custom exercises on the admin's and therapists' camera page after the six system exercises, with a guided set-by-set session in place of camera tracking
+- Shared every custom exercise with all therapists in Manage Exercises, Assign Exercise, Exercise Program and the camera page; only the therapist who added one can edit or archive it, and only the admin can permanently delete it
+- Added an Archived column with Restore to the therapist's Manage Exercises, for the custom exercises the therapist archived
+- Added Search patient, Search program and Search exercise boxes to Assign Exercise, and made choosing None, or another program, uncheck the exercises the previous program added
+- Labelled custom exercises "Manual · no Machine Learning" and their owner "Added by you", "Added by admin · view only" or "Added by another therapist · view only"
+- Gave the patient's custom exercises a Start button that opens the camera page, where finishing the guided session's last set marks the day complete
+- Moved the Archived column under the System and Custom exercise columns on both Manage Exercises pages
+- Upgraded Next.js and eslint-config-next from 16.4.0 to 16.4.3, updated nodemailer to 10.3.1 for a moderate security advisory, and corrected the clinic's name and address on the landing and sign-in pages
+
+### *scripts\exercises_pg.sql* and *web\.gitignore*
+
+- Added `video_mime_type` (video/mp4 or video/webm) and `youtube_video_id` to `exercises`; the script can be rerun on an existing table
+- Ignored `web\.exercise-videos`, where uploaded videos are kept
+
+### *web\src\lib\exercises\customVideo.ts*, *web\src\lib\exercises\customVideoStorage.ts*, and *web\src\lib\exercises\customVideo.test.ts*
+
+- Accepted only .mp4 and .webm files whose first bytes match the format, up to 100 MB
+- Read the YouTube video id from embed code, watch, youtu.be, shorts and live links, or a bare id, and stored only the id; the player builds its own youtube-nocookie.com address, so pasted code never reaches the page
+- Saved each upload to a temporary file and replaced the exercise's video only once the whole file passed, under `EXERCISE_VIDEOS_DIR` (by default `web\.exercise-videos`), one file per exercise
+
+### *web\src\lib\db.ts*
+
+- Added restoring an archived exercise, and permanently deleting an archived custom exercise only when it was never prescribed and has no sessions, so patient history is kept
+- Removed the rule that limited a therapist to the system exercises and their own custom ones, in the exercise list, in assigning to patients and in saving programs
+- Added the video to the patient's schedule rows once the new columns exist, so the schedule keeps working before the script is run
+- Added the check that lets the add form discard an exercise it made in the last 10 minutes when that exercise's upload fails
+
+### *web\src\app\api\exercises\route.ts*, *web\src\app\api\exercises\[id]\route.ts*, and *web\src\app\api\exercises\[id]\video\route.ts*
+
+- Listed archived exercises with `includeArchived=true`: all of them for the admin, and only a therapist's own for that therapist
+- Added Restore (PATCH with `action: "restore"`) for the admin and the exercise's owner, and permanent delete (`?permanent=true`) for the admin only
+- Refused archiving or deleting a system exercise, and kept a system exercise's name on edit
+- Accepted a YouTube embed when adding a custom exercise, and added uploading the video file (PUT) and streaming it with byte ranges (GET); staff can watch any active exercise's video, the admin also archived ones, and a patient only an exercise prescribed to them
+- Added `?discardNew=true`, which removes only a never-archived exercise added in the last 10 minutes with no history, for the add form's failed uploads
+- Answered "Exercise videos need scripts/exercises_pg.sql to be run on the database first" when the columns are missing
+
+### *web\src\app\(app)\dashboard\_components\ExerciseVideoField.tsx*, *web\src\app\(app)\dashboard\_components\CustomExerciseVideo.tsx*, and *web\src\app\(app)\dashboard\_components\ExerciseReferenceVideo.tsx*
+
+- Added the shared No video, Attach video file and YouTube embed code field and the add step used by the admin and therapist forms; it uploads the file after the exercise is saved and removes the exercise again if the upload fails
+- Added the 16:9 player for an uploaded video or a YouTube video, with a message when the video cannot load
+- Showed a custom exercise's video in the admin's and therapists' View windows
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Loaded archived exercises, renamed the custom exercise's Delete button to Archive, and moved an archived exercise to the Archived column instead of hiding it
+- Added Restore and Permanently delete with confirmations and result messages, and an Archived count tile; the other tiles count active exercises only
+- Added the guide video to Add Exercise, with the file's name and size, a "Video found" check for YouTube code, and errors shown in the form
+- Placed the Archived column full width under the System and Custom columns, with the buttons under each card's text
+
+### *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*
+
+- Showed every custom exercise with "Added by you", "Added by admin · view only" or "Added by another therapist · view only", and Edit and Archive only on the therapist's own
+- Added the Archived column, full width under the other two, with Restore only and the note "Only an admin can permanently delete it", and an Archived count tile
+- Labelled custom exercises "Manual · no Machine Learning"
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*
+
+- Added Search patient, Search program and Search exercise on the right of steps 1, 2 and 3, the same size; the patient search covers only the therapist's assigned patients, and a selected program or exercise stays listed while searching
+- Opened a list of matching programs under Search program; choosing one loads it as the dropdown does
+- Unchecked the exercises a program added when None or another program is chosen, keeping the ones checked before it
+- Labelled custom exercises "Manual · no Machine Learning"
+
+### *web\src\app\(app)\dashboard\therapist\programs\page.tsx* and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Added the guide video to Add New Custom Exercise, the same as the admin's form
+- Showed Edit and Archive only on the therapist's own custom exercises, with the same owner labels, and renamed the list Custom Exercises
+- Renamed the custom exercise's Delete button, its confirmation and its messages to Archive, since it archives the exercise; the confirmation says it can be restored from Manage Exercises and that only an admin can permanently delete it
+- Labelled custom exercises "Manual · no Machine Learning" on the patient's page
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Listed the active custom exercises after the six system exercises for the admin and therapists, and the patient's custom exercises due that day for the patient
+- Replaced Start session for a custom exercise with a guided session: Set done after each set, the rest countdown with Skip rest, End session, and Finish on the last set; nothing is counted or scored
+- Marked the patient's day complete when the last set is finished, through the same route the schedule's Mark Complete used, so the therapist is still notified, then offered Next exercise and Back to schedule, or Try saving again on a failure; the staff session saves nothing
+- Played the custom exercise's video in the Reference Guide and widened the right column for custom exercises to up to 45% of the width, at most 860 px; system exercises keep their layout
+
+### *web\src\app\(app)\dashboard\patient\page.tsx* and *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*
+
+- Replaced Mark done and Mark Complete on custom exercises with Start and Start Session, which open the camera page on that exercise
+- Labelled custom exercises "Manual · no Machine Learning", and added Watch video to a custom exercise's schedule card when it has a video
+
+### *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Described the guide video, the Archived columns, the owner-only edit and archive, and the admin-only permanent delete in the admin and therapist tours, including the Exercise Program page's Summary, Create and Custom exercises steps
+
+### *web\package.json*, *web\package-lock.json*, *web\src\app\page.tsx*, and *web\src\app\(auth)\AuthFrame.tsx*
+
+- Upgraded next and eslint-config-next to 16.4.3, updated nodemailer to 10.3.1 with `npm audit fix`, and approved the install scripts of esbuild and unrs-resolver
+- Changed the clinic name to "ACC+ Bacoor", the service to "Orthopedic Consultation", and the address to "Unit 1, L-1F, Tirona Highway, Habay 1, Bacoor City, Cavite"
+
+### *Changes to earlier updates*
+
+- `dataPreservation.test.ts` allowed no exercise delete; it now allows only the archived, never-prescribed custom exercise delete
+- `patientExerciseWorkflowContracts.test.ts` kept custom exercises off the camera page; it now checks that they open it, run only the guided session and complete through the manual-completion route
+- `PatientProgramView.test.tsx` no longer passes the removed `onStart`
+
+### *Validation*
+
+- Type check and lint pass on the changed files, and the custom video, data preservation, clinical context, workflow, program input and patient dashboard suites pass
+- The custom video suite checks the file types and signatures, the YouTube ids, and the storage's save, replace, size limit and delete on a temporary folder
+- On the local app as admin: the three columns, adding without a video, refusing a non-YouTube embed, archive, restore and permanent delete all worked, and the test exercise was removed
+- An MP4 added on the local app played in the camera page's Reference Guide, the guided session ran through 3 sets with the rest countdown, and the custom column measured 720 px against 340 px for a system exercise at 1600 px wide
+- On the local app, a system exercise's rename was ignored and its archive and permanent delete refused, a just-added exercise was discarded, and an older one's discard refused
+- The patient schedule query ran on the local database before and after the new columns were added
+
+### *Remaining boundaries*
+
+- Before videos are used on a deployment, the database owner runs scripts\exercises_pg.sql
+- Uploaded videos are kept on the server's disk and are not in the nightly backup; on the evaluation server, `EXERCISE_VIDEOS_DIR` can point to `/var/lib/postural/exercise-videos` beside the recordings
+- A custom exercise's guided session is the patient's own report, with no video; the therapist cannot yet verify that it was done correctly
+- Restoring an exercise does not restore the prescriptions its archive ended
+
+---
+
+## 📌 Update-10-24-26 | *RyanCodesling*
+
+- Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because 22 of the 24 repetitions done following the guide video were rated partial
+- Recorded the tuning trace in every patient session by default, so a reported counting problem can be replayed through the counter afterwards; the staff panel can still switch it off
+- Moved the trace's frame readout and its "check the server" warning behind a new staff switch, so patients and evaluators do not see them
+- Showed the arm hold (Arm Abduction at 90°) as one main timer, the slower arm's time that ends the set, with each arm's own seconds beneath it, greyed while that arm is out of position
+- Counted only the active exercises on the admin dashboard, so archived and retired exercises no longer raise its total
+- Limited new or edited prescriptions to whole numbers of 1–4 sets and 1–20 reps per set, and hold exercises to 1–10 sets, each set one hold with the prescription's rest between holds
+- Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed, and counted only finished sets in it
+- Restored the accepted reference videos in Manage Exercises for therapist and admin accounts, with the camera page's crop and playback controls
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\peakRelevantGating.test.ts*
+
+- Set the wall angels' full-range line to 125, the 5th percentile of 24 repetitions that followed the guide video (only 2 of them reached 134.3), as was done for the lateral raise
+- Set the minimum peak to 98.8 so it keeps its place between the start line and the lowered full-range line
+- Changed only the wall angels' measurement version, so their trend history starts again; the hidden elbow check's near-peak gate moved from 120.9 to 112.5 with the full-range line
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\tuningTraceV4.test.ts*, *web\src\lib\pose\traceUploadLoss.test.ts*, and *web\README.md*
+
+- Started "Record tuning trace" ticked on every page load; only patient sessions with a prescription save a trace, as before
+- Added a "Show trace sync readout" switch to the staff panel, off by default; the frame readout, its warning line, and the toast about lost trace batches now appear only with it on
+- Noted in web\README.md that traces are recorded by default
+
+### *web\src\lib\holdDisplay.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Showed the credited hold, the slower arm or the prescribed arm when only one is prescribed, as the main number; the session progress bar already used the same value
+- Kept each arm's seconds beneath it, grey while that arm is out of the target band and highlighted once it reaches the hold
+- Changed the display only: each arm still has its own timer, and when a set ends and what is saved are unchanged; the side-split hold display is unchanged
+
+### *web\src\lib\db.ts*
+
+- Counted the admin dashboard's system and custom exercises from the active catalog, leaving out archived exercises and the two retired ones (ex_002 and ex_003)
+
+### *web\src\lib\prescriptionLimits.ts*, *web\src\app\api\patient-exercises\route.ts*, *web\src\lib\programExerciseInput.ts*, *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, and *web\src\app\(app)\dashboard\therapist\programs\page.tsx*
+
+- Accepted whole numbers of 1–4 sets and 1–20 reps per set on new or edited assignments and program templates, and refused fractions instead of rounding them down; a template's dose can still stay blank until assignment
+- Gave hold exercises 1–10 sets, each set one hold with the prescription's rest between holds, so a hold can be repeated with short rests; custom tasks keep 1–4
+- Showed each exercise's own range on the assign and program forms; holds send a placeholder of 1 rep and keep their own hold duration
+- Left existing prescriptions and session history unchanged, and noted the limits in web\README.md
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Titled the end-of-session summary "Session ended early" when fewer sets were finished than prescribed
+- Showed "Sets completed" from the finished sets only, so a set stopped part-way no longer counts as finished, and sets finished before a reload and Resume still count
+
+### *web\src\app\(app)\dashboard\_components\ExerciseReferenceVideo.tsx*, *web\src\app\(app)\dashboard\therapist\exercises\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Replaced the fixed unavailable-video message in both exercise detail windows with the existing guide player for the six active built-in exercises
+- Reused the accepted clips, full-body crop, detail view, pause, half speed and full screen; custom or unknown exercises keep written guidance, and a clip that fails to load shows a separate message
+
+### *Validation*
+
+- 83 framework-free TypeScript suites pass, including new cases for the trace default, the readout switch, the loss toast, the hold display, and the prescription limits
+- The real assignment and program routes, run against a test database, refuse out-of-range, fractional, and text doses, and any batch containing one, before anything is saved; 10 hold sets are accepted and 11 refused
+- The admin count's query, run on temporary tables, counts the active built-in and custom exercises and leaves out archived and retired ones
+- The end-of-session summary, rendered for seven endings including a stop during the countdown or a rest and a partial final set, always titles and counts the finished sets
+- On the local app, the assign and program forms show "Sets (1–10)" for the hold, and "Sets (1–4)" and "Reps (1–20)" for the other exercises
+- All six guide videos played in each of the local therapist and admin accounts (12 previews); pause, half speed and detail framing worked, the 13 clip checks passed, and all six video files stayed unchanged
+- Type check, lint (no errors), and a production build pass
+- Undoing each part of the trace change makes its own test fail
+- The trace adds about 0.07 to 0.08 ms per camera frame on the laptop, timed on stored traces
+- Replaying the pilot hold sessions through the camera code showed the arms' timers starting up to 0.64 s apart and brief slips out of the band putting them a further second apart; the main number no longer shows that difference
+- The real hold display, rendered for five states, shows the main number, each arm's seconds, and a grey arm while it is out of position
+- The guide video's wall angels count 6 of 6 complete on each side at 125, and 22 of the 24 recorded wall angels would be complete
+
+### *Remaining boundaries*
+
+- After deploying, check that the first session's trace reaches the server; no trace has been saved there yet
+- The wall angels' 125 and 98.8 are provisional engineering lines from one person's repetitions and the guide figure, not clinical norms; the peaks between 98.8 and 101.6 that now count have not been checked on short slides
+- The hold display has not been tried in a live camera session
+- Staff video playback was checked on the local app; a signed-in check on the evaluation server remains
+- The prescription limits are prototype input ranges, not recommended or safe doses; the thesis manuscript's methods still need them
+- The 3D builder's files (assets\blender and tools\blender) and the email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
+
+---
+
+## 📌 Update-10-23-26 | *RyanCodesling*
+
+- Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic exaggerated how far a line tilts from horizontal and shrank how far it tilts from vertical (a real 5 degrees read about 8.8 and 2.8); against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high
+- Converted every angle threshold to the corrected measurement so that counting and cues behave as before, except that a lateral raise peaking between 45 and about 60 in the corrected measurement now counts as partial instead of being dropped
+- Counted neck side bends from the head's own ear line, taken during the 3-second baseline, instead of the camera's tilt
+- Kept counting when the camera briefly stalls, for under a second, just as a limb leaves its resting position; this had lost a repetition in three recordings
+- Re-learned the trend model in the corrected measurement, now including the neck sessions
+- Showed angle trends recorded before the correction as measured values only, with a note, and started a new trend history at the change
+- Refused to start a session from a page measured under an older version, asking the patient to reload, and stopped offering saved progress from an older version
+- Upgraded Next.js from 16.4.0 to 16.4.2, which fixes two critical remote code execution advisories and one denial-of-service advisory
+- Built this update on top of Enah's 10-19 update
+
+### *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\shoulderRestReference.ts*, *web\src\lib\pose\metricVersion.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Rescaled the landmark coordinates by each frame's width-to-height ratio before any angle is taken; every metric function now requires that ratio, so no caller can leave it out
+- Passed each frame's own ratio from the camera loop to every metric, the baseline samples, the resting shoulder line, and the tuning trace
+- Changed the measurement version to pose_metrics_v3_aspect_corrected, so each exercise's history starts again at the change; no saved data is rewritten
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\compensationWarningState.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\lib\pose\holdQuality.ts*
+
+- Converted each angle threshold from its old value by the shape of the line it measures, on the 16:9 frames it was tuned on: the lateral raise's start, return, and full-range lines of 20, 15, and 85 became 32.9, 25.5, and 87.2; the side bend's 5, 2, 15, and 17 became 8.8, 3.6, 25.5, and 28.5; the neck's 12, 6, 18, and 30 became 6.8, 3.4, 10.4, and 18; the wall angels' 85, 70, 110, and 150 became 87.2, 78.4, 101.6, and 134.3; the arm hold's band of 10 became 5.7; and the cue and warning lines followed
+- Set the lateral raise's minimum peak to 45 in the corrected measurement, about 51 degrees on a body; the old 45 sat at about 65
+- Refitted the four shoulder-linked expected lines on the corrected pilot data, and converted the elbow checks at the arm position where each one runs
+- Corrected two registry comments that called the thresholds clinical norms; they are engineering settings
+- Recorded the coaching version coaching_v13_aspect_corrected, and marked hold records as measured in the corrected unit
+
+### *web\src\lib\pose\neckCalibrationReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\exercises\registry.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Took the median ear line over each 3-second baseline, after the 5-second countdown, and measured the live neck side bends from it instead of the camera tilt, so a head that rests tilted in the picture no longer reaches one side's line early and the other's late
+- Kept the form check's measures on the camera tilt, and the thresholds, the per-side counting, and the charts' rest rule as before
+- Changed only the neck exercise's measurement version
+
+### *web\src\lib\pose\repCounter.ts*, *web\src\lib\pose\bidirectionalRepCounter.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Kept the counter's evidence that a limb was resting across a camera stall of up to 1 second; frames the camera processes without a reading still clear it after 300 ms, as before, so an arm swept across the body is still not counted
+- Marked the counters on every processed frame of a set that gives them no reading
+
+### *web\src\app\api\sessions\route.ts*, *web\src\lib\exercises\versionPayload.ts*, *web\src\lib\exercises\versioning.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Sent the page's measurement version and the exercise's own version with Start; when either differs from the server's, the server answers "The app has been updated. Reload this page, then start again.", so a tab left open across a deploy cannot save a session in the old unit
+- Offered saved progress only to a page measuring under the same versions
+
+### *web\src\lib\analytics\trendSeries.ts*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, *web\src\lib\analytics\trendModelConfig.json*, and *web\src\lib\analytics\trendModelFixtures.json*
+
+- Showed the angle measures of a history recorded before the correction as measured values only, without the trend model's band or label, with a note on the chart and in the progress report
+- Replaced the trend model's settings with the re-learned ones (trend-model-a318495d08c5)
+
+### *ml\trend\EVALUATION_PROTOCOL.md*, *ml\trend\learn.py*, *ml\trend\evaluate.py*, *ml\trend\extra.py*, and *web\scripts\export-trend-measures.ts*
+
+- Wrote amendment v4 before the run: the corrected unit, sessions measured before the change converted, and neck sessions 225 and 227 to 229 in and 226 out
+- The model passed again with the same settings and threshold, confirmed on the held-back seeds
+
+### *web\scripts\replay-coaching.ts* and *web\scripts\lib\cameraReplayHarness.ts*
+
+- Recomputed each recording's baseline in the current measurement from its samples, including the neck's ear line
+- Set a new replay baseline, with a manifest that expects the 9 raises and 9 presses the labels record
+
+### *web\package.json* and *web\package-lock.json*
+
+- Upgraded next and eslint-config-next from 16.4.0 to 16.4.2
+
+### *Changes to Enah's Update-10-19-26*
+
+- Built this update on her commit (508b684); her camera page change, the folding Form check card, and ours touch different parts of the file
+- Gave the new note on the My Progress trend card her larger text size
+
+### *Validation*
+
+- 81 framework-free TypeScript suites pass, including new ones for the corrected measurement, the neck's ear line, the camera stall, and the version check, and Enah's notification suites
+- Type check, lint, and a production build pass on Next.js 16.4.2
+- The database check passes against actual PostgreSQL using connection-private temporary tables
+- Replaying the saved pilot recordings counts the same repetitions as before the correction in every recording; with the stall fix, the arm-raise and press recordings that each lost one repetition to a camera stall now count 9 of 9, as their labels do
+- Against motion capture (REHAB24-6: 8 people, 71 raises), the lateral raise's peak reads +5.6 ± 6.7 degrees, from +18.5 ± 9.5 before the correction
+- The re-learned trend model's TypeScript and Python versions agree on all 26 fixtures
+- Live checks on the laptop: a neck session counted from the ear line (session 230), and two lateral raise sessions (233 and 234) counted raises to about 60 degrees as partial and raises to shoulder height as complete
+
+### *Remaining boundaries*
+
+- Sessions recorded before this update keep their old measurement and their own trend history; their angle charts show measured values without the trend model
+- Deploy while no one is in a session; a page left open from before the update asks for a reload
+- The database owner runs Enah's scripts\notification_email_digests_pg.sql on the server, so the new reminder emails can be recorded
+- The neck exercise's description waits for the counting test on other people's recordings
+- The thesis manuscript's measurement text and threshold table still describe the old unit
+- The 3D builder's files (assets\blender and tools\blender) and the 10-21 email setup notes (deploy\server, web\docs, AUTHENTICATION_SETUP.md, and two scripts) are not in this update
+
+---
+
+## 📌 Update-10-19-26 | *Enah*
+
+- Named every exercise in the patient's assigned, edited, and removed exercise notifications, one notification for each change, and showed each edited field's old and new value
+- Added the patient's in-app reminder on the day exercises are due, and reminder emails the evening before and that morning, one email a day listing every exercise due
+- Notified the patient in the app when they pause an exercise for pain, and the patient and therapist when the exercise is resumed after that pause
+- Named the therapist in the patient's assigned, changed, and unassigned therapist notifications, and told the therapist a patient leaves which therapist the patient was moved to
+- Replaced the therapist's one missed notification per exercise with one per missed day, and added an email listing the patients who did only part of a day's exercises, with where each unfinished exercise stopped
+- Moved the daily summary emails from 7 AM to just after 12 AM
+- Added pop-up notifications that disappear after 3 seconds, All, Unread, and Read filters, and pages of 10 to the bell, and made it check every 30 seconds instead of every 3
+- Reloaded the patient dashboard when a new notification arrives or the patient returns to the tab, so a removed exercise no longer needs a page reload
+- Let the patient fold the camera page's Form check card to one line
+- Enlarged the text on the patient profile's PT Program, Reports, and Sessions tabs and on the patient's My Progress trends
+
+### *web\src\lib\notificationText.ts*, *web\src\app\api\patient-exercises\route.ts*, and *web\src\app\api\users\[id]\route.ts*
+
+- Added the notification wording: names joined as "A, B, and C", and each edited field as "Sets 3 → 4"
+- Sent the patient one Exercises Assigned notification naming every new exercise and one Exercises Edited notification listing each changed exercise with its changed sets, repetitions, hold, rest, order, side, resistance, repeat, or schedule; a save that changes nothing sends neither
+- Sent the patient an Exercises Removed notification naming the removed exercises
+- Told the patient "Ana Reyes is now your assigned therapist, replacing Mark Cruz" when the therapist changes, and "Mark Cruz is no longer your assigned therapist" when unassigned
+- Told the therapist a patient leaves "Patient Maria Santos was moved to therapist Ana Reyes", or that the patient is no longer assigned to them
+
+### *web\src\lib\db.ts*
+
+- Notified the patient in the app when they pause an exercise for pain, with where it stopped, as the therapist already was
+- Treated a start whose exercise's previous attempt was stopped for pain as a resume, and told the patient and the therapist once, naming the day of the pause
+- Gave the patient one Exercises Due Today notification a day naming every exercise still to do that day
+- Gave the therapist one Missed Exercises notification for each patient's missed day, naming every exercise missed; a day already reported, by this notification or an older per-exercise one, is not reported again
+- Moved the summary claim and retry into a shared helper used by the daily summaries and the reminders, with the same rules as before: each email is sent once, and a claim whose email did not go out is released for the next hourly check
+- Sent the daily summaries for the day that just ended at the first hourly check after 12 AM
+- Added the therapist's partly done day: patients who completed some but not all of a day's exercises, each exercise marked Completed, Not started, Started, not finished, or Paused because of pain, with the sets and repetitions reached
+- Added the patient's reminders: from 6 PM the next day's exercises and from 7 AM that day's, one email per patient per day; a day with nothing due claims nothing, so exercises assigned later that day are still reminded
+- Added the bell's page query: 10 at a time newest first, filtered by read state, with the totals and the newest unread ones for the pop-ups; login and logout events stay in the administrator's activity log
+
+### *web\src\lib\email.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Added the Exercises Due Tomorrow and Exercises Due Today email, a table of each exercise with its sets and target
+- Added the Partially Completed Exercises email, one table per patient with "1 of 3 completed" and each exercise's status in green, red, or amber
+- Ran the reminders in the same hourly check as the daily summaries
+- Allowed the summary table's new kinds, partial, due_tomorrow, and due_today; the script can be rerun on an existing table
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*, *web\src\app\api\notifications\route.ts*, and *web\src\app\(app)\dashboard\_components\tours.ts*
+
+- Showed each new notification as a small card in the top right, with its title and two lines of its message, gone after 3 seconds, at most three at once; clicking it opens the notification
+- Kept notifications that were there before the page opened from popping up
+- Added All, Unread, and Read tabs, with the unread count on Unread, and pages of 10 with Previous and Next and "11–20 of 34"
+- Checked for new notifications every 30 seconds instead of every 3
+- Showed "99+" on the bell past 99 unread, and kept the list within a phone's width
+- Announced new notifications to the page so it can reload what they change
+- Described the pop-ups, filters, and pages in the bell's tour step
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Reloaded the patient's exercises, schedule, and sessions when the bell finds a new notification, such as an assigned, edited, or removed exercise, and when the patient returns to the tab
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Made the Form check card's header a button that folds the card to one line showing its status, still amber on a warning, and opens it again
+- Kept the choice in the browser, so the card stays folded on that device; the card is the same for patients, therapists, and administrators
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, *web\src\app\(app)\dashboard\_components\SessionBreakdown.tsx*, *web\src\app\(app)\dashboard\_components\TrendChart.tsx*, and *web\src\app\(app)\dashboard\_components\PatientReports.tsx*
+
+- Raised every text size one step, for example 12px to 14px and 14px to 16px, on the PT Program, Reports, and Sessions tabs and in the trend cards, which My Progress shares, and the chart labels by 2
+- Changed nothing else: the page header, the tab bar, the Overview tab, the calendar, and the session video are as before
+
+### *Changes to RyanCodesling's Update-10-19-26*
+
+- The daily summaries now go out after 12 AM instead of 7 AM, still for the whole previous day
+- The summary claim and retry in `db.ts` moved into a shared helper with the same behaviour, and the summaries' tests in `notificationEmails.test.ts` now check midnight and the partly done day
+- The patient's pain pause test expects the patient's new in-app notification beside the therapist's
+
+### *Validation*
+
+- Type check and lint pass on the changed files
+- The notification email suite passes 12 of 12, including new cases for the midnight summary, the partly done day, and the reminders, and a new suite checks the notification wording
+- The demo clock, coaching contract, clinical field, clinical context, schedule date, patient dashboard, workflow, trend, Reports, and twelve camera page suites pass; a full run of every suite and a production build were not done
+- No email was sent: the app was started only with the mail settings blanked, and its log showed the emails skipped
+- The bell, its pop-ups, filters, and pages, the folded Form check card, the larger text, and the dashboard reload were not checked on screen
+
+### *Remaining boundaries*
+
+- The new emails stay off on the evaluation server until its mail settings are added
+- Before the reminders and the partly done day are used, the database owner runs scripts\notification_email_digests_pg.sql again, which also creates the table if it is missing
+- A pop-up, and the patient dashboard's reload, can take up to 30 seconds after the therapist's change
+- The patient's due-day reminder and the therapist's missed-day notification are created when the patient or therapist opens the app, as the missed notifications were
+- A paused-for-pain exercise counts as resumed when its next attempt starts, since a pain stop cannot be continued
+- The partly done email says "paused in set" for an exercise started but not finished, the wording of the pain pause it reuses
+
+---
+
+## 📌 Update-10-19-26 | *RyanCodesling*
+
+- Measured each neck side bend's peak from the head's resting position, which the camera now records between sets, so the charts no longer shift with how the camera was set up
+- Added a 5-second positioning countdown before every 3-second baseline, so the baseline is not taken while the patient is still getting into place
+- Judged "Level your shoulders" against the patient's own resting shoulder line from the baseline instead of the camera tilt
+- Replaced the patient dashboard's 0-180 range-of-motion gauge with a Last Session card that shows counts only, and made smaller interface fixes
+- Showed My Progress one trend card per row again, in a centred column as wide as the therapist page
+- Showed each assigned exercise on View Profile as Upcoming, Active, Ended, or Ended early, with a line counting the days done, missed, stopped for pain, and to go
+- Fixed the two problems left in the 10-15 update's emails: ending a session paused for pain no longer waits for its email, and the daily summary no longer misses exercises completed after 8 PM
+- Fixed four problems a review found after this update was deployed: the Last Session card credited the other side's repetitions to a one-sided prescription, a day stopped for pain showed as missed, emails described hold exercises by repetitions, and a daily summary whose query failed was never retried
+- Added the neck side bends animation to the Reference Guide and replaced the overhead press animation with the deep-start revision (low priority)
+
+### *web\src\lib\analytics\trendRules.ts*, *web\src\lib\analytics\trendBreakdown.ts*, *web\src\lib\analytics\trendSeries.ts*, *web\src\lib\sessionReadModels.ts*, and *web\src\lib\db.ts*
+
+- Saved the still head's reading in the rests between sets of a neck session, for each baseline, in the session's capture summary, and kept it through Stop and Resume
+- Measured each side's peak from that reading instead of the baseline's camera tilt in the trend charts, the session breakdown, the Reports chart, and the PDF reports, and judged completion on that peak against the repetition's own target
+- Left a repetition without a resting reading out of the peak measures, and drew a neck session without any reading as a hollow point at its saved value, with the reason
+- Applied the same rule in the session list query, which now also returns how many repetitions on each side have a peak, and in the trend-model export
+- Left live counting, cues, thresholds, and the stored peaks unchanged; the rule changes only what the charts read
+
+### *web\src\lib\pose\neutralCalibration.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Started every baseline (Start, Resume, Recalibrate, a camera switch, and the restart of an unfinished baseline) with 5 seconds of "Get into position" in which nothing is measured, followed by the 3-second baseline as before
+- Showed the 5 seconds in the start countdown's overlay and the 3 seconds in the baseline card, so the camera view is no longer dimmed while the baseline is taken; a recalibration in the middle of a session shows both in the card
+- Updated the camera page's help text
+
+### *web\src\lib\pose\shoulderRestReference.ts*, *web\src\lib\pose\poseMetrics.ts*, *web\src\lib\pose\coachingConfig.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Took the resting shoulder line from the baseline and judged the "Level your shoulders" cue and its arrow against it, through their own smoothing
+- Kept the form score, the stored features, the cue's switch-on level of 7, and the measurement versions on the camera tilt as before
+- Recorded the new coaching version and the shoulder reference in each session's coaching configuration
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\lib\exercises\scheduleSessionSummary.ts*, and *web\src\lib\exercises\prescriptionStatus.ts*
+
+- Replaced the 0-180 gauge with a Last Session card: the newest session with a result, its exercise, side, day, and sets, and for each prescribed side the repetitions counted and those that reached the full-range line, or the time held against the target
+- Removed the second completion ring and added an Open My Progress button to the card
+- Headed a finished schedule "Schedule ended" instead of a week number
+- Kept the dashboard within a phone's width: the day rows truncate instead of widening the page
+- Put the My Progress trend cards back one to a row, in a centred column as wide as the therapist page
+- Showed View Profile's exercise label as Upcoming, Active, Ended, or Ended early, the therapist's program words, with a line under it counting the days done, missed, stopped for pain, and to go
+- Kept a one-sided prescription's own count in the Last Session card, even 0, when only the other side moved; the Total column is only for older rows without side counts
+- Showed a past day stopped for pain as "Stopped for pain" and a partly done day as "Partly done", following the calendar's day rules, instead of "Missed"
+- Showed each exercise's own state in its label: Stopped for pain, Missed, Make-up open, Today, or Upcoming
+
+### *web\src\app\(app)\dashboard\_components\PatientReports.tsx* and *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
+
+- Titled the Reports chart with its measure, "Peak angle (camera estimate)", and named each exercise setup's side, resistance, dates, and session count in its list, so two setups of one exercise read differently
+- Corrected the patient profile's trend model note: Rising or Falling shows only beyond normal variation, and otherwise No clear change
+- Hid the patient profile tab bar's stray scrollbar
+
+### *web\src\lib\db.ts*, *web\src\lib\email.ts*, *web\src\lib\exercises\prescriptionEmail.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Started the pain pause emails after the in-app notifications without waiting for them, so ending a paused session returns at once
+- Gave each email a time limit: 10 seconds to connect, 10 seconds for the mail server's greeting, and 20 seconds of silence
+- Sent the daily summaries at 7 AM for the whole previous day, so exercises completed after 8 PM are included
+- Changed only the comments in the summary table's script; the table is the same
+- Gave a hold exercise's target as its hold time, as the app shows it, in the assigned, changed, and removed exercise emails, the daily summaries, and the pain pause email, and sent a change email when only the hold time changes
+- Described a hold stopped for pain by the sets held instead of repetitions
+- Released a daily summary's claim whenever the summary was not sent, including when a query fails before sending, so the next hourly check retries it
+
+### *web\src\lib\exercises\demoClips.ts* (low priority)
+
+- Added the neck side bends animation to the Reference Guide ahead of the multi-person neck counting test; it comes out if that test returns the exercise to the assisted stretch
+- Replaced the guide's overhead press with the deep-start revision
+- Kept the animation files out of the repository; they are copied to the server separately
+
+### *Changes to Enah's Update-10-15-26*
+
+- In `tours.ts`, replaced the gauge step with a Last Session step, said that Rising or Falling appears only beyond normal variation and otherwise No clear change, said that the Reports charts are not printed, called the Reports measure peak angle instead of range of motion, and described the new View Profile label and day counts
+- On the landing page, said the app sends the therapist "a record of every session" instead of "objective data", and used "uneven shoulders" as the cue example instead of "a shrugged shoulder", which the shoulder measure cannot tell apart from a lowered head
+- The email fixes above change the update's `email.ts`, `db.ts`, and `instrumentation.ts`
+- The review fixes above change the update's patient dashboard day list (`PatientProgramView.tsx`) and its `prescriptionEmail.ts`
+
+### *Validation*
+
+- 78 framework-free TypeScript suites pass, including new ones for the neck rest reference, the shoulder reference, the Last Session card, and the emails
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables, including the neck rule in the session list query against the breakdown
+- Replaying the saved pilot traces through the camera loop gives the same results as before
+- The four cases from the review of the deployed update, run again on the fixed source, now behave as fixed, and each fix has its own tests
+- A live neck session on the new version counted both sets to their targets, took its baseline after the 5-second countdown, and saved the resting reading, and the app's session list read its peaks through the new rule
+- The Last Session card, the Reports list, the landing page, My Progress, and View Profile at phone width were checked on screen; the countdown's new display and the day list's new labels were not
+
+### *Remaining boundaries*
+
+- The emails stay off on the evaluation server until its mail settings are added; until then the tours and the landing page describe emails it does not send
+- Before the daily summaries are used, the database owner runs scripts\notification_email_digests_pg.sql
+- A neck session needs at least two sets for a resting reading; neck sessions recorded before this update have none, so their peaks are drawn hollow
+- "Level your shoulders" still shows on most of one tester's right bends; whether that is a shoulder hike or the pose model following the head needs other people's recordings and the physical therapist's review
+- The 3D builder's updates and notes for the two new animations (assets\blender and tools\blender) are not in this update
+
+---
+
+## 📌 Update-10-15-26 | *Enah*
+
+- Added a How to Use button to the top bar of every patient, therapist, and administrator page, which opens a step-by-step tour of that page, in the style of the camera page's tour
+- Wrote a tour for each patient page, My Progress, Session, and View Profile as well as the dashboard, and for each therapist page, the dashboard, View Profile, Manage Patients, Manage Exercises, Assign Exercise, Exercise Program, and a patient's profile, and for each administrator tab, the dashboard, Manage Users, Manage Exercises, Assign Patients, and the demo clock
+- Removed the Open Dashboard button from the exercise, assignment, and pain emails
+- Removed the page search box from the top bar of the patient, therapist, and administrator screens
+- Asked for confirmation before logging out: Log Out now opens a pop-up with Cancel and Log Out on the patient, therapist, and administrator screens
+
+### *web\src\app\(app)\dashboard\_components\SpotlightTour.tsx*, *web\src\app\(app)\dashboard\_components\tours.ts*, and *web\src\app\(app)\dashboard\_components\AppShell.tsx*
+
+- Added a reusable tour that dims the page, outlines one element at a time with a pulsing ring, and shows a card beside it with an arrow, the step number, step dots, and Back, Next, and Got it buttons; the arrow keys move between steps and Esc closes it
+- Placed the card on the side of the outlined element with room for it, centred it when an element is not on screen, and scrolled the element into view before outlining it
+- Skipped the steps of an optional element that is not on the page, such as an empty list
+- Wrote the steps of each page in `tours.ts`: what the page shows, what each part does, and how to use it, for example how a patient reads My Progress
+- Wrote the administrator's tours for the dashboard, Manage Users, Manage Exercises, Assign Patients, and the demo clock, covering the system numbers, adding a user and the welcome email, editing, archiving, restoring, and the permanent deletion rules, the exercise lists, and assigning and unassigning patients
+- Showed the How to Use button in the top bar only on pages that have a tour, and gave the sidebar items, the bell, and Log Out ids so a tour can point at them
+- Left the camera page and its own tour unchanged
+- Removed the page search box from the top bar, leaving the notification bell and the user's initials, name, and role
+- Opened a confirmation pop-up when Log Out is pressed: a red icon, "Log out?", "Are you sure you want to log out of your account?", and Cancel and Log Out buttons, with Cancel focused so Enter does not log out, Esc or a click outside cancelling, and the Log Out button disabled while it works so it cannot be pressed twice
+- Kept Log Out reachable only through that one button, so every role's logout passes through the confirmation, including from the phone menu
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, and the dashboard pages
+
+- Gave the administrator page's tiles, activity feed, recent sessions, quick actions, add user and add exercise buttons, user lists, exercise search and lists, assignment panels, and demo clock ids, and passed each tab's tour to the shared frame
+- Let a card take an id, and gave the summary tiles, cards, search boxes, and tables that the tours point at ids on the patient dashboard, My Progress, Session, and profile pages and on the therapist dashboard, profile, patients, exercises, assign exercise, exercise program, and patient profile pages
+
+### *web\src\lib\email.ts*
+
+- Removed the Open Dashboard button and its helper from the daily completed and missed, pain pause, therapist and patient assignment, and exercise assigned, changed, and removed emails
+- Kept the Log In Now buttons in the welcome, new email address, and account restored emails
+
+### *Validation*
+
+- Type check passes and 74 of 74 framework-free TypeScript suites pass in a full run
+- The patient dashboard tour was opened and its first three steps stepped through on a temporary sample-data page that was removed: the outlined element, the card beside it, and the Next button worked
+- The other tours and the pages' ids, including the administrator's, were not tried on screen, because the demo accounts do not exist in the local database and no signed-in session was available
+- No email was sent after removing the button
+- The log out pop-up was opened on a temporary preview page that was removed: Cancel closed it without logging out, and Log Out then ran the logout; it was not tried on the signed-in pages
+
+### *Remaining boundaries*
+
+- The tours' wording was written from the pages' code, so it should be read once against how the clinic works
+- A tour opens only when the button is pressed, not automatically on a first visit
+- On a phone the sidebar is hidden, so a step that points at it shows its card in the centre
+
+---
+
+## 📌 Update-10-15-26 | *RyanCodesling*
+
+- Merged the 10-14 frame-size fix into Enah's 10-15 update, so this branch keeps every change the evaluation server runs
+- Kept the update's package upgrade, which clears every security advisory npm reports for the app's packages, including critical ones for the previous Next.js
+- Turned off the six React Compiler lint rules that the new lint package adds; the app does not use the React Compiler, and they failed on code that already runs
+- Made the new Reports tab's range-of-motion chart and the patient dashboard's range-of-motion gauge follow the same tracking rules as the trend charts, and kept the shoulder press's decimals
+
+### *web\package.json* and *web\package-lock.json*
+
+- Kept the update's versions: Next.js 16.4.0, nodemailer 10.1.1, esbuild 0.28.2, and eslint-config-next 16.4.0; npm's security audit flagged 7 of the app's packages in the previous lock, Next.js 16.2.6 among them with critical advisories, and flags none in this one
+- The trend worker built by the new esbuild is byte-identical to the previous build
+
+### *web\eslint.config.mjs*
+
+- Turned off react-hooks/refs, purity, set-state-in-effect, immutability, preserve-manual-memoization, and static-components, which the new lint package adds for the React Compiler; they raised 72 errors on code that already runs, 61 of them in the camera page, which the update did not change
+- Kept the hook-order and dependency checks on
+
+### *web\src\app\(app)\dashboard\_components\PatientReports.tsx*
+
+- Plotted each side's peak under the trend data rules, as the trend charts do: poorly tracked repetitions do not count, and a poorly tracked session shows as a dashed hollow point off the line, with the same note as the trend cards
+- Kept two decimals for the shoulder press's normalized readings, which the chart had rounded to 0 or 1
+- Left the hold times, repetition bars, adherence calendar, and session totals as recorded
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*
+
+- Compared the gauge's latest, best, and first values within one exercise setup only (exercise, side, resistance, and configuration), under the same tracking rules; a session counts when every prescribed side does
+
+### *Validation*
+
+- 74 framework-free TypeScript suites pass, including a new one for the Reports chart and the gauge
+- Type check, lint, and a production build pass on Next.js 16.4.0
+- The database check passes against actual PostgreSQL using connection-private temporary tables; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop gives the same results as before the merge
+- The landing and login pages render on the new versions
+
+### *Remaining boundaries*
+
+- The update's emails stay off on the evaluation server, which has no mail settings; two problems remain in them: ending a session paused for pain waits for its email, and the daily summary can miss exercises completed after 8 PM
+- Before the daily summaries are used, the database owner runs scripts\notification_email_digests_pg.sql
+- The landing and sign-in pages show the clinic's contact details, describe the camera as showing a stick-figure skeleton rather than a picture although sessions can save video, and offer daily emails the server cannot send yet; these are for Enah to settle before the update is deployed
+- The Reports chart and the gauge were checked by rendering them with test data, not in a signed-in browser, and no camera session has been recorded on the new versions yet
+
+---
+
+## 📌 Update-10-15-26 | *Enah*
+
+- Sent each therapist and patient one email a day for the exercises completed and one for the exercises missed, listing each exercise's sets and reps, and left manual-monitoring exercises out
+- Sent an email to the patient and the therapist when a patient pauses an exercise because of pain, with the prescribed sets and reps and how far the patient got
+- Sent separate patient and therapist emails when a therapist is assigned to a patient, and when exercises are assigned, changed, or removed, each exercise listed with its sets, reps, rest, order, side, resistance, repeat, and dates
+- Removed the role from the archived and restored account emails sent to the user
+- Gave the patient, therapist, and administrator screens a new shared frame: a light icon sidebar with the ACC Bacoor logo and Log Out at the bottom, and a top bar with the notification bell and the user's name
+- Rebuilt the patient dashboard as a day-by-day exercise program with a progress ring, a range-of-motion gauge, reminders, and a compact adherence calendar, and gave the patient, therapist, and administrator dashboards a row of summary tiles and cards that share one screen
+- Split the therapist's patient profile into Overview, PT Program, Reports, and Sessions tabs, with range-of-motion, repetition, and adherence charts on a date range
+- Restyled the pages opened from the side menu to match: the therapist's profile, patients, exercises, assign exercise, and exercise program pages, the patient's progress, session, and profile pages, and the administrator's users, exercises, and assign patients tabs, with the full page width used
+- Restyled the landing, login, forgot password, change password, and first-time password pages as a green brand panel beside a clean form, with the clinic logo in place
+
+### *web\src\lib\email.ts*
+
+- Added the daily completed and missed exercise email, in a therapist version grouped by patient and a patient version listing only their own exercises
+- Added the pain pause email, in a therapist and a patient version, reading "paused" instead of "stopped" and stating the prescribed sets and reps and the set and repetition where the patient paused
+- Added the Assigned Therapist email for the patient and the Assigned Patient email for the therapist, with no exercise list
+- Added the Assigned Exercises, Assigned Exercises Updated, and Exercises Removed emails, each in a patient and a therapist version; every exercise shows its sets, reps, rest, order, side, resistance, repeat, and start and end dates, and a changed exercise shows each changed field's previous value
+- Removed the role from the archived and restored emails sent to the user; the administrator copies still name it
+- Left the permanent deletion emails unchanged because the account deletion function is still in the system
+
+### *web\src\lib\db.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Added the daily summary send, which emails each therapist and patient at most once a day per kind after 8 PM Manila time, using the demo clock where it is enabled; a failed send is retried the next hour
+- Counted an exercise as missed on the day its make-up window ended, and as completed on the day it was completed
+- Started an hourly check when the server starts, so the daily summary needs the server running and, on Azure, the web app's Always On setting
+- Added `notification_email_digests`, which records each sent summary so it is never sent twice; the table's `therapist_id` column holds the recipient, who may be a therapist or a patient
+- Changed the pain notification on the dashboard to read "paused" and to include the same progress
+- Took the progress from the saved repetition counts of the session
+- Did not email the manual exercise completion, which stays on the dashboard only
+
+### *web\src\app\api\patient-exercises\route.ts*, *web\src\app\api\users\[id]\route.ts*, and *web\src\lib\exercises\prescriptionEmail.ts*
+
+- Compared the patient's exercises before and after each assignment save, emailing the new ones as assigned and the ones with a different sets, reps, rest, order, side, resistance, repeat, or date as changed; an unchanged exercise sends nothing
+- Emailed the patient and the therapist the exercises that a removal actually took off the patient's program
+- Emailed the patient and the therapist when an administrator assigns a different therapist; the previous therapist receives nothing
+
+### *web\src\app\(app)\dashboard\_components\AppShell.tsx*, *web\src\app\(app)\dashboard\therapist\layout.tsx*, *web\src\app\(app)\dashboard\patient\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Added one shared frame for the three signed-in roles: a pale green sidebar with the ACC Bacoor logo and name, the active page highlighted in white, and Log Out pinned at the bottom, plus a white top bar with the notification bell and the user's initials, name, and role
+- Replaced the three separate dark green sidebars with the frame, keeping each page's own tabs and links, and turned the sidebar into a slide-out menu on narrow screens
+- Placed the page content on a soft green background with white shadowed cards, and kept the print layout free of the sidebar and top bar
+
+### *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx* and *web\src\app\(app)\dashboard\patient\ConsistencyCalendar.tsx*
+
+- Rebuilt the patient dashboard as "{Name}'s Exercise Program": the week of the program, a percent-complete ring, and one card per scheduled day marked completed, today, make-up open, missed, or upcoming
+- Opened a day to show each exercise's sets and repetitions, with Start for camera exercises and Mark done for manual ones, as before; showed three days back and seven ahead, with a button for the full schedule
+- Added a range-of-motion gauge from the latest, first, and best session of the most recent degree-measured exercise, labelled as camera estimates, and a reminders card from the patient's own schedule
+- Let the adherence calendar drop its frame and heading so it can sit inside another card, and added a compact version with a one-line streak, active days, and sessions count, smaller cells, and a one-line legend
+- Added a row of four tiles above the program: percent completed, today's done and total, the next scheduled day, and missed exercises
+- Fitted the dashboard to one screen on large displays: the program list scrolls inside its card, with the calendar above and the range-of-motion gauge and reminders side by side
+- Drew the gauge's arcs as a half circle: the arc was drawn the long way round for values above 90
+
+### *web\src\app\(app)\dashboard\_components\DashboardKit.tsx*, *web\src\app\(app)\dashboard\therapist\page.tsx*, and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Added shared dashboard parts: a pastel summary tile with a round icon, a white card with a title row whose body can scroll, a short page heading, and the one-screen layout that stacks and scrolls normally on small screens
+- Rebuilt the therapist dashboard as five tiles, the patient roster beside a Needs attention list that shows why each patient is flagged, and quick links to assign exercises, manage exercises, and programs
+- Rebuilt the administrator dashboard as six tiles, the activity feed beside the recent sessions, and the three quick actions as one row; the activity feed and sessions scroll inside their cards
+- Let the page headings, tables, and cards of the old dashboards share the new look: white cards with a soft shadow and smaller rounded corners, dark gray titles, and light table headers
+
+### *web\src\app\(app)\dashboard\_components\ProfileLayout.tsx*, *web\src\app\(app)\dashboard\therapist\profile\page.tsx*, and *web\src\app\(app)\dashboard\patient\page.tsx*
+
+- Added one profile layout for the therapist and the patient: a green identity card with the initials, name, email, role, and Change Password, then Personal Information and Account Information panels
+- Listed the therapist's assigned patients under the panels, with each patient's name, email, and a link to their profile, and listed the patient's assigned exercises under theirs
+- Restyled the Change Password popup as a white card with light fields and a green step indicator, keeping the verification, code, and reset steps
+
+### *web\src\app\(app)\dashboard\therapist\patients\page.tsx*, *exercises\page.tsx*, *assign\page.tsx*, and *programs\page.tsx*
+
+- Rebuilt Manage Patients with four tiles and a searchable table of patients, their assigned exercises, and a View button
+- Rebuilt Manage Exercises with three tiles, a search box, and the system and custom exercises in two cards side by side
+- Let Assign Exercise use the full page width and show the selected patients panel only once a patient is chosen
+- Rebuilt Exercise Program with three tiles and the programs and custom exercises in two scrolling cards side by side, with the create and edit forms opening above them
+
+### *web\src\app\(app)\dashboard\patient\page.tsx* and *web\src\app\(app)\dashboard\admin\page.tsx*
+
+- Rebuilt the patient's My Progress with four tiles and the trend cards two to a row on wide screens, and Session with three tiles, today's exercises on the left, and the next, later, and past dates on the right
+- Rebuilt the administrator's Manage Users with four tiles and the active users above the archived users, Manage Exercises with three tiles and the system and custom exercises side by side, and Assign Patients with four tiles, the unassigned list beside the therapist picker, and the assigned table and history below
+- Kept the add and edit user and exercise forms as long forms inside the new cards
+
+### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\(app)\dashboard\_components\PatientReports.tsx*, and *web\src\app\api\patient-exercises\route.ts*
+
+- Split the long patient profile into Overview, PT Program, Reports, and Sessions tabs, with every section kept and all tabs shown when printing
+- Added a Reports tab with an exercise selector, Prior Week, Prior Month, and All buttons, a range-of-motion line chart for the left and right sides, a repetitions bar chart, the adherence calendar, and session totals for the range
+- Made the therapist's request for a patient's exercises also return the scheduled days, which the adherence calendar needs
+- Pointed the "View Patient Progress" button at the Reports tab
+
+### *web\src\app\(auth)\AuthFrame.tsx*, *web\src\app\page.tsx*, and the login, forgot password, change password, and first-time password pages
+
+- Added one shared layout for the signed-out pages: a green panel with the clinic photo under a green wash, the clinic's name, services, phone, email, and address as text, and a clean form panel beside it
+- Replaced the letter P with the ACC Bacoor logo in the sidebar and on the signed-out pages, at the same size
+- Restyled the forms with light fields, green focus rings, green buttons, and larger headings, keeping the sign-in, OTP, reset, and password change behaviour
+- Rebuilt the landing page as a showcase: a hero with a Log In button, four things the system does in every session, how it serves therapists and patients, how it works, and what the software does and does not do
+
+### *Validation*
+
+- Type check passes
+- The new `prescriptionEmail.test.ts` passes, covering the exercise details, new versus changed exercises, and the previous values
+- 72 of 72 framework-free TypeScript suites pass in a full run; the patient workflow contract test now reads the dashboard's camera shortcut from `PatientProgramView.tsx`, where it moved
+- The login, forgot password, first-time password, and landing pages were viewed in the browser, and the one-screen patient dashboard and the profile layout were viewed with sample data on a temporary page that was removed; the sidebar and every other signed-in page were not, because the demo patient account does not exist in the local database and no signed-in session was available
+- The daily summary, pain progress, and exercise queries run against actual PostgreSQL without error but returned no rows, so the grouping and wording were not checked against real data
+- No email was sent: the emails were not tried with SMTP credentials, and the assign, remove, and pain pause actions were not exercised in the running app
+
+### *Remaining boundaries*
+
+- Before the daily summaries are used, the database owner runs `scripts\notification_email_digests_pg.sql` in the `postural` database
+- Emails are sent only when `SMTP_USER` and `SMTP_PASS` are set; a Gmail account allows about 500 emails a day
+- Exercises completed after 8 PM Manila time miss that day's summary
+- The pain pause email can miss the last repetition if it was saved after the session ended
+- The previous therapist receives no email when a patient is reassigned, and the permanent deletion function and its emails remain
+- The new frame and the restyled dashboards and pages have not been seen with real data
+- The camera pages were not changed
+- The range-of-motion gauge and charts show camera estimates, not clinical measurements
+- The long forms, such as Assign Exercise and the add and edit user and exercise forms, still scroll normally, and the one-screen layouts apply only on large displays
+
+---
+
+## 📌 Update-10-14-26 | *RyanCodesling*
+
+- Set the lateral arm raise's full-range target to 85 instead of 90, and its return line to 15 instead of 10
+- Left the side bend's neck tilt and shoulder elevation, and the arm hold's shoulder elevation, out of the form score; they are still recorded
+- Saved each session's camera picture size in its capture summary
+- Showed the arm raise's share of repetitions reaching the target, the side bend's form score, and the arm hold's form score as measured values only in the trends
+
+### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\poseMetrics.ts*
+
+- Set the lateral arm raise's full-range target to 85 instead of 90: a horizontal arm reads just under 90 in the camera estimate, so at 90 a correct raise passed or failed by chance, and the guide figure's raises to exactly 90 all count at 85
+- Raised its return line, the reading a repetition must fall back to before it counts, from 10 to 15: at 10, a side stopped counting for a whole set when its resting reading sat just above the line, and a return that stopped short merged two raises into one count
+- Left three measures out of the form score while still recording them: the side bend's neck tilt and shoulder elevation, and the arm hold's shoulder elevation, whose cues were already hidden because they cannot identify a fault; correct side bends had scored about 60
+- Changed only the arm raise's, side bend's, and arm hold's measurement versions, so their trend histories start new series; no coaching configuration changes
+
+### *web\src\lib\analytics\trendSeries.ts*
+
+- Showed the arm raise's share of repetitions reaching the target, the side bend's form score, and the arm hold's form score as measured values only, because their trend bands were learned under the old settings; the frozen trend settings are unchanged
+
+### *web\src\lib\sessionReadModels.ts* and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Saved the camera picture's size in each session's capture summary, so it shows whether a session's readings are comparable; the thresholds were tuned on 16:9 frames
+
+### *Validation*
+
+- 71 framework-free TypeScript suites pass, including new cases for the measures left out of the form score, the withheld trend bands, and the saved picture size
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop keeps every count; the only change is that the arm raise's shrug cue clears two frames sooner after a flagged raise, because a repetition now ends at 15
+- The six guide animations, run through the camera loop, draw no cue and count every repetition
+
+### *Remaining boundaries*
+
+- The new target and return line are engineering values from one subject's data and a rendered figure, not clinical targets
+- The side bend has no form score in new sessions
+- A moderate sideways lean in the arm hold or the neck bends can still show LOWER rather than the trunk-lean cue, because on 16:9 frames the camera estimate reads the shoulder line about three times larger than the trunk line
+- Readings are still computed without correcting for the frame's shape, so the thresholds hold on 16:9 cameras
+
+---
+
+## 📌 Update-10-11-26 | *RyanCodesling*
+
+- Replaced the progress trend labels with a Gaussian-process trend model learned offline from the app's own recorded sessions, on the therapist trend cards, the patient progress view, and the progress PDF
+- Left each set's first repetition out of the raising and lowering times, and the repetitions and sessions the camera tracked poorly out of the trend lines
+- Revised the coaching cues: warnings count only movement beyond the expected amount, LOWER switches on at 7 and off at 5, and cues that failed the pilot replay check are logged but not drawn
+- Added display-only "Hips shifted" and "Straighten arms" checks, and a message when the camera's tracking of a prescribed body part becomes unsteady
+- Set the standing side bend's repetition target to 17 instead of 25
+- Added an end-of-set gauge to the session breakdown and "worth checking" markers on the session video
+- Reworded the PDF reports for physical therapists and doctors and gave them a patient block, a session block, results against their targets, and the current home exercise program
+- Moved session videos to the project's cloud server under recording notice version 3, with a local backup tool and the server's setup scripts
+- Merged Ron's 10-10 update without its sign-in tracking and camera-page Log Out, with the demo clock limited to a demo mode and a delete for attached files
+- Added Reference Guide player controls and Blender tools for the demo figures (low priority)
+
+### *web\src\lib\analytics\trendModel.ts*, *web\src\lib\analytics\trendModelConfig.json*, and *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*
+
+- Labelled each side's main measure (the peak, or time in band for holds) Rising or Falling only when its change since the first counted session is larger than normal session-to-session variation, No clear change otherwise, and Collecting data below three counted sessions
+- Gave the form score and the other measures model bands but no labels, and showed measured values only for a measure without a checked band, such as the standing side bend's share of repetitions reaching the target
+- Ran the fits in a background worker (`web\public\workers\trend-fit.js`, generated by `npm run dev` and `npm run build`), so measured points show at once, and cached each card's fits
+- Opened a breakdown of the stored repetitions or sets from every chart point
+- Learned the model's variation in `ml\trend` under the pre-registered protocol in `ml\trend\EVALUATION_PROTOCOL.md`, and checked the TypeScript port against the Python reference on shared fixtures
+
+### *web\src\lib\analytics\trendRules.ts*, *web\src\lib\analytics\trendSeries.ts*, and *web\src\app\(app)\dashboard\_components\SessionBreakdown.tsx*
+
+- Left each set's first repetition out of the raising and lowering times
+- Left the repetitions the camera tracked poorly, and the sessions where half or more were, out of the trend lines, and drew them as hollow points where enough well-tracked repetitions remain; the trend card says how many sessions were left out
+- Showed in the session breakdown why a repetition or session was left out, noted repetitions whose tracking could not be checked, and added an end-of-set gauge: the last repetition's duration against the set's middle repetitions, and its peak minus theirs
+- Applied the same rules to the trend-model export in `web\scripts\export-trend-measures.ts`; the frozen trend settings are unchanged
+
+### *web\src\lib\pose\coachingCue.ts*, *web\src\lib\pose\compensationWarningState.ts*, *web\src\lib\pose\hipShiftWarning.ts*, and *web\src\lib\pose\elbowBendWarning.ts*
+
+- Counted only movement beyond the expected amount in warnings that depend on another movement, and switched them off at rest
+- Switched the shoulder-level cue (LOWER) on at 7 and off at 5, kept a shown cue on screen at least 0.7 s, and moved the LOWER arrow when the other shoulder clearly rises
+- Kept logging but stopped drawing the cues that failed the pilot replay check: LOWER on lateral arm raises, the side bend's neck-tilt and shrug cues, the arm hold's shrug cue, and the elbow cue on the shoulder press and wall angels
+- Judged the arm-raise shrug once per repetition while the arm rises, and the neck side bends' trunk lean and LOWER once per bend
+- Added a display-only "Hips shifted" check to the side bends and a "Straighten arms" check to lateral arm raises and the arm hold, both kept out of the measurement version
+
+### *web\src\lib\pose\trackingSteadiness.ts*, *web\src\lib\pose\repQuality.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Showed a display-only message when the camera's tracking of a prescribed body part becomes unsteady (coaching version `coaching_v11_tracking_steadiness_check`)
+- Saved a tracking record with every repetition, with the frames seen, rejected, checked, and unsteady; a gap over 250 ms ends a run, and frame marks are kept for 180 s
+- Recorded a repetition as not checked when the camera runs at 5 frames a second or fewer, because the check cannot judge it there
+- Counted the checked frames in the session's capture summary
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\captureReadiness.ts*
+
+- Set the standing side bend's repetition target to 17 instead of 25, because its head-lean reading is in pipeline units and full pilot bends read about 21; the minimum stays 15, and only the side bend's measurement version changes
+- Kept three decimals in normalized values, corrected the saved smoothness value's formula, and gave new repetitions a version-3 record that marks gapped samples for offline analysis; older records stay readable
+- Needed only the knees in frame in side-on framing, with a check that the hips are visible, so deep side bends are no longer discarded
+- Saved in the capture summary why frames were rejected and how often a dropout discarded a movement
+
+### *web\src\lib\reports* and *web\src\app\(app)\dashboard\_components\progressReport.ts*
+
+- Reworded both PDF reports for physical therapists and doctors, and moved the configuration and model codes to a line for the app's developers
+- Opened both reports with a patient block: name, patient ID, date of birth with the age, gender, assigned therapist, and the diagnosis and condition the clinic entered
+- Added a session block to the session report: exercise, session number for that exercise, browser and device, start, end, outcome, and prescription
+- Listed results as tables of measure, result, and target with a "Below target" flag, moved camera tracking and the camera-estimate note to a Limitations section, and named the patient with their ID on every page
+- Added the current home exercise program to the progress report, with the days done so far
+- Left out normal ranges, diagnosis, and sign-off lines, because the angles are camera estimates and the app does not diagnose
+
+### *web\src\lib\recording* and *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*
+
+- Updated the recording notice to version 3 for videos stored on the project's cloud server: the upload uses an encrypted connection, the researcher who runs the server can reach the stored files, stored videos are not encrypted, and after the study's evaluation the recordings may be used to improve the system; choices made under the earlier notice are asked again
+- Marked repetitions worth checking on the session video's timeline: poorly tracked ones, and ones at least twice or at most half their side's median duration, a set's first excepted
+- Stored the shoulder the LOWER arrow was drawn on in the overlay track, and the real start time of a resumed video part, so its overlay lines up on playback
+
+### *web\scripts\backup-local.ts*, *web\docs\evaluation-deployment.md*, and *deploy\server*
+
+- Added `npm run backup:local`, which backs up the database and the session video folder with a manifest; with `--verify` it restores a backup into a separate empty database and checks every table and file
+- Listed the steps for a deployment reached over HTTPS in `web\docs\evaluation-deployment.md`
+- Added the evaluation server's setup scripts and runbook: base system, app and database, nightly backups, HTTPS, and a tool to set the admin password; secrets are generated on the server
+
+### *ml\analysis* and *ml\trend*
+
+- Prepared timestamped tuning-trace exports and scored frozen models on recorded sessions from a manifest (`ml\analysis\TRACE_PREPARATION.md`, `ml\analysis\OFFLINE_EVALUATION.md`), using the corrected feature definitions with subject-separated calibration
+- Added the trend model's learning, evaluation, and simulation code
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\app\(app)\dashboard\therapist\session-report\page.tsx*, and *scripts\user_clinical_fields_pg.sql*
+
+- Cancelled a pending patient load on the assignment page when the selection changes, so a late reply cannot fill or lock a multi-patient form
+- Removed the printable session report from the therapist navigation and marked it as a demo in its preview, print output, and JSON export
+- Kept account creation and editing working before the optional Diagnosis, Condition, and Prescription columns exist, refusing a nonempty value for a missing column; `scripts\user_clinical_fields_pg.sql` adds them and must be run by the users table owner
+
+### *Changes to Ron's Update-10-10-26 before the merge*
+
+- Removed the patient sign-in, sign-out, and assignment tracking and the therapist dashboard's 14-day activity chart, with `scripts\patient_activity_events_pg.sql`
+- Removed the Log Out button on the camera page; Log Out stays in the dashboards' top-right header
+- Made the demo clock work only in a development server started with `npm run dev:demo`; a normal `npm run dev` and every production build use the real time and ignore a demo date left in the database
+- Made the pages read only the demo day, so the camera page does not redraw for the clock, took tomorrow's reminders from the same clock as today, and showed the admin's Demo Clock tab only in demo mode
+- Listed a patient's attached files in the admin's edit form with a Delete that asks first, and asked admins to upload documents only with the patient's permission
+- Checked only new or changed prescription dates against today, so a running prescription can still be extended
+- Fixed the two tests the update broke, and added tests for these changes
+
+### *tools\blender*, *assets\blender*, *web\src\app\(app)\camera\DemoClipPlayer.tsx*, and *web\src\lib\exercises\demoClips.ts* (low priority)
+
+- Added Reference Guide player controls: phase and Front/Side labels in step with the video, an upper-body close-up, pause, half speed, and full screen; the guide's clips are unchanged
+- Added tools that polish the demo figures (eyes, skin tone, and lighting) and refine arm and hand form, with their notes and validation records
+- Revised the neck side bends draft to a slower swing with level shoulders; it stays out of the Reference Guide until the neck counting check passes
+
+### *Validation*
+
+- 71 framework-free TypeScript suites pass on the merge, including the new tracking, trend-rule, report, demo-clock, attachment-delete, and schedule-date checks
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop reproduces the recorded baseline byte for byte; these are tuning recordings, so this shows the coaching output is unchanged, not that it is accurate
+- The trend model's TypeScript port matches the Python reference on shared fixtures, and the ml suite passed 81 tests
+- Sample PDF reports were rendered and checked page by page, and the replies the reports read were checked in the running app for the fields they use
+- The demo clock was checked in the running app: started with `npm run dev:demo` its API answers, and started with `npm run dev` it answers 404
+
+### *Remaining boundaries*
+
+- The trend model's normal variation was learned from one researcher's pilot sessions on two test accounts, not from patients; its labels are supplementary information, not a diagnosis
+- The tracking check's limits and the side bend's target are engineering values from one subject's data, not clinical judgements
+- No physical camera session has run on the merged code, the admin's file Delete has not been clicked through in a browser, and no session has been recorded under a demo date
+- Attached files are stored in the database without encryption; upload a real patient's documents only with their permission
+- Sessions recorded while a demo date is set keep that date, so use a demo account with `npm run dev:demo`
+- Before attachments are used, the database owner runs `scripts\patient_image_attachments_pg.sql`; `scripts\demo_clock_settings_pg.sql` is needed only where `npm run dev:demo` is used
+- The new demo-figure renders are not in this update: they await visual acceptance, and the neck clip also awaits the neck counting check
+- Whether physical therapists find the PDF wording and layout clear is untested
+- Three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
+
+---
+
+📌 Update-10-10-26 | Ron
+### Web admin navigation
+Moved Log Out from the admin, patient, and therapist sidebars to the top-right header beside notifications; added a top-right Log Out button to the camera page.
+
+### Web therapist patient profiles and exercise assignment
+Added an Assign Exercise button to a patient profile that opens the assignment page with that patient preselected
+Added diagnosis, condition, and prescription to the therapist’s Patient Profile
+Prevented new or changed exercise schedules from using past dates; unchanged existing schedules remain editable
+
+### Patient attachments
+Renamed Patient Images to Attached Files and added image/document uploads during patient creation and editing
+Added support for JPEG, PNG, WebP, PDF, Word, Excel, PowerPoint, RTF, and TXT files, limited to 5 files at 5 MB each
+Added password verification before files can be opened; images and PDFs preview, while other documents download
+Added PostgreSQL storage and an idempotent migration that expands the existing image-only attachment constraint
+
+### ⚠️ *IMPORTANT* ⚠️ Before final setup
+Run user_credentials_pg.sql as the database owner to add the missing diagnosis, condition, and prescription columns; the app’s configured role does not have permission to alter the table
+Run the updated patient_image_attachments_pg.sql as the database owner to enable document attachments; it preserves existing attachments
+Keep sessions_pg.sql ahead of exercise_occurrences_pg.sql
+
+### Therapist dashboard analytics
+Added a 14-day activity graph for sessions, patient sign-ins, and new patient assignments
+Added total and recently active patient metrics; “active” means a recorded sign-in or completed exercise session in the last 7 days, not currently online
+Added database event tracking for patient sign-ins/sign-outs and therapist assignments
+Kept the roster dashboard available if the analytics migration hasn’t been installed; missing metrics show as unavailable
+
+### Development Demo Clock
+Added an admin-only Demo Clock control to set or reset the app’s simulated date and time without changing the computer clock
+Applied simulated time to schedule validation, patient calendars, camera schedule selection, session timestamps, and dashboard activity windows
+Kept authentication and password-expiry timers on real time; scheduling days continue to use Manila time
+Disabled the clock controls in production
+
+Database setup
+Run these scripts as the PostgreSQL database owner before using the new features:
+
+demo_clock_settings_pg.sql
+patient_activity_events_pg.sql
+The setup order is documented in AUTHENTICATION_SETUP.md.
+
+Validation
+TypeScript, ESLint, git diff --check, and npm run build pass
+The app is already running at http://localhost:3000; a second dev-server launch was blocked because that port is occupied
+
+---
+
+## 📌 Update-10-1-26 | *Ron*
+
+### *pt_session_summary_printable_report.html*
+Test phase only, not offical yet
+- Added editable clinical summary and goal-progress fields, displayed them in the printable report, and included them in JSON export
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\lib\db.ts*, and *web\src\app\api\therapist\overview\route.ts*
+
+- Added patient roster details and multi-patient exercise assignment
+- Added a separate patient-details module with one-at-a-time accordion profiles and smooth expand/collapse transitions
+- Made empty required fields show red borders only after clicking Assign Exercises, and guarded the page against missing exercise API data
+
+### *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\api\users\route.ts*, *web\src\lib\db.ts*, and *scripts\user_credentials_pg.sql*
+
+- Added Diagnosis, Condition, and Prescription fields for patients when adding or editing users, and wired them through the API and database mapper
+- Restored the three user-table columns in the idempotent setup SQL; the local database migration still needs to be run by the table owner because the configured role lacks ownership permission
+
+### *web\scripts\seedDemo.ts* and *web\package.json*
+### REMOVE DEMO ACCOUNTS BEFORE FINAL DEFENSE
+- Added a demo therapist and seven demo patient accounts, with `npm run seed:demo:accounts` to add them and `npm run remove:demo:accounts` to remove them
+
+### *Validation*
+
+- ESLint and TypeScript checks pass for the updated web code
+- The demo account seed completed successfully; the clinical-column migration remains pending owner-level database access
+
+---
+
+## 📌 Update-9-27-26 | *RyanCodesling*
+
+- Added optional session video: a question before each patient session with a "remember my choice" option, upload to this clinic's computer during the session, and a player for the patient and their assigned therapist that marks sets, repetitions, and cues and can redraw the coaching overlays
+- Added a before-session pain survey on the after-session report's 0-10 scale, with a non-blocking caution at 7/10 or above
+- Added PDF session and progress reports, built in the browser from the saved data at download time
+- Labelled surfaced angles "angle (camera estimate)" without a degree sign, because they are pipeline units from a 2D camera
+- Recorded a versioned audit of what the coaching layer observed and drew for every set, under a coaching configuration fingerprint kept apart from the measurement version
+- Changed neck lateral flexion (`ex_004`) from an assisted hold to active alternating repetitions counted per side, pending a multi-person recording check
+- Restored finished sets, repetition outcomes, and the capture tally when a session is resumed after a reload
+- Showed a session's details when hovering, tapping, or focusing a point on the progress trend charts
+- Added wall angels and a one-sided standing side bend to the Reference Guide, and re-rendered its figure in an upgraded look (low priority)
+
+### *web\src\lib\recording*, *web\src\app\api\sessions\[id]\recording*, and *web\src\app\(app)\dashboard\_components\SessionVideo.tsx*
+
+- Asked "Record video of this session?" after the pain survey, with a notice that the video uploads to this clinic's computer, that only the patient and their assigned therapist can watch it, that the patient can delete it at any time, that stored videos are not encrypted, and that videos are never used to train or tune the system
+- Let a patient remember the answer on this device, per patient, and reset it beside Start session; an answer remembered under an older notice is ignored, so the question returns
+- Stored the consent in the session's start context with its time, notice version, and whether it was remembered; session creation accepts consent only when the page sends the notice version it showed and that version is current, and otherwise asks the patient to reload
+- Recorded consented sessions with `MediaRecorder` and uploaded them in 4-second chunks during the session, so a reload keeps what was sent and Resume continues in a new part; uploads are retried, a request with no answer after 30 s is abandoned, and a recording failure shows on the camera view without affecting the session
+- Let the patient stop recording at any time from the camera view, and closed the recording when the session ends
+- Stored videos under `RECORDINGS_DIR` (by default `web\.recordings`, which is gitignored), one folder per session, with a limit of 600 MB and 20 parts per session; only the owning patient can upload or delete, and only the patient and their assigned therapist can list and play parts, with byte ranges for seeking
+- Saved each processed frame's pose landmarks and drawn cue beside the video as an overlay track (about 0.5 MB a minute) on an upload queue of its own, so the video never waits for it; closing a part records whether the whole track was saved and how far it reaches
+- Added the player to the patient's My Progress, under Session videos, and to the therapist's session detail, where sessions with a video carry a badge; its timeline marks sets, repetitions, and the moments a coaching cue was on screen from their stored timestamps, with jump buttons for each
+- Made "Show coaching overlays" redraw the skeleton and cues in step with playback using the live drawing code, label any stretch whose overlay was not saved, and fall back to the cue labels from the coaching record for videos without a track
+- Kept the overlay in full screen through the player's own Full screen button, and turned off the video's native full screen and picture-in-picture, which would show the video without it
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\prescriptionContext.ts*, and *web\src\app\api\sessions\route.ts*
+
+- Opened every new patient session with a pain survey on the after-session report's 0-10 scale with an optional body area; its button reads Continue when the video question follows and Save and start when a remembered answer skips it, Skip continues without an answer, and Back cancels without starting and keeps a pending Resume
+- Showed a non-blocking caution at 7/10 or above that suggests checking with the therapist first
+- Validated the answer on session creation and stored it as `preSessionPain` in the start context, so the schema is unchanged; the therapist's session detail shows it beside the after-session report, whose red follow-up banner now appears only for pain stops
+- Made camera Start and Resume wait for a playable stream before a session is created or reopened
+- Restored finished sets, repetition outcomes, and the capture tally from the resume snapshot after a reload, so the end-of-session card and capture summary cover the whole attempt instead of showing zeros; older snapshots still load
+
+### *web\src\lib\reports*, *web\src\app\(app)\dashboard\_components\progressReport.ts*, and *web\src\app\(app)\dashboard\_components\ReportButton.tsx*
+
+- Built session and progress reports as PDFs in the browser with a small dependency-free writer that uses built-in Helvetica, A4 pages, tables, and line charts
+- Covered in the session report the prescription, results per side, sets, pain before and after, the coaching cues drawn (from the stored audits, including attempts that credited no movement), and camera tracking
+- Made the progress report fetch the saved sessions at download time and mirror the Progress Trends groups, so it always reflects the latest data
+- Took kind, primary metric, and targets from each session's own record, so an exercise whose definition changed keeps its history; the trend groups now prefer the recorded kind over the current registry too
+- Offered the end-of-session card's report only once every result is saved, and added report buttons to the therapist's patient page and session detail and to the patient's My Progress
+
+### *web\src\lib\sessionOutcomePresentation.ts*, *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*, and *web\src\app\(app)\dashboard\_components\TrendChart.tsx*
+
+- Relabelled surfaced angles "angle (camera estimate)" with no degree sign across the trend charts and tooltips, the end-of-session card and recap, the staff live metric cards, and the therapist views
+- Showed a session's date and details when hovering, tapping, or focusing a trend point: the peak with sets and reps (or the hold time), and each side's full-ROM count on the reps chart
+- Gave each session index a target reaching halfway to its neighbours, because the dots alone are too small to aim at, with a native title element as the fallback
+
+### *web\src\lib\pose\coachingAudit.ts*, *web\src\lib\pose\coachingConfig.ts*, *web\src\lib\pose\holdQuality.ts*, and *web\src\app\api\sessions\[id]\set-events\route.ts*
+
+- Gave each session a coaching configuration fingerprint of its own (context version 3), separate from the measurement version, so trend grouping is unchanged
+- Stored a versioned audit of what the coaching layer observed and drew for each set inside the existing `hold_quality` column: `hold_quality_v2` for holds and `coaching_set_v1` for dynamic sets
+- Validated these envelopes in the set-events route and kept an invalid one in a quarantine envelope while still saving the set, so one bad record cannot block later sets
+- Saved an attempt that ended with no credited movement as an audit-only row, which every outcome reader excludes
+- Added `npm run verify:coaching`, which runs every web test file; `npm run replay:coaching`, which replays saved traces through the current camera loop; and `npm run verify:coaching:db`, which checks the outcome readers against private temporary PostgreSQL tables; `web\docs\coaching-measurement.md` describes the contract
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\pose\poseMetrics.ts*, and *web\src\lib\pose\neckLateralFlexionCounting.test.ts*
+
+- Changed neck lateral flexion (`ex_004`) from an assisted hold to active alternating repetitions: the signed ear-line angle is split by sign and each side runs its own `RepCounter`, so a return stroke past neutral lands on the other side's counter, which discards it below its minimum peak
+- Set engineering starting thresholds in pipeline units (start 12, complete 6, minimum peak 18, target 30) and restored shoulder symmetry as a compensation beside trunk lean
+- Pinned the overshoot, loose-neutral, noise, and reduced-range cases, including two runs through the camera loop; only `ex_004`'s measurement hash changes, and the side-split isometric path stays in the camera loop
+
+### *tools\blender*, *assets\blender*, and *web\src\lib\exercises\demoClips.ts* (low priority)
+
+- Added a wall angels animation (`ex_008`): the figure stands against a wall with its upper back and head resting on it, both arms slide in the wall's plane from a W up to a Y with each elbow a pure hinge, and one repetition is shown from the front and the next from the side
+- Added the standing side bend (`ex_005`) to one side only, so it does not suggest alternating, with the right hand kept on the hip just outside the clothing while the waist moves
+- Built an upgraded look from the unchanged figure with the CC0 MakeHuman short02 hairstyle, softer skin, rebalanced lights, and a seamless backdrop, and re-rendered the lateral raise, arm hold, and overhead press in it with unchanged motion
+- Checked every clip frame by frame against the lateral-raise guide's crop; the inspector reports that at the W the wall angels' wrists and knuckles sit 20-25 mm off the wall, so the clip does not show full hand contact
+
+### *Validation*
+
+- 52 framework-free TypeScript suites pass, including 19 session-video, 11 report, 8 before-session question, and 5 end-of-session report checks
+- Type check, lint, and a production build pass
+- The database check passes against actual PostgreSQL using connection-private temporary tables, covering the outcome readers and the session detail, review, and roster queries; no public row or sequence changes
+- Replaying the saved pilot traces through the camera loop reproduces the recorded baseline byte for byte; these are tuning recordings, so this shows the coaching output is unchanged, not that it is accurate
+- Sample PDF reports were rendered and checked page by page, and the video player was checked in Chrome on a fixture page with a generated test video and a synthetic overlay track, not a session recording: the overlays stay aligned on the page and in letterboxed full screen, the native full-screen control and double-click do nothing, and a partly saved overlay shows its label after the saved point
+- A real session was recorded, uploaded, and played back on the development machine before overlay tracks existed, so it did not test them; a signed-in check of a new recording's overlays, Stop, reload and Resume across parts, therapist viewing, deletion, and the reload prompt after a notice change is still pending, and automated and fixture checks do not establish live or clinical acceptance
+
+### *Remaining boundaries*
+
+- The `ex_004` thresholds are engineering starting values in pipeline units, not clinician-approved; by 2026-10-02 the active counting must match multi-person recordings within one repetition per side per set, with none counted during neutral or rest, or the assisted stretch returns; its code path stays intact, and `ml\config\registry.json` still describes the stretch until then
+- Apart from `ex_004`, no metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the new data lives in the existing start-context and `hold_quality` columns
+- Angle outputs remain pipeline measurements, not validated anatomical angles
+- The 7/10 caution threshold and its wording await physical-therapist review
+- Session videos stay on the deployment's disk, unencrypted and outside the repository; only the patient and their assigned therapist can watch them, and they are never used to train or tune the system
+- Firefox ignores the setting that hides the video's native full-screen control, so full screen started there shows the video without overlays
+- The demonstration videos stay in the gitignored `web\public\demos\` folder, and three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
+
+---
+
+## 📌 Update-9-18-26 | *RyanCodesling*
+
+- Made manual recalibration and a dropout during calibration discard the measurement in progress, so no repetition or neutral baseline mixes readings from before and after them
+- Blanked the trace sync readout on frames that write no trace row, so a paused screen recording can no longer pair a later posture with an older row
+- Renamed the scapular overlay label from "Shoulder elevated" to "Shoulder / head position", because the metric cannot tell a rising shoulder from a lowering head
+- Redesigned the camera page around a letterboxed camera view, a session card, and a Reference Guide, and made Start and Resume wait until the pose model is ready
+- Delivered repetition and set results left on the device when a session ended, and warned on screen when a tuning-trace batch is lost after its upload retries run out
+- Versioned the Blender figure and animation tooling together with its asset licence and provenance records
+- Added figure animations for lateral arm raises, the arm hold at shoulder height, and the overhead shoulder press to the Reference Guide, all shown through the same crop (low priority)
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\traceSyncClock.ts*, and *web\src\lib\pose\tuningTraceV4.test.ts*
+
+- Routed manual recalibration through one shared reset that clears the repetition state machines, the quality buffer, the isometric anchor, and accrued hold time, while completed repetitions and closed sets survive; before, an in-progress repetition kept its peak from the old frozen tilt and baselines and was judged against the new ones
+- Discarded and restarted a calibration that a sustained capture dropout interrupts, instead of keeping its partial samples; a finished baseline is still kept, with the stale-baseline prompt offered instead
+- Added a distinct paused marker to the trace sync readout for any processed frame that wrote no row, and cleared the readout at session start and camera stop
+- Made the readout writer compare the node's own text rather than a remembered value, which an ordinary rerender could desynchronise
+- Tested the recalibration fix through a real `RepCounter` and the writer against a node changed behind its back, replacing two source-text assertions that could not see the behaviour
+
+### *web\src\lib\pose\drawCompensationOverlay.ts*
+
+- Renamed the `scapularElevation` label to name the region its box encloses instead of a movement, since the metric is an ear-to-shoulder vector on the trunk axis and a rising shoulder and a lowering head read the same
+- Left every threshold, metric formula, smoothing constant, latch, arbitration rule, and scoring value unchanged, along with the directional branches that draw their own words
+
+### *web\src\app\(app)\camera\CameraClient.tsx* and *web\src\lib\pose\captureReadiness.ts*
+
+- Rebuilt the layout: the camera view carries the feed, the repetition, set, and time counts, and the framing messages; the session card beside it carries progress, the set-progress strip, the trace sync readout, and the session controls; the Reference Guide sits below, and narrow layouts stack these areas
+- Letterboxed the camera feed and its overlay instead of cropping them, so the whole frame the pose model receives stays visible at any width
+- Moved device choice, starting and stopping the camera, mirroring, and the front-camera preference into a Camera menu in the page header, and moved the pose-model readiness indicator onto the camera view's top-right corner
+- Put staff diagnostics in a panel docked beside the camera view behind an (i) button, and kept the frame rate on screen next to that button, above the countdown and the camera-off cover
+- Made the baseline-capture message the most prominent banner on the camera view, since the patient has to hold still while it runs, and showed rest between sets as an overlay on the view
+- Rolled the repetition and set digits when they change, keeping them static under reduced motion; as rest begins, the view holds the finished set's count for two seconds before rolling back to zero
+- Added a neutral form-check card that reads "Check the highlighted area" only while the selected cue's highlight can be drawn, and names no movement
+- Made Start session also start the camera when it is off; Start and Resume now do nothing until the pose model is ready, and Resume is disabled while the model loads or the camera starts
+- Changed the framing messages to say head to knees, which is what the existing knee gate already requires; no readiness gate changed
+- Updated the page tour and its illustrations for the new layout, and added loose-clothing advice to the clothing and environment tips
+
+### *web\src\lib\pose\eventOutbox.ts* and *web\src\lib\pose\eventOutbox.test.ts*
+
+- Added `recoverPersistedOutboxes`, which sends results still queued when a session ended, once per patient camera-page load and one session at a time; before, only Resume read them back, so an ended session's repetitions and sets never left the device
+- Removed a stored item only when the server acknowledges it, keeping anything refused for the next load, and showed a toast when results from an earlier session are uploaded
+- Skipped sessions that can still be resumed, because Resume re-adopts the same queue; a session running in another tab counts as resumable
+- Corrected the end-of-session message, which promised an upload that stops when the session ends
+
+### *web\src\lib\pose\traceUploadLoss.ts* and *web\src\lib\pose\traceUploadLoss.test.ts*
+
+- Recorded each raw-frame batch that exhausts its retries, with its final HTTP status or network failure, and showed the loss beside the trace readout, including after End, with a toast on the first loss; before, a lost batch left no sign while the readout kept advancing, because it names rows as they are queued
+- Kept the readout's meaning explicit: a displayed row means queued, not saved, and the absence of a warning does not prove every batch arrived
+
+### *web\src\lib\pose\cameraStartup.test.ts* and *web\src\lib\patientExerciseWorkflowContracts.test.ts*
+
+- Added a startup test that runs the component's actual `startSessionWithCamera`, `resumeSession`, `startCamera`, and `predictWebcam` against fake browser dependencies; it proves the model-loading barrier, not a live session
+- Extended the workflow contract test to pin the ended-session recovery, the resumable-session exclusion, and the corrected end message
+
+### *web\src\lib\exercises\demoClips.ts* and *web\src\lib\exercises\demoClips.test.ts* (low priority)
+
+- Added looping figure animations to the Reference Guide for lateral arm raises (`ex_001`), the arm hold at shoulder height (`ex_006`), and the overhead shoulder press (`ex_007`), with a full-screen view; other exercises say that no video is published
+- Showed every clip through the lateral-raise guide's crop, scaled to its render, so the guide keeps one size and framing across exercises; checked over every decoded frame, that crop holds the whole figure and cuts away the baked-in title, caption, and phase word
+- Kept clip data outside the exercise registry, so it can never change the measurement-configuration hash that groups a patient's history
+- Remembered a load failure per clip, so one missing file cannot blank every other exercise's guide
+- Captioned the guide as having illustrative timing, with the therapist's instructions coming first, and named the movement in its accessible label
+- Withheld the side-bend animation (`ex_005`) for now and published no clip for the assisted neck stretch (`ex_004`) or wall angels (`ex_008`), whose animations are on hold; the test pins these together with the shared crop, file names, and registry membership
+
+### *tools\blender*, *assets\blender*, and *LICENSE*
+
+- Versioned the build, inspection, render, and encoding scripts for the figure and its animations, with the asset README, the animation notes, provenance and attribution records, and the reference data they use
+- Kept the editable `.blend` sources and rendered previews ignored, because they are large and regenerable from these scripts
+- Stated in `LICENSE` that MIT covers the original software and documentation, while atlas-derived anatomy geometry and its media are CC BY-SA 4.0, as recorded in `assets\blender\LICENSE-CC-BY-SA-4.0.md` and `assets\blender\THIRD_PARTY_ASSETS.md`; the MPFB figure is built from CC0 MakeHuman assets
+- Kept the anatomy, écorché, and muscle-atlas variants as frozen history; the app does not use them
+
+### *Validation*
+
+- 44 framework-free TypeScript suites pass, including 44 tuning-trace, 21 outcome-outbox, 15 trace-clock, 11 trace-loss, 8 capture-readiness, 8 demo-clip, and 5 workflow-contract checks, plus the camera startup check
+- Type check, lint, and a production build pass; the build notes that `CameraClient.tsx` now exceeds the 500 KB size above which Babel stops pretty-printing its output, which does not affect behaviour
+- The demo-clip source check fails against the previous single-clip camera page, so it catches a return to a hard-coded clip, and the crop check rejects the earlier per-clip crops
+- The shared crop was drawn over each clip's extreme frames and viewed in a browser using the page's own sizing rules, where every clip showed at the same size
+- A signed-in check of camera startup, Resume, saved results, and the new guides is still pending; automated and fixture checks do not establish live or clinical acceptance
+
+### *Remaining boundaries*
+
+- No metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the aspect correction remains enabled nowhere
+- Angle outputs remain pipeline measurements, not validated anatomical angles
+- The demonstration videos stay in the gitignored `web\public\demos\` folder, so this branch ships the player but not the media; without the files the guide shows its "no video" state
+- The animations are illustrative, with authored timing, and no clinician has reviewed them
+- Three validation reports for the frozen anatomy variants stay local because they record machine-specific paths
+
+---
+
+## 📌 Update-9-8-26 | *RyanCodesling*
+
+- Stopped a capture dropout from silently re-capturing the neutral baseline, which could adopt a compensated posture as the reference every later deduction is measured against
+- Relaxed the default head-position ceiling that was rejecting ordinary postural movement rather than bad framing, on measurements taken from a recorded session
+- Added an on-screen trace sync readout so a screen recording can be matched to an exact exported row instead of an approximate one
+- Recorded the pose task's world-coordinate landmarks, which were previously computed on every frame and discarded, so a recorded session can be checked for whether either depth signal separates forward-backward faults the image plane cannot see
+- Corrected a comment that described the opposite of the calibration lifecycle it annotated, at the site where believing it had already cost two recordings
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Removed the automatic recalibration that followed a sustained capture dropout; counters, filters and hold accrual still reset, because they describe interrupted movement, while the neutral baseline describes the body and is now kept
+- Added a prompt offering manual recalibration when a dropout interrupts a session that had already captured its baseline, stating why it might be needed rather than only presenting a control, because the remaining risk is a moved camera leaving a stale reference
+- Corrected the trace writer's comment, which stated that calibration does not release its sample ring; it does, immediately before the phase flip that gates the writer, which is why the first version of that trace recorded empty samples
+
+### *web\src\lib\pose\captureReadiness.ts* and *web\src\lib\pose\captureReadiness.test.ts*
+
+- Raised the default head-position ceiling from the top quarter of the frame to just over the top third, measured against a recorded session in which a deliberate backward lean put the ear line flush against the old bound with no margin, and the transitions in and out of it crossed the gate
+- Kept the new bound clearly inside the overhead mode's, and left the top-of-frame guard unchanged
+- Added five checks, including one that asserts the rejection of a head that has dropped too far without pinning which gate rejects it, since the body-fit gate legitimately fires first at that depth
+
+### *web\src\lib\pose\traceSyncClock.ts* and *web\src\lib\pose\traceSyncClock.test.ts*
+
+- Added the formatting and parsing for an on-screen readout carrying the frame index and elapsed time of the row being written, with an exact inverse so a value transcribed from a paused video frame resolves to the stored integer rather than near it
+- Held no time source in the module: the caller supplies the value it is about to persist, which is what makes the readout and the stored row one number rather than two that agree
+- Rendered the readout from the same two locals the payload is queued from, and only while a patient session is recording, so an ordinary session shows nothing new
+- Added 15 checks that run the functions and round-trip every claim, including a dense sweep rather than only the rollover boundaries
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\tuningTraceV4.test.ts*, and *scripts\sessions_pg.sql*
+
+- Recorded the world-coordinate landmarks for the same ten points already retained, or an explicit null where the pose task emitted none
+- Placed them inside the metrics envelope rather than beside the landmarks on the payload, because the write route allowlists the fields it persists and an unrecognised top-level key is dropped without an error
+- Required a finite depth value for a world point to be stored at all, since depth is the only reason the channel exists
+- Extended the suite to 30 checks covering the field's shape, its placement, its source, the two landmark sets covering the same indices, and the calibration and readout guards
+
+### *Validation*
+
+- 41 framework-free TypeScript suites pass, including 30 tuning-trace checks, 15 trace-clock checks, and 13 capture-readiness checks
+- Type check, lint, and a clean production build all pass; 62 offline comparison tests pass
+- Both changed behaviours were mutation-tested by injecting the defects the checks claim to prevent and requiring each to fail: 8 of 8 for the calibration and readiness work, 6 of 6 for the world-landmark channel, 10 of 10 for the trace clock, with every source restored byte-identical afterwards
+- Two of those injections found real gaps in the checks themselves, which were rewritten rather than the injections dropped
+
+### *Remaining boundaries*
+
+- No metric computation, threshold, target, band, coupled-fit constant, registry value, schema, or exercise definition changed; the pose metric algorithm version is unchanged
+- The aspect correction remains enabled nowhere, and no threshold has been re-derived against it
+- The world-coordinate landmarks are recorded and read by nothing; no score, cue, or therapist surface consumes them
+- Two behaviours are patient-visible by intent: the head-position ceiling is looser, and a dropout no longer recalibrates on its own
+
+---
+
+## 📌 Update-9-6-26 | *RyanCodesling*
+
+- Added an opt-in aspect-ratio correction to the clinical angle pipeline, default-disabled, so no patient-visible measurement changes until the affected thresholds are re-derived against it
+- Generalized the coaching-shadow capture-boundary guard from forward steps to any plan transition, closing two paths that could leave a capture while retained decisions were unexported
+- Extended the tuning trace to `upper_body_v4`, persisting the source frame size and the retained neutral-calibration samples so a recorded session can be reprocessed under a changed coordinate convention
+- Recorded the provenance of several clinical values that previously carried none, and the requirements any future live activation of the correction must satisfy together
+- No metric computation, threshold, target, band, coupled-fit constant, schema, persistence path, or exercise definition changed; every `exerciseConfigVersion` hash is unchanged
+
+### *web\src\lib\pose\poseMetrics.ts* and *web\src\lib\pose\poseNormalization.test.ts*
+
+- Added an optional frame-aspect parameter to every metric, scaling each horizontal delta so image-plane angles no longer depend on the frame's width-to-height ratio
+- Kept the correction in the geometry rather than in a landmark transform: rescaling landmark coordinates would shrink the in-frame guard's usable width and silently null one side's primary metric for most of its range
+- Defaulted the parameter to no correction, so the existing pipeline and every prior reading are reproduced exactly; the camera passes no aspect and the live path is unchanged
+- Added 53 product-level checks covering the uncorrected behaviour, the corrected behaviour, square-frame controls, the in-frame guard budget, and a case pinning that the frozen neutral tilt cannot be switched separately from the geometry
+
+### *web\src\lib\pose\coachingShadowPlan.ts*, *web\src\lib\pose\coachingShadowPlan.test.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Replaced the forward-step guard with a direction-agnostic transition check, since the invariant is about leaving a capture rather than about the direction of travel
+- Routed the main-panel Back control and the plan-complete restart through the same guarded mover as both Next controls; each previously set the plan index directly and skipped the segment-end call
+- Extended the suite to 12 checks covering backward and reset transitions, and added a source check that no control writes the plan index outside the guarded path
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\scripts\export-tuning-traces.ts*, *web\src\lib\pose\tuningTraceV4.test.ts*, and *scripts\sessions_pg.sql*
+
+- Recorded the source frame size per frame, because landmark normalization divisors cannot be recovered afterwards and the device picker can change resolution mid-session
+- Recorded the retained neutral-calibration samples once per set, snapshotted before the sample ring is released, because every baseline is a median over that ring and a median cannot be recomputed under a changed measurement from the stored value alone
+- Added the new payload kind to the offline exporter's accepted list while retaining every legacy kind, since trace rows are never migrated
+- Added 15 checks covering the payload shape, the snapshot-before-release ordering, and agreement between the payload kind the camera writes and the kinds the exporter accepts
+
+### *web\src\lib\exercises\registry.ts* and *web\src\lib\pose\metricVersion.ts*
+
+- Recorded the origin of the scapular-elevation warning threshold as a single-subject engineering default with no published source, and added the same in-rep envelope caveat to two coupled-fit intercepts that already carried their fit and sample count
+- Withdrew an unsourced physiological assertion attached to a deprecated exercise's peak threshold rather than citing a source for it
+- Recorded what a future live activation of the aspect correction must move together: the frozen neutral tilt, every direct metric caller, the persisted frame size, the affected coupled fits, and the pose metric algorithm version
+
+### *Validation*
+
+- 40 framework-free TypeScript suites pass, including 53 normalization checks, 15 tuning-trace checks, and 12 coaching-shadow guard checks
+- Type check, lint, and a clean production build all pass with all static pages generated; 62 offline comparison tests pass
+- Registry changes verified comment-only by comparing every `exerciseConfigVersion` hash before and after, and by confirming no non-comment line changed
+
+### *Remaining boundaries*
+
+- The aspect correction is enabled nowhere and no threshold has been re-derived against it; four primary-coupled scoring fits regress a compensation channel on a primary the correction changes and would need re-fitting first
+- The trace additions apply to future recordings only; earlier sessions cannot be reprocessed because the frame size and calibration inputs they would need were never recorded
+- Angle values are image-plane estimates from a single camera, not validated anatomical joint measurements, and every single-subject pilot threshold remains exactly that
+
+---
+
+## 📌 Update-9-4-26 | *RyanCodesling*
+
+- Added an opt-in Face Landmarker comparison path and offline calibration tools for `ex_004` diagnostics while keeping Pose authoritative for readiness, timing, coaching, scoring, persistence, and ML inputs
+- Added deterministic single-cue arbitration downstream of the existing warning latches so the patient sees at most one active compensation label without changing any metric computation, threshold, target, band, or coupled-fit constant
+- Added a staff-only `coaching_shadow_v2` recorder with labelled session steps, bounded local evidence, automated export checks, and file-download export for replay and false-cue review
+- Added a reproducible offline audit showing that the current normalized-coordinate angle pipeline is aspect-ratio dependent; the product correction and threshold re-derivation remain separate work
+- Closed the alternate-control evidence-loss path by routing both coaching-shadow Next controls through one capture-boundary export guard
+
+### *web\src\lib\pose\faceLandmarkerShadow.ts*, *web\src\app\(app)\camera\CameraClient.tsx*, *web\public\models*, and *ml\comparison*
+
+- Kept Face output inside the diagnostic record and staff panel; no Face value affects the live Pose path or becomes patient-visible behavior
+- Added fixed face-region tracking, baseline-relative roll/yaw/pitch records, controlled marks, coverage reporting, saved-clip comparison, and roll-calibration tooling
+- Retained the known Face boundary: the UI is staff-only, while enabled console/inference helpers are not role-gated, and `Copy diagnostics` still defaults to the most recent 1,200 records from a 3,000-record ring
+
+### *web\src\lib\exercises\registry.ts*, *web\src\lib\exercises\versioning.ts*, and *web\src\lib\pose\coachingCue.ts*
+
+- Declared one cue for every compensation metric, validated cue identifiers and timing values, and selected by priority, threshold-normalized excess, and deterministic cue identifier
+- Added minimum-active, minimum-display, immediate-clear, and per-cue cooldown behavior without re-testing warning thresholds or mutating the warning-latch state
+- Excluded cue presentation data from `exerciseConfigVersion` so a presentation-only change cannot split therapist-visible measurement trends; a separate persisted coaching-configuration version remains future work
+
+### *web\src\lib\pose\coachingShadowPlan.ts*, *web\src\lib\pose\coachingShadowPlan.test.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Centralized the capture-boundary rule used by both the floating remote and main coaching-shadow panel
+- Allowed movement between labels inside one capture, but blocked entry into another capture or plan completion while retained decisions remain unexported
+- Re-checked the live record ring and export refs inside the shared callback so a delayed UI-state refresh cannot bypass the guard
+
+### *ml\comparison\normalization_audit.py*, *ml\comparison\tests\test_normalization_audit.py*, and *web\src\lib\pose\poseMetrics.ts*
+
+- Reproduced the normalized-coordinate distortion and its square-frame controls without changing product metric behavior
+- Corrected the trunk-lean source comment that previously claimed horizontal and vertical tilt correction were geometrically symmetric
+- Kept every surfaced and persisted angle described as a pipeline value rather than an anatomical degree until the approved aspect correction and affected-threshold re-derivation are complete
+
+### *Validation*
+
+- All 38 framework-free TypeScript suites passed, including 5 capture-boundary guard checks, 18 cue-arbitration checks, and 13 measurement-version checks
+- `npx tsc --noEmit --pretty false`, `npm run lint`, and `npm run build` completed successfully
+- The documented comparison virtual environment passed all 62 Python comparison tests
+- `git diff --check` passed; the pending licence and 3D asset/tool work remains outside this sprint package
+
+### *Remaining boundaries*
+
+- Cue wording and priority are engineering defaults with only partial live verification; clinician review and the remaining isometric, near-peak, bidirectional, mixed-export, and reset checks are still owed
+- The normalization audit is evidence, not the product fix. Current thresholds were fitted in the existing pipeline space and must not be silently reused after a coordinate correction
+- `ml\config\registry.json` retains stale whole-file metadata, while its cue-excluded measurement payload and exported exercise configuration versions remain unchanged
+
+---
+
+## 📌 Update-7-31-26 | *RyanCodesling*
+
+- Consolidated the complete post–July 22 clinical-context and patient-workflow batch: typed prescription side/load, immutable runtime context, pain reporting, therapist review labels, occurrence-driven session starts, therapist-controlled order, and explicit completion acknowledgement
+- Preserved completed, started, missed, cancelled, pain-stopped, and otherwise historical occurrences without rewriting their durable prescription/session context; active camera work now locks and navigates by one exact actionable occurrence
+- Replaced moving per-frame tilt correction with capture-ready frozen neutral calibration shared by display, coaching, raw rule aggregation, and raw feature traces, while keeping the unprescribed limb observation-only
+- Made patient and therapist outcomes follow the immutable prescription context: unilateral results show only the treated side, bilateral sides remain separate, and unlike side/load/configuration contexts are not presented as one continuous trend
+- Added durable idempotent repetition/set delivery, duplicate-safe database writes, and archive-first permanent-deletion safeguards so retry or account administration cannot silently remove recorded clinical history
+- Kept live rule-based coaching separate from the offline ML scorer; no model training, inference, prediction writeback, or `ml.features.extract.rep-v1` feature definition changed
+
+### *AUTHENTICATION_SETUP.md*, *scripts\patient_exercises_pg.sql*, *scripts\exercise_programs_pg.sql*, *scripts\sessions_pg.sql*, and *scripts\exercise_occurrences_pg.sql*
+
+- Corrected the existing-database migration order to include exercise programs between prescriptions and sessions, and documented the dependency-safe owner-script sequence
+- Added constrained `prescribed_side` and typed resistance fields for prescriptions and programs; `unknown` remains migration-only for legacy rows
+- Added immutable versioned prescription snapshots and session context containing the exact dose, side, resistance, exercise definition, effective compensation bands, registry/configuration hashes, application revision, and repetition-quality version used at session start
+- Added terminal `pain_stopped` occurrences, structured 0–10 post-attempt pain reports, explicit terminal session reasons, and append-only `session_reviews`
+- Added positive therapist-controlled `sequence_index` fields with deterministic idempotent backfill and supporting indexes for program exercises and patient prescriptions
+- Upgraded only still-actionable version-1 occurrence snapshots to version 2 with their captured sequence; started and terminal history remains unchanged, and Manila calendar dates govern migration-time actionability
+
+### *scripts\exercises_pg.sql*, *scripts\patient_therapist_pg.sql*, *scripts\patient_exercises_pg.sql*, *scripts\exercise_programs_pg.sql*, and *scripts\sessions_pg.sql*
+
+- Changed durable user relationships to `ON DELETE RESTRICT` while keeping audit-actor references nullable and ephemeral account data independently removable
+- Added duplicate preflight checks and unique `(session_id, set_index)` and `(session_id, rep_index)` indexes so deployment stops for manual review instead of deleting or merging existing outcomes
+- Kept the schema scripts rerunnable and history-preserving for owner deployment
+
+### *web\src\lib\prescriptionContext.ts*, *web\src\lib\exercises\versioning.ts*, *web\src\lib\db.ts*, and the patient-exercise, program, occurrence, and session APIs
+
+- Centralized typed side/resistance parsing and validation, including positive-load/unit pairing and migration-only legacy values
+- Made session creation the authoritative transaction: it locks the exact actionable occurrence selected by the patient, adopts that occurrence's snapshot, hashes the live registry/configuration, closes an orphaned open attempt as superseded, and returns the runtime prescription used by the camera
+- Made terminal transitions first-write-wins; pain reports and identical clinician-review retries are idempotent, while changed clinician judgments append a new audit record
+- Derived therapist review scores only from sufficiently covered raw rule data or isometric hold-rule data; smoothed coaching scores remain audit-only
+- Kept the exact occurrence in dashboard and camera URLs. Explicit stale or non-actionable identifiers now fail closed to the schedule instead of silently selecting different work
+- Ordered actionable work by state, due date, therapist sequence, exercise name, exercise identifier, and occurrence identifier without introducing a global exercise order
+
+### *web\src\lib\pose\eventOutbox.ts*, *web\src\app\api\sessions\[id]\rep-events\route.ts*, *web\src\app\api\sessions\[id]\set-events\route.ts*, and *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Added a durable repetition/set outbox that removes items only after an acknowledged OK response, retains failed batches, prevents concurrent duplicate sends, and retries with bounded exponential backoff
+- Persisted undelivered clinical outcome events in local storage for same-session recovery; tuning traces use bounded in-memory retries and report dropped batches without risking browser storage quotas
+- Validated event rows independently so one malformed repetition cannot discard the rest of a valid batch, and made session completion report partial persistence when outcome events remain queued
+- Replaced retry-sensitive event inserts with `ON CONFLICT DO NOTHING` backed by the unique set/repetition indexes
+
+### *web\src\app\(app)\camera\CameraClient.tsx*, *web\src\lib\pose\captureReadiness.ts*, *web\src\lib\pose\neutralCalibration.ts*, *web\src\lib\pose\compensationSignals.ts*, and *web\src\lib\pose\poseMetrics.ts*
+
+- Added prescribed-side-aware dynamic progress and independent isometric per-arm timing; the unprescribed side remains visible as observation and cannot satisfy the treatment target
+- Applied the front-camera anatomical-side swap to unilateral wrist readiness, selected the prescribed limb for primary cards, used the matching-side residual for primary-coupled warnings, and suppressed form warnings outside an active capture-ready calibrated set
+- Added a three-second neutral setup with at least 15 valid samples, a 250 ms maximum credited gap, median tilt/baseline estimates, readiness-loss pauses, and recalibration after sustained capture loss or camera restart
+- Applied frozen neutral tilt to every derived metric path while retaining live hip/ear agreement as confidence metadata; `upper_body_v3`, pose-metric versioning, session-context V2, and repetition-quality V2 prevent unlike algorithms from being silently compared
+- Preserved legacy `upper_body_v1`/`upper_body_v2`, session-context V1, and repetition-quality V1 readback
+- Added the post-attempt pain-report step and one-click pain stop, prevented pain-stopped work from resuming before therapist follow-up, and kept that state separate from completed, missed, or adherence outcomes
+- Retained the just-completed side-aware recap after reporting or decline, removed Redo from terminal patient recaps, and delayed queue removal/navigation until explicit Next or Finish acknowledgement
+- Reset displayed metrics, warning labels, near-peak state, and the metric clock before paint whenever the selected occurrence changes
+
+### *web\src\app\(app)\dashboard\patient\page.tsx*, *web\src\lib\exercises\scheduleSessionSummary.ts*, and patient schedule/session presentation
+
+- Limited `Start Session` to actionable camera occurrences while leaving therapist-owned manual exercises in their acknowledgement workflow
+- Added side-specific peak and hold aggregates. Unilateral live and persisted recaps show only the prescribed side; bilateral outcomes retain separate left/right values and asymmetry
+- Reworded dynamic quality as “met full-ROM target” so counted partial repetitions are not presented as missing data
+- Replaced schedule-only `paired hold` and unconditional left/right repetition wording with shared prescribed-side helpers and legacy-safe aggregate fallbacks
+
+### *web\src\app\(app)\dashboard\therapist\assign\page.tsx*, *web\src\app\(app)\dashboard\therapist\programs\page.tsx*, *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, and *web\src\app\(app)\dashboard\_components\ExerciseTrends.tsx*
+
+- Added reusable prescribed-side and resistance controls to direct assignments and reusable programs, including before/after review text
+- Added editable positive unique order fields with program-to-prescription copying; new selections use the highest retained order plus one so later additions cannot collide with preserved history
+- Added pain-follow-up indicators and notifications, recorded context/version readback, and append-only review labels for agreement, form worse than score, or form better than score
+- Segmented descriptive trends by exercise, prescribed side, resistance, and exercise-configuration hash, with the comparison context shown on each card
+
+### *web\src\lib\sessionOutcomePresentation.ts*, administrative/user APIs and surfaces, and *web\src\lib\email.ts*
+
+- Applied prescribed-side outcome wording to patient recaps, therapist summaries, set drill-downs, and trend charts while preserving bilateral asymmetry
+- Made permanent user deletion transactional, archive-first, self-protected, and history-free only; prescriptions, sessions, assigned patients, owned programs/exercises, and therapist reviews block deletion and remain available through archival
+- Returned the server's eligibility reason to the admin UI and corrected deletion confirmation/email wording so it no longer claims durable history is removed
+
+### *web\scripts\export-registry.ts*, *web\scripts\export-tuning-traces.ts*, *ml\analysis\real_frames.py*, and *ml\tests\test_real_frames.py*
+
+- Added registry and per-exercise configuration hashes to registry export output
+- Added `upper_body_v3` export/readback with frozen-neutral provenance while retaining V1/V2 trace compatibility and the existing raw feature field mapping
+- Added focused mapper coverage confirming V3 calibration/tilt metadata does not change offline feature values
+
+### *Validation and deployment*
+
+- All **34** framework-free TypeScript regression files pass, including clinical-context, typed-load, pain-state, event-outbox, frozen-calibration, legacy-version, prescribed-side presentation, deletion, ordering, exact-occurrence, actionable-queue, snapshot-version, and reset contracts
+- `npx tsc --noEmit`, full `npm run lint`, and `npm run build` pass; the production build generated all **34** pages/routes and retains only the existing multiple-lockfile workspace-root warning
+- The real-trace mapper passes **5** focused Python tests, including V1 compatibility and V3 frozen-tilt metadata
+- Applied the five clinical-context scripts twice in a rolled-back temporary PostgreSQL schema, then deployed them through pgAdmin as `postgres`; restricted-role readback confirmed the expected columns, constraints, tables, and grants without changing the deployment baseline
+- Deployed the history-protection/event DDL in one owner transaction; restricted-role readback confirmed six restrictive relationships, both unique event indexes, zero duplicate keys, and duplicate retries returning `inserted: 0, skipped: 1`
+- Applied the three occurrence-workflow scripts twice against legacy-shaped temporary tables, then individually to the live database; readback confirmed sequence checks/indexes, deterministic backfill, pending-only V1-to-V2 upgrade, preservation of in-progress context, and unambiguous legacy-session links
+- Authenticated HTTP verification covered typed left-only band assignment, immutable session context, pain stopping/reporting, append-only therapist review, role boundaries, ordered programs/prescriptions, and 400/409 rejection of invalid or expired exact session starts
+- Real-person occurrences 262/263 verified the right-only isometric hold, left-only dynamic wrong-side negative control, readiness pauses, and prescribed-side persisted summaries
+- Fresh occurrence 264 completed the retained-recap gate: after the right-only five-second hold and declined report, the camera remained on `Session complete` with `Right hold 5s / 5s`, `Sets 1 / 1`, and no Redo action until explicit Finish acknowledgement
+- `git diff --check` passes with line-ending normalization warnings only
+
+### *Remaining follow-up*
+
+- Obtain clinician-approved `ex_004` assisted-hold parameters and retain the deferred `ex_005` threshold decision until its required live-protocol input exists
+- Before new evaluation recordings, version richer in-session measurement: effective compensation exposure and movement phase, capture confidence/missingness, coaching exposure/response, and a validated isometric hold-quality contract. Preserve legacy readers and the raw-analytics-versus-smoothed-live-display boundary
+- Surface those measurements first as cautious set/session therapist summaries, then evaluate one phase-aware prioritized cue in non-visible shadow mode on `ex_001` and `ex_006`. Patient-visible rollout requires replay tests, live-webcam evidence, clinician-reviewed wording/priority, and no incidental threshold changes
+- Decide whether the calibrated Random Forest remains an offline thesis-feasibility artifact or becomes an application feature; real-session feature ingestion, prediction provenance/persistence, and dashboard ML scoring are not implemented
+- Resolve the remaining prescription/result contracts before claiming a complete rehabilitation product: patient-specific ROM/counter intent is not prescribable, `pairedReps` is a minimum-of-sides aggregate rather than time-window pairing, and prescribed rest still exposes a skip override
+- Collect a new untouched multi-subject evaluation set only after the exercise and measurement protocols are frozen; keep baseline and feedback-assisted recordings explicitly separable, and do not treat cue response as a clinical label. Researcher sessions 168–174 remain calibration evidence
+
+## 📌 Update-7-22-26 | *RyanCodesling*
 
 - Preserved prescription, occurrence, session, set, repetition, and raw-trace history by replacing exercise and assignment hard deletion with archival and cancellation workflows
 - Reworked patient and therapist read models so prescription lifecycle, adherence, schedule status, completed outcomes, capture quality, and form quality remain separate and auditable
@@ -63,10 +1905,10 @@
 
 ### *Remaining follow-up*
 - Keep calibrated ML inference and dashboard writeback deferred until a frozen real-data collection protocol and untouched evaluation cohort exist
-- Add the before-collection schema fields for load, pain/stop-pain, frequency/adherence, prescription side, registry version, and therapist review labels
+- Complete a real-person webcam pass for prescribed-side repetition/timing behavior; automated mirrored-wrist gating coverage already passes, but pose-dependent behavior cannot be claimed from an API-only session
 - Obtain clinician-approved decisions for the `ex_004` assisted-hold target and the deferred `ex_005` threshold retune
 
-## 📌 Update-7-11-26
+## 📌 Update-7-11-26 | *RyanCodesling*
 
 - Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline
 - Extended the offline synthetic-feasibility pipeline across all six active exercises while keeping the browser's rule-based feedback as the live coaching layer
@@ -160,7 +2002,7 @@
 - Collect future model evaluation data only after the protocol is frozen; do not reuse sessions 168–174 as held-out evidence
 - Review and disposition the dependency-audit findings before deployment rather than applying a blind breaking upgrade
 
-## 📌 Update-6-8-26
+## 📌 Update-6-8-26 | *RyanCodesling*
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
 - Kept the ML scope explicit: this is an offline/batch, synthetic-data proof-of-concept for a calibrated good-vs-compensated quality score, not a live browser model and not clinical validation
 - Added a registry export path so the Python ML generator reads exercise definitions, thresholds, target ROM, and compensation metrics from the same exercise registry used by the web app
@@ -269,7 +2111,7 @@
 
 ---
 
-## 📌 Update-6-7-26
+## 📌 Update-6-7-26 | *RyanCodesling*
 - Stabilized live compensation warning feedback so borderline landmark noise no longer flashes warning cards and canvas overlays on every metrics refresh
 - Added display-only hysteresis and debounce for compensation warnings while leaving One Euro filtering, raw frame capture, compensation scoring, registry thresholds, and rep counting unchanged
 - Kept peak-only warnings, such as elbow extension cues near overhead ROM, gated to the relevant movement phase while adding temporal persistence to the final warning display state
@@ -603,7 +2445,7 @@
 
 ---
 
-## 📌 Update-6-6-26
+## 📌 Update-6-6-26 | *RyanCodesling*
 
 - Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
 - Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
@@ -724,7 +2566,7 @@
 
 --- 
 
-## 📌 Update-6-4-26
+## 📌 Update-6-4-26 | *RyanCodesling*
 
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
 - Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
@@ -893,7 +2735,7 @@
 
 ---
 
-## 📌 Update-5-31-26
+## 📌 Update-5-31-26 | *RyanCodesling*
 
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
 - Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
@@ -978,7 +2820,7 @@
 
 ---
 
-## 📌 Update-5-29-26
+## 📌 Update-5-29-26 | *RyanCodesling*
 
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
 - Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
@@ -1024,7 +2866,7 @@
 
 ---
 
-## 📌 Update-5-28-26
+## 📌 Update-5-28-26 | *RyanCodesling*
 
 - Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
 - Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
@@ -1305,7 +3147,7 @@
 
 --- 
 
-## 📌 Update-5-22-26
+## 📌 Update-5-22-26 | *RyanCodesling*
 
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
 - **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
@@ -1525,7 +3367,7 @@
 
 --- 
 
-## 📌 Update-5-19-26
+## 📌 Update-5-19-26 | *RyanCodesling*
 Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_004` bidirectional rep counting was iterated heavily and is now **frozen** as a proof-of-concept-adequate mitigation (see Current Status).
 
 - Implemented shoulder flexion (`ex_002`) and scapular elevation + baseline capture (`ex_003`) — both now code-complete
@@ -1721,9 +3563,9 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ### *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*
 - Fully rewrote Patient Profile page — removed all localStorage (admin_users, admin_exercises, patient_exercises, exercise_templates, patient_sessions keys)
 - Fetches patient info from `GET /api/users/[id]` and exercises from `GET /api/patient-exercises?patientId=` in parallel
-- Shows Personal Information: Full Name, Age, Email, Progress Status badge, Assigned Specialist name
+- Shows Personal Information: Full Name, Age, Email, Progress Status badge, Assigned Therapist name
 - Progress Status is derived from exercise statuses (not started / in progress / progressing / completed)
-- Assigned Specialist name is joined from the therapist's row in the users table
+- Assigned Therapist name is joined from the therapist's row in the users table
 - Ongoing Exercises section: exercises with status `pending` or `in_progress`, color-coded badge, View Exercise button
 - Finished Exercises section: exercises with status `completed`, green Completed badge
 - Sessions Record section: empty state (no sessions table yet)
@@ -1843,7 +3685,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-11-26
+## 📌 Update-5-11-26 | *RyanCodesling*
 - Implemented the real shoulder abduction metric for Lateral Arm Raises (`ex_001`)
 - Added per-side shoulder abduction calculation for left and right arms
 - Fixed cross-body arm movement being mistaken as valid lateral arm raise motion
@@ -2065,7 +3907,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-5-4-26
+## 📌 Update-5-4-26 | *RyanCodesling*
 
 ### *web\src\lib\exercises\registry.ts*
 - Added exercise registry as the source of truth for the six thesis exercises (`ex_001` to `ex_006`)
@@ -2124,7 +3966,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-30-26
+## 📌 Update-4-30-26 | *RyanCodesling*
 ### *web\src\lib\pose\poseMetrics.ts*
 - Added trunkLean as a third metric
 - Added a wrapper to handle the left-right convention, instead of having to swap out every left-right to right-left
@@ -2167,7 +4009,7 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 
 ---
 
-## 📌 Update-4-24-26
+## 📌 Update-4-24-26 | *RyanCodesling*
 ### *web\src\lib\pose*
 - Added oneEuroFilter.ts for landmarker smoothing
 
@@ -2241,7 +4083,7 @@ Added 2 new database tables: therapist, patients
 
 ---
 
-## 📌 Update-4-09-26
+## 📌 Update-4-09-26  | *RyanCodesling*
 
 ### *web/source/lib/pose*
 - Added poseMetrics.tsx for math engine

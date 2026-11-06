@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Third-party and separately licensed assets
+-------------------------------------------
+
+This MIT license applies to the repository's original software and
+documentation except where a file is expressly identified as separately
+licensed. Atlas-derived anatomy geometry and derivative visual media are not
+licensed under MIT. Their scope, required attributions, modification notice,
+and CC BY-SA 4.0 license URI are recorded in:
+
+assets/blender/LICENSE-CC-BY-SA-4.0.md
+assets/blender/THIRD_PARTY_ASSETS.md

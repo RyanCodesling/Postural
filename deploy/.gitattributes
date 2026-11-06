@@ -1,0 +1,4 @@
+# These files run on the Linux server: keep LF line endings in every checkout, so a copy made
+# from a Windows working tree still runs under bash and node.
+*.sh text eol=lf
+*.mjs text eol=lf

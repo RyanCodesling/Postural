@@ -35,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from generators.registry import get_exercise
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+FEATURE_DIR = DATA_DIR / "features-v2"
+FEATURE_DEFINITION = "ml.features.extract.rep-v2"
 
 REP_GROUP_KEYS = ["session_id", "set_index", "side", "rep_index"]
 ID_COLUMNS = ("session_id", "subject_id", "label")  # never model features
@@ -50,14 +52,20 @@ def _moving_average(x: np.ndarray, w: int = 5) -> np.ndarray:
 def _smoothness(primary: np.ndarray, fps: int) -> tuple[float, float]:
     """Return (neg_log_dimensionless_jerk, submovement_count). Higher first = smoother."""
     n = primary.size
-    duration = n / fps
-    peak = float(np.max(np.abs(primary))) or 1.0
+    if n < 4 or not np.isfinite(primary).all():
+        return float("nan"), float("nan")
+    duration = (n - 1) / fps
+    amplitude = float(np.max(primary) - np.min(primary))
+    if amplitude <= 1e-9:
+        return float("nan"), float("nan")
     dt = 1.0 / fps
 
     # Dimensionless jerk on the raw position signal.
     jerk = np.diff(primary, n=3) * (fps ** 3) if n > 3 else np.array([0.0])
     integral_jerk_sq = float(np.sum(jerk ** 2) * dt)
-    dj = (duration ** 3 / peak ** 2) * integral_jerk_sq + 1e-9
+    # Position jerk has units amplitude / time^3. Its squared integral
+    # requires duration^5 / amplitude^2 (not duration^3 / amplitude^2).
+    dj = (duration ** 5 / amplitude ** 2) * integral_jerk_sq + 1e-9
     neg_log_dj = float(-np.log(dj))
 
     # Submovement count: prominent peaks of the speed profile (lightly smoothed
@@ -77,6 +85,8 @@ def _rep_features_one(g: pd.DataFrame, target_rom: float,
     g = g.sort_values("frame")
     primary = g["primary"].to_numpy(dtype=float)
     n = primary.size
+    if not np.isfinite(primary).all() or not np.all(np.diff(g["frame"].to_numpy()) == 1):
+        raise ValueError("rep-v2 requires contiguous finite 30 Hz primary samples; resample or exclude gaps explicitly")
     fps = 30
     total_ms = n / fps * 1000.0
 
@@ -95,6 +105,7 @@ def _rep_features_one(g: pd.DataFrame, target_rom: float,
     neg_log_dj, n_sub = _smoothness(primary, fps)
 
     feats = {
+        "feature_definition": FEATURE_DEFINITION,
         **{k: g[k].iloc[0] for k in ("session_id", "subject_id", "label",
                                      "set_index", "side", "rep_index")},
         # Tier 1
@@ -193,6 +204,9 @@ def _extract_hold_features(frames: pd.DataFrame, exercise_id: str) -> pd.DataFra
 
 
 def extract_rep_features(frames: pd.DataFrame, exercise_id: str) -> pd.DataFrame:
+    if "captured_at" in frames.columns:
+        from analysis.prepare_real import validate_prepared_timing
+        validate_prepared_timing(frames)
     params = get_exercise(exercise_id)
     if params.framing == "isometric":
         return _extract_hold_features(frames, exercise_id)
@@ -277,8 +291,8 @@ def _aggregate_isometric(rep_feats: pd.DataFrame, sets: pd.DataFrame,
 
         row = {
             "session_id": sid,
-            "subject_id": int(g["subject_id"].iloc[0]),
-            "label": int(g["label"].iloc[0]),
+            "subject_id": g["subject_id"].iloc[0],
+            "label": g["label"].iloc[0],
             "n_holds": len(g),
             "n_sets": int(g["set_index"].nunique()),
             "completion_rate": completion,
@@ -307,6 +321,7 @@ def aggregate_session_features(rep_feats: pd.DataFrame, sets: pd.DataFrame,
     params = get_exercise(exercise_id)
     if params.framing == "isometric":
         return _aggregate_isometric(rep_feats, sets, exercise_id, frames)
+    require_current_feature_definition(rep_feats)
     comp_names = [c.name for c in params.scored_compensations]
     # Per-limb runs both sides every set (2x the per-set target); bidirectional
     # alternates within one target count (1x).
@@ -326,9 +341,10 @@ def aggregate_session_features(rep_feats: pd.DataFrame, sets: pd.DataFrame,
         completion = len(g) / target if target and target > 0 else np.nan
 
         row = {
+            "feature_definition": FEATURE_DEFINITION,
             "session_id": sid,
-            "subject_id": int(g["subject_id"].iloc[0]),
-            "label": int(g["label"].iloc[0]),
+            "subject_id": g["subject_id"].iloc[0],
+            "label": g["label"].iloc[0],
             "n_reps": len(g),
             "completion_rate": completion,
             "count_asym": abs(left.size - right.size),
@@ -360,6 +376,11 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
             if c not in ID_COLUMNS and pd.api.types.is_numeric_dtype(df[c])]
 
 
+def require_current_feature_definition(df: pd.DataFrame) -> None:
+    if "feature_definition" not in df or not df["feature_definition"].eq(FEATURE_DEFINITION).all():
+        raise ValueError("Legacy or mixed dynamic features: regenerate with ml.features.extract.rep-v2 before training")
+
+
 def main() -> None:
     import argparse
 
@@ -375,8 +396,9 @@ def main() -> None:
     rep_feats = extract_rep_features(frames, ex)
     sess_feats = aggregate_session_features(rep_feats, sets, sessions, ex, frames=frames)
 
-    rep_feats.to_parquet(DATA_DIR / f"{ex}_rep_features.parquet", index=False)
-    sess_feats.to_parquet(DATA_DIR / f"{ex}_session_features.parquet", index=False)
+    FEATURE_DIR.mkdir(parents=True, exist_ok=True)
+    rep_feats.to_parquet(FEATURE_DIR / f"{ex}_rep_features.parquet", index=False)
+    sess_feats.to_parquet(FEATURE_DIR / f"{ex}_session_features.parquet", index=False)
     print(f"{ex}: {len(rep_feats):,} reps -> {len(sess_feats)} sessions, "
           f"{len(feature_columns(sess_feats))} session features")
 

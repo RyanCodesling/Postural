@@ -1,0 +1,131 @@
+/**
+ * Run with:
+ *   npx tsx src/lib/pose/neutralCalibration.test.ts
+ */
+import {
+  NEUTRAL_CALIBRATION_DURATION_MS,
+  NEUTRAL_CALIBRATION_POSITIONING_MS,
+  advanceNeutralCalibrationClock,
+  positioningSecondsLeft,
+  frozenNeutralTiltReference,
+  medianFinite,
+  neutralCalibrationProgressPct,
+  neutralCalibrationReady,
+  newNeutralCalibrationClock,
+  pauseNeutralCalibrationClock,
+} from "./neutralCalibration";
+import { computeShoulderSymmetry, type TiltReference, NO_ASPECT_CORRECTION } from "./poseMetrics";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+function clockAtFps(fps: number) {
+  let clock = newNeutralCalibrationClock();
+  const tick = 1_000 / fps;
+  for (let now = 0; now <= NEUTRAL_CALIBRATION_DURATION_MS + tick; now += tick) {
+    clock = advanceNeutralCalibrationClock(clock, now);
+  }
+  return clock;
+}
+
+for (const fps of [5, 10, 30]) {
+  const clock = clockAtFps(fps);
+  assert(neutralCalibrationReady(clock), `${fps} FPS did not become ready`);
+  assert(
+    neutralCalibrationProgressPct(clock) === 100,
+    `${fps} FPS progress did not reach 100`,
+  );
+}
+
+{
+  let clock = newNeutralCalibrationClock();
+  clock = advanceNeutralCalibrationClock(clock, 0);
+  clock = advanceNeutralCalibrationClock(clock, 100);
+  clock = pauseNeutralCalibrationClock(clock);
+  clock = advanceNeutralCalibrationClock(clock, 2_000);
+  assert(
+    clock.validElapsedMs === 100,
+    "paused readiness gap was credited to calibration",
+  );
+}
+
+{
+  let clock = newNeutralCalibrationClock();
+  clock = advanceNeutralCalibrationClock(clock, 0);
+  clock = advanceNeutralCalibrationClock(clock, 5_000);
+  assert(
+    clock.validElapsedMs === 250,
+    "single stalled frame exceeded the credited-dt cap",
+  );
+  assert(!neutralCalibrationReady(clock), "stalled frames completed calibration");
+}
+
+{
+  let clock = newNeutralCalibrationClock();
+  for (let index = 0; index < 14; index += 1) {
+    clock = advanceNeutralCalibrationClock(clock, index * 250);
+  }
+  assert(
+    clock.validElapsedMs >= NEUTRAL_CALIBRATION_DURATION_MS,
+    "test setup did not satisfy duration",
+  );
+  assert(!neutralCalibrationReady(clock), "fewer than 15 samples were accepted");
+}
+
+assert(medianFinite([1, 2, 3, 100]) === 2.5, "even median is incorrect");
+assert(medianFinite([1, 2, 100]) === 2, "odd median is incorrect");
+assert(
+  medianFinite([Number.NaN, 2, Number.POSITIVE_INFINITY]) === 2,
+  "non-finite samples were not ignored",
+);
+assert(medianFinite([]) === null, "empty median must be null");
+
+{
+  const landmarks = Array.from({ length: 33 }, () => ({
+    x: 0,
+    y: 0,
+    visibility: 0,
+  }));
+  landmarks[11] = { x: 0.6, y: 0.3, visibility: 1 };
+  landmarks[12] = { x: 0.4, y: 0.3, visibility: 1 };
+  const observedA: TiltReference = {
+    cameraTiltDeg: 0,
+    confidence: "high",
+    divergenceDeg: 0,
+  };
+  const observedB: TiltReference = {
+    cameraTiltDeg: 12,
+    confidence: "high",
+    divergenceDeg: 2,
+  };
+  const first = computeShoulderSymmetry(
+    landmarks,
+    frozenNeutralTiltReference(observedA, 4.5),
+    NO_ASPECT_CORRECTION,
+  );
+  const second = computeShoulderSymmetry(
+    landmarks,
+    frozenNeutralTiltReference(observedB, 4.5),
+    NO_ASPECT_CORRECTION,
+  );
+  assert(first?.angleDeg === 4.5, "frozen correction was not applied");
+  assert(
+    second?.angleDeg === first.angleDeg &&
+      second.elevatedSide === first.elevatedSide,
+    "a changing observed tilt altered a static landmark outcome",
+  );
+}
+
+// The positioning countdown before every calibration: 5 s, counted down in
+// whole seconds, then the 3 s calibration (user decision 2026-10-19).
+assert(NEUTRAL_CALIBRATION_POSITIONING_MS === 5_000, "the positioning countdown is 5 s");
+assert(NEUTRAL_CALIBRATION_DURATION_MS === 3_000, "the calibration stays 3 s");
+assert(positioningSecondsLeft(10_000, 5_000) === 5, "5 s left at its start");
+assert(positioningSecondsLeft(10_000, 5_001) === 5, "a part second rounds up");
+assert(positioningSecondsLeft(10_000, 9_999) === 1, "the last second shows 1");
+assert(positioningSecondsLeft(10_000, 10_000) === 0, "done when it runs out");
+assert(positioningSecondsLeft(10_000, 12_000) === 0, "never negative");
+assert(positioningSecondsLeft(null, 1_000) === 0, "no countdown running");
+
+console.log("neutralCalibration tests passed");

@@ -1,0 +1,79 @@
+{
+  "exercise": "ex_007",
+  "revision": "mpfb-straight-press-2026-09-15",
+  "source_file": "ex_001_figure_mpfb.blend",
+  "source_sha256": "402a1da4346d1737b91b762d94f5b10175c558b2ae92905e905c8feaee57a511",
+  "frames": 300,
+  "fps": 30,
+  "status": "animation draft",
+  "phases": [
+    [
+      1,
+      24,
+      "Ready"
+    ],
+    [
+      25,
+      119,
+      "Press"
+    ],
+    [
+      120,
+      144,
+      "Pause"
+    ],
+    [
+      145,
+      239,
+      "Lower"
+    ],
+    [
+      240,
+      300,
+      "Ready"
+    ]
+  ],
+  "checkpoints": [
+    1,
+    24,
+    48,
+    72,
+    96,
+    120,
+    144,
+    168,
+    192,
+    216,
+    300
+  ],
+  "peak_frame": 120,
+  "pose_note": "Bilateral bodyweight press from folded arms with wrists level with their shoulders and closed fists. Each fist travels vertically with a 15-degree elbow bend at the top. Elbow path and shoulder roll are authored. No scapula bone or clinical shoulder rhythm is modelled.",
+  "mesh_vertex_sha256": {
+    "Figure_Body": "38014831cf727326ca4b7a44132275940a2ffa7b894f49f91714d6c7d46029bc",
+    "Figure_Top": "83db99ce39d664774092ee7fc72622fc1de730ddab8b2765b30f9a8c1063f544",
+    "Figure_Shorts": "29eeffcb9cb29c780265e91ec9abe0d7818690b07b3cc6429cbf712e5dbcade8"
+  },
+  "garment_weight_adjustment": {
+    "vertices_reweighted": 591,
+    "transfer": "upperarm to same-side clavicle"
+  },
+  "camera_fit": {
+    "body_envelope_min": [
+      -0.3410577178001404,
+      -0.24235115945339203,
+      1.1607345307140804e-08
+    ],
+    "body_envelope_max": [
+      0.34105753898620605,
+      0.09550102800130844,
+      1.9646728038787842
+    ],
+    "camera_location": [
+      -8.940696716308594e-08,
+      -5.630694389343262,
+      1.0693788528442383
+    ],
+    "frames_measured": 300
+  },
+  "scope": "Presentation asset only; no product integration or clinical validation."
+}

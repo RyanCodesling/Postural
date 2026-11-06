@@ -1,12 +1,11 @@
 -- Exercises table for the admin dashboard.
--- Run this in pgAdmin after alter_users_pg.sql.
 
 CREATE TABLE IF NOT EXISTS exercises (
   id                   VARCHAR(50)  PRIMARY KEY,
   name                 VARCHAR(255) NOT NULL,
   description          TEXT         NOT NULL,
   is_custom            BOOLEAN      NOT NULL DEFAULT FALSE,
-  owner_therapist_id   VARCHAR(50)  REFERENCES users(id) ON DELETE SET NULL,
+  owner_therapist_id   VARCHAR(50)  REFERENCES users(id) ON DELETE RESTRICT,
   monitoring_mode      VARCHAR(20)  NOT NULL DEFAULT 'camera'
                                      CHECK (monitoring_mode IN ('camera', 'manual')),
   archived_at          TIMESTAMPTZ,
@@ -17,11 +16,34 @@ CREATE TABLE IF NOT EXISTS exercises (
 -- Safe to re-run on existing tables
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS is_custom BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS owner_therapist_id VARCHAR(50)
-  REFERENCES users(id) ON DELETE SET NULL;
+  REFERENCES users(id) ON DELETE RESTRICT;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS monitoring_mode VARCHAR(20) NOT NULL DEFAULT 'camera';
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE exercises ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50)
   REFERENCES users(id) ON DELETE SET NULL;
+
+-- A custom exercise's optional guide video: an uploaded MP4/WebM file kept on
+-- the server's disk (see web/src/lib/exercises/customVideoStorage.ts), or a
+-- YouTube video id. Archiving keeps both, so a restored exercise has its video.
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS video_mime_type VARCHAR(20);
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS youtube_video_id VARCHAR(11);
+-- New uploads use immutable filenames. NULL preserves pre-existing id.mp4/webm files.
+ALTER TABLE exercises ADD COLUMN IF NOT EXISTS video_file_name VARCHAR(100);
+DO $$
+BEGIN
+  ALTER TABLE exercises
+    ADD CONSTRAINT exercises_video_mime_type_check
+    CHECK (video_mime_type IN ('video/mp4', 'video/webm'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- Ownership is durable history. Archive the therapist account while any custom
+-- exercise remains attributed to it; do not silently erase ownership.
+ALTER TABLE exercises DROP CONSTRAINT IF EXISTS exercises_owner_therapist_id_fkey;
+ALTER TABLE exercises
+  ADD CONSTRAINT exercises_owner_therapist_id_fkey
+  FOREIGN KEY (owner_therapist_id) REFERENCES users(id) ON DELETE RESTRICT;
 
 DO $$
 BEGIN

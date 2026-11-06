@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
+import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { COACHING_CONFIG_VERSIONS, EXERCISE_CONFIG_VERSIONS, sha256Version } from "@/lib/exercises/versioning";
+import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
+import { hasRecording } from "@/lib/recording/storage";
 import {
   createSession,
-  getPatientExercises,
   getSessionsForPatient,
   getUsers,
   SessionNotScheduledError,
 } from "@/lib/db";
+
+/** Marks the sessions that have a stored video, for the dashboards' video lists. */
+async function withRecordingFlags<T extends { id: unknown }>(sessions: T[]) {
+  const flags = await Promise.all(sessions.map((s) => hasRecording(Number(s.id))));
+  return sessions.map((s, i) => ({ ...s, hasRecording: flags[i] }));
+}
 
 // GET /api/sessions — session history summaries.
 //   patient   → own sessions.
@@ -17,7 +27,7 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     if (user.role === "patient") {
-      const sessions = await getSessionsForPatient(user.id);
+      const sessions = await withRecordingFlags(await getSessionsForPatient(user.id));
       return NextResponse.json({ sessions });
     }
 
@@ -33,7 +43,7 @@ export async function GET(request: NextRequest) {
           { status: 403 },
         );
       }
-      const sessions = await getSessionsForPatient(patientId);
+      const sessions = await withRecordingFlags(await getSessionsForPatient(patientId));
       return NextResponse.json({ sessions });
     }
 
@@ -57,35 +67,109 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const patientExerciseId = Number(body?.patientExerciseId);
+    const occurrenceId = Number(body?.occurrenceId);
     const exerciseId = body?.exerciseId;
 
-    if (!Number.isInteger(patientExerciseId) || typeof exerciseId !== "string") {
+    if (
+      !Number.isInteger(patientExerciseId) ||
+      patientExerciseId < 1 ||
+      !Number.isInteger(occurrenceId) ||
+      occurrenceId < 1 ||
+      typeof exerciseId !== "string"
+    ) {
       return NextResponse.json(
-        { error: "patientExerciseId (integer) and exerciseId (string) are required" },
+        {
+          error:
+            "patientExerciseId (integer), occurrenceId (integer), and exerciseId (string) are required",
+        },
         { status: 400 },
       );
     }
 
-    // Verify the patient_exercise belongs to this patient (and matches the
-    // exercise id) before creating a session against it.
-    const assigned = await getPatientExercises(user.id);
-    const owns = assigned.some(
-      (pe) => pe.id === patientExerciseId && pe.exercise_id === exerciseId,
-    );
-    if (!owns) {
+    const coaching = body?.coaching;
+    if (coaching !== undefined && (!validCoachingProvenance(coaching) || coaching.configuration.exerciseId !== exerciseId ||
+        sha256Version(coaching.configuration) !== coaching.version)) {
+      return NextResponse.json({ error: "Invalid coaching configuration provenance" }, { status: 400 });
+    }
+    const preSessionPain = parsePreSessionPain(body?.preSessionPain);
+    if (!preSessionPain.ok) {
+      return NextResponse.json({ error: preSessionPain.error }, { status: 400 });
+    }
+    // Recording is opt-in per session; only an explicit true records consent.
+    if (body?.videoConsent !== undefined && typeof body.videoConsent !== "boolean") {
+      return NextResponse.json({ error: "videoConsent must be true or false" }, { status: 400 });
+    }
+    if (body?.videoConsentRemembered !== undefined && typeof body.videoConsentRemembered !== "boolean") {
+      return NextResponse.json({ error: "videoConsentRemembered must be true or false" }, { status: 400 });
+    }
+    // Consent counts only for the notice the patient was shown. A page opened
+    // before the notice changed (or a choice remembered under an older one)
+    // is sent back to reload and read the current notice.
+    if (body?.videoConsent === true && body?.videoNotice !== SESSION_VIDEO_NOTICE_VERSION) {
       return NextResponse.json(
-        { error: "patient_exercise not found for this patient" },
-        { status: 403 },
+        {
+          error: "The video notice has been updated. Reload this page to read it, then start again.",
+          code: "video_notice_changed",
+        },
+        { status: 409 },
       );
     }
-
+    // The session is filed under this server's measurement version. A page
+    // loaded before an update that changed how angles are measured (D-48)
+    // would store its readings under the wrong one, so it is sent back to
+    // reload. Pages from before this field existed send nothing. The same
+    // holds for the exercise's own measurement version, which changes when
+    // only that exercise's measurement does (D-49); the page sends the one it
+    // computed from its own code.
+    const exerciseConfigVersion = EXERCISE_CONFIG_VERSIONS[exerciseId];
+    if (
+      body?.poseMetricAlgorithm !== POSE_METRIC_ALGORITHM_VERSION ||
+      (typeof exerciseConfigVersion === "string" && body?.exerciseConfigVersion !== exerciseConfigVersion)
+    ) {
+      return NextResponse.json(
+        {
+          error: "The app has been updated. Reload this page, then start again.",
+          code: "app_updated",
+        },
+        { status: 409 },
+      );
+    }
+    // A display-only update can leave measurement versions unchanged while
+    // adding feedback. A valid old fingerprint is still historical provenance,
+    // but a new session must run this server's current coaching configuration.
+    // Refuse before creating a session or consuming its scheduled occurrence.
+    const coachingConfigVersion = COACHING_CONFIG_VERSIONS[exerciseId];
+    if (typeof coachingConfigVersion === "string" && coaching?.version !== coachingConfigVersion) {
+      return NextResponse.json(
+        {
+          error: "The app has been updated. Reload this page, then start again.",
+          code: "app_updated",
+        },
+        { status: 409 },
+      );
+    }
     const session = await createSession({
       patientId: user.id,
       patientExerciseId,
+      occurrenceId,
       exerciseId,
       deviceInfo: body?.deviceInfo,
+      coaching,
+      preSessionPain: preSessionPain.value,
+      videoConsent: body?.videoConsent === true
+        ? {
+            consentedAt: new Date().toISOString(),
+            notice: SESSION_VIDEO_NOTICE_VERSION,
+            remembered: body.videoConsentRemembered === true,
+          }
+        : undefined,
     });
-    return NextResponse.json({ sessionId: session.id, startedAt: session.startedAt });
+    return NextResponse.json({
+      sessionId: session.id,
+      startedAt: session.startedAt,
+      runtimePrescription: session.runtimePrescription,
+      context: session.context,
+    });
   } catch (error) {
     // Strict schedule lock: nothing actionable for this exercise today.
     if (error instanceof SessionNotScheduledError) {

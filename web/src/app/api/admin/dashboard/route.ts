@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const data = await getAdminDashboardData(user.id);
+    const data = await getAdminDashboardData();
     return NextResponse.json(data);
   } catch (error) {
     console.error("GET /api/admin/dashboard error:", error);

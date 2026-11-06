@@ -284,13 +284,26 @@ async function main(): Promise<void> {
       path.join(apiRoot, "auth", "verify-otp", "route.ts"),
       path.join(apiRoot, "auth", "reset-password", "route.ts"),
     ]);
+    // Shared route guards count only while they call the centralized helper themselves.
+    const authGuards = [
+      { name: "requireDateCorrectionAdmin", file: path.join(webRoot, "src", "lib", "sessionDateCorrectionApi.ts") },
+    ];
+    for (const guard of authGuards) {
+      const guardSource = readFileSync(guard.file, "utf8");
+      assert(
+        guardSource.includes(`export async function ${guard.name}(`) && guardSource.includes("await getAuthenticatedUser("),
+        `${guard.file} ${guard.name} lacks centralized authentication`,
+      );
+    }
 
     for (const routeFile of findRouteFiles(apiRoot)) {
       const source = readFileSync(routeFile, "utf8");
       assert(!source.includes("JSON.parse(authToken.value)"), `${routeFile} still parses cookie JSON`);
       assert(!source.includes('cookies.get("auth_token")'), `${routeFile} reads the raw cookie name`);
       assert(
-        publicRoutes.has(routeFile) || source.includes("getAuthenticatedUser"),
+        publicRoutes.has(routeFile)
+          || source.includes("getAuthenticatedUser")
+          || authGuards.some((guard) => source.includes(`await ${guard.name}(`)),
         `${routeFile} lacks centralized authentication`,
       );
     }

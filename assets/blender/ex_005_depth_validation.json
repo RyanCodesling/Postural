@@ -1,0 +1,267 @@
+{
+  "exercise": "ex_005",
+  "revision": "mpfb-side-bend-depth-2026-09-16",
+  "scene_sha256": "218E1E7D785126EC398A8BADF7F77FD14D40B2E165BD12E0EC4256094E1F13C7",
+  "video_sha256": "4A5A0664F3B0D783339B8A1CB5B72537963E37462F6952CDAADEBB1E75DC42CF",
+  "frames": 360,
+  "fps": 30,
+  "seconds": 12,
+  "render_size": [
+    522,
+    588
+  ],
+  "pose_input_size": [
+    1280,
+    720
+  ],
+  "pose_runtime": {
+    "delegate": "GPU",
+    "jsVersion": "0.10.34",
+    "wasmBase": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm",
+    "modelSha256": "4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad",
+    "runtimeFiles": {
+      "vision_wasm_internal.js": "efebf9d676d8828c31e7c0d9718c5c80de8a3de084e97aa3ea5472a5346c518e",
+      "vision_wasm_internal.wasm": "0431b3bacfcb26d91d800450216b305b9378f4e063d78c2e85a944aba432e0dd"
+    },
+    "webglRenderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  "checks": {
+    "all_360_scene_frames_pass": true,
+    "head_follows_torso": true,
+    "pelvis_and_feet_fixed": true,
+    "loop_closes": true,
+    "additional_transition_clearance": true,
+    "scene_render_encode_provenance": true,
+    "video_hash": true,
+    "complete_video": true,
+    "all_frames_detected_and_ready": true,
+    "extracted_frame_hashes_match_render": true,
+    "one_rep_each_side": true,
+    "both_peaks_clear_floor_with_margin": true,
+    "original_replay_control_zero_reps": true,
+    "same_model_and_runtime": true
+  },
+  "scene": {
+    "endpoints": {
+      "minimum_trunk_lean_deg": -33.17934213343267,
+      "maximum_trunk_lean_deg": 33.17934213343267,
+      "previous_peak_trunk_lean_deg": 26.795678058067196,
+      "peak_increase_factor": 1.238234840019045,
+      "minimum_peak_increase_required": 1.2,
+      "maximum_head_relative_upper_spine_change_deg": 0.0,
+      "peak_arm_poses": {
+        "l": {
+          "upper_arm_deg_from_down": 30.000006360408374,
+          "elbow_flexion_deg": 36.52015353962965,
+          "forearm_frontal_angle_from_down": 5.967408278440639,
+          "shoulder_height": 1.1500670909881592,
+          "wrist_minus_shoulder_mm": -445.099413394928,
+          "wrist_height": 0.7049676775932312,
+          "wrist": [
+            0.25540053844451904,
+            -0.04749353975057602,
+            0.7049676775932312
+          ],
+          "hand_tip": [
+            0.25872528553009033,
+            -0.051309555768966675,
+            0.6731720566749573
+          ],
+          "fist_center": [
+            0.2644764259457588,
+            -0.04122462193481624,
+            0.6081227660179138
+          ]
+        },
+        "r": {
+          "upper_arm_deg_from_down": 54.00000385352633,
+          "elbow_flexion_deg": 53.04973567317019,
+          "forearm_frontal_angle_from_down": 5.9673346527909015,
+          "shoulder_height": 1.37985360622406,
+          "wrist_minus_shoulder_mm": -355.4636240005493,
+          "wrist_height": 1.0243899822235107,
+          "wrist": [
+            -0.12149213254451752,
+            -0.12370789051055908,
+            1.0243899822235107
+          ],
+          "hand_tip": [
+            -0.12450141459703445,
+            -0.13781368732452393,
+            0.9956054091453552
+          ],
+          "fist_center": [
+            -0.1429008413106203,
+            -0.15382755547761917,
+            0.9341952502727509
+          ]
+        },
+        "trunk_lean_deg": 33.17934213343267,
+        "head_height": 1.502785563468933
+      }
+    },
+    "maximum_joint_step_mm": 14.875756015293517,
+    "maximum_feet_pelvis_drift_mm": 0.0,
+    "loop_closure_error_mm": 0.0,
+    "maximum_wrist_axis_error_deg": 0.00010143891202067391,
+    "negative_controls": {
+      "narrow_camera_rejected": true,
+      "bent_wrist_rejected": true,
+      "extra_head_rotation_rejected": true
+    }
+  },
+  "sampled_clothing_clearance_mm": {
+    "Figure_Top": 1.3596722795625737,
+    "Figure_Shorts": 1.555650022055488
+  },
+  "clothing_poses_checked": 19,
+  "before": {
+    "primary": {
+      "name": "trunkLateralFlexion",
+      "thresholds": {
+        "startThreshold": 5,
+        "repCompleteThreshold": 2,
+        "minimumPeakThreshold": 15,
+        "targetROM": 25
+      },
+      "band": null,
+      "peakLeft": null,
+      "peakRight": null,
+      "singleMax": 14.8,
+      "singleMin": -14.4
+    },
+    "reps": {
+      "count": 0,
+      "events": []
+    },
+    "compensations": {
+      "neckTilt": {
+        "warningThreshold": 5,
+        "compareDirection": "above",
+        "peakRelevant": false,
+        "coupled": true,
+        "cuePriority": 10,
+        "framesConsidered": 360,
+        "deviationMax": 22.2283,
+        "deviationMin": -12.314,
+        "framesOverPositive": 175,
+        "framesOverNegative": 145,
+        "latchedActiveFrames": 345,
+        "longestActiveMs": 11500,
+        "activeInPhases": [
+          "Ready",
+          "Bend",
+          "Pause",
+          "Return"
+        ]
+      },
+      "scapularElevation": {
+        "warningThreshold": 0.04,
+        "compareDirection": "above",
+        "peakRelevant": false,
+        "coupled": true,
+        "cuePriority": 20,
+        "framesConsidered": 360,
+        "deviationMax": 0.0681,
+        "deviationMin": -0.1651,
+        "framesOverPositive": 6,
+        "framesOverNegative": 124,
+        "latchedActiveFrames": 130,
+        "longestActiveMs": 2500,
+        "activeInPhases": [
+          "Bend",
+          "Pause",
+          "Return"
+        ]
+      }
+    },
+    "score": {
+      "median": 80,
+      "min": 19
+    }
+  },
+  "after": {
+    "primary": {
+      "name": "trunkLateralFlexion",
+      "thresholds": {
+        "startThreshold": 5,
+        "repCompleteThreshold": 2,
+        "minimumPeakThreshold": 15,
+        "targetROM": 25
+      },
+      "band": null,
+      "peakLeft": null,
+      "peakRight": null,
+      "singleMax": 18.5,
+      "singleMin": -18.1
+    },
+    "reps": {
+      "count": 2,
+      "events": [
+        {
+          "frame": 139,
+          "side": "left",
+          "peak": 18.5,
+          "classification": "partial"
+        },
+        {
+          "frame": 319,
+          "side": "right",
+          "peak": 18.1,
+          "classification": "partial"
+        }
+      ]
+    },
+    "compensations": {
+      "neckTilt": {
+        "warningThreshold": 5,
+        "compareDirection": "above",
+        "peakRelevant": false,
+        "coupled": true,
+        "cuePriority": 10,
+        "framesConsidered": 360,
+        "deviationMax": 22.5236,
+        "deviationMin": -11.913,
+        "framesOverPositive": 185,
+        "framesOverNegative": 141,
+        "latchedActiveFrames": 345,
+        "longestActiveMs": 11500,
+        "activeInPhases": [
+          "Ready",
+          "Bend",
+          "Pause",
+          "Return"
+        ]
+      },
+      "scapularElevation": {
+        "warningThreshold": 0.04,
+        "compareDirection": "above",
+        "peakRelevant": false,
+        "coupled": true,
+        "cuePriority": 20,
+        "framesConsidered": 360,
+        "deviationMax": 0.0747,
+        "deviationMin": -0.1186,
+        "framesOverPositive": 9,
+        "framesOverNegative": 98,
+        "latchedActiveFrames": 80,
+        "longestActiveMs": 2667,
+        "activeInPhases": [
+          "Bend",
+          "Pause",
+          "Return"
+        ]
+      }
+    },
+    "score": {
+      "median": 77.5,
+      "min": 12
+    }
+  },
+  "limits": [
+    "Offline rendered avatar; no live or clinical validation.",
+    "Existing coupled warning fit and thresholds unchanged; warning-free movement is not claimed.",
+    "All frames inspected for pose/framing; clothing/body clearance sampled at nineteen poses.",
+    "Pose replay uses the first Ready phase for neutral calibration and a synthetic 30 fps clock."
+  ]
+}

@@ -1,18 +1,48 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useAuth } from "@/lib/AuthContext";
+import ExerciseVideoField, {
+  KEEP_EXERCISE_VIDEO,
+  NO_EXERCISE_VIDEO,
+  createCustomExercise,
+  exerciseVideoChoiceError,
+  saveCustomExerciseEdit,
+  type ExerciseVideoChoice,
+} from "../../_components/ExerciseVideoField";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
+import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../../_components/DashboardKit";
 import {
   DEFAULT_DISPLAY_HOLD_SECONDS,
   getDisplayHoldSeconds,
   isIsometricExercise,
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
+import {
+  formatResistanceContext,
+  parseResistanceContext,
+  type PrescribedSide,
+  type ResistanceContext,
+} from "@/lib/prescriptionContext";
+import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import {
+  MAX_PRESCRIPTION_REPS,
+  maxPrescriptionSets,
+  prescriptionCountError,
+} from "@/lib/prescriptionLimits";
+import MovementContextFields, {
+  type MovementContextForm,
+} from "../_components/MovementContextFields";
 
 interface Exercise {
   id: string;
   name: string;
   description: string;
   is_custom: boolean;
+  owner_therapist_id?: string | null;
+  /** A custom exercise's guide video: an uploaded file, or a YouTube video. */
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 interface ProgramExercise {
@@ -25,6 +55,17 @@ interface ProgramExercise {
   reps?: number | null;
   restSeconds?: number | null;
   holdSeconds?: number | null;
+  sequenceIndex?: number | null;
+  prescribedSide?: PrescribedSide;
+  resistanceType?:
+    | "unknown"
+    | "none"
+    | "external_weight"
+    | "resistance_band"
+    | "other";
+  resistanceValue?: number | string | null;
+  resistanceUnit?: "kg" | "lb" | null;
+  resistanceLabel?: string | null;
 }
 
 interface ExerciseProgram {
@@ -35,14 +76,29 @@ interface ExerciseProgram {
   exercises: ProgramExercise[];
 }
 
-type ExerciseParams = {
+type ExerciseParams = MovementContextForm & {
   sets?: number;
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
+  sequenceIndex?: number;
 };
 
+function programResistance(exercise: ProgramExercise): ResistanceContext {
+  const value =
+    exercise.resistanceValue == null
+      ? null
+      : Number(exercise.resistanceValue);
+  return {
+    type: exercise.resistanceType ?? "unknown",
+    value: value !== null && Number.isFinite(value) ? value : null,
+    unit: exercise.resistanceUnit ?? null,
+    label: exercise.resistanceLabel ?? null,
+  };
+}
+
 export default function ExerciseProgramsPage() {
+  const { user } = useAuth();
   const [programs, setPrograms] = useState<ExerciseProgram[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +115,8 @@ export default function ExerciseProgramsPage() {
   // Custom exercise form state
   const [customName, setCustomName] = useState("");
   const [customDesc, setCustomDesc] = useState("");
+  const [customVideo, setCustomVideo] = useState<ExerciseVideoChoice>(NO_EXERCISE_VIDEO);
+  const [customVideoError, setCustomVideoError] = useState<string | null>(null);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [showSuccessModal,  setShowSuccessModal]  = useState(false);
   const [successMsg,        setSuccessMsg]        = useState("");
@@ -71,6 +129,9 @@ export default function ExerciseProgramsPage() {
   // Custom exercise inline edit/delete state
   const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
   const [editCustomDesc, setEditCustomDesc] = useState("");
+  // The edited custom exercise's guide video; it starts as "keep".
+  const [editCustomVideo, setEditCustomVideo] = useState<ExerciseVideoChoice>(KEEP_EXERCISE_VIDEO);
+  const [editCustomVideoError, setEditCustomVideoError] = useState<string | null>(null);
   const [savingCustom, setSavingCustom] = useState(false);
 
   // Styled modal states for custom exercise deletion
@@ -115,6 +176,8 @@ export default function ExerciseProgramsPage() {
   const resetCustomForm = () => {
     setCustomName("");
     setCustomDesc("");
+    setCustomVideo(NO_EXERCISE_VIDEO);
+    setCustomVideoError(null);
   };
 
   const handleToggleExercise = (exerciseId: string) => {
@@ -129,6 +192,21 @@ export default function ExerciseProgramsPage() {
         });
       } else {
         next.add(exerciseId);
+        setExerciseParams((params) => ({
+          ...params,
+          [exerciseId]: {
+            ...params[exerciseId],
+            sequenceIndex:
+              params[exerciseId]?.sequenceIndex ??
+              nextExerciseSequenceIndex(
+                Array.from(next, (selectedId) =>
+                  selectedId === exerciseId
+                    ? undefined
+                    : params[selectedId]?.sequenceIndex,
+                ),
+              ),
+          },
+        }));
       }
       return next;
     });
@@ -142,24 +220,23 @@ export default function ExerciseProgramsPage() {
       setErrorTitle("Required Fields"); setErrorMsg("Description is required."); setShowErrorModal(true); return;
     }
 
+    const videoError = exerciseVideoChoiceError(customVideo);
+    if (videoError) {
+      setCustomVideoError(videoError);
+      return;
+    }
+
     setAddingCustom(true);
     try {
-      const res = await fetch("/api/exercises", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: customName.trim(),
-          description: customDesc.trim(),
-          isCustom: true,
-        }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json();
-        setErrorTitle("Something Went Wrong"); setErrorMsg(d.error ?? "Failed to add custom exercise."); setShowErrorModal(true); return;
+      const result = await createCustomExercise<Exercise>(
+        { name: customName.trim(), description: customDesc.trim() },
+        customVideo,
+      );
+      if ("error" in result) {
+        setErrorTitle("Something Went Wrong"); setErrorMsg(result.error); setShowErrorModal(true); return;
       }
 
-      const { exercise } = await res.json();
+      const { exercise } = result;
       setExercises((prev) => [...prev, exercise]);
       resetCustomForm();
       setShowCustomForm(false);
@@ -183,14 +260,26 @@ export default function ExerciseProgramsPage() {
       reps?: number;
       restSeconds: number;
       holdSeconds?: number;
+      sequenceIndex: number;
+      prescribedSide: PrescribedSide;
+      resistanceType: Exclude<ResistanceContext["type"], "unknown">;
+      resistanceValue: number | null;
+      resistanceUnit: ResistanceContext["unit"];
+      resistanceLabel: string | null;
     }[] = [];
 
-    selectedExercises.forEach((exId) => {
+    Array.from(selectedExercises).forEach((exId, selectedIndex) => {
       const ex = exercises.find((e) => e.id === exId);
       if (!ex) return;
       const p = exerciseParams[exId] ?? {};
       const isIsometric = isIsometricExercise(ex.id);
+      const countError = prescriptionCountError(p.sets, isIsometric ? undefined : p.reps, {
+        allowMissing: true,
+        maxSets: maxPrescriptionSets(ex.id),
+      });
+      if (countError) throw new Error(`${ex.name}: ${countError}`);
       const restSeconds = p.restSeconds == null || p.restSeconds < 0 ? 60 : p.restSeconds;
+      const resistance = parseResistanceContext(p);
       result.push({
         exerciseId: ex.id,
         name: ex.name,
@@ -200,6 +289,15 @@ export default function ExerciseProgramsPage() {
         reps: isIsometric ? undefined : p.reps,
         restSeconds,
         holdSeconds: isIsometric ? getDisplayHoldSeconds(p.holdSeconds) : undefined,
+        sequenceIndex: p.sequenceIndex ?? selectedIndex + 1,
+        prescribedSide: p.prescribedSide ?? "both",
+        resistanceType: resistance.type as Exclude<
+          ResistanceContext["type"],
+          "unknown"
+        >,
+        resistanceValue: resistance.value,
+        resistanceUnit: resistance.unit,
+        resistanceLabel: resistance.label,
       });
     });
 
@@ -210,9 +308,29 @@ export default function ExerciseProgramsPage() {
     if (!programName.trim()) {
       setErrorTitle("Required Fields"); setErrorMsg("Please enter a program name."); setShowErrorModal(true); return;
     }
-    const exPayload = buildExercisePayload();
+    let exPayload;
+    try {
+      exPayload = buildExercisePayload();
+    } catch (error) {
+      setErrorTitle("Invalid Exercise Details");
+      setErrorMsg(
+        error instanceof Error ? error.message : "Check the resistance details.",
+      );
+      setShowErrorModal(true);
+      return;
+    }
     if (exPayload.length === 0) {
       setErrorTitle("Required Fields"); setErrorMsg("Please select at least one exercise."); setShowErrorModal(true); return;
+    }
+    const sequenceIndexes = exPayload.map((exercise) => exercise.sequenceIndex);
+    if (
+      sequenceIndexes.some((value) => !Number.isInteger(value) || value < 1) ||
+      new Set(sequenceIndexes).size !== sequenceIndexes.length
+    ) {
+      setErrorTitle("Invalid Exercise Order");
+      setErrorMsg("Each exercise needs a unique positive whole-number order.");
+      setShowErrorModal(true);
+      return;
     }
 
     setSaving(true);
@@ -263,6 +381,20 @@ export default function ExerciseProgramsPage() {
           reps: ex.reps ?? undefined,
           restSeconds: ex.restSeconds ?? undefined,
           holdSeconds: ex.holdSeconds ?? undefined,
+          sequenceIndex: ex.sequenceIndex ?? undefined,
+          prescribedSide: ex.prescribedSide ?? "both",
+          resistanceType:
+            ex.resistanceType === "external_weight" ||
+            ex.resistanceType === "resistance_band" ||
+            ex.resistanceType === "other"
+              ? ex.resistanceType
+              : "none",
+          resistanceValue:
+            ex.resistanceValue == null
+              ? undefined
+              : Number(ex.resistanceValue),
+          resistanceUnit: ex.resistanceUnit ?? undefined,
+          resistanceLabel: ex.resistanceLabel ?? undefined,
         };
       }
     });
@@ -300,6 +432,8 @@ export default function ExerciseProgramsPage() {
   const startEditCustom = (ex: Exercise) => {
     setEditingCustomId(ex.id);
     setEditCustomDesc(ex.description);
+    setEditCustomVideo(exerciseVideoFromRow(ex) ? KEEP_EXERCISE_VIDEO : NO_EXERCISE_VIDEO);
+    setEditCustomVideoError(null);
   };
 
   const cancelEditCustom = () => {
@@ -311,22 +445,18 @@ export default function ExerciseProgramsPage() {
     if (!editCustomDesc.trim()) return;
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
+    const invalid = exerciseVideoChoiceError(editCustomVideo);
+    if (invalid) { setEditCustomVideoError(invalid); return; }
     setSavingCustom(true);
     try {
-      const res = await fetch(`/api/exercises/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: original.name, description: editCustomDesc.trim() }),
-      });
-      if (res.ok) {
-        const { exercise } = await res.json();
-        setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...exercise } : e)));
+      const result = await saveCustomExerciseEdit<Exercise>(id, { name: original.name, description: editCustomDesc.trim() }, editCustomVideo);
+      if ("exercise" in result) {
+        setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...result.exercise } : e)));
         cancelEditCustom();
         setSuccessMsg(`"${original.name}" updated successfully.`);
         setShowSuccessModal(true);
       } else {
-        const d = await res.json();
-        setErrorTitle("Failed to Save"); setErrorMsg(d.error ?? "Could not save custom exercise."); setShowErrorModal(true);
+        setErrorTitle("Failed to Save"); setErrorMsg(result.error); setShowErrorModal(true);
       }
     } catch (err) {
       console.error("Error saving custom exercise:", err);
@@ -357,15 +487,15 @@ export default function ExerciseProgramsPage() {
           next.delete(confirmDeleteCustomId);
           return next;
         });
-        setSuccessMsg(`"${confirmDeleteCustomName}" deleted successfully.`);
+        setSuccessMsg(`"${confirmDeleteCustomName}" archived. You can restore it from Manage Exercises.`);
         setShowSuccessModal(true);
       } else {
         const d = await res.json();
-        setErrorTitle("Failed to Delete"); setErrorMsg(d.error ?? "Could not delete custom exercise."); setShowErrorModal(true);
+        setErrorTitle("Failed to Archive"); setErrorMsg(d.error ?? "Could not archive custom exercise."); setShowErrorModal(true);
       }
     } catch (err) {
       console.error("Error deleting custom exercise:", err);
-      setErrorTitle("Something Went Wrong"); setErrorMsg("Failed to delete custom exercise."); setShowErrorModal(true);
+      setErrorTitle("Something Went Wrong"); setErrorMsg("Failed to archive custom exercise."); setShowErrorModal(true);
     } finally {
       setConfirmDeleteCustomId(null);
       setConfirmDeleteCustomName(null);
@@ -384,18 +514,19 @@ export default function ExerciseProgramsPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Exercise Program</h1>
-          <p className="text-gray-600 mt-1">Create and manage reusable exercise programs.</p>
-        </div>
+    <div className={showForm || showCustomForm ? "space-y-4" : FIT_SCREEN}>
+      <PageHeading title="Exercise Program" subtitle="Create and manage reusable exercise programs." />
+
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3">
+        <StatTile label="Programs" value={programs.length} icon={Glyph.list} tone="green" />
+        <StatTile label="Custom exercises" value={customExercises.length} icon={Glyph.dumbbell} tone="teal" />
+        <StatTile label="Exercises in programs" value={programs.reduce((n, pr) => n + pr.exercises.length, 0)} icon={Glyph.pulse} tone="lime" />
       </div>
 
       {/* Create / Edit form */}
       {showForm ? (
-        <div className="bg-white rounded-2xl border border-green-100 p-6 mb-8">
-          <h2 className="text-green-700 font-semibold text-lg mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <h2 className="text-gray-900 font-semibold text-lg mb-6">
             {editingId ? "Edit Program" : "Create New Program"}
           </h2>
 
@@ -426,6 +557,7 @@ export default function ExerciseProgramsPage() {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
                   const isIsometric = isIsometricExercise(ex.id);
+                  const maxSets = maxPrescriptionSets(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -450,13 +582,34 @@ export default function ExerciseProgramsPage() {
                       </label>
 
                       {checked && (
-                        <div className="mt-3 grid grid-cols-3 gap-3 pl-7">
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 pl-7">
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Sets</label>
+                            <label className="block text-xs text-gray-500 mb-1">Order</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={p.sequenceIndex ?? ""}
+                              onChange={(e) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: {
+                                    ...prev[ex.id],
+                                    sequenceIndex: e.target.value ? Number(e.target.value) : undefined,
+                                  },
+                                }))
+                              }
+                              placeholder="1"
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets})</label>
                             <input
                               type="number"
                               min={1}
                               value={p.sets ?? ""}
+                              max={maxSets}
+                              step={1}
                               onChange={(e) =>
                                 setExerciseParams((prev) => ({
                                   ...prev,
@@ -492,11 +645,13 @@ export default function ExerciseProgramsPage() {
                             </div>
                           ) : (
                             <div>
-                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS})</label>
                               <input
                                 type="number"
                                 min={1}
                                 value={p.reps ?? ""}
+                                max={MAX_PRESCRIPTION_REPS}
+                                step={1}
                                 onChange={(e) =>
                                   setExerciseParams((prev) => ({
                                     ...prev,
@@ -530,6 +685,17 @@ export default function ExerciseProgramsPage() {
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
                             />
                           </div>
+                          <div className="col-span-2 sm:col-span-4">
+                            <MovementContextFields
+                              value={p}
+                              onChange={(patch) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: { ...prev[ex.id], ...patch },
+                                }))
+                              }
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -550,6 +716,7 @@ export default function ExerciseProgramsPage() {
                   const checked = selectedExercises.has(ex.id);
                   const p = exerciseParams[ex.id] ?? {};
                   const isIsometric = isIsometricExercise(ex.id);
+                  const maxSets = maxPrescriptionSets(ex.id);
                   return (
                     <div
                       key={ex.id}
@@ -577,13 +744,34 @@ export default function ExerciseProgramsPage() {
                       </label>
 
                       {checked && (
-                        <div className="mt-3 grid grid-cols-3 gap-3 pl-7">
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 pl-7">
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Sets</label>
+                            <label className="block text-xs text-gray-500 mb-1">Order</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={p.sequenceIndex ?? ""}
+                              onChange={(e) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: {
+                                    ...prev[ex.id],
+                                    sequenceIndex: e.target.value ? Number(e.target.value) : undefined,
+                                  },
+                                }))
+                              }
+                              placeholder="1"
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets})</label>
                             <input
                               type="number"
                               min={1}
                               value={p.sets ?? ""}
+                              max={maxSets}
+                              step={1}
                               onChange={(e) =>
                                 setExerciseParams((prev) => ({
                                   ...prev,
@@ -619,11 +807,13 @@ export default function ExerciseProgramsPage() {
                             </div>
                           ) : (
                             <div>
-                              <label className="block text-xs text-gray-500 mb-1">Reps</label>
+                              <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS})</label>
                               <input
                                 type="number"
                                 min={1}
                                 value={p.reps ?? ""}
+                                max={MAX_PRESCRIPTION_REPS}
+                                step={1}
                                 onChange={(e) =>
                                   setExerciseParams((prev) => ({
                                     ...prev,
@@ -655,6 +845,17 @@ export default function ExerciseProgramsPage() {
                               }
                               placeholder="60"
                               className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div className="col-span-2 sm:col-span-4">
+                            <MovementContextFields
+                              value={p}
+                              onChange={(patch) =>
+                                setExerciseParams((prev) => ({
+                                  ...prev,
+                                  [ex.id]: { ...prev[ex.id], ...patch },
+                                }))
+                              }
                             />
                           </div>
                         </div>
@@ -684,16 +885,16 @@ export default function ExerciseProgramsPage() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-3 mb-8">
+        <div id="tour-actions" className="flex shrink-0 flex-wrap gap-3">
           <button
             onClick={() => { setShowForm(true); setShowCustomForm(false); }}
-            className="w-60 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
+            className="px-5 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded-lg transition"
           >
             + Create New Program
           </button>
           <button
             onClick={() => setShowCustomForm((v) => !v)}
-            className="w-60 h-10 flex items-center justify-center border border-green-700 text-green-700 hover:bg-green-50 text-sm font-medium rounded-lg transition"
+            className="px-5 h-10 flex items-center justify-center border border-green-700 text-green-700 hover:bg-green-50 text-sm font-medium rounded-lg transition"
           >
             {showCustomForm ? "✕ Cancel" : "+ Add New Custom Exercise"}
           </button>
@@ -702,8 +903,8 @@ export default function ExerciseProgramsPage() {
 
       {/* Standalone custom exercise form */}
       {!showForm && showCustomForm && (
-        <div className="bg-white rounded-2xl border border-green-100 p-6 mb-8">
-          <h2 className="text-green-700 font-semibold text-lg mb-6">Add New Custom Exercise</h2>
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <h2 className="text-gray-900 font-semibold text-lg mb-6">Add New Custom Exercise</h2>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -729,6 +930,12 @@ export default function ExerciseProgramsPage() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
               />
             </div>
+            <ExerciseVideoField value={customVideo} onChange={setCustomVideo} onError={setCustomVideoError} />
+            {customVideoError && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {customVideoError}
+              </p>
+            )}
             <div className="flex gap-3">
               <button
                 type="button"
@@ -736,7 +943,9 @@ export default function ExerciseProgramsPage() {
                 disabled={addingCustom}
                 className="w-48 h-10 flex items-center justify-center bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
               >
-                {addingCustom ? "Saving..." : "Add Custom Exercise"}
+                {addingCustom
+                  ? customVideo.source === "file" && customVideo.file ? "Uploading video..." : "Saving..."
+                  : "Add Custom Exercise"}
               </button>
               <button
                 type="button"
@@ -751,8 +960,9 @@ export default function ExerciseProgramsPage() {
       )}
 
       {/* Programs list */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+      <div id="tour-programs" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-7">
+        <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
           Your Programs ({programs.length})
         </h2>
 
@@ -761,9 +971,9 @@ export default function ExerciseProgramsPage() {
             No programs yet. Click &quot;Create New Program&quot; to get started.
           </p>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
             {programs.map((p) => (
-              <div key={p.id} className="rounded-xl border border-gray-100 p-4 transition hover:shadow-sm">
+              <div key={p.id} className="rounded-lg border border-green-50 bg-[#fafcfa] p-4 transition hover:bg-green-50/50">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
                     <h3 className="font-semibold text-green-700 text-base">{p.name}</h3>
@@ -784,9 +994,10 @@ export default function ExerciseProgramsPage() {
                             return (
                               <span
                                 key={i}
-                                className="text-xs px-2 py-1 rounded-full font-medium bg-green-50 text-green-600 border border-green-200"
+                                className="text-xs px-2 py-1 rounded-lg font-medium bg-green-50 text-green-600 border border-green-200"
                               >
                                 {ex.name}
+                                {` #${ex.sequenceIndex ?? i + 1}`}
                                 {hasPrescription && (
                                   <>
                                     {" — "}
@@ -796,6 +1007,10 @@ export default function ExerciseProgramsPage() {
                                       reps: ex.reps,
                                       holdSeconds: ex.holdSeconds,
                                     })}
+                                    {" · "}
+                                    {ex.prescribedSide ?? "both"}
+                                    {" · "}
+                                    {formatResistanceContext(programResistance(ex))}
                                   </>
                                 )}
                               </span>
@@ -828,20 +1043,23 @@ export default function ExerciseProgramsPage() {
       </div>
 
       {/* Your Custom Exercises */}
-      <div className="bg-white rounded-2xl border border-green-100 p-6 mt-8">
-        <h2 className="text-green-700 font-semibold text-lg mb-6">
-          Your Custom Exercises ({customExercises.length})
+      <div id="tour-custom" className="flex min-h-0 min-w-0 flex-col rounded-xl bg-white p-5 shadow-sm lg:col-span-5">
+        <h2 className="mb-3 shrink-0 text-base font-semibold text-gray-900">
+          Custom Exercises ({customExercises.length})
         </h2>
         {customExercises.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-6">
             No custom exercises yet. Click &quot;+ Add New Custom Exercise&quot; to create one.
           </p>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pr-1">
             {customExercises.map((ex) => {
               const isEditingCustom = editingCustomId === ex.id;
+              // Only the therapist who added it edits or archives it; the admin
+              // manages the rest from Manage Exercises.
+              const own = !!user?.id && ex.owner_therapist_id === user.id;
               return (
-                <div key={ex.id} className="rounded-xl border border-gray-100 p-4 flex flex-col justify-between">
+                <div key={ex.id} className="flex flex-col justify-between rounded-lg border border-green-50 bg-[#fafcfa] p-4">
                   {isEditingCustom ? (
                     <div className="space-y-3 w-full">
                       <div className="font-semibold text-gray-900 text-sm">{ex.name}</div>
@@ -852,6 +1070,16 @@ export default function ExerciseProgramsPage() {
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
                         rows={3}
                       />
+                      <div>
+                        <ExerciseVideoField
+                          value={editCustomVideo}
+                          onChange={setEditCustomVideo}
+                          onError={setEditCustomVideoError}
+                          current={exerciseVideoFromRow(ex)}
+                          name={`edit-custom-video-${ex.id}`}
+                        />
+                        {editCustomVideoError && <p role="alert" className="mt-1 text-xs text-red-600">{editCustomVideoError}</p>}
+                      </div>
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleSaveCustomExercise(ex.id)}
@@ -871,26 +1099,37 @@ export default function ExerciseProgramsPage() {
                   ) : (
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
                           <h3 className="font-semibold text-gray-900 text-sm">{ex.name}</h3>
                           <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium">custom</span>
+                          {own ? (
+                            <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+                              Added by you
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full font-medium">
+                              Added by {ex.owner_therapist_id ? "another therapist" : "admin"} · view only
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-500 mt-1">{ex.description}</p>
                       </div>
-                      <div className="flex gap-2 ml-4 shrink-0">
-                        <button
-                          onClick={() => startEditCustom(ex)}
-                          className="px-3 py-1.5 text-sm border border-green-700 text-green-700 rounded-lg hover:bg-green-50 transition"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCustomExerciseClick(ex.id, ex.name)}
-                          className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      {own && (
+                        <div className="flex gap-2 ml-4 shrink-0">
+                          <button
+                            onClick={() => startEditCustom(ex)}
+                            className="px-3 py-1.5 text-sm border border-green-700 text-green-700 rounded-lg hover:bg-green-50 transition"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCustomExerciseClick(ex.id, ex.name)}
+                            className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition"
+                          >
+                            Archive
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -898,6 +1137,7 @@ export default function ExerciseProgramsPage() {
             })}
           </div>
         )}
+      </div>
       </div>
 
       {/* ── Success Modal ─────────────────────────────────────────────────── */}
@@ -990,9 +1230,9 @@ export default function ExerciseProgramsPage() {
                   <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
                 </svg>
               </div>
-              <h2 className="text-lg font-bold text-gray-900 mb-1">Delete Custom Exercise</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Are you sure you want to delete <span className="font-semibold text-gray-900">{confirmDeleteCustomName}</span>? This will also remove it from any programs.
+                Archive <span className="font-semibold text-gray-900">{confirmDeleteCustomName}</span>? An exercise still used by a prescription or program cannot be archived. End those prescriptions and remove the program entries first. Existing history is kept. You can restore the exercise from Manage Exercises; only an admin can permanently delete it.
               </p>
               <div className="flex gap-3 justify-center">
                 <button
@@ -1005,7 +1245,7 @@ export default function ExerciseProgramsPage() {
                   onClick={handleConfirmDeleteCustomExercise}
                   className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition"
                 >
-                  Delete
+                  Archive
                 </button>
               </div>
             </div>

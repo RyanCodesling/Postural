@@ -20,6 +20,11 @@ function getTransporter() {
       user: SMTP_USER,
       pass: SMTP_PASS,
     },
+    // Bound each send (review 2026-10-15, finding 4). Nodemailer's defaults
+    // wait up to 2 minutes to connect and 10 minutes on a silent connection.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 }
 
@@ -380,7 +385,7 @@ export async function sendAccountArchivedUserEmail(
       Hello <strong>${name}</strong>,
     </p>
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
-      Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been archived by an administrator.
+      Your account on the ACC Bacoor Postural Monitoring System has been archived by an administrator.
     </p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;margin:0 0 20px;">
       <tr>
@@ -443,7 +448,7 @@ export async function sendAccountRestoredUserEmail(
       Hello <strong>${name}</strong>,
     </p>
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
-      Great news! Your <strong>${role}</strong> account on the ACC Bacoor Postural Monitoring System has been restored by an administrator.
+      Great news! Your account on the ACC Bacoor Postural Monitoring System has been restored by an administrator.
     </p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin:0 0 20px;">
       <tr>
@@ -521,7 +526,7 @@ export async function sendAccountDeletedUserEmail(
       <tr>
         <td style="padding:16px 20px;">
           <p style="margin:0;color:#991b1b;font-size:14px;line-height:1.5;">
-            🚨 This action is permanent. All of your records, details, and access tokens have been completely deleted from the system and cannot be recovered.
+            🚨 This action is permanent. Your history-free account record and its non-clinical access data cannot be recovered. Accounts with durable clinical or assignment history are archived instead of permanently deleted.
           </p>
         </td>
       </tr>
@@ -559,8 +564,353 @@ export async function sendAccountDeletedAdminEmail(
       </tr>
     </table>
     <p style="margin:0;color:#374151;font-size:15px;line-height:1.6;">
-      All database records associated with this user have been completely removed and cannot be restored.
+      The account passed the archived and history-free eligibility checks before deletion. Accounts with durable clinical or assignment history remain archived and cannot be permanently deleted.
     </p>
   `;
   return sendEmail(adminEmail, subject, wrapTemplate("Account Deletion Confirmation", body));
+}
+
+// ── Therapist exercise emails ────────────────────────────────────────────────
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function emailConfigured(): boolean {
+  return Boolean(SMTP_USER && SMTP_PASS);
+}
+
+const PARAGRAPH = "margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;";
+
+export interface ExerciseDigestItem {
+  patientName: string;
+  exerciseName: string;
+  sets: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  target: string;
+  dueDateLabel: string;
+}
+
+/** One email per recipient per day. Therapists see rows grouped by patient; patients see their own list. */
+export async function sendExerciseDigestEmail(
+  email: string,
+  recipientName: string,
+  kind: "completed" | "missed",
+  dayLabel: string,
+  items: ExerciseDigestItem[],
+  role: string = "therapist",
+): Promise<boolean> {
+  const completed = kind === "completed";
+  const forPatient = role === "patient";
+  const plural = items.length === 1 ? "" : "s";
+  const title = completed ? "Exercises Completed" : "Exercises Missed";
+  const subject = `${title} – ${dayLabel}`;
+  const intro = forPatient
+    ? completed
+      ? `You completed ${items.length} exercise${plural} on ${dayLabel}.`
+      : `You have missed ${items.length} exercise${plural} (the last day to make ${items.length === 1 ? "it" : "them"} up was ${dayLabel}).`
+    : completed
+      ? `Your patients completed ${items.length} exercise${plural} on ${dayLabel}.`
+      : `${items.length} exercise${items.length === 1 ? " was" : "s were"} missed by your patients (final make-up day was ${dayLabel}).`;
+
+  const byPatient = new Map<string, ExerciseDigestItem[]>();
+  for (const item of items) {
+    byPatient.set(item.patientName, [...(byPatient.get(item.patientName) ?? []), item]);
+  }
+  const groups = [...byPatient.entries()]
+    .map(([patient, rows]) => `
+      ${forPatient ? "" : `<p style="margin:16px 0 6px;color:#166534;font-size:15px;font-weight:600;">${escapeHtml(patient)}</p>`}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;">
+        ${rows
+          .map(
+            (r) => `<tr>
+          <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}${completed ? "" : `<br/><span style="color:#6b7280;font-size:12px;">Scheduled ${escapeHtml(r.dueDateLabel)}</span>`}</td>
+          <td align="right" style="padding:10px 14px;color:#374151;font-size:14px;border-bottom:1px solid #f0fdf4;white-space:nowrap;">${r.sets} sets × ${escapeHtml(r.target)}</td>
+        </tr>`,
+          )
+          .join("")}
+      </table>`)
+    .join("");
+
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(recipientName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${escapeHtml(intro)}</p>
+    ${groups}
+    <div style="height:20px;"></div>`;
+  return sendEmail(email, subject, wrapTemplate(title, body));
+}
+
+export interface ExerciseReminderItem {
+  exerciseName: string;
+  sets: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  target: string;
+}
+
+/** Patient template: every exercise due on one day, sent the evening before and that morning. */
+export async function sendExerciseReminderEmail(
+  email: string,
+  patientName: string,
+  when: "today" | "tomorrow",
+  dayLabel: string,
+  items: ExerciseReminderItem[],
+): Promise<boolean> {
+  const n = items.length;
+  const title = when === "today" ? "Exercises Due Today" : "Exercises Due Tomorrow";
+  const intro = `You have ${n} exercise${n === 1 ? "" : "s"} due ${when}, ${dayLabel}:`;
+  const rows = items
+    .map(
+      (r) => `<tr>
+          <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}</td>
+          <td align="right" style="padding:10px 14px;color:#374151;font-size:14px;border-bottom:1px solid #f0fdf4;white-space:nowrap;">${r.sets} sets × ${escapeHtml(r.target)}</td>
+        </tr>`,
+    )
+    .join("");
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(patientName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${escapeHtml(intro)}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;">${rows}</table>
+    <div style="height:20px;"></div>`;
+  return sendEmail(email, `${title} – ${dayLabel}`, wrapTemplate(title, body));
+}
+
+export interface PartialDayItem {
+  exerciseName: string;
+  /** "Completed", "Not started", "Started, not finished", or "Paused because of pain". */
+  status: string;
+  /** The prescription, and for an unfinished exercise where it stopped. */
+  detail: string;
+}
+
+export interface PartialDayPatient {
+  patientName: string;
+  completed: number;
+  total: number;
+  items: PartialDayItem[];
+}
+
+/** Therapist template: the patients who did only part of one day's exercises. */
+export async function sendPartialDayEmail(
+  email: string,
+  therapistName: string,
+  dayLabel: string,
+  patients: PartialDayPatient[],
+): Promise<boolean> {
+  const n = patients.length;
+  const intro = `${n} of your patients completed only part of the exercises scheduled for ${dayLabel}.`;
+  const statusColor = (status: string) =>
+    status === "Completed" ? "#166534" : status === "Paused because of pain" ? "#b91c1c" : "#b45309";
+  const groups = patients
+    .map((p) => `
+      <p style="margin:16px 0 6px;color:#166534;font-size:15px;font-weight:600;">${escapeHtml(p.patientName)}
+        <span style="color:#6b7280;font-size:13px;font-weight:400;">· ${p.completed} of ${p.total} completed</span></p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;">
+        ${p.items
+          .map(
+            (r) => `<tr>
+          <td style="padding:10px 14px;color:#111827;font-size:14px;border-bottom:1px solid #f0fdf4;">${escapeHtml(r.exerciseName)}<br/><span style="color:#6b7280;font-size:12px;">${escapeHtml(r.detail)}</span></td>
+          <td align="right" style="padding:10px 14px;color:${statusColor(r.status)};font-size:13px;font-weight:600;border-bottom:1px solid #f0fdf4;white-space:nowrap;vertical-align:top;">${escapeHtml(r.status)}</td>
+        </tr>`,
+          )
+          .join("")}
+      </table>`)
+    .join("");
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${escapeHtml(n === 1 ? intro.replace("1 of your patients", "One of your patients") : intro)}</p>
+    ${groups}
+    <div style="height:20px;"></div>`;
+  return sendEmail(email, `Partially Completed Exercises – ${dayLabel}`, wrapTemplate("Partially Completed Exercises", body));
+}
+
+export interface ExercisePausedDetails {
+  patientName: string;
+  exerciseName: string;
+  prescribedSets: number;
+  prescribedReps: number;
+  /** The per-set target in the app's words: "10 reps", or "30s hold" for a hold exercise. */
+  prescribedTarget: string;
+  /** A hold exercise: its progress is the sets held, as it has no repetitions. */
+  isHold: boolean;
+  /** Set the patient was in when they paused (1-based), or null if no rep was recorded. */
+  pausedSet: number | null;
+  repsInPausedSet: number;
+  completedSets: number;
+  /** A custom exercise: guided, so no sets or repetitions were counted. */
+  custom?: boolean;
+}
+
+export function describePausedProgress(d: ExercisePausedDetails): string {
+  if (d.custom) {
+    return `a custom exercise, so no sets or reps are counted (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
+  }
+  if (d.isHold) {
+    return d.completedSets > 0
+      ? `${d.completedSets} of ${d.prescribedSets} sets completed before the pause`
+      : `before completing any set (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
+  }
+  if (d.pausedSet === null) {
+    return `before completing any rep (prescribed ${d.prescribedSets} sets × ${d.prescribedTarget})`;
+  }
+  const setsPart = d.completedSets > 0
+    ? `${d.completedSets} of ${d.prescribedSets} sets completed, `
+    : "";
+  return `${setsPart}paused in set ${d.pausedSet} of ${d.prescribedSets} after ${d.repsInPausedSet} of ${d.prescribedReps} reps`;
+}
+
+export async function sendExercisePausedEmail(
+  email: string,
+  recipientName: string,
+  d: ExercisePausedDetails,
+  role: "therapist" | "patient" = "therapist",
+): Promise<boolean> {
+  const sentence = role === "patient"
+    ? `You paused <strong>${escapeHtml(d.exerciseName)}</strong> because of pain. Your therapist has been notified and will review it before rescheduling.`
+    : `<strong>${escapeHtml(d.patientName)}</strong> paused <strong>${escapeHtml(d.exerciseName)}</strong> because of pain. Please review before rescheduling.`;
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(recipientName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${sentence}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;margin:0 0 20px;">
+      <tr><td style="padding:16px 20px;color:#374151;font-size:14px;line-height:1.7;">
+        <strong>Prescribed:</strong> ${d.prescribedSets} sets × ${escapeHtml(d.prescribedTarget)}<br/>
+        <strong>Progress:</strong> ${escapeHtml(describePausedProgress(d))}
+      </td></tr>
+    </table>`;
+  return sendEmail(email, "Exercise paused because of pain", wrapTemplate("Exercise Paused", body));
+}
+
+// ── Therapist / patient assignment ───────────────────────────────────────────
+
+/** Patient template: their therapist has been assigned or changed. */
+export async function sendAssignedTherapistEmail(
+  email: string,
+  patientName: string,
+  therapistName: string,
+): Promise<boolean> {
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(patientName)}</strong>,</p>
+    <p style="${PARAGRAPH}"><strong>${escapeHtml(therapistName)}</strong> is now your assigned therapist. Your therapist will prescribe and monitor your exercises.</p>`;
+  return sendEmail(email, "You Have an Assigned Therapist", wrapTemplate("Assigned Therapist", body));
+}
+
+/** Therapist template: a patient has been assigned to them. */
+export async function sendAssignedPatientEmail(
+  email: string,
+  therapistName: string,
+  patientName: string,
+): Promise<boolean> {
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
+    <p style="${PARAGRAPH}">Patient <strong>${escapeHtml(patientName)}</strong> has been assigned to you. You can now assign and monitor their exercises.</p>`;
+  return sendEmail(email, "You Have a New Assigned Patient", wrapTemplate("Assigned Patient", body));
+}
+
+// ── Assigned exercises ───────────────────────────────────────────────────────
+
+export interface PrescriptionDetail {
+  exerciseName: string;
+  sets: number;
+  /** "Reps", or "Hold" for a hold exercise, as the app labels the target. */
+  metricLabel: "Reps" | "Hold";
+  /** The target as the app shows it: "10", or "30s" for a hold. */
+  metricValue: string;
+  restSeconds: number;
+  order: number;
+  side: string;
+  resistance: string;
+  repeat: string;
+  startLabel: string;
+  endLabel: string;
+  /** For changed exercises: field label -> its previous value. */
+  changed?: Record<string, string>;
+}
+
+function prescriptionBlock(d: PrescriptionDetail): string {
+  const was = (label: string) =>
+    d.changed && label in d.changed
+      ? ` <span style="color:#b45309;">(was ${escapeHtml(d.changed[label])})</span>`
+      : "";
+  const line = (label: string, value: string | number) =>
+    `<tr><td style="padding:2px 0;color:#6b7280;font-size:14px;width:110px;">${label}:</td><td style="padding:2px 0;color:#111827;font-size:14px;">${escapeHtml(String(value))}${was(label)}</td></tr>`;
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #bbf7d0;border-radius:8px;margin:0 0 14px;">
+      <tr><td style="padding:14px 18px;">
+        <p style="margin:0 0 8px;color:#166534;font-size:16px;font-weight:600;">${escapeHtml(d.exerciseName)}</p>
+        <table role="presentation" cellpadding="0" cellspacing="0">
+          ${line("Sets", d.sets)}
+          ${line(d.metricLabel, d.metricValue)}
+          ${line("Rest", `${d.restSeconds}s`)}
+          ${line("Order", d.order)}
+          ${line("Side", d.side)}
+          ${line("Resistance", d.resistance)}
+          ${line("Repeat", d.repeat)}
+        </table>
+        <p style="margin:8px 0 0;color:#111827;font-size:14px;">From ${escapeHtml(d.startLabel)} to ${escapeHtml(d.endLabel)}${was("Schedule")}</p>
+      </td></tr>
+    </table>`;
+}
+
+function exercisesEmail(
+  email: string,
+  recipientName: string,
+  subject: string,
+  title: string,
+  intro: string,
+  details: PrescriptionDetail[],
+): Promise<boolean> {
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(recipientName)}</strong>,</p>
+    <p style="${PARAGRAPH}">${intro}</p>
+    ${details.map(prescriptionBlock).join("")}
+    <div style="height:8px;"></div>`;
+  return sendEmail(email, subject, wrapTemplate(title, body));
+}
+
+/** "Assigned Exercises" template. The patient receives it from their therapist; the therapist gets a copy. */
+export function sendAssignedExercisesEmail(
+  email: string,
+  recipientName: string,
+  role: "patient" | "therapist",
+  otherName: string,
+  details: PrescriptionDetail[],
+): Promise<boolean> {
+  const n = details.length;
+  const intro = role === "patient"
+    ? `<strong>${escapeHtml(otherName)}</strong> assigned you ${n} new exercise${n === 1 ? "" : "s"}:`
+    : `You assigned ${n} new exercise${n === 1 ? "" : "s"} to <strong>${escapeHtml(otherName)}</strong>:`;
+  return exercisesEmail(email, recipientName, "Exercises Assigned", "Assigned Exercises", intro, details);
+}
+
+/** "Changes on Assigned Exercises" template; changed fields show their previous value. */
+export function sendAssignedExercisesChangedEmail(
+  email: string,
+  recipientName: string,
+  role: "patient" | "therapist",
+  otherName: string,
+  details: PrescriptionDetail[],
+): Promise<boolean> {
+  const n = details.length;
+  const intro = role === "patient"
+    ? `<strong>${escapeHtml(otherName)}</strong> updated ${n} of your assigned exercise${n === 1 ? "" : "s"}:`
+    : `You updated ${n} assigned exercise${n === 1 ? "" : "s"} for <strong>${escapeHtml(otherName)}</strong>:`;
+  return exercisesEmail(email, recipientName, "Assigned Exercises Updated", "Changes on Assigned Exercises", intro, details);
+}
+
+/** "Removed Exercises" template; lists the prescriptions that were taken off the patient's program. */
+export function sendRemovedExercisesEmail(
+  email: string,
+  recipientName: string,
+  role: "patient" | "therapist",
+  otherName: string,
+  details: PrescriptionDetail[],
+): Promise<boolean> {
+  const n = details.length;
+  const intro = role === "patient"
+    ? `<strong>${escapeHtml(otherName)}</strong> removed ${n} exercise${n === 1 ? "" : "s"} from your program:`
+    : `You removed ${n} exercise${n === 1 ? "" : "s"} from <strong>${escapeHtml(otherName)}</strong>'s program:`;
+  return exercisesEmail(email, recipientName, "Exercises Removed", "Removed Exercises", intro, details);
 }

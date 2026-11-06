@@ -17,9 +17,103 @@ Open [http://localhost:3000](http://localhost:3000). The seeded credentials in t
 
 `SESSION_SECRET` must contain at least 32 random bytes and must not be committed. Changing it invalidates existing `auth_token` cookies.
 
-## Common checks
+### Optional demo clock
+
+The [demo clock](docs/demo-clock.md) supports local development and production
+deployments through **Admin → Demo Clock → Enable demo tools**, after one-time
+database setup. It stays off by default. Enable/disable needs no server restart;
+disabling restores real time and clears the offset. The guide covers installation,
+recorded-date corrections, shared scope and timestamp limits.
+
+### Optional clinical profile fields
+
+For an existing database, its `users` table owner can enable Diagnosis, Condition,
+and Prescription by running [`../scripts/user_clinical_fields_pg.sql`](../scripts/user_clinical_fields_pg.sql).
+This transaction only adds the three nullable text columns, is safe to rerun, and
+has a five-second lock timeout. It does not seed accounts, change grants, or edit
+stored rows. Do not rerun the full credentials/setup script just for this upgrade.
+
+Before that migration, creating and editing accounts still works with these fields
+blank. A nonempty value in an unavailable field returns HTTP 409 with code
+`clinical_fields_unavailable` before any account write; the admin form displays
+the explanation. Existing fields are saved normally, and schema availability is
+checked on each affected write, so migration needs no application restart.
+
+The regression suite checks both schema states and the API error/auth boundaries.
+For an explicit PostgreSQL check using `.env.local` or `DATABASE_URL`, run:
 
 ```bash
+node --import tsx src/lib/userClinicalFields.test.ts --database
+```
+
+This check copies the `public.users` structure into a private temporary table,
+runs the real writers and the migration DDL there, and rolls back. It never copies
+patient rows or migrates the real table, and sends no mail or notifications.
+
+### Prescription inputs
+
+New or edited assignments accept whole numbers of **1–4 sets** and **1–20 reps
+per set**. Hold exercises accept **1–10 sets** instead: each set is one hold,
+with the prescription's rest between holds, so a hold can be repeated with short
+rests. Program templates use the same bounds when a dose is entered; their
+dose fields can remain blank until assignment. Forms and APIs reject values
+outside these ranges and fractional counts. These are prototype input limits;
+the therapist chooses the dose. Isometric exercises use a separate hold-duration
+target. Existing prescriptions and session history are not rewritten.
+
+### Session report prototype
+
+The standalone `/pt_session_summary_printable_report.html` and the direct therapist
+route `/dashboard/therapist/session-report` are **demo templates only**. The route
+is omitted from normal therapist navigation. The template starts blank, reads no
+saved sessions, creates no clinical record or sign-off, and marks its preview,
+print output, and JSON export as demo material. Use fictional entries only. The
+existing saved-session and progress report buttons remain the reporting workflow.
+
+### Evaluation deployment
+
+For sessions reached through a temporary HTTPS tunnel, follow
+[`docs/evaluation-deployment.md`](docs/evaluation-deployment.md): passwords, backups with
+`npm run backup:local` (database and session videos, with a restore check), the release
+check and the second-device test.
+
+## Progress session eligibility
+
+Progress charts, the Reports view and progress PDFs exclude attempts marked
+`superseded` (replaced by a new start). The patient progress count and latest date
+use that same subset. Original sessions, events, recordings and schedule history
+are retained. Ended-early and pain-stopped outcomes remain eligible, as do legacy
+summaries without a terminal-status field. Completed sessions are never removed
+because their values are low or their repetitions did not reach the target.
+The displayed GP is recomputed on the eligible sessions with the existing frozen
+settings; this is not a model retraining or a new evaluation.
+
+## Common checks
+
+Manual exercise starts use the scheduled prescription snapshot, mark the task
+in progress, and reject completed or pain-stopped tasks. The guide adopts the
+server's returned prescription. A failed start does not begin an unsaved guide;
+a failed pain stop keeps its session target available for retry.
+
+With `DATABASE_URL` set to a loopback PostgreSQL database, `npm run verify:manual:db`
+exercises the actual manual start/end SQL against new connection-private
+temporary tables. It does not read or modify public patient rows or sequences.
+
+Removed session videos stay in Recently Deleted until an admin restores or
+permanently deletes them. The recording notice and delete confirmation explain
+this retention. A device's remembered recording answer expires when the notice
+changes; historical session consent records keep their original version.
+
+`npm run dev` and `npm run build` first bundle the trend Web Worker with esbuild.
+The generated `public/workers/trend-fit.js` is ignored by Git and must be included
+with `public/` when deploying a build. This separate bundle supports the current
+Next.js/Turbopack version without changing the app bundler. Use the npm scripts
+rather than invoking `next` directly. After editing worker/model source during
+development, run `npm run build:trend-worker` and reload the browser (or restart
+`npm run dev`). The worker uses the same fitting functions as synchronous readers.
+
+```bash
+npm run verify:coaching
 npx tsc --noEmit --pretty false
 npm run lint
 npm run build
@@ -33,7 +127,7 @@ To synchronize the offline ML registry after an exercise-definition change:
 npx tsx scripts/export-registry.ts
 ```
 
-The generated `../ml/config/registry.json` must be reviewed and committed with the registry change. Raw tuning traces are opt-in and are not a substitute for a newly collected untouched validation set.
+The generated `../ml/config/registry.json` must be reviewed and committed with the registry change. Raw tuning traces are recorded by default in patient sessions (the camera's staff panel can switch them off) and are not a substitute for a newly collected untouched validation set.
 
 ## Architecture boundaries
 

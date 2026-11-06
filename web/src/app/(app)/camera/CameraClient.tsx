@@ -1,23 +1,43 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import { useToast } from "@/lib/ToastContext";
 import {
+  FaceLandmarker,
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
+  type Landmark,
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
 import { evaluateCaptureReadiness, type FramingMode } from "@/lib/pose/captureReadiness";
+import { buildCaptureQualitySummary, type NeckRestTally } from "@/lib/sessionReadModels";
+import { NECK_REST_EXERCISES } from "@/lib/analytics/trendRules";
+import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/pose/shoulderRestReference";
+import { restReferencedTrunkLean, restingTrunkLineDeg } from "@/lib/pose/trunkRestReference";
+import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "@/lib/pose/neckCalibrationReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
-import { drawCompensationOverlay } from "@/lib/pose/drawCompensationOverlay";
+import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
+import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
+import { CoachingAuditBuffer, observeMovement, type CoachingObservation } from "@/lib/pose/coachingAudit";
+import type { HoldQualityV2, HoldSideQuality, SetMeasurement } from "@/lib/pose/holdQuality";
+import { roundFilteredMetric } from "@/lib/pose/metricPrecision";
 import {
   computePoseMetricsForExercise,
   computeCompensationScore,
+  computeTiltReference,
   isNearPeak,
   computeElbowFlexion,
   computeLateralNeckTilt,
@@ -33,19 +53,48 @@ import {
   computeShoulderHorizAbduction,
   computeWristShoulderLateral,
   computeWristShoulderVertical,
+  frameAspectOf,
   type ExerciseFrameMetrics,
+  type TiltReference,
 } from "@/lib/pose/poseMetrics";
 import {
+  cueClearLevel,
+  cueTriggerLevel,
   updateCompensationWarningMap,
   type CompensationWarningLatch,
 } from "@/lib/pose/compensationWarningState";
 import {
+  COACHING_SHADOW_SCHEMA,
+  newCoachingCueState,
+  resolveCoachingCue,
+  resolveCoachingCueTiming,
+  selectCoachingCue,
+  type CoachingCueCandidate,
+  type CoachingCueReason,
+  type CoachingCueState,
+} from "@/lib/pose/coachingCue";
+import {
+  shouldBlockCoachingShadowPlanAdvance,
+  shouldBlockCoachingShadowPlanTransition,
+} from "@/lib/pose/coachingShadowPlan";
+import {
+  coachingWarningSpecs,
   getCompensationScoring,
   getExerciseDefinition,
   type ExerciseDefinition,
   type MetricName,
 } from "@/lib/exercises/registry";
 import { DEPRECATED_EXERCISE_IDS } from "@/lib/exercises/deprecated";
+import { demoClipFor } from "@/lib/exercises/demoClips";
+import { exerciseVideoFromRow, type ExerciseVideo } from "@/lib/exercises/customVideo";
+import DemoClipPlayer from "./DemoClipPlayer";
+import CustomExerciseVideo from "../dashboard/_components/CustomExerciseVideo";
+import {
+  compareActionableOccurrences,
+  isOccurrenceActionable,
+  removeActionableOccurrence,
+  type OccurrenceStatus,
+} from "@/lib/exercises/occurrences";
 import { OneEuroFilter } from "@/lib/pose/oneEuroFilter";
 import { RepCounter, type RepCounterOptions, type RepEvent } from "@/lib/pose/repCounter";
 import {
@@ -56,14 +105,155 @@ import {
 import { VelocityBidirectionalRepCounter } from "@/lib/pose/velocityBidirectionalRepCounter";
 import {
   DynamicRepQualityBuffer,
-  type DynamicRepQualityV1,
+  type DynamicRepQuality,
   type RepQualityChannel,
 } from "@/lib/pose/repQuality";
+import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
+import { bundleExerciseConfigVersions, computedExerciseConfigVersions } from "@/lib/exercises/versionPayload";
+import {
+  applyTraceSyncReadout,
+  formatTraceSyncReadout,
+  TRACE_SYNC_PAUSED,
+  TRACE_SYNC_PLACEHOLDER,
+} from "@/lib/pose/traceSyncClock";
+import {
+  recordTraceBatchLoss,
+  traceUploadLossLabel,
+  traceUploadLossToast,
+  type TraceUploadLoss,
+} from "@/lib/pose/traceUploadLoss";
+import {
+  NEUTRAL_CALIBRATION_DURATION_MS,
+  NEUTRAL_CALIBRATION_MIN_SAMPLES,
+  NEUTRAL_CALIBRATION_POSITIONING_MS,
+  positioningSecondsLeft,
+  advanceNeutralCalibrationClock,
+  frozenNeutralTiltReference,
+  medianFinite,
+  neutralCalibrationProgressPct,
+  neutralCalibrationReady,
+  newNeutralCalibrationClock,
+  pauseNeutralCalibrationClock,
+  type NeutralCalibrationClock,
+} from "@/lib/pose/neutralCalibration";
+import {
+  perLimbCompensationWarningSignal,
+  singleCompensationWarningSignal,
+  type CompensationWarningSignal,
+} from "@/lib/pose/compensationSignals";
+import {
+  newRepWindowState,
+  repWindowCompensationWarningSignal,
+  type RepWindowState,
+} from "@/lib/pose/repWindowWarning";
+import {
+  hipShiftGeometry,
+  newHipShiftState,
+  updateHipShift,
+  type HipShiftState,
+} from "@/lib/pose/hipShiftWarning";
+import {
+  newElbowBendState,
+  updateElbowBend,
+  type ElbowBendState,
+} from "@/lib/pose/elbowBendWarning";
+import {
+  newOverRaiseState,
+  updateOverRaise,
+  type OverRaiseState,
+} from "@/lib/pose/overRaiseWarning";
+import {
+  newOtherArmDownState,
+  updateOtherArmDown,
+  updateArmAboveHold,
+  type OtherArmDownState,
+} from "@/lib/pose/otherArmDownWarning";
+import {
+  NO_TRACKING_MESSAGE,
+  TRACKING_STEADINESS,
+  addTrackingMark,
+  newSteadinessState,
+  repTracking,
+  trackingMessage,
+  trackingParts,
+  trackingRegion,
+  updateSteadiness,
+  updateTrackingMessage,
+  type SteadinessState,
+  type TrackingFrameMark,
+  type TrackingMessageState,
+  type TrackingPart,
+} from "@/lib/pose/trackingSteadiness";
+import {
+  BODY_TURN_MESSAGE,
+  NO_BODY_TURN,
+  bodyTurnApplies,
+  hipLineTurnDeg,
+  turnExplainsCaptureFailure,
+  updateBodyTurn,
+  type BodyTurnState,
+} from "@/lib/pose/bodyTurn";
+import {
+  DARK_PICTURE_MESSAGE,
+  PICTURE_LUMA_SAMPLE_MS,
+  captureMessageForPicture,
+  pictureIsBright,
+  samplePictureLuma,
+} from "@/lib/pose/pictureBrightness";
+import {
+  newHoldHintState,
+  updateHoldHint,
+  type HoldHint,
+  type HoldHintState,
+} from "@/lib/pose/holdHint";
+import {
+  EventOutbox,
+  persistedOutboxSessionIds,
+  recoverPersistedOutboxes,
+} from "@/lib/pose/eventOutbox";
+import {
+  angleDeltaDegrees,
+  faceOrientationDegrees,
+  fixedFaceRoiFromPose,
+  type FaceOrientationDegrees,
+  type FixedFaceRoi,
+} from "@/lib/pose/faceLandmarkerShadow";
+import ReportButton from "../dashboard/_components/ReportButton";
+import PleaseWait from "../dashboard/_components/PleaseWait";
+import { SESSION_VIDEO_NOTICE, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/recording/consent";
+import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "@/lib/recording/videoChoice";
+import { SessionRecorder, type RecordingState } from "@/lib/recording/sessionRecorder";
+import {
+  formatResistanceContext,
+  PRE_SESSION_PAIN_CAUTION_SCORE,
+  type PainTiming,
+  type PreSessionPain,
+  type PrescribedSide,
+  type ResistanceContext,
+  type RuntimePrescription,
+} from "@/lib/prescriptionContext";
+import {
+  ANGLE_ESTIMATE_LABEL,
+  fullRomOutcomeText,
+  prescribedOutcomeSides,
+  shouldShowOutcomeAsymmetry,
+  sideLabel,
+} from "@/lib/sessionOutcomePresentation";
+import { perArmHoldDisplay, type HoldArmDisplay } from "@/lib/holdDisplay";
 
 type CamDevice = MediaDeviceInfo;
 
-type AssignmentStatus = "pending" | "in_progress" | "completed";
-type EndSessionPersistenceResult = "saved" | "pending" | "skipped" | "failed";
+type AssignmentStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "pain_stopped";
+type EndSessionPersistenceResult =
+  | "saved"
+  | "partial"   // session row closed, but outcome events are still undelivered
+  | "pending"
+  | "skipped"
+  | "failed";
 
 interface Exercise {
   id: string;
@@ -99,6 +289,17 @@ interface Exercise {
    * staff debug path has no row, so it skips session persistence entirely.
    */
   patientExerciseId?: number;
+  /** Exact actionable schedule row represented by this queue item. */
+  occurrenceId?: number;
+  dueDate?: string;
+  makeupUntil?: string;
+  sequenceIndex?: number;
+  /**
+   * Staff catalog only: a custom exercise has no camera definition, so it
+   * shows its description and attached guide video but cannot start a session.
+   */
+  isCustom?: boolean;
+  customVideo?: ExerciseVideo | null;
   /**
    * Assignment status from `patient_exercises.status` via
    * `/api/patient-exercises` (patient assignments only). Drives the
@@ -106,6 +307,8 @@ interface Exercise {
    * to a finished exercise. Undefined for the staff debug catalog.
    */
   status?: AssignmentStatus;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 }
 
 /**
@@ -117,7 +320,9 @@ interface Exercise {
  * preserves the asymmetry signal).
  */
 type ExerciseSessionRecap = {
+  sessionId: number | null;
   exerciseKind: "dynamic" | "isometric" | null;
+  prescribedSide: PrescribedSide;
   endedAt: string | null;
   durationMs: number | null;
   setCount: number;
@@ -126,8 +331,12 @@ type ExerciseSessionRecap = {
   completeLeftReps: number;
   completeRightReps: number;
   avgPeakValue: number | null;
+  avgLeftPeakValue: number | null;
+  avgRightPeakValue: number | null;
   totalPairedHoldMs: number | null;
   totalTargetHoldMs: number | null;
+  totalLeftHoldMs: number | null;
+  totalRightHoldMs: number | null;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -157,7 +366,10 @@ function integerField(record: JsonRecord, field: string): number | undefined {
 }
 
 function assignmentStatus(value: unknown): AssignmentStatus | undefined {
-  return value === "pending" || value === "in_progress" || value === "completed"
+  return value === "pending" ||
+    value === "in_progress" ||
+    value === "completed" ||
+    value === "pain_stopped"
     ? value
     : undefined;
 }
@@ -205,14 +417,43 @@ type ResumeSnapshot = {
   // frame_index at 1 and collide with raw_frames' UNIQUE(session_id, frame_index).
   rawFrameIndex: number;
   updatedAtWallMs: number;
+  /**
+   * Outcomes counted before a disruption, so the end-of-session card and the
+   * capture summary cover the whole attempt after Resume, not only the resumed
+   * portion. Optional: snapshots written before these fields existed parse.
+   */
+  completedSetsLog?: CompletedSetRecord[];
+  repOutcomes?: { left: RepOutcome[]; right: RepOutcome[] };
+  captureFrames?: { total: number; ok: number; rejectedByStatus?: Record<string, number>; dropoutResets?: number; unsteady?: number; checked?: number; frameSizes?: Record<string, number> };
+  /** Neck side bends: the still-head readings so far, per calibration (trend data rule 4). */
+  neckRest?: NeckRestTally;
+  /** The patient opted in to video for this session and has not stopped it. */
+  recordVideo?: boolean;
+  /**
+   * The measurement the session's readings were taken with (D-48). A snapshot
+   * from another one, or from before this field, is not offered for Resume:
+   * its session is filed under that measurement, and new readings would be
+   * stored there in a different unit.
+   */
+  poseMetricAlgorithm?: string;
+  /**
+   * The exercise's own measurement version, which changes when only that
+   * exercise's measurement does (D-49). Checked the same way.
+   */
+  exerciseConfigVersion?: string;
 };
+
+/** What the end-of-session card needs from each counted repetition. */
+type RepOutcome = Pick<RepEvent, "peakValue" | "classification">;
 
 // A resumable session older than this (by last snapshot write) is not offered —
 // avoids resuming a days-old still-open session.
 const RESUME_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
+const RESUME_KEY_PREFIX = "postural.resume.v1.";
+
 const resumeKey = (patientExerciseId: number) =>
-  `postural.resume.v1.${patientExerciseId}`;
+  `${RESUME_KEY_PREFIX}${patientExerciseId}`;
 
 /** Read + validate the resume snapshot for an assignment. Null if absent/invalid. */
 function readResumeSnapshot(
@@ -225,10 +466,121 @@ function readResumeSnapshot(
     if (!raw) return null;
     const snap = JSON.parse(raw) as ResumeSnapshot;
     if (snap?.v !== 1 || typeof snap.sessionId !== "number") return null;
+    if (snap.poseMetricAlgorithm !== POSE_METRIC_ALGORITHM_VERSION) return null;
+    // None until the page has hashed its exercises, so nothing is offered before then.
+    const exerciseConfigVersion = computedExerciseConfigVersions()?.[snap.exerciseId];
+    if (!exerciseConfigVersion || snap.exerciseConfigVersion !== exerciseConfigVersion) return null;
     return snap;
   } catch {
     return null;
   }
+}
+
+/**
+ * The progress a snapshot carries from before a disruption. Validated so an
+ * older or malformed snapshot restores nothing rather than wrong numbers.
+ */
+function restoredSessionProgress(snap: ResumeSnapshot): {
+  setsLog: CompletedSetRecord[];
+  repOutcomes: { left: RepOutcome[]; right: RepOutcome[] };
+  captureFrames: { total: number; ok: number; rejectedByStatus: Record<string, number>; dropoutResets: number; unsteady: number; checked: number; frameSizes: Record<string, number> };
+  neckRest: NeckRestTally;
+} {
+  const count = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const setsLog = Array.isArray(snap.completedSetsLog)
+    ? snap.completedSetsLog.filter(
+        (s) =>
+          !!s &&
+          count(s.setIndex) &&
+          count(s.leftReps) &&
+          count(s.rightReps) &&
+          count(s.asymmetryIndex),
+      )
+    : [];
+  const outcomes = (list: unknown): RepOutcome[] =>
+    Array.isArray(list)
+      ? list.flatMap((o: { peakValue?: unknown; classification?: unknown } | null) =>
+          o &&
+          typeof o.peakValue === "number" &&
+          Number.isFinite(o.peakValue) &&
+          (o.classification === "complete" || o.classification === "partial")
+            ? [{ peakValue: o.peakValue, classification: o.classification }]
+            : [],
+        )
+      : [];
+  const frames = snap.captureFrames;
+  // The rejection reasons and dropout resets came later; a snapshot without
+  // them restores none.
+  const rejected = frames?.rejectedByStatus;
+  const rejectedByStatus =
+    rejected && typeof rejected === "object" && !Array.isArray(rejected) &&
+    Object.values(rejected).every(count)
+      ? { ...rejected }
+      : {};
+  // The frame sizes came later still: "WxH" keys counting accepted frames,
+  // at most as many as the frames that passed. Anything else restores none.
+  const sizes = frames?.frameSizes;
+  const sizeEntries =
+    sizes && typeof sizes === "object" && !Array.isArray(sizes) ? Object.entries(sizes) : [];
+  const sizesValid =
+    sizeEntries.every(([key, n]) => /^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(key) && count(n)) &&
+    !!frames && count(frames.ok) &&
+    sizeEntries.reduce((sum, [, n]) => sum + (n as number), 0) <= frames.ok;
+  const frameSizes = sizesValid ? Object.fromEntries(sizeEntries) as Record<string, number> : {};
+  const captureFrames =
+    frames && count(frames.total) && count(frames.ok) && frames.ok <= frames.total
+      ? {
+          total: frames.total,
+          ok: frames.ok,
+          rejectedByStatus,
+          dropoutResets: count(frames.dropoutResets) ? frames.dropoutResets : 0,
+          unsteady: count(frames.unsteady) && frames.unsteady <= frames.ok ? frames.unsteady : 0,
+          checked: count(frames.checked) && frames.checked <= frames.ok ? frames.checked : 0,
+          frameSizes,
+        }
+      : { total: 0, ok: 0, rejectedByStatus: {}, dropoutResets: 0, unsteady: 0, checked: 0, frameSizes: {} };
+  // The neck rest readings came later again: per calibration, an ISO start
+  // time and at most 3000 finite readings. Anything else restores none.
+  const rest = snap.neckRest?.epochs;
+  const neckRest: NeckRestTally =
+    Array.isArray(rest) &&
+    rest.length <= 50 &&
+    rest.every(
+      (e) =>
+        !!e &&
+        typeof e.from === "string" &&
+        Number.isFinite(Date.parse(e.from)) &&
+        Array.isArray(e.readings) &&
+        e.readings.length <= 3_000 &&
+        e.readings.every((v) => typeof v === "number" && Number.isFinite(v)),
+    )
+      ? { epochs: rest.map((e) => ({ from: e.from, readings: [...e.readings] })) }
+      : { epochs: [] };
+  return {
+    setsLog,
+    repOutcomes: {
+      left: outcomes(snap.repOutcomes?.left),
+      right: outcomes(snap.repOutcomes?.right),
+    },
+    captureFrames,
+    neckRest,
+  };
+}
+
+/** Repetition outcomes for the whole attempt: restored ones, then this page's. */
+function sessionRepOutcomes(
+  prior: { left: RepOutcome[]; right: RepOutcome[] },
+  log: { left: RepEvent[]; right: RepEvent[] },
+): { left: RepOutcome[]; right: RepOutcome[] } {
+  const pick = (e: RepEvent): RepOutcome => ({
+    peakValue: e.peakValue,
+    classification: e.classification,
+  });
+  return {
+    left: [...prior.left, ...log.left.map(pick)],
+    right: [...prior.right, ...log.right.map(pick)],
+  };
 }
 
 function clearResumeSnapshot(patientExerciseId: number | undefined): void {
@@ -239,6 +591,23 @@ function clearResumeSnapshot(patientExerciseId: number | undefined): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Sessions a stored resume snapshot can still offer to resume, by the same age
+ * rule as the resume prompt. Resuming re-adopts their queued outcome events, so
+ * outbox recovery leaves them alone.
+ */
+function resumableSessionIds(storageKeys: string[]): Set<number> {
+  const ids = new Set<number>();
+  for (const key of storageKeys) {
+    if (!key.startsWith(RESUME_KEY_PREFIX)) continue;
+    const snap = readResumeSnapshot(Number(key.slice(RESUME_KEY_PREFIX.length)));
+    if (snap && Date.now() - snap.updatedAtWallMs < RESUME_MAX_AGE_MS) {
+      ids.add(snap.sessionId);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -257,7 +626,13 @@ function clearResumeSnapshot(patientExerciseId: number | undefined): void {
 // "resting" = hard-block rest between sets: rep counting is suspended and a
 // countdown is shown. Auto-entered after a completed set when sets remain and
 // restSeconds > 0; auto-resumes to "active" when the countdown elapses.
-type SessionState = "idle" | "countdown" | "active" | "resting" | "ended";
+type SessionState =
+  | "idle"
+  | "countdown"
+  | "active"
+  | "resting"
+  | "reporting"
+  | "ended";
 
 /**
  * Session set summary. The live UI keeps a local log, and patient sessions also
@@ -272,7 +647,12 @@ type CompletedSetRecord = {
   rightReps: number;
   pairedReps: number;
   durationMs: number;
-  terminatedBy: "min_reached" | "user" | "capture_lost" | "stall";
+  terminatedBy:
+    | "min_reached"
+    | "user"
+    | "pain"
+    | "capture_lost"
+    | "stall";
   asymmetryIndex: number;
   /**
    * Isometric-only: milliseconds of credited hold for this set, plus the
@@ -304,9 +684,19 @@ type Prescription = {
   holdSeconds: number;
   // patient_exercises.id for the current assignment; undefined for staff debug.
   patientExerciseId?: number;
+  occurrenceId?: number;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 };
 
-const DEFAULT_PRESCRIPTION: Prescription = { sets: 3, reps: 12, restSeconds: 60, holdSeconds: 30 };
+const DEFAULT_PRESCRIPTION: Prescription = {
+  sets: 3,
+  reps: 12,
+  restSeconds: 60,
+  holdSeconds: 30,
+  prescribedSide: "both",
+  resistance: { type: "none", value: null, unit: null, label: null },
+};
 
 /**
  * A counted rep shaped for the `rep_events` write API. Kept local (not imported
@@ -323,7 +713,7 @@ type RepEventPayload = {
   descentMs: number;
   totalMs: number;
   classification: RepEvent["classification"];
-  compensations: DynamicRepQualityV1;
+  compensations: DynamicRepQuality;
   startTs: string;
   endTs: string;
 };
@@ -336,17 +726,77 @@ type RawTraceLandmark = {
 };
 
 /**
- * Raw per-frame metric payload for the tuning trace (`upper_body_v2`).
- * Extends the original ex_007-only `ex_007_upper_body_v1` payload with the
- * metrics the other active exercises need (neck/trunk signed flexion,
- * horizontal abduction) plus a snapshot of the in-session baselines, so the
- * offline analysis can reproduce the values the live score sees:
+ * One landmark from MediaPipe's SECOND output, `worldLandmarks`.
+ *
+ * The pose task emits two coordinate sets per frame. `landmarks` is normalized
+ * to the image (x/width, y/height) with a depth estimate on roughly the same
+ * scale; `worldLandmarks` is hip-centred in approximate metres and is the
+ * better-conditioned of the two for FORWARD-BACKWARD position specifically.
+ *
+ * Neither is used by any metric — every scored value in this system is computed
+ * in the image plane. This is recorded so that one question can be answered
+ * offline from a session rather than by recording a second one: can either
+ * depth signal separate sagittal faults (leaning back, slouching, an elbow
+ * drifting off a wall) that the image plane cannot see at all?
+ *
+ * No `visibility` field: it carries the same value as the normalized landmark
+ * at the same key, which is already stored, and duplicating it would grow every
+ * row for nothing.
+ */
+type RawTraceWorldLandmark = {
+  x: number;
+  y: number;
+  z: number;
+};
+
+/**
+ * One retained neutral-calibration sample, as V4 persists it.
+ *
+ * The live baseline is a MEDIAN over these, so recomputing a baseline under any
+ * changed measurement needs the samples themselves — a stored median cannot be
+ * re-derived into a different coordinate convention.
+ */
+type CalibrationSample = {
+  landmarks: Record<string, RawTraceLandmark | null>;
+  observedCameraTiltDeg: number | null;
+  confidence: TiltReference["confidence"];
+};
+
+/**
+ * Raw per-frame metric payload for the tuning trace (`upper_body_v4`).
+ * V3 kept the cross-exercise fields introduced by V2 and recorded both the
+ * observed per-frame tilt diagnostic and the frozen effective correction.
+ * The offline analysis can reproduce the values the live score sees:
  *   - scapularElevation as scored = baseline − raw (per side)
  *   - ex_005 primary as counted   = |uncorrected signed − bidirectional baseline|
  * All metric values are RAW/unsmoothed (pre One Euro), captured only on
  * capture-ready frames. No image/video data, ever.
+ *
+ * ── WHAT V4 ADDS, AND WHY ────────────────────────────────────────────────────
+ *
+ * Two things the app already knew and then discarded, each of which blocked a
+ * later reanalysis of sessions that had already been recorded:
+ *
+ * 1. `frame` — the SOURCE FRAME SIZE. MediaPipe normalizes landmarks as
+ *    `x / frameWidth` and `y / frameHeight`, so without the divisors a stored
+ *    landmark cannot be returned to an isotropic space and no angle in the
+ *    trace can be reinterpreted. Recovering it for the 2026-06 sessions meant
+ *    reading the number off a screen recording of the app's own footer, which
+ *    is not a repeatable analysis path. It is recorded PER FRAME rather than
+ *    per session because the device picker can change resolution mid-session.
+ *
+ * 2. `calibration.samples` — the RETAINED NEUTRAL-CALIBRATION SAMPLES. The
+ *    frozen tilt and every per-side baseline are medians over a ring of up to
+ *    300 of these; V3 persisted only the resulting scalars and the sample
+ *    COUNT. A median cannot be recomputed under a changed measurement, so the
+ *    2026-06 sessions cannot have their baselines re-derived at all — the
+ *    calibration frames mostly predate the first exported frame, and one set
+ *    retained none. That is the blocker on re-fitting the four primary-coupled
+ *    scoring constants. Emitted ONCE PER SET, on the first captured frame after
+ *    calibration finalizes, rather than repeated on every frame.
  */
 type UpperBodyTraceMetrics = {
+  metricAlgorithmVersion: typeof POSE_METRIC_ALGORITHM_VERSION;
   exerciseId: string;
   wristShoulderVertical: { left: number | null; right: number | null };
   wristShoulderLateral: { left: number | null; right: number | null };
@@ -362,7 +812,11 @@ type UpperBodyTraceMetrics = {
   /** Abs ear-line tilt (deg) + side, as the neckTilt compensation reads it. */
   neckTiltDeg: number | null;
   neckTiltDirection: "left" | "right" | "center" | null;
-  /** Signed ear-line angle (positive = patient's LEFT), pre-abs. */
+  /**
+   * Signed ear-line angle (positive = patient's LEFT), pre-abs, against the
+   * reference the exercise counts it from: the calibration's ear line for
+   * ex_004 since D-49 (`calibration.earLineDeg`), the frozen tilt otherwise.
+   */
   neckLateralFlexionSignedDeg: number | null;
   /** ex_005 signed head-lean, NOT camera-roll corrected (baseline domain). */
   trunkLateralFlexionUncorrectedSignedDeg: number | null;
@@ -380,25 +834,67 @@ type UpperBodyTraceMetrics = {
   };
   baselinePhase: "not-needed" | "capturing" | "captured";
   tiltReference: {
+    /**
+     * Frozen neutral correction used to derive every metric in this frame,
+     * except a primary measured from its own reference (`calibration.earLineDeg`).
+     */
     cameraTiltDeg: number;
+    /** Per-frame hip/ear observation retained only for confidence analysis. */
+    observedCameraTiltDeg: number;
     confidence: ExerciseFrameMetrics["tiltReference"]["confidence"];
     divergenceDeg: number | null;
   };
+  calibration: {
+    sampleCount: number;
+    validElapsedMs: number;
+    frozenCameraTiltDeg: number;
+    /**
+     * The ear line frozen in this calibration, present when the primary metric
+     * is measured from it (ex_004, D-49). Absent otherwise and on earlier traces.
+     */
+    earLineDeg?: number;
+    /**
+     * V4. Present on exactly ONE frame per set — the first captured frame after
+     * calibration finalizes — and absent on every other frame. Consumers must
+     * therefore scan a set for the frame that carries it rather than expecting
+     * it per frame.
+     */
+    samples?: CalibrationSample[];
+  };
+  /**
+   * V4. Source frame size the landmarks in THIS frame were normalized against.
+   * Null when the video element has not reported a size yet.
+   */
+  frame: { width: number; height: number } | null;
+  /**
+   * V4. The same ten points from MediaPipe's `worldLandmarks` output, or null
+   * when the pose task did not emit them for this frame.
+   *
+   * It lives in the METRICS envelope rather than beside `landmarks` on the
+   * payload for a mechanical reason: the write route allowlists the columns it
+   * persists, so an unrecognised top-level key is dropped without an error.
+   * `metrics` is stored whole, and V4 already carries landmark data inside it
+   * (`calibration.samples`), so this is consistent rather than a special case.
+   *
+   * Non-optional: an absent depth channel must be an explicit null, not a
+   * missing key, or a reprocessing months later cannot tell "not recorded"
+   * from "not detected".
+   */
+  worldLandmarks: Record<string, RawTraceWorldLandmark | null> | null;
 };
 
 /**
  * One raw metric-only frame shaped for the `/raw-frames` write API. The
  * landmark payload is deliberately limited to upper-body analysis points plus
  * hips (needed for the trunk-relative coordinate frame); no image/video data.
- * `ex_007_upper_body_v1` rows (the original ex_007-only trace) remain in the
- * table; this client only writes `upper_body_v2`.
+ * Existing V1/V2/V3 rows remain in the table; this client writes V4.
  */
 type RawFramePayload = {
   frameIndex: number;
   setIndex: number;
   elapsedMs: number;
   capturedAt: string;
-  traceKind: "upper_body_v2";
+  traceKind: "upper_body_v4";
   metrics: UpperBodyTraceMetrics;
   landmarks: Record<string, RawTraceLandmark | null>;
 };
@@ -412,30 +908,8 @@ type RawFramePayload = {
  *  - `meanErrorDeg`        — mean − target band center (negative = below target / sag)
  *  - `droopSlopeDegPerSec` — slope of angle vs time (negative = progressive sag / fatigue)
  */
-type HoldSideQuality = {
-  meanDeg: number;
-  sdDeg: number;
-  meanErrorDeg: number;
-  droopSlopeDegPerSec: number;
-};
-
-/**
- * Set-level hold-quality summary for an isometric hold. Aggregates per-frame raw
- * signals the camera loop already computes; persisted to `set_events.hold_quality`.
- */
-type HoldQuality = {
-  sampleCount: number;
-  leftInBandMs: number;
-  rightInBandMs: number;
-  outOfPositionMs: number;          // active time NOT both-in-band
-  dropCount: number;                // both-in-band → not transitions
-  longestPairedStreakMs: number;    // longest continuous both-in-band run
-  settleMs: number | null;          // set start → first both-in-band (null if never)
-  left: HoldSideQuality | null;
-  right: HoldSideQuality | null;
-  meanCompensationScore: number | null;
-  minCompensationScore: number | null;
-};
+// Contract types and validation live in holdQuality.ts; legacy field names
+// remain readable. Their angle values are pipeline units, not anatomical ROM.
 
 /**
  * A set-level outcome shaped for the `set_events` write API. This is what makes
@@ -453,8 +927,8 @@ type SetEventPayload = {
   durationMs: number;
   terminatedBy: CompletedSetRecord["terminatedBy"];
   asymmetryIndex: number;
-  // Isometric only; absent for dynamic sets.
-  holdQuality?: HoldQuality;
+  // Existing JSONB envelope: hold statistics or a dynamic-set coaching audit.
+  holdQuality?: SetMeasurement;
   startTs: string;
   endTs: string;
 };
@@ -563,6 +1037,342 @@ type NeckRepDebugDump = {
   records: NeckRepDebugRecord[];
 };
 
+/**
+ * One logged coaching-cue arbitration decision.
+ *
+ * Written only while the staff-only coaching shadow mode is on. The selector
+ * itself runs regardless — shadow mode adds the recording, it does not change
+ * which cue the patient sees. Nothing here is persisted or transmitted; the
+ * ring lives in memory until it is exported to a local file or dropped.
+ */
+/**
+ * What the operator was TRYING to do during a labelled segment.
+ *
+ * This is the one thing the selector cannot infer and the log cannot recover
+ * afterwards: a quiet tick looks identical whether the movement was clean, the
+ * patient was resting, or a cue was suppressed. Recording intent at capture
+ * time is what makes a false-positive rate computable instead of guessed.
+ */
+type CoachingShadowIntent = "clean" | "faulty" | "transition";
+
+type CoachingShadowRecord = {
+  seq: number;
+  /** `performance.now()` at the decision, matching every other camera clock. */
+  tMs: number;
+  /** Milliseconds since shadow recording was switched on. */
+  tShadowMs: number;
+  /** Wall clock, for lining a session up against an external observation log. */
+  wallIso: string;
+  exerciseId: string;
+  prescribedSide: PrescribedSide;
+  // ── Readiness / calibration context. A decision is only interpretable
+  // alongside the gates that were open when it was made.
+  sessionState: SessionState;
+  captureOk: boolean;
+  captureMessage: string;
+  baselinePhase: "not-needed" | "capturing" | "captured";
+  frozenTiltDeg: number | null;
+  tiltConfidence: TiltReference["confidence"];
+  nearPeak: boolean;
+  // ── Selector input and output.
+  activeLatches: MetricName[];
+  suppressedMetrics: MetricName[];
+  // ── Operator-declared ground truth. Free-text label (a capture or segment
+  // id) plus what the movement was meant to be. Both are whatever was set when
+  // the record was written, so a mid-capture segment change splits cleanly.
+  segmentLabel: string | null;
+  segmentIntent: CoachingShadowIntent;
+  selectedCueId: string | null;
+  selectedMetric: MetricName | null;
+  /**
+   * The cue's registry wording at the moment of the decision. Recorded even
+   * though it is not rendered. This legacy diagnostic export stays readable;
+   * session/set audit envelopes separately fingerprint the executing config.
+   */
+  selectedMessage: string | null;
+  reason: CoachingCueReason;
+  displayedForMs: number | null;
+  clearedCueId: string | null;
+  /** Every latched warning the selector ranked, plus its anatomical side. */
+  candidates: (CoachingCueCandidate & { side: "left" | "right" | null })[];
+};
+
+/**
+ * Export envelope for the coaching shadow log.
+ *
+ * `droppedRecords` is why this is a file download rather than a clipboard copy:
+ * the ring is finite, and an export that silently omitted its overflow would
+ * repeat the failure recorded against the Face diagnostic export. `records`
+ * always contains the ENTIRE retained ring — it is never truncated further at
+ * export time — and `droppedRecords` states exactly how many older decisions
+ * the ring discarded.
+ */
+type CoachingShadowExport = {
+  schema: typeof COACHING_SHADOW_SCHEMA;
+  generatedAt: string;
+  /**
+   * Every exercise represented in `records`, in first-seen order. The ring is
+   * not cleared on an exercise change, so one export can legitimately span
+   * several exercises; a single `exerciseId` here would have labelled such a
+   * file as whichever exercise happened to be last.
+   */
+  exerciseIds: string[];
+  mixedExercises: boolean;
+  /**
+   * The cue configuration in force at export time, for every exercise in
+   * `exerciseIds`: ids, wording, priority, and the EFFECTIVE timing after the
+   * module defaults are applied. Read from the registry when the file is
+   * written, so it describes the configuration that produced these decisions
+   * only while the registry is unchanged — this is a diagnostic snapshot, not
+   * a persisted configuration version. Session/set coaching provenance is
+   * recorded separately from this legacy diagnostic export.
+   */
+  cueConfiguration: {
+    exerciseId: string;
+    metric: MetricName;
+    cueId: string;
+    message: string;
+    priority: number;
+    minActiveMs: number;
+    minDisplayMs: number;
+    cooldownMs: number;
+  }[];
+  /**
+   * Derived index of the operator-declared segments in `records`, in the order
+   * they occurred, so analysis does not have to re-group by hand. A segment
+   * breaks whenever the label or the intent changes.
+   */
+  segments: {
+    label: string | null;
+    intent: CoachingShadowIntent;
+    firstSeq: number;
+    lastSeq: number;
+    startMs: number;
+    endMs: number;
+    durationMs: number;
+    recordCount: number;
+    cueActiveRecords: number;
+  }[];
+  ringCapacity: number;
+  recordCount: number;
+  droppedRecords: number;
+  notes: string[];
+  records: CoachingShadowRecord[];
+};
+
+/**
+ * One planned step of the live-verification session.
+ *
+ * The protocol asks the operator to declare a label and an intent before every
+ * segment. Typing those by hand mid-session is the step most likely to be
+ * skipped or mistyped, and a mislabelled segment is only discovered during
+ * analysis when it is too late to redo. This table pre-writes them.
+ *
+ * It deliberately does NOT drive the session lifecycle. Stop/Start stays manual
+ * so the proven session state machine is untouched by anything added here —
+ * `startsCapture` only tells the panel to remind the operator to do it.
+ */
+type CoachingSessionStep = {
+  captureId: string;
+  exerciseId: string;
+  label: string;
+  intent: CoachingShadowIntent;
+  hint: string;
+  /** First step of a capture: Stop/Start, confirm the reset, clear the buffer. */
+  startsCapture?: boolean;
+};
+
+/**
+ * The twelve captures of protocol v2.3, expanded into labelled segments.
+ *
+ * Every capture opens with a `transition` step so the interval between baseline
+ * capture and the first deliberate movement is excluded from both the clean and
+ * the faulty counts instead of polluting one of them.
+ */
+const COACHING_SESSION_PLAN: readonly CoachingSessionStep[] = [
+  { captureId: "A1", exerciseId: "ex_001", label: "A1-setup", intent: "transition", hint: "Settle into position. Nothing recorded as clean or faulty yet.", startsCapture: true },
+  { captureId: "A1", exerciseId: "ex_001", label: "A1-clean", intent: "clean", hint: "8 deliberately clean lateral raises. Expect no cue at all." },
+
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm set 1 / 0 reps / baseline captured, clear the buffer.", startsCapture: true },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-trunk", intent: "faulty", hint: "3 reps: SHIFT the torso sideways, do not tip. Keep the shoulder line level with the floor and let your head travel with the torso." },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-shrug", intent: "faulty", hint: "3 reps: shrug BOTH shoulders equally. A one-sided shrug also trips shoulderSymmetry." },
+  { captureId: "A2", exerciseId: "ex_001", label: "A2-asymmetry", intent: "faulty", hint: "3 reps RAISING one shoulder. Scapular will almost certainly co-fire and outranks symmetry here — symmetry appearing as a ranked candidate is enough." },
+
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-shrug", intent: "faulty", hint: "Reps 1-2 of 8: establish a shrug, hold until its cue appears." },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-both", intent: "faulty", hint: "Reps 3-5 of 8: add trunk lean, keep the shrug. Watch the switch." },
+  { captureId: "A3", exerciseId: "ex_001", label: "A3-trunk-corrected", intent: "faulty", hint: "Reps 6-8 of 8: correct the trunk lean only. Shrug should return on the same tick." },
+
+  { captureId: "B1", exerciseId: "ex_006", label: "B1-setup", intent: "transition", hint: "New capture on ex_006. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "B1", exerciseId: "ex_006", label: "B1-clean", intent: "clean", hint: "One clean T-pose hold, about 20 s. Expect silence." },
+
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-shrug", intent: "faulty", hint: "Hold, then shrug ONE shoulder upward. Not dropping the other." },
+  // `transition`, not `clean`: this window opens the instant the fault is
+  // corrected, so it necessarily contains the cue's legitimate clear latency.
+  // Counting that as clean-window cue activity would inflate the false-positive
+  // figure with correct behaviour.
+  { captureId: "B2", exerciseId: "ex_006", label: "B2-corrected", intent: "transition", hint: "Correct it and hold on for the rest of the 25 s. Recovery window, counted as neither clean nor faulty." },
+
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-setup", intent: "transition", hint: "New capture on ex_008. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-normal-tempo", intent: "faulty", hint: "5 bent-elbow reps at normal tempo. Silence here is a result, not a failure." },
+  { captureId: "C1", exerciseId: "ex_008", label: "C1-slow-tempo", intent: "faulty", hint: "5 slow reps, pausing at the top." },
+
+  { captureId: "C2", exerciseId: "ex_008", label: "C2-setup", intent: "transition", hint: "New capture. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C2", exerciseId: "ex_008", label: "C2-asymmetric", intent: "faulty", hint: "6 reps: one arm straight and high, the other bent and lower." },
+
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-setup", intent: "transition", hint: "New capture on ex_007. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-slow", intent: "faulty", hint: "5 slow bent-elbow presses." },
+  { captureId: "C3", exerciseId: "ex_007", label: "C3-asymmetric", intent: "faulty", hint: "5 asymmetric presses." },
+
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-setup", intent: "transition", hint: "New capture on ex_005. Stop/Start, confirm reset, clear.", startsCapture: true },
+  // Split by direction: side attribution is the observation under test here, so
+  // one combined label would make it unrecoverable from the JSON.
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-clean-left", intent: "clean", hint: "2 clean bends to the LEFT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-clean-right", intent: "clean", hint: "2 clean bends to the RIGHT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-head-led-left", intent: "faulty", hint: "2 head-led bends to the LEFT." },
+  { captureId: "D1", exerciseId: "ex_005", label: "D1-head-led-right", intent: "faulty", hint: "2 head-led bends to the RIGHT." },
+
+  { captureId: "E1", exerciseId: "ex_001", label: "E1-setup", intent: "transition", hint: "New capture on ex_001. Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "E1", exerciseId: "ex_001", label: "E1-ex001", intent: "faulty", hint: "3 reps with a fault. Then switch to ex_006 and press Start again — do NOT clear the buffer." },
+  { captureId: "E1", exerciseId: "ex_006", label: "E1-ex006", intent: "faulty", hint: "After Start and recalibration: 15 s hold with a fault. Then export WITHOUT clearing." },
+
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-setup", intent: "transition", hint: "New capture. Select ex_001, Stop/Start, confirm reset, clear.", startsCapture: true },
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-pre-reset", intent: "faulty", hint: "Short A3-style sequence as the pre-reset reference. Note what happened." },
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-post-reset", intent: "faulty", hint: "After recalibrating: the SAME sequence again. Compare against pre-reset." },
+  // Separate label: recalibration evidence and dropout evidence answer different
+  // questions and must be separable in the export.
+  { captureId: "E2", exerciseId: "ex_001", label: "E2-dropout", intent: "faulty", hint: "Get a cue active, step out of frame until capture drops, step back. Then export." },
+];
+
+/**
+ * Ring capacity for the shadow log. The selector runs on the 150 ms metrics
+ * tick, so this retains roughly 12 minutes of continuous decisions. Overflow is
+ * counted and reported in the export rather than hidden.
+ */
+const COACHING_SHADOW_RING_LIMIT = 5000;
+
+/**
+ * How many automated checks the export runs: ring overflow, unlabelled records,
+ * all-transition capture, wrong-exercise segments, mixed captures, missing
+ * planned segments, and implausibly thin segments.
+ *
+ * Reported to the operator so a clean result never reads as a blanket "valid".
+ * These checks do NOT confirm that a session was reset, that the movement was
+ * performed correctly, or that the segments were declared at the right moment.
+ * The protocol's manual checks remain required, not optional.
+ */
+const COACHING_SHADOW_CHECKS_RUN = 7;
+
+type Ex004FaceShadowModelState =
+  | "disabled"
+  | "waiting"
+  | "loading"
+  | "ready"
+  | "error";
+
+type Ex004FaceShadowFrameStatus =
+  | "model-not-ready"
+  | "roi-unavailable"
+  | "detected"
+  | "no-face"
+  | "multiple-faces"
+  | "invalid-matrix"
+  | "inference-error";
+
+type Ex004FaceShadowPhase =
+  | "neutral"
+  | "yaw-left"
+  | "yaw-right"
+  | "pitch-up"
+  | "pitch-down"
+  | "lateral-left"
+  | "lateral-right"
+  | "mixed"
+  | "assisted-left"
+  | "assisted-right"
+  | "other";
+
+type Ex004FaceShadowMark = {
+  version: "ex004_face_shadow_mark_v2";
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  kind: "phase" | "reference";
+  phase: Ex004FaceShadowPhase;
+  referenceAngleDeg: number | null;
+  note: string | null;
+};
+
+type Ex004FaceShadowRecord = {
+  version: "ex004_face_shadow_v2";
+  seq: number;
+  tMs: number;
+  elapsedMs: number;
+  trialPhase: Ex004FaceShadowPhase;
+  sessionState: SessionState;
+  baselinePhase: "not-needed" | "capturing" | "captured";
+  modelState: Ex004FaceShadowModelState;
+  status: Ex004FaceShadowFrameStatus;
+  faceCount: number | null;
+  matrixCount: number | null;
+  roi: FixedFaceRoi | null;
+  poseSignedDeg: number | null;
+  faceRawRollDeg: number | null;
+  faceRawYawDeg: number | null;
+  faceRawPitchDeg: number | null;
+  faceBaselineRollDeg: number | null;
+  faceBaselineYawDeg: number | null;
+  faceBaselinePitchDeg: number | null;
+  faceSignedDeg: number | null;
+  faceYawDeltaDeg: number | null;
+  facePitchDeltaDeg: number | null;
+  faceMinusPoseDeg: number | null;
+  inferenceMs: number | null;
+  authoritativeSource: "pose";
+};
+
+type Ex004FaceShadowDump = {
+  version: "ex004_face_shadow_dump_v2";
+  generatedAt: string;
+  enabled: boolean;
+  modelState: Ex004FaceShadowModelState;
+  modelAssetPath: "/models/face_landmarker.task";
+  authoritativeSource: "pose";
+  attemptedFrames: number;
+  detectedFrames: number;
+  coverage: number | null;
+  currentPhase: Ex004FaceShadowPhase;
+  faceBaselineRollDeg: number | null;
+  faceBaselineYawDeg: number | null;
+  faceBaselinePitchDeg: number | null;
+  roi: FixedFaceRoi | null;
+  markCount: number;
+  marks: Ex004FaceShadowMark[];
+  recordCount: number;
+  records: Ex004FaceShadowRecord[];
+};
+
+type Ex004FaceShadowInference = {
+  status: Ex004FaceShadowFrameStatus;
+  faceCount: number | null;
+  matrixCount: number | null;
+  rawOrientation: FaceOrientationDegrees | null;
+  inferenceMs: number | null;
+};
+
+type Ex004FaceShadowLive = {
+  status: Ex004FaceShadowFrameStatus | null;
+  poseSignedDeg: number | null;
+  faceSignedDeg: number | null;
+  faceYawDeltaDeg: number | null;
+  facePitchDeltaDeg: number | null;
+  faceMinusPoseDeg: number | null;
+  inferenceMs: number | null;
+  attemptedFrames: number;
+  detectedFrames: number;
+};
+
 type Ex005DebugLandmark = {
   x: number | null;
   y: number | null;
@@ -644,14 +1454,66 @@ declare global {
     disableEx005Debug?: () => void;
     clearEx005Debug?: () => void;
     dumpEx005Debug?: (limit?: number) => string;
+    __ex004FaceShadow?: Ex004FaceShadowRecord[];
+    enableEx004FaceShadow?: () => void;
+    disableEx004FaceShadow?: () => void;
+    clearEx004FaceShadow?: () => void;
+    dumpEx004FaceShadow?: (limit?: number) => string;
+    setEx004FaceShadowPhase?: (phase: Ex004FaceShadowPhase) => boolean;
+    markEx004FaceShadowReference?: (
+      angleDeg: number,
+      note?: string,
+    ) => boolean;
   }
 }
 
 const MAX_NECK_REP_DEBUG_RECORDS = 3000;
 const MAX_EX005_DEBUG_RECORDS = 2000;
+const MAX_EX004_FACE_SHADOW_RECORDS = 3000;
+const MAX_EX004_FACE_SHADOW_MARKS = 300;
 const EX005_DEBUG_THROTTLE_MS = 250;
+const EX004_FACE_SHADOW_UI_THROTTLE_MS = 250;
+const EX004_FACE_SHADOW_INFERENCE_INTERVAL_MS = 200;
+const EX004_FACE_SHADOW_MODEL_PATH = "/models/face_landmarker.task" as const;
+const EX004_FACE_SHADOW_MIN_BASELINE_SAMPLES = 10;
+const EX004_FACE_SHADOW_PHASE_OPTIONS: readonly {
+  value: Ex004FaceShadowPhase;
+  label: string;
+}[] = [
+  { value: "neutral", label: "Neutral" },
+  { value: "yaw-left", label: "Yaw left" },
+  { value: "yaw-right", label: "Yaw right" },
+  { value: "pitch-up", label: "Pitch up" },
+  { value: "pitch-down", label: "Pitch down" },
+  { value: "lateral-left", label: "Lateral left" },
+  { value: "lateral-right", label: "Lateral right" },
+  { value: "mixed", label: "Mixed axes" },
+  { value: "assisted-left", label: "Assisted left" },
+  { value: "assisted-right", label: "Assisted right" },
+  { value: "other", label: "Other" },
+];
+
+function isEx004FaceShadowPhase(value: string): value is Ex004FaceShadowPhase {
+  return EX004_FACE_SHADOW_PHASE_OPTIONS.some((option) => option.value === value);
+}
+
+function isEx004FaceShadowAttempt(
+  status: Ex004FaceShadowFrameStatus,
+): boolean {
+  return (
+    status === "detected" ||
+    status === "no-face" ||
+    status === "multiple-faces" ||
+    status === "invalid-matrix" ||
+    status === "inference-error"
+  );
+}
 const RAW_FRAME_UPLOAD_BATCH_SIZE = 120;
-const BASELINE_SAMPLE_COUNT = 90; // ~3 s at 30 fps
+// Tuning traces are retried a few times and then given up on — see flushRawFrames.
+const RAW_FRAME_UPLOAD_ATTEMPTS = 3;
+const RAW_FRAME_RETRY_BASE_MS = 500;
+// How long session end waits for queued reps/sets before reporting "partial".
+const SESSION_END_DRAIN_TIMEOUT_MS = 6000;
 const CAPTURE_READINESS_RESET_GRACE_MS = 300;
 
 function finiteNumberOrNull(value: unknown): number | null {
@@ -669,6 +1531,46 @@ function traceLandmark(
     y,
     z: finiteNumberOrNull(landmark?.z),
     visibility: finiteNumberOrNull(landmark?.visibility),
+  };
+}
+
+/**
+ * Serialize one `worldLandmarks` entry. Unlike `traceLandmark` this requires a
+ * finite z: a world landmark whose depth is unusable carries no information for
+ * the only question this channel exists to answer, so it is stored as null
+ * rather than as a point with a hole in it.
+ */
+function traceWorldLandmark(
+  landmark: Landmark | undefined,
+): RawTraceWorldLandmark | null {
+  const x = finiteNumberOrNull(landmark?.x);
+  const y = finiteNumberOrNull(landmark?.y);
+  const z = finiteNumberOrNull(landmark?.z);
+  if (x === null || y === null || z === null) return null;
+  return { x, y, z };
+}
+
+/**
+ * The same ten indices as `upperBodyTraceLandmarks`, from the world-coordinate
+ * output. Kept deliberately in lockstep with that function: a depth channel for
+ * a point whose image-plane position was not retained could not be compared
+ * against anything.
+ */
+function upperBodyTraceWorldLandmarks(
+  worldLandmarks: Landmark[] | undefined,
+): Record<string, RawTraceWorldLandmark | null> | null {
+  if (!worldLandmarks || worldLandmarks.length === 0) return null;
+  return {
+    leftEar:       traceWorldLandmark(worldLandmarks[7]),
+    rightEar:      traceWorldLandmark(worldLandmarks[8]),
+    leftShoulder:  traceWorldLandmark(worldLandmarks[11]),
+    rightShoulder: traceWorldLandmark(worldLandmarks[12]),
+    leftElbow:     traceWorldLandmark(worldLandmarks[13]),
+    rightElbow:    traceWorldLandmark(worldLandmarks[14]),
+    leftWrist:     traceWorldLandmark(worldLandmarks[15]),
+    rightWrist:    traceWorldLandmark(worldLandmarks[16]),
+    leftHip:       traceWorldLandmark(worldLandmarks[23]),
+    rightHip:      traceWorldLandmark(worldLandmarks[24]),
   };
 }
 
@@ -690,72 +1592,79 @@ function upperBodyTraceLandmarks(landmarks: NormalizedLandmark[]) {
 function upperBodyTraceMetrics(
   landmarks: NormalizedLandmark[],
   raw: ExerciseFrameMetrics,
+  observedTilt: TiltReference,
   exerciseId: string,
   baselines: UpperBodyTraceMetrics["baselines"],
   baselinePhase: UpperBodyTraceMetrics["baselinePhase"],
+  calibrationClock: NeutralCalibrationClock,
+  frame: UpperBodyTraceMetrics["frame"],
+  calibrationSamples: CalibrationSample[] | undefined,
+  worldLandmarks: UpperBodyTraceMetrics["worldLandmarks"],
+  frameAspect: number,
 ): UpperBodyTraceMetrics {
   const tilt = raw.tiltReference;
-  const trunkLean = computeTrunkLateralLean(landmarks, tilt);
-  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt);
-  const neckTilt = computeLateralNeckTilt(landmarks, tilt);
+  const trunkLean = computeTrunkLateralLean(landmarks, tilt, frameAspect);
+  const shoulderSymmetry = computeShoulderSymmetry(landmarks, tilt, frameAspect);
+  const neckTilt = computeLateralNeckTilt(landmarks, tilt, frameAspect);
   return {
+    metricAlgorithmVersion: POSE_METRIC_ALGORITHM_VERSION,
     exerciseId,
     wristShoulderVertical: {
       left: finiteNumberOrNull(
         raw.perSideMetrics?.left ??
-          computeWristShoulderVertical(landmarks, tilt, "left"),
+          computeWristShoulderVertical(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
         raw.perSideMetrics?.right ??
-          computeWristShoulderVertical(landmarks, tilt, "right"),
+          computeWristShoulderVertical(landmarks, tilt, "right", frameAspect),
       ),
     },
     wristShoulderLateral: {
       left: finiteNumberOrNull(
-        computeWristShoulderLateral(landmarks, tilt, "left"),
+        computeWristShoulderLateral(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeWristShoulderLateral(landmarks, tilt, "right"),
+        computeWristShoulderLateral(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderAbductionDeg: {
       left: finiteNumberOrNull(
-        computeShoulderAbduction(landmarks, tilt, "left"),
+        computeShoulderAbduction(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderAbduction(landmarks, tilt, "right"),
+        computeShoulderAbduction(landmarks, tilt, "right", frameAspect),
       ),
     },
     elbowFlexionDeg: {
       left: finiteNumberOrNull(
-        computeElbowFlexion(landmarks, tilt, "left"),
+        computeElbowFlexion(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeElbowFlexion(landmarks, tilt, "right"),
+        computeElbowFlexion(landmarks, tilt, "right", frameAspect),
       ),
     },
     scapularElevationRaw: {
       left: finiteNumberOrNull(
-        computeScapularElevation(landmarks, tilt, "left"),
+        computeScapularElevation(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeScapularElevation(landmarks, tilt, "right"),
+        computeScapularElevation(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderElbowDistance: {
       left: finiteNumberOrNull(
-        computeShoulderElbowDistance(landmarks, tilt, "left"),
+        computeShoulderElbowDistance(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderElbowDistance(landmarks, tilt, "right"),
+        computeShoulderElbowDistance(landmarks, tilt, "right", frameAspect),
       ),
     },
     shoulderHorizAbdDeg: {
       left: finiteNumberOrNull(
-        computeShoulderHorizAbduction(landmarks, tilt, "left"),
+        computeShoulderHorizAbduction(landmarks, tilt, "left", frameAspect),
       ),
       right: finiteNumberOrNull(
-        computeShoulderHorizAbduction(landmarks, tilt, "right"),
+        computeShoulderHorizAbduction(landmarks, tilt, "right", frameAspect),
       ),
     },
     trunkLeanDeg: finiteNumberOrNull(trunkLean?.angleDeg),
@@ -766,11 +1675,13 @@ function upperBodyTraceMetrics(
     neckTiltDirection: neckTilt?.direction ?? null,
     // Side parameter is ignored by the signed neck metric (single
     // bidirectional signal); "left" is passed for signature compatibility.
+    // Against the primary's own reference when it has one (ex_004's
+    // calibration ear line, D-49), so the trace reads what was counted.
     neckLateralFlexionSignedDeg: finiteNumberOrNull(
-      computeNeckLateralFlexionSigned(landmarks, tilt, "left"),
+      computeNeckLateralFlexionSigned(landmarks, raw.primaryReference ?? tilt, "left", frameAspect),
     ),
     trunkLateralFlexionUncorrectedSignedDeg: finiteNumberOrNull(
-      computeTrunkLateralFlexionUncorrectedSigned(landmarks),
+      computeTrunkLateralFlexionUncorrectedSigned(landmarks, frameAspect),
     ),
     trunkLateralFlexionFromNeutralSignedDeg:
       baselines.bidirectionalPrimary !== null
@@ -778,6 +1689,7 @@ function upperBodyTraceMetrics(
             computeTrunkLateralFlexionFromNeutralSigned(
               landmarks,
               baselines.bidirectionalPrimary,
+              frameAspect,
             ),
           )
         : null,
@@ -785,9 +1697,31 @@ function upperBodyTraceMetrics(
     baselinePhase,
     tiltReference: {
       cameraTiltDeg: tilt.cameraTiltDeg,
-      confidence: tilt.confidence,
-      divergenceDeg: finiteNumberOrNull(tilt.divergenceDeg),
+      observedCameraTiltDeg: observedTilt.cameraTiltDeg,
+      confidence: observedTilt.confidence,
+      divergenceDeg: finiteNumberOrNull(observedTilt.divergenceDeg),
     },
+    calibration: {
+      sampleCount: calibrationClock.sampleCount,
+      validElapsedMs: Math.round(calibrationClock.validElapsedMs),
+      frozenCameraTiltDeg: tilt.cameraTiltDeg,
+      ...(raw.primaryReference ? { earLineDeg: raw.primaryReference.cameraTiltDeg } : {}),
+      ...(calibrationSamples ? { samples: calibrationSamples } : {}),
+    },
+    frame,
+    worldLandmarks,
+  };
+}
+
+function emptyFrameMetrics(): ExerciseFrameMetrics {
+  return {
+    tiltReference: {
+      cameraTiltDeg: 0,
+      confidence: "insufficient",
+      divergenceDeg: null,
+    },
+    metrics: {},
+    compensationScore: null,
   };
 }
 
@@ -799,13 +1733,179 @@ const ACCENT = {
   text: "oklch(0.35 0.06 200)",
 };
 
-// Bright "glowing neon" palette, used only by the session progress strip
-// (set pips + overall progress bar) to make completion state pop. Kept
+// Bright "glowing neon" palette for completion: the session progress strip
+// (set pips + overall progress bar) and counts that reach their target. Kept
 // separate from ACCENT so the rest of the clinical UI stays restrained.
 const NEON = {
   hex:  "oklch(0.82 0.20 195)",        // bright neon cyan fill
   glow: "oklch(0.82 0.20 195 / 0.7)",  // box-shadow glow color
   dim:  "oklch(0.90 0.08 195)",        // current/upcoming set tint
+};
+
+// Layout tokens for the camera screen. The type ramp is sized for the 2-3 m the
+// patient stands at, so it runs larger than the dashboard's.
+
+const CARD_STYLE: CSSProperties = {
+  background: "white",
+  border: "1px solid oklch(0.93 0.003 240)",
+  borderRadius: 12,
+};
+
+const EYEBROW_STYLE: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: ".14em",
+  textTransform: "uppercase",
+  color: "oklch(0.42 0.01 240)",
+};
+
+const STAFF_HEADING_STYLE: CSSProperties = {
+  fontFamily: "var(--mono)",
+  fontSize: 10,
+  letterSpacing: ".14em",
+  textTransform: "uppercase",
+  color: "oklch(0.30 0.01 240)",
+  fontWeight: 600,
+};
+
+const PRIMARY_BUTTON_STYLE: CSSProperties = {
+  padding: "14px 18px",
+  borderRadius: 10,
+  border: `1px solid ${ACCENT.hex}`,
+  background: ACCENT.hex,
+  color: "white",
+  fontFamily: "var(--sans)",
+  fontSize: 18,
+  fontWeight: 600,
+  textAlign: "center",
+  cursor: "pointer",
+};
+
+const SECONDARY_BUTTON_STYLE: CSSProperties = {
+  padding: "14px 18px",
+  borderRadius: 10,
+  border: "1px solid oklch(0.90 0.003 240)",
+  background: "white",
+  color: "oklch(0.30 0.01 240)",
+  fontFamily: "var(--sans)",
+  fontSize: 18,
+  fontWeight: 500,
+  textAlign: "center",
+  textDecoration: "none",
+  cursor: "pointer",
+};
+
+const DANGER_BUTTON_STYLE: CSSProperties = {
+  padding: "11px 12px",
+  borderRadius: 10,
+  border: "1px solid oklch(0.55 0.17 25)",
+  background: "oklch(0.55 0.17 25)",
+  color: "white",
+  fontFamily: "var(--sans)",
+  fontSize: 15,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const FIELD_STYLE: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "9px 10px",
+  border: "1px solid oklch(0.88 0.01 240)",
+  borderRadius: 8,
+  background: "white",
+  color: "oklch(0.25 0.01 240)",
+  fontFamily: "var(--sans)",
+  fontSize: 14,
+};
+
+const CHIP_STYLE: CSSProperties = {
+  padding: "7px 12px",
+  borderRadius: 6,
+  background: "oklch(0.96 0.003 240)",
+  fontSize: 15,
+  fontWeight: 600,
+};
+
+const ICON_BUTTON_STYLE: CSSProperties = {
+  width: 36,
+  height: 36,
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid oklch(0.90 0.003 240)",
+  borderRadius: 8,
+  background: "white",
+  color: "oklch(0.35 0.01 240)",
+  cursor: "pointer",
+};
+
+const MODAL_BACKDROP_STYLE: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 35,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  background: "oklch(0.18 0.01 240 / 0.62)",
+};
+
+const MODAL_CARD_STYLE: CSSProperties = {
+  position: "relative",
+  width: "min(600px, 100%)",
+  maxHeight: "100%",
+  overflowY: "auto",
+  padding: "30px 32px",
+  borderRadius: 16,
+  background: "white",
+  boxShadow: "0 12px 40px oklch(0 0 0 / 0.3)",
+};
+
+const MODAL_DISMISS_STYLE: CSSProperties = {
+  ...ICON_BUTTON_STYLE,
+  position: "absolute",
+  top: 14,
+  right: 14,
+  width: 32,
+  height: 32,
+  fontSize: 15,
+  lineHeight: 1,
+  color: "oklch(0.40 0.01 240)",
+};
+
+const MODAL_ROW_STYLE: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "baseline",
+  gap: 16,
+  fontSize: 20,
+};
+
+const FEED_CHIP_STYLE: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 36,
+  padding: "0 12px",
+  borderRadius: 999,
+  background: "oklch(0.16 0.01 240 / 0.72)",
+  border: "1px solid oklch(1 0 0 / 0.14)",
+  color: "white",
+  fontFamily: "var(--mono)",
+  fontSize: 13,
+  fontWeight: 600,
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+};
+
+const MODAL_LABEL_STYLE: CSSProperties = { color: "oklch(0.45 0.01 240)" };
+
+const MODAL_VALUE_STYLE: CSSProperties = {
+  fontWeight: 700,
+  color: "oklch(0.18 0.01 240)",
+  fontVariantNumeric: "tabular-nums",
+  textAlign: "right",
 };
 
 type ScoreTier = { hex: string; soft: string; text: string; label: string };
@@ -818,26 +1918,14 @@ function scoreTier(score: number | null): ScoreTier {
   return             { hex: "oklch(0.58 0.17 25)",  soft: "oklch(0.96 0.04 25)",  text: "oklch(0.45 0.14 25)",  label: "poor form" };
 }
 
-function clinicalNavBtnStyle(): CSSProperties {
-  return {
-    width: 36,
-    border: "1px solid oklch(0.90 0.003 240)",
-    background: "white",
-    borderRadius: 8,
-    color: "oklch(0.35 0.01 240)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    flexShrink: 0,
-  };
-}
-
 type CardSpec = {
-  key: MetricName;
+  id: string;
+  metric: MetricName;
   label: string;
   value: number | null;
   kind: "primary" | "compensation";
+  /** Angles are camera estimates in pipeline units and show no degree sign. */
+  isAngle: boolean;
   warningThreshold?: number;
   compareDirection?: "above" | "below";
   warningActive?: boolean;
@@ -851,13 +1939,15 @@ type CardSpec = {
 
 export default function CameraClient() {
   const { user } = useAuth();
+  // The day by the demo clock (the real day outside demo mode). It changes once
+  // a day, so the camera page does not redraw for the clock.
+  const { todayKey: effectiveTodayPH } = useDemoClock();
   const { showToast } = useToast();
   const dashboardHref =
     user?.role === "admin" ? "/dashboard/admin"
     : user?.role === "therapist" ? "/dashboard/therapist"
     : "/dashboard/patient";
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
 
@@ -867,6 +1957,11 @@ export default function CameraClient() {
 
   const requestRef = useRef<number | null>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
+  const visionFilesetRef = useRef<
+    Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null
+  >(null);
+  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const faceCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Footer telemetry (resolution + processing FPS). Both are driven from the
   // rAF loop via refs to avoid per-frame setState: resolution commits only when
@@ -889,8 +1984,24 @@ export default function CameraClient() {
   const frameMsSumRef = useRef(0);
   const perfSampleCountRef = useRef(0);
 
-  const tiltFilterRef = useRef(new OneEuroFilter(1.0, 0.1));
   const metricFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
+  const leftCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(
+    new Map(),
+  );
+  const rightCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(
+    new Map(),
+  );
+  // The LOWER cue's own reading (D-47): the shoulders against their resting
+  // line from the calibration, smoothed by its own filter so the score's
+  // filters above keep the frozen-tilt reading. Null until a calibration.
+  const shoulderRestLineDegRef = useRef<number | null>(null);
+  // The trunk-lean cue's own reading (D-65), in the same way: the trunk against
+  // its resting line from the calibration. Null until a calibration.
+  const trunkRestLineDegRef = useRef<number | null>(null);
+  // The ear line frozen in the calibration (D-49): the zero the neck side bend
+  // counts from. Every calibration takes it; null until one has.
+  const calibrationEarLineDegRef = useRef<number | null>(null);
+  const cueCompensationFiltersRef = useRef<Map<MetricName, OneEuroFilter>>(new Map());
   // Dedicated smoothing filters for per-limb primary metrics. Separate from
   // the metricFiltersRef map because per-limb exercises need TWO filters for
   // the same MetricName — one per side. Cleared on exercise change, reset on
@@ -911,6 +2022,22 @@ export default function CameraClient() {
   });
   const leftScapBaselineRef  = useRef<BaselineState>({ samples: [], value: null });
   const rightScapBaselineRef = useRef<BaselineState>({ samples: [], value: null });
+  type NeutralCalibrationSample = {
+    landmarks: NormalizedLandmark[];
+    observedTilt: TiltReference;
+    // The shape of the frame the sample came from: its baselines are
+    // measured in that frame's aspect-corrected image plane (D-48).
+    frameAspect: number;
+  };
+  const neutralCalibrationClockRef = useRef<NeutralCalibrationClock>(
+    newNeutralCalibrationClock(),
+  );
+  const neutralCalibrationSamplesRef = useRef<NeutralCalibrationSample[]>([]);
+  // When the positioning countdown that comes before every calibration ends
+  // (performance.now() clock). Until then no calibration sample is taken, so a
+  // patient still walking back from the computer is not measured as neutral.
+  const calibrationPositioningEndsAtMsRef = useRef<number | null>(null);
+  const frozenTiltDegRef = useRef<number | null>(null);
   const lastMetricsUpdateRef = useRef(0);
   const compensationWarningLatchesRef = useRef<Map<MetricName, CompensationWarningLatch>>(
     new Map(),
@@ -918,9 +2045,79 @@ export default function CameraClient() {
   const [activeCompensationWarnings, setActiveCompensationWarnings] = useState<Set<MetricName>>(
     new Set(),
   );
+  // Single-cue arbitration state. Lives beside the warning latches and is
+  // cleared with them: a cue's minimum-active clock, display clock and
+  // cooldown all describe one continuous stretch of coaching, so carrying any
+  // of it across an exercise change, a calibration restart or a capture
+  // dropout would suppress or promote a cue on evidence from a different run.
+  const coachingCueStateRef = useRef<CoachingCueState>(newCoachingCueState());
+  // Read by the per-frame overlay path, which runs faster than the 150 ms
+  // metrics tick that produces the decision.
+  const selectedCoachingCueMetricRef = useRef<MetricName | null>(null);
+  // Landmark (11 or 12) the LOWER arrow was drawn on when the shoulder cue
+  // appeared; kept until that cue leaves the slot so the arrow cannot jump.
+  const lockedShoulderIndexRef = useRef<11 | 12 | null>(null);
+  // Per-metric state of rep-window warnings (cues judged once per repetition).
+  const repWindowStatesRef = useRef(new Map<MetricName, RepWindowState>());
+  // Per-check state of display-only coaching checks (hipShiftWarning.ts).
+  const hipShiftStatesRef = useRef(new Map<MetricName, HipShiftState>());
+  // Per-check state of the display-only elbow check (elbowBendWarning.ts).
+  const elbowBendStatesRef = useRef(new Map<MetricName, ElbowBendState>());
+  // Per-check state of the display-only past-shoulder-height check (overRaiseWarning.ts).
+  const overRaiseStatesRef = useRef(new Map<MetricName, OverRaiseState>());
+  // Per-check state of the arm hold's "Raise this arm" check (otherArmDownWarning.ts).
+  const otherArmDownStatesRef = useRef(new Map<MetricName, OtherArmDownState>());
+  // The cue last drawn, with the reading and direction it was drawn with. A cue
+  // kept for its minimum visible time is drawn with these once its own reading
+  // has gone, as the per-repetition, hip and at-rest coupled readings do.
+  const lastDrawnCueRef = useRef<{ metric: MetricName; value: number; direction: string | null } | null>(null);
+  const coachingProvenanceRef = useRef<CoachingProvenance | null>(null);
+  const coachingAuditRef = useRef(new CoachingAuditBuffer());
+  const coachingDecisionRef = useRef<CoachingObservation["selected"]>(null);
+  const sessionStartPendingRef = useRef(false);
+  const cameraStartEpochRef = useRef(0);
+  const cameraReadyRef = useRef(false);
+  const [selectedCoachingCueMetric, setSelectedCoachingCueMetric] =
+    useState<MetricName | null>(null);
   const resetCompensationWarnings = useCallback(() => {
     compensationWarningLatchesRef.current.clear();
     setActiveCompensationWarnings(new Set());
+    coachingCueStateRef.current = newCoachingCueState();
+    selectedCoachingCueMetricRef.current = null;
+    coachingDecisionRef.current = null;
+    // Per-repetition and hip-check state, the LOWER lock and the last drawn
+    // cue belong to the run being reset, like the latches above.
+    repWindowStatesRef.current.clear();
+    hipShiftStatesRef.current.clear();
+    elbowBendStatesRef.current.clear();
+    overRaiseStatesRef.current.clear();
+    otherArmDownStatesRef.current.clear();
+    lockedShoulderIndexRef.current = null;
+    lastDrawnCueRef.current = null;
+    setSelectedCoachingCueMetric(null);
+  }, []);
+  /**
+   * Whether anything in the warning/cue layer still carries state from an
+   * earlier run. The render loop's "clear stale state" paths test this rather
+   * than the latch map alone: a cue can hold a live cooldown after every latch
+   * has dropped, and carrying that across a calibration restart would suppress
+   * a cue on evidence from before the restart.
+   */
+  const compensationWarningStateIsDirty = useCallback(() => {
+    const cue = coachingCueStateRef.current;
+    return (
+      compensationWarningLatchesRef.current.size > 0 ||
+      cue.currentCueId !== null ||
+      cue.activeSinceMs.size > 0 ||
+      cue.clearedAtMs.size > 0 ||
+      repWindowStatesRef.current.size > 0 ||
+      hipShiftStatesRef.current.size > 0 ||
+      elbowBendStatesRef.current.size > 0 ||
+      overRaiseStatesRef.current.size > 0 ||
+      otherArmDownStatesRef.current.size > 0 ||
+      lockedShoulderIndexRef.current !== null ||
+      lastDrawnCueRef.current !== null
+    );
   }, []);
 
   const [repCounts, setRepCounts] = useState<{ left: number; right: number }>({
@@ -946,6 +2143,111 @@ export default function CameraClient() {
   const neckRepDebugRef = useRef<NeckRepDebugRecord[]>([]);
   const neckRepDebugStartMsRef = useRef<number | null>(null);
   const neckRepDebugSeqRef = useRef(0);
+  // ── Staff-only coaching shadow log ────────────────────────────────────────
+  // Records what the cue selector decided and why. Unlike the Face diagnostic,
+  // the runtime gate is the staff role itself, not just the panel: both refs
+  // below are checked inside the render loop before a record is written, and
+  // no console helper is registered, so a patient cannot start recording from
+  // developer tools on their own device.
+  const coachingShadowEnabledRef = useRef(false);
+  const coachingShadowStaffAllowedRef = useRef(false);
+  const coachingShadowRecordsRef = useRef<CoachingShadowRecord[]>([]);
+  const coachingShadowSeqRef = useRef(0);
+  const coachingShadowDroppedRef = useRef(0);
+  const coachingShadowStartMsRef = useRef<number | null>(null);
+  const coachingShadowSegmentLabelRef = useRef<string | null>(null);
+  const coachingShadowSegmentIntentRef = useRef<CoachingShadowIntent>("transition");
+  const [coachingShadowSegmentLabel, setCoachingShadowSegmentLabel] = useState("");
+  const [coachingShadowSegmentIntent, setCoachingShadowSegmentIntent] =
+    useState<CoachingShadowIntent>("transition");
+  const [coachingShadowActiveSegment, setCoachingShadowActiveSegment] =
+    useState<{ label: string; intent: CoachingShadowIntent } | null>(null);
+  const [coachingPlanIndex, setCoachingPlanIndex] = useState(0);
+  /**
+   * Set index whose neutral-calibration samples have already been written to
+   * the trace. V4 emits them once per set; this is what makes it once.
+   */
+  const calibrationSamplesEmittedSetRef = useRef<number | null>(null);
+  /**
+   * Neutral-calibration samples SERIALIZED FOR THE TRACE, snapshotted at
+   * finalize time.
+   *
+   * `finalizeNeutralCalibration` deliberately frees the raw sample ring once
+   * the medians are computed, and it does so BEFORE flipping the phase to
+   * "captured". The trace writer runs after that flip, so reading the raw ring
+   * there yields an empty array — the v4 trace shipped writing `samples: []`
+   * for exactly this reason. Snapshotting into the compact trace shape keeps
+   * the memory saving (10 landmarks per sample rather than the full set) while
+   * preserving what a later reprocessing actually needs.
+   */
+  const calibrationTraceSamplesRef = useRef<CalibrationSample[] | null>(null);
+  /**
+   * True when a capture dropout interrupted a session that had ALREADY captured
+   * its neutral baseline.
+   *
+   * Until 2026-09-07 a sustained dropout re-ran calibration automatically. That
+   * is worse than it sounds: calibration captures "neutral" from whatever
+   * posture the patient happens to hold at that moment, so an interruption
+   * while they are slouched adopts the slouch as their reference, and every
+   * later deduction is measured against a compensated posture. A recorded
+   * session did exactly this twice, silently.
+   *
+   * The baseline is now KEPT and this flag is raised instead, so the choice to
+   * re-anchor is explicit. That trades one risk for a visible one: if the
+   * CAMERA moved rather than the patient, the frozen tilt is now stale until
+   * somebody recalibrates — which is why the prompt says so rather than just
+   * offering a button.
+   */
+  const calibrationStaleRef = useRef(false);
+  const [calibrationStale, setCalibrationStale] = useState(false);
+  /**
+   * The on-screen trace sync readout. Held as a DOM node rather than state on
+   * purpose: the camera loop deliberately avoids per-frame `setState` (fps and
+   * the timing split commit once a second, resolution only on change), and
+   * reconciling a readout every frame would add render cost to the exact frame
+   * budget this recording is trying to protect.
+   */
+  const traceSyncElRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Whether THIS processed frame produced a trace row. Cleared at the top of
+   * each frame's work and read at the bottom, which is what lets the readout
+   * be blanked on a frame that was not traced.
+   *
+   * It has to be per-frame rather than per-rAF-tick: the loop is scheduled on
+   * every animation frame but only does this work when the video has advanced,
+   * so a tick-level flag would blank the readout between video frames and
+   * strobe it at display rate.
+   */
+  const traceSyncWroteThisFrameRef = useRef(false);
+  const [coachingRemoteCollapsed, setCoachingRemoteCollapsed] = useState(false);
+  // True once the current ring contents have been written to a file. Cleared by
+  // the next recorded decision, so "exported" always describes what is in the
+  // ring right now rather than something that was exported two captures ago.
+  const coachingShadowExportedRef = useRef(false);
+  const [coachingShadowExported, setCoachingShadowExported] = useState(false);
+  const [coachingShadowEnabled, setCoachingShadowEnabledState] = useState(false);
+  const [coachingShadowCount, setCoachingShadowCount] = useState(0);
+  const coachingShadowLastUiUpdateMsRef = useRef(0);
+
+  const ex004FaceShadowEnabledRef = useRef(false);
+  const ex004FaceShadowModelStateRef = useRef<Ex004FaceShadowModelState>("disabled");
+  const ex004FaceShadowRoiRef = useRef<FixedFaceRoi | null>(null);
+  const ex004FaceShadowBaselineSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselineYawSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselinePitchSamplesRef = useRef<number[]>([]);
+  const ex004FaceShadowBaselineRollRef = useRef<number | null>(null);
+  const ex004FaceShadowBaselineYawRef = useRef<number | null>(null);
+  const ex004FaceShadowBaselinePitchRef = useRef<number | null>(null);
+  const ex004FaceShadowRecordsRef = useRef<Ex004FaceShadowRecord[]>([]);
+  const ex004FaceShadowMarksRef = useRef<Ex004FaceShadowMark[]>([]);
+  const ex004FaceShadowPhaseRef = useRef<Ex004FaceShadowPhase>("neutral");
+  const ex004FaceShadowSeqRef = useRef(0);
+  const ex004FaceShadowMarkSeqRef = useRef(0);
+  const ex004FaceShadowStartMsRef = useRef<number | null>(null);
+  const ex004FaceShadowAttemptedFramesRef = useRef(0);
+  const ex004FaceShadowDetectedFramesRef = useRef(0);
+  const ex004FaceShadowLastUiUpdateMsRef = useRef(0);
+  const ex004FaceShadowLastInferenceMsRef = useRef<number | null>(null);
   const ex005DebugRef = useRef<Ex005DebugRecord[]>([]);
   const ex005DebugStartMsRef = useRef<number | null>(null);
   const ex005DebugSeqRef = useRef(0);
@@ -953,12 +2255,18 @@ export default function CameraClient() {
   // TEMPORARY (2026-05-26): throttle anchor for the ex_005 head-lean console
   // diagnostic below. Remove once ex_005 thresholds/framing are tuned.
   const lastEx005DebugMsRef = useRef(0);
-  
+
   // In-memory per-rep event log, keyed by side. Cleared when the exercise
   // changes. This is the buffer that will eventually feed Postgres in a later
   // step — for now, console.log on each rep is the only output beyond the
   // live counter.
   const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
+    left: [],
+    right: [],
+  });
+  // Outcomes counted before a Resume (from the snapshot). Kept apart from
+  // repLogRef, which only ever holds this page's live RepEvents.
+  const priorRepOutcomesRef = useRef<{ left: RepOutcome[]; right: RepOutcome[] }>({
     left: [],
     right: [],
   });
@@ -990,6 +2298,9 @@ export default function CameraClient() {
     rightSec: number;
     leftInBand: boolean;
     rightInBand: boolean;
+    /** Per-arm hold: which way the arm should move to get back into the band (display only). */
+    leftHint?: HoldHint | null;
+    rightHint?: HoldHint | null;
   }>({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
 
   // ── Isometric hold-quality accumulators ──────────────────────────────────────
@@ -1052,17 +2363,525 @@ export default function CameraClient() {
 
   const [mounted, setMounted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [cameraStreamActive, setCameraStreamActive] = useState(false);
+  const [staffDrawerOpen, setStaffDrawerOpen] = useState(false);
+  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelLoaded, setModelLoaded] = useState(false);
+  const [ex004FaceShadowEnabled, setEx004FaceShadowEnabledState] = useState(false);
+  const [ex004FaceShadowModelState, setEx004FaceShadowModelState] =
+    useState<Ex004FaceShadowModelState>("disabled");
+  const [ex004FaceShadowModelError, setEx004FaceShadowModelError] =
+    useState<string | null>(null);
+  const [ex004FaceShadowPhase, setEx004FaceShadowPhaseState] =
+    useState<Ex004FaceShadowPhase>("neutral");
+  const [ex004FaceShadowReferenceInput, setEx004FaceShadowReferenceInput] =
+    useState("");
+  const [ex004FaceShadowLive, setEx004FaceShadowLive] =
+    useState<Ex004FaceShadowLive>({
+      status: null,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+      inferenceMs: null,
+      attemptedFrames: 0,
+      detectedFrames: 0,
+    });
+
+  const appendEx004FaceShadowMark = useCallback((
+    kind: Ex004FaceShadowMark["kind"],
+    phase: Ex004FaceShadowPhase,
+    referenceAngleDeg: number | null = null,
+    note: string | null = null,
+  ): Ex004FaceShadowMark => {
+    const tNow = performance.now();
+    if (ex004FaceShadowStartMsRef.current === null) {
+      ex004FaceShadowStartMsRef.current = tNow;
+    }
+    const mark: Ex004FaceShadowMark = {
+      version: "ex004_face_shadow_mark_v2",
+      seq: ++ex004FaceShadowMarkSeqRef.current,
+      tMs: Math.round(tNow),
+      elapsedMs: Math.round(tNow - ex004FaceShadowStartMsRef.current),
+      kind,
+      phase,
+      referenceAngleDeg,
+      note,
+    };
+    ex004FaceShadowMarksRef.current.push(mark);
+    if (ex004FaceShadowMarksRef.current.length > MAX_EX004_FACE_SHADOW_MARKS) {
+      ex004FaceShadowMarksRef.current.shift();
+    }
+    return mark;
+  }, []);
+
+  const setEx004FaceShadowPhase = useCallback((phase: Ex004FaceShadowPhase) => {
+    ex004FaceShadowPhaseRef.current = phase;
+    setEx004FaceShadowPhaseState(phase);
+    appendEx004FaceShadowMark("phase", phase);
+  }, [appendEx004FaceShadowMark]);
+
+  const markEx004FaceShadowReference = useCallback((
+    angleDeg: number,
+    note: string | null = null,
+  ): boolean => {
+    if (!Number.isFinite(angleDeg)) return false;
+    appendEx004FaceShadowMark(
+      "reference",
+      ex004FaceShadowPhaseRef.current,
+      angleDeg,
+      note,
+    );
+    return true;
+  }, [appendEx004FaceShadowMark]);
+
+  const setEx004FaceShadowEnabled = useCallback((enabled: boolean) => {
+    ex004FaceShadowEnabledRef.current = enabled;
+    setEx004FaceShadowEnabledState(enabled);
+  }, []);
+
+  const clearCoachingShadow = useCallback(() => {
+    coachingShadowRecordsRef.current = [];
+    coachingShadowSeqRef.current = 0;
+    coachingShadowDroppedRef.current = 0;
+    coachingShadowStartMsRef.current = null;
+    coachingShadowLastUiUpdateMsRef.current = 0;
+    coachingShadowSegmentLabelRef.current = null;
+    coachingShadowSegmentIntentRef.current = "transition";
+    coachingShadowExportedRef.current = false;
+    setCoachingShadowCount(0);
+    setCoachingShadowActiveSegment(null);
+    setCoachingShadowExported(false);
+  }, []);
+
+  /**
+   * Starts a labelled segment. Every record written from now until the next
+   * call carries this label and intent, so the export is self-describing and
+   * no separate written timestamp sheet has to be kept in sync with it.
+   */
+  const markCoachingShadowSegment = useCallback(
+    (label: string, intent: CoachingShadowIntent): boolean => {
+      const trimmed = label.trim();
+      if (trimmed === "") return false;
+      coachingShadowSegmentLabelRef.current = trimmed;
+      coachingShadowSegmentIntentRef.current = intent;
+      setCoachingShadowActiveSegment({ label: trimmed, intent });
+      return true;
+    },
+    [],
+  );
+
+  /**
+   * Closes the current segment by dropping back to an unlabelled `transition`.
+   *
+   * A label with a start but no end runs until the next one begins, so it
+   * absorbs the rest after the last repetition and the time spent reaching for
+   * the export button. Those ticks are not movement, and there is no rep
+   * boundary or primary value in the record to trim them afterwards. Ending the
+   * segment explicitly is the only way to bound the window.
+   */
+  const endCoachingShadowSegment = useCallback(() => {
+    // Keep a LABEL — `after:<segment>` — rather than dropping to null. Recording
+    // continues while the operator reaches for Download, and nulling the label
+    // would have made those ordinary between-segment ticks trip the
+    // unlabelled-record warning on every single capture. A warning that fires
+    // when the workflow is being followed correctly trains people to ignore
+    // warnings. The intent still drops to `transition`, so these ticks stay out
+    // of both the clean and the faulty counts.
+    const previous = coachingShadowSegmentLabelRef.current;
+    // Idempotent: `Next` also ends any open segment, so pressing End then Next
+    // would otherwise produce `after:after:<segment>`.
+    const label =
+      previous === null
+        ? "idle"
+        : previous === "idle" || previous.startsWith("after:")
+          ? previous
+          : `after:${previous}`;
+    coachingShadowSegmentLabelRef.current = label;
+    coachingShadowSegmentIntentRef.current = "transition";
+    setCoachingShadowActiveSegment({ label, intent: "transition" });
+  }, []);
+
+  const coachingShadowAdvanceBlocked = shouldBlockCoachingShadowPlanAdvance(
+    COACHING_SESSION_PLAN,
+    coachingPlanIndex,
+    coachingShadowCount,
+    coachingShadowExported,
+  );
+
+  /**
+   * The floating remote and the main panel must share this path. Re-check the
+   * refs here because the visible count/export state is updated asynchronously;
+   * a click inside that brief lag must still preserve the retained capture.
+   */
+  const moveCoachingShadowPlanTo = useCallback((targetIndex: number): boolean => {
+    const retainedRecordCount = coachingShadowRecordsRef.current.length;
+    const blocked = shouldBlockCoachingShadowPlanTransition(
+      COACHING_SESSION_PLAN,
+      coachingPlanIndex,
+      targetIndex,
+      retainedRecordCount,
+      coachingShadowExportedRef.current,
+    );
+    if (blocked) {
+      showToast({
+        variant: "error",
+        message: `This capture has ${retainedRecordCount} unexported decisions. Download the log before moving on.`,
+      });
+      return false;
+    }
+    if (coachingShadowActiveSegment) endCoachingShadowSegment();
+    setCoachingPlanIndex(Math.max(0, Math.min(targetIndex, COACHING_SESSION_PLAN.length)));
+    return true;
+  }, [
+    coachingPlanIndex,
+    coachingShadowActiveSegment,
+    endCoachingShadowSegment,
+    showToast,
+  ]);
+
+  const advanceCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(coachingPlanIndex + 1),
+    [coachingPlanIndex, moveCoachingShadowPlanTo],
+  );
+
+  /**
+   * Back and restart go through the SAME guard as advance. Both previously set
+   * the index directly, so either could cross a capture boundary while the ring
+   * held unexported decisions, and both skipped `endCoachingShadowSegment()` so
+   * an open segment kept recording under its old label after the step moved.
+   */
+  const stepBackCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(coachingPlanIndex - 1),
+    [coachingPlanIndex, moveCoachingShadowPlanTo],
+  );
+
+  const restartCoachingShadowPlan = useCallback(
+    (): boolean => moveCoachingShadowPlanTo(0),
+    [moveCoachingShadowPlanTo],
+  );
+
+  const setCoachingShadowEnabled = useCallback((enabled: boolean) => {
+    coachingShadowEnabledRef.current = enabled;
+    setCoachingShadowEnabledState(enabled);
+  }, []);
+
+  /**
+   * Writes the whole retained shadow ring to a local JSON file.
+   *
+   * A FILE DOWNLOAD, deliberately, not a clipboard copy: the Face diagnostic's
+   * clipboard export lost a session's raw dump and silently truncated the ring
+   * it did copy. Everything the ring still holds is written, and any overflow
+   * the ring already discarded is stated as a count in the envelope rather than
+   * being papered over.
+   *
+   * Nothing leaves the device. The blob is created, saved, and revoked locally.
+   */
+  const downloadCoachingShadow = useCallback((): {
+    warnings: string[];
+    checksRun: number;
+  } | null => {
+    if (typeof window === "undefined") return null;
+    const records = coachingShadowRecordsRef.current;
+    if (records.length === 0) return null;
+
+    const exerciseIds = [...new Set(records.map((record) => record.exerciseId))];
+    const cueConfiguration: CoachingShadowExport["cueConfiguration"] = [];
+    for (const exerciseId of exerciseIds) {
+      const definition = getExerciseDefinition(exerciseId);
+      if (!definition) continue;
+      for (const comp of definition.compensationMetrics) {
+        const cue = resolveCoachingCue(comp);
+        const timing = resolveCoachingCueTiming(cue);
+        cueConfiguration.push({
+          exerciseId,
+          metric: comp.name,
+          cueId: cue.id,
+          message: cue.message,
+          priority: cue.priority,
+          ...timing,
+        });
+      }
+    }
+
+    const segments: CoachingShadowExport["segments"] = [];
+    for (const record of records) {
+      const open = segments[segments.length - 1];
+      if (
+        open &&
+        open.label === record.segmentLabel &&
+        open.intent === record.segmentIntent
+      ) {
+        open.lastSeq = record.seq;
+        open.endMs = record.tMs;
+        open.durationMs = open.endMs - open.startMs;
+        open.recordCount += 1;
+        if (record.selectedCueId !== null) open.cueActiveRecords += 1;
+        continue;
+      }
+      segments.push({
+        label: record.segmentLabel,
+        intent: record.segmentIntent,
+        firstSeq: record.seq,
+        lastSeq: record.seq,
+        startMs: record.tMs,
+        endMs: record.tMs,
+        durationMs: 0,
+        recordCount: 1,
+        cueActiveRecords: record.selectedCueId !== null ? 1 : 0,
+      });
+    }
+
+    const payload: CoachingShadowExport = {
+      schema: COACHING_SHADOW_SCHEMA,
+      generatedAt: new Date().toISOString(),
+      exerciseIds,
+      mixedExercises: exerciseIds.length > 1,
+      cueConfiguration,
+      segments,
+      ringCapacity: COACHING_SHADOW_RING_LIMIT,
+      recordCount: records.length,
+      droppedRecords: coachingShadowDroppedRef.current,
+      notes: [
+        "Coaching cue arbitration decisions. Diagnostic record of which cue was selected and why.",
+        "Records the selector's own decisions, not clinical outcomes. Cue wording and priority ordering are engineering defaults and are not clinician-approved.",
+        "Every record the in-memory ring still held is included. droppedRecords counts decisions the ring discarded before this export.",
+        "tMs is performance.now() milliseconds since page load; tShadowMs is milliseconds since recording started.",
+        "The ring is not cleared on an exercise change, so one export can span several exercises. Every record carries its own exerciseId; exerciseIds lists them all.",
+        "cueConfiguration is read from the registry at export time, not at decision time. It describes these decisions only if the registry has not changed since they were made.",
+        "segmentLabel and segmentIntent are operator-declared ground truth, set in the panel before each segment. intent=clean marks movement that was MEANT to be clean; intent=transition marks setup, recovery, and between-segment time and belongs in neither count.",
+        "cueActiveRecords/recordCount on a clean segment is a DESCRIPTIVE TICK SHARE, not a false-positive rate and not a bound on one. A segment still contains the pauses between repetitions, and a pause can push the share either way depending on whether a cue was active across it. The record carries no rep boundary or primary value, so those ticks cannot be removed afterwards.",
+      ],
+      records: [...records],
+    };
+
+    const exerciseLabel = exerciseIds.length === 1 ? exerciseIds[0] : "mixed";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+    );
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `coaching-shadow-${exerciseLabel}-${stamp}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+
+    // Self-validation. The protocol asks the operator to open every file and
+    // check these before clearing; doing it here means a bad capture is caught
+    // in the room rather than during analysis, when it cannot be redone.
+    const warnings: string[] = [];
+
+    // Cross-check the capture against the plan. Without this the validator can
+    // only see the envelope's own consistency, and a single record recorded on
+    // the wrong exercise would pass.
+    const planByLabel = new Map(
+      COACHING_SESSION_PLAN.map((step) => [step.label, step] as const),
+    );
+    const misplaced = payload.segments.filter((segment) => {
+      const step = segment.label === null ? undefined : planByLabel.get(segment.label);
+      if (!step) return false;
+      return records.some(
+        (record) =>
+          record.segmentLabel === segment.label &&
+          record.exerciseId !== step.exerciseId,
+      );
+    });
+    if (misplaced.length > 0) {
+      warnings.push(
+        `${misplaced.length} segment(s) were recorded on the wrong exercise: ${misplaced
+          .map((segment) => segment.label)
+          .join(", ")}.`,
+      );
+    }
+    const capturesPresent = new Set(
+      payload.segments
+        .map((segment) => planByLabel.get(segment.label ?? "")?.captureId)
+        .filter((id): id is string => id !== undefined),
+    );
+    // A valid E1 file holds ONE capture id spanning two EXERCISES. Nothing is
+    // meant to hold two capture ids, so there is no exception here — the earlier
+    // `!capturesPresent.has("E1")` guard confused exercises with captures and
+    // let an E1 + A1 contamination through unreported.
+    if (capturesPresent.size > 1) {
+      warnings.push(
+        `This file holds ${capturesPresent.size} captures (${[...capturesPresent].join(", ")}). Each capture belongs in its own file; only E1 spans two exercises, and it is still one capture.`,
+      );
+    }
+    for (const captureId of capturesPresent) {
+      // Exclude only the auto-generated capture-boundary setup steps. Filtering
+      // on `intent !== "transition"` also dropped genuinely required segments
+      // that happen to be transition-classified — `B2-corrected` is the
+      // recovery window and its absence must be reported.
+      const expected = COACHING_SESSION_PLAN.filter(
+        (step) => step.captureId === captureId && step.startsCapture !== true,
+      ).map((step) => step.label);
+      const missing = expected.filter(
+        (label) => !payload.segments.some((segment) => segment.label === label),
+      );
+      if (missing.length > 0) {
+        warnings.push(`${captureId} is missing segment(s): ${missing.join(", ")}.`);
+      }
+    }
+    const thin = payload.segments.filter(
+      (segment) => segment.intent !== "transition" && segment.recordCount < 10,
+    );
+    if (thin.length > 0) {
+      warnings.push(
+        `${thin.length} segment(s) hold fewer than 10 records (under ~1.5 s): ${thin
+          .map((segment) => segment.label)
+          .join(", ")}.`,
+      );
+    }
+
+    if (payload.droppedRecords > 0) {
+      warnings.push(
+        `${payload.droppedRecords} decisions were evicted from the ring before this export — the capture ran past about 12 minutes.`,
+      );
+    }
+    // Only records written BEFORE anything was ever declared land here — ending
+    // a segment keeps an `after:` label, so the normal gap between segments does
+    // not trip this.
+    const undeclared = records.filter((record) => record.segmentLabel === null).length;
+    if (undeclared > 0) {
+      warnings.push(
+        `${undeclared} of ${records.length} records were written before any segment was declared — press "Start this step" before moving.`,
+      );
+    }
+    const transitionOnly =
+      payload.segments.length > 0 &&
+      payload.segments.every((segment) => segment.intent === "transition");
+    if (transitionOnly) {
+      warnings.push(
+        "Every segment is still 'transition' — no clean or faulty intent was declared, so this capture cannot contribute to the clean-window measure.",
+      );
+    }
+    return { warnings, checksRun: COACHING_SHADOW_CHECKS_RUN };
+  }, []);
+
+  // Runtime staff gate for the shadow log, kept in a ref so the render loop can
+  // check it without re-subscribing. Losing the staff role stops recording and
+  // discards what was captured, so the panel disappearing and the recording
+  // stopping are the same event.
+  const coachingShadowStaffAllowed =
+    user?.role === "admin" || user?.role === "therapist";
+  useEffect(() => {
+    coachingShadowStaffAllowedRef.current = coachingShadowStaffAllowed;
+    if (!coachingShadowStaffAllowed) {
+      coachingShadowEnabledRef.current = false;
+      setCoachingShadowEnabledState(false);
+      clearCoachingShadow();
+    }
+  }, [coachingShadowStaffAllowed, clearCoachingShadow]);
+
+  /**
+   * Remote segment control for an operator standing away from the keyboard.
+   *
+   * WHY THIS EXISTS
+   * `End step` is what flips the recorded label to `transition`. Every tick
+   * between the movement stopping and that click is still labelled clean or
+   * faulty, and at the ~150 ms tick a few seconds of walking back to the desk
+   * writes tens of mislabelled records that cannot be repaired afterwards. The
+   * boundary has to be markable from where the exercise is performed.
+   *
+   * MOUSE THUMB BUTTONS DO NOT WORK AND ARE NOT BOUND. Tested 2026-08-23 on the
+   * operator's hardware: the browser services Back/Forward at the chrome layer
+   * and never dispatches `mousedown` to the page, so a handler cannot see them
+   * and `preventDefault()` never runs. Binding them is worse than useless — the
+   * navigation still happens, and navigating away from a live capture destroys
+   * the only copy of it. Do not re-add this without retesting.
+   *
+   * What works instead: the large on-screen remote below (park the cursor on it
+   * and left-click from anywhere in the room), and the F8/F9 keys for anything
+   * that can send a real keystroke.
+   */
+  useEffect(() => {
+    if (!coachingShadowEnabled || !coachingShadowStaffAllowed) return;
+
+    const typingInAField = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      const tag = el?.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable === true;
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (typingInAField(event.target)) return;
+      if (event.key === "F8") {
+        event.preventDefault();
+        const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+        if (!step) return;
+        if (!markCoachingShadowSegment(step.label, step.intent)) return;
+        setCoachingShadowSegmentLabel(step.label);
+        setCoachingShadowSegmentIntent(step.intent);
+        showToast({ variant: "success", message: `Recording ${step.label} (${step.intent}).` });
+      } else if (event.key === "F9") {
+        event.preventDefault();
+        endCoachingShadowSegment();
+        showToast({ variant: "success", message: "Segment ended." });
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [
+    coachingShadowEnabled,
+    coachingShadowStaffAllowed,
+    coachingPlanIndex,
+    markCoachingShadowSegment,
+    endCoachingShadowSegment,
+    showToast,
+  ]);
+
+  const commitEx004FaceShadowModelState = useCallback((
+    state: Ex004FaceShadowModelState,
+    message: string | null = null,
+  ) => {
+    ex004FaceShadowModelStateRef.current = state;
+    setEx004FaceShadowModelState(state);
+    setEx004FaceShadowModelError(message);
+  }, []);
+
+  const clearEx004FaceShadow = useCallback(() => {
+    ex004FaceShadowRecordsRef.current = [];
+    ex004FaceShadowMarksRef.current = [];
+    ex004FaceShadowSeqRef.current = 0;
+    ex004FaceShadowMarkSeqRef.current = 0;
+    ex004FaceShadowStartMsRef.current = null;
+    ex004FaceShadowPhaseRef.current = "neutral";
+    setEx004FaceShadowPhaseState("neutral");
+    setEx004FaceShadowReferenceInput("");
+    ex004FaceShadowAttemptedFramesRef.current = 0;
+    ex004FaceShadowDetectedFramesRef.current = 0;
+    ex004FaceShadowLastUiUpdateMsRef.current = 0;
+    ex004FaceShadowLastInferenceMsRef.current = null;
+    setEx004FaceShadowLive({
+      status: null,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+      inferenceMs: null,
+      attemptedFrames: 0,
+      detectedFrames: 0,
+    });
+    if (typeof window !== "undefined") {
+      window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    }
+  }, []);
 
   // Capture readiness (HTML overlay, never mirrored)
   const [captureOk, setCaptureOk] = useState(true);
   const [captureMessage, setCaptureMessage] = useState("Captured");
 
-  // Resting-baseline phase. "capturing" while the per-side baseline samples
-  // are being accumulated, "captured" once both sides have enough samples,
-  // "not-needed" for exercises whose primary metric is already baseline-
-  // relative (everything except scapularElevation today).
+  // Neutral calibration phase. Every monitored attempt freezes a camera-tilt
+  // reference before clinical metrics, rep counting, or hold timing starts.
   //
   // The ref is what predictWebcam reads — the rAF chain holds a stale
   // closure on the React state, mirroring the lastCaptureOkRef pattern
@@ -1072,12 +2891,19 @@ export default function CameraClient() {
   const [baselinePhase, setBaselinePhaseState] = useState<BaselinePhase>("not-needed");
   const [baselineProgress, setBaselineProgress] = useState({
     samples: 0,
-    required: BASELINE_SAMPLE_COUNT,
+    validElapsedMs: 0,
   });
   const setBaselinePhase = useCallback((phase: BaselinePhase) => {
     baselinePhaseRef.current = phase;
     setBaselinePhaseState(phase);
   }, []);
+  const [displayPerSidePrimary, setDisplayPerSidePrimary] = useState<{
+    left: number | null;
+    right: number | null;
+  } | null>(null);
+  const compensationWarningSignalsRef = useRef<
+    Map<MetricName, CompensationWarningSignal>
+  >(new Map());
 
   const lastBadCaptureAtRef = useRef<number>(0);
   const stableOkSinceRef = useRef<number>(0);
@@ -1093,11 +2919,18 @@ export default function CameraClient() {
   const [useFrontCameraHint, setUseFrontCameraHint] = useState(true);
   const [mirror, setMirror] = useState(true);
 
-  const [currentTime, setCurrentTime] = useState<string>("");
   const [viewportWidth, setViewportWidth] = useState(1280);
+  const [viewportHeight, setViewportHeight] = useState(900);
 
   const searchParams = useSearchParams();
+  const router = useRouter();
   const initialExerciseId = searchParams.get("exerciseId") ?? "";
+  const initialOccurrenceIdParam = searchParams.get("occurrenceId");
+  const initialOccurrenceIdRaw =
+    initialOccurrenceIdParam === null ? Number.NaN : Number(initialOccurrenceIdParam);
+  const initialOccurrenceId = Number.isInteger(initialOccurrenceIdRaw)
+    ? initialOccurrenceIdRaw
+    : null;
 
   const [assignedExercises, setAssignedExercises] = useState<Exercise[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>(initialExerciseId);
@@ -1117,7 +2950,7 @@ export default function CameraClient() {
   // actionable today — due today or still inside its make-up window. A patient
   // may only start one of these; the server enforces the same rule. Empty for
   // staff debug (which bypasses the lock entirely).
-  const [actionableExerciseIds, setActionableExerciseIds] = useState<Set<string>>(new Set());
+  const [actionableOccurrenceIds, setActionableOccurrenceIds] = useState<Set<number>>(new Set());
   // Set when a start is blocked because nothing is scheduled today for the
   // selected exercise (or the server rejects with 409).
   const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
@@ -1177,6 +3010,9 @@ export default function CameraClient() {
     selectedExerciseRef.current = selectedExercise;
   }, [selectedExercise]);
   const assignedExercisesRef = useRef<Exercise[]>([]);
+  /** Whether the selected exercise is a custom one, for the per-frame loop (reads refs, not state). */
+  const customExerciseSelected = () =>
+    assignedExercisesRef.current.find((e) => e.id === selectedExerciseRef.current)?.isCustom === true;
   useEffect(() => {
     assignedExercisesRef.current = assignedExercises;
   }, [assignedExercises]);
@@ -1204,8 +3040,16 @@ export default function CameraClient() {
    * timer useEffect when `sessionState === "active"`.
    */
   const sessionStartMsRef = useRef<number | null>(null);
+  const countdownResumeElapsedMsRef = useRef<number | null>(null);
   const [sessionElapsedSec, setSessionElapsedSec] = useState(0);
-  const [countdownSec, setCountdownSec] = useState(3);
+  const [countdownSec, setCountdownSec] = useState(5);
+  // Which part of the start countdown is showing: getting into place, or the
+  // calibration that follows it.
+  const [countdownStage, setCountdownStage] = useState<"positioning" | "baseline">("positioning");
+  // Seconds left of the positioning countdown before any calibration, for the
+  // baseline banner during a recalibration mid-session (at the start, the
+  // countdown overlay shows them).
+  const [positioningSec, setPositioningSec] = useState(0);
 
   /**
    * Completed sets count for the current session. State + ref pair so
@@ -1229,6 +3073,57 @@ export default function CameraClient() {
    */
   const prescriptionRef = useRef<Prescription>(DEFAULT_PRESCRIPTION);
   const [prescription, setPrescriptionRaw] = useState<Prescription>(DEFAULT_PRESCRIPTION);
+  const reportSessionIdRef = useRef<number | null>(null);
+  const showCompletionRecapAfterReportRef = useRef(false);
+  const terminalOccurrenceAfterReportRef = useRef<
+    "completed" | "pain_stopped" | null
+  >(null);
+  const [pendingCompletionNavigation, setPendingCompletionNavigation] = useState<{
+    remaining: Exercise[];
+    next: Exercise | null;
+  } | null>(null);
+  const [painScore, setPainScore] = useState(0);
+  const [painTiming, setPainTiming] = useState<PainTiming | "">("");
+  const [painBodyArea, setPainBodyArea] = useState("");
+  const [painReportSaving, setPainReportSaving] = useState(false);
+  const [painReportError, setPainReportError] = useState<string | null>(null);
+  // Before-session pain survey. A new patient session waits for its answer,
+  // and null (Back) cancels the start.
+  const [preSessionSurvey, setPreSessionSurvey] = useState<{ score: number; bodyArea: string } | null>(null);
+  const preSessionSurveyResolveRef = useRef<((answer: PreSessionPain | null) => void) | null>(null);
+  const preSessionPainRef = useRef<PreSessionPain | null>(null);
+  // Optional session video: a question after the pain survey, answered each
+  // time unless the patient asked this device to remember the answer.
+  const [videoQuestion, setVideoQuestion] = useState<{ remember: boolean } | null>(null);
+  const videoQuestionResolveRef = useRef<((answer: { record: boolean; remember: boolean } | null) => void) | null>(null);
+  const [, setVideoChoiceVersion] = useState(0);
+  const videoConsentRef = useRef(false);
+  const videoConsentRememberedRef = useRef(false);
+  // The notice version the patient agreed to, sent so the server can check it.
+  const videoConsentNoticeRef = useRef<string | null>(null);
+  const recorderRef = useRef<SessionRecorder | null>(null);
+  // Whether a Resume should keep recording: true once recording starts, false
+  // after the patient stops it.
+  const recordingWantedRef = useRef(false);
+  // A custom exercise's video-only session while it records, else null.
+  const customSessionIdRef = useRef<number | null>(null);
+  // Whether that session records video, and the ended session awaiting its
+  // "pain after this attempt" report.
+  const customRecordingConsentRef = useRef(false);
+  const customReportSessionIdRef = useRef<number | null>(null);
+  // Whether that custom session is open, for the recording badge; and whether
+  // the patient pressed Stop, which keeps the remaining sets unrecorded.
+  const [customRecordingOpen, setCustomRecordingOpen] = useState(false);
+  const customRecordingStoppedRef = useRef(false);
+  // "Please wait" while the next page loads; the page unmounts when it arrives.
+  const [waitMessage, setWaitMessage] = useState<string | null>(null);
+  // The recording badge's Stop asks first; recording continues while it asks.
+  const [confirmStopRecording, setConfirmStopRecording] = useState(false);
+  // A custom exercise's rest, shown with the same overlay as a camera session's rest.
+  const [customRest, setCustomRest] = useState<{ remainingSec: number; totalSec: number; nextSet: number; sets: number } | null>(null);
+  const [recordingState, setRecordingState] = useState<RecordingState | "off">("off");
+  // The session the end card describes, for its PDF report.
+  const [lastSessionId, setLastSessionId] = useState<number | null>(null);
 
   /**
    * When true, the sidebar shows an inline confirm step instead of ending the
@@ -1271,28 +3166,107 @@ export default function CameraClient() {
    *    performance.now() captured at create, used to convert the rep counter's
    *    monotonic timestamps into wall-clock start_ts/end_ts.
    *  - `globalRepIndexRef` — session-wide 1..N rep index across sides and sets.
-   *  - `pendingSetEventsRef` / `pendingRepEventsRef` — outcomes buffered since
-   *    the last flush. Flushed at each set completion and at session end.
-   *    Persistence is best-effort: all writes are fire-and-forget and never
-   *    block rep counting, hold accumulation, or the UI.
+   *  - `eventOutboxRef` — durable queue for rep/set outcomes. Items leave it
+   *    only on an acknowledged OK response; failures are retried and anything
+   *    still pending is reported at session end instead of being discarded.
+   *    Enqueueing never blocks rep counting, hold accumulation, or the UI.
    */
   const sessionIdRef = useRef<number | null>(null);
   const sessionWallStartMsRef = useRef<number>(0);
   const sessionPerfStartMsRef = useRef<number>(0);
   const globalRepIndexRef = useRef<number>(0);
-  const pendingSetEventsRef = useRef<SetEventPayload[]>([]);
-  const pendingRepEventsRef = useRef<RepEventPayload[]>([]);
+  const eventOutboxRef = useRef(
+    new EventOutbox<RepEventPayload, SetEventPayload>({
+      fetchFn: (url, init) => fetch(url, init),
+      storage: typeof window !== "undefined" ? window.localStorage : null,
+      onError: (kind, message) =>
+        console.warn(`${kind}-events delivery failed (will retry):`, message),
+    }),
+  );
+  // The page hashes its exercises' measurement versions once, asynchronously
+  // (D-49). Resume snapshots are checked against them, so the resume prompt
+  // and outbox recovery wait until that has settled.
+  const [exerciseVersionsSettled, setExerciseVersionsSettled] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const settle = () => { if (live) setExerciseVersionsSettled(true); };
+    bundleExerciseConfigVersions().then(settle, settle);
+    return () => { live = false; };
+  }, []);
+
+  // A session that ends before its outcome events are delivered leaves them in
+  // localStorage (see endSessionPersistence), and only resuming used to read
+  // them back, so an ended session's events never left the device. Send them
+  // once per camera page load for the signed-in patient. Resumable sessions are
+  // skipped because resuming re-adopts the same queue. The routes refuse other
+  // patients' sessions, and anything refused stays stored.
+  const outboxRecoveryStartedRef = useRef(false);
+  useEffect(() => {
+    if (user?.role !== "patient" || !exerciseVersionsSettled || outboxRecoveryStartedRef.current) return;
+    outboxRecoveryStartedRef.current = true;
+    let storageKeys: string[];
+    try {
+      storageKeys = Object.keys(window.localStorage);
+    } catch {
+      return; // storage unavailable, so nothing was persisted either
+    }
+    const resumable = resumableSessionIds(storageKeys);
+    const sessionIds = persistedOutboxSessionIds(storageKeys).filter(
+      (id) => !resumable.has(id),
+    );
+    if (sessionIds.length === 0) return;
+    void recoverPersistedOutboxes({
+      sessionIds,
+      fetchFn: (url, init) => fetch(url, init),
+      storage: window.localStorage,
+      onError: (kind, message) =>
+        console.warn(`${kind}-events recovery failed (kept for the next load):`, message),
+    })
+      .then((recovered) => {
+        const delivered = recovered.reduce(
+          (sum, session) => sum + session.restored - session.remaining,
+          0,
+        );
+        if (delivered > 0) {
+          showToast({
+            variant: "success",
+            message: `Uploaded ${delivered} saved result${delivered === 1 ? "" : "s"} from an earlier session.`,
+          });
+        }
+      })
+      .catch((err) => console.warn("outbox recovery failed:", err));
+  }, [user?.role, showToast, exerciseVersionsSettled]);
   const rawFrameIndexRef = useRef<number>(0);
   const pendingRawFramesRef = useRef<RawFramePayload[]>([]);
-  // Opt-in tuning-trace recording (patient mode only, default OFF). The ref
-  // mirrors the state for the rAF loop — same stale-closure pattern as
-  // lastCaptureOkRef. Flipping mid-session simply starts/stops buffering;
-  // frame_index stays monotonic, and gaps are an expected trace property.
-  const [tuningTraceEnabled, setTuningTraceEnabledState] = useState(false);
-  const tuningTraceEnabledRef = useRef(false);
+  /** Trace batches abandoned after exhausting retries, for honest reporting. */
+  const rawFrameDroppedBatchesRef = useRef<number>(0);
+  // The same losses per session, for the warning under the trace sync readout.
+  // The upload chain outlives the render that queued it, so it reads the ref;
+  // the state is what draws the warning.
+  const traceUploadLossRef = useRef<TraceUploadLoss | null>(null);
+  const [traceUploadLoss, setTraceUploadLoss] = useState<TraceUploadLoss | null>(null);
+  // Tuning-trace recording (patient sessions only persist). On by default
+  // since 2026-10-24, so any patient session can be replayed through the
+  // counter offline; the staff panel can still switch it off for the page
+  // load. The ref mirrors the state for the rAF loop — same stale-closure
+  // pattern as lastCaptureOkRef. Flipping mid-session simply starts/stops
+  // buffering; frame_index stays monotonic, and gaps are an expected trace
+  // property.
+  const [tuningTraceEnabled, setTuningTraceEnabledState] = useState(true);
+  const tuningTraceEnabledRef = useRef(true);
   const setTuningTraceEnabled = useCallback((on: boolean) => {
     tuningTraceEnabledRef.current = on;
     setTuningTraceEnabledState(on);
+  }, []);
+  // The trace sync readout and the trace-loss toast are for the person
+  // recording a tuning session, so they stay hidden until the staff panel
+  // shows them. With the trace on by default, every patient would otherwise
+  // see a debugging readout and be told to check the server.
+  const [traceSyncReadoutShown, setTraceSyncReadoutShownState] = useState(false);
+  const traceSyncReadoutShownRef = useRef(false);
+  const setTraceSyncReadoutShown = useCallback((on: boolean) => {
+    traceSyncReadoutShownRef.current = on;
+    setTraceSyncReadoutShownState(on);
   }, []);
   // Serial upload chain for raw-frame batches. Each queued request captures its
   // session id + rows, so an end/auto-advance reset cannot redirect an in-flight
@@ -1309,7 +3283,10 @@ export default function CameraClient() {
    */
   const sessionTokenRef = useRef<number>(0);
   const endSessionPersistenceRef = useRef<
-    (completed?: boolean, endReason?: "user") => Promise<EndSessionPersistenceResult>
+    (
+      completed?: boolean,
+      endReason?: "user" | "pain",
+    ) => Promise<EndSessionPersistenceResult>
   >(() => Promise.resolve("skipped"));
   /**
    * If an end (notably the End button) fires before the session create resolves,
@@ -1318,7 +3295,7 @@ export default function CameraClient() {
    * create leaves `end_reason` NULL and the dashboard mislabels the attempt as
    * "In Progress" instead of "Ended Early". Reset on each start and after use.
    */
-  const pendingStaleEndReasonRef = useRef<"user" | undefined>(undefined);
+  const pendingStaleEndReasonRef = useRef<"user" | "pain" | undefined>(undefined);
 
   // Capture-quality tally for the current session (→ sessions.capture_quality_summary).
   // Counts frames processed while the session is active and how many had OK
@@ -1326,16 +3303,64 @@ export default function CameraClient() {
   // session from one degraded by poor tracking/framing. Reset on session start.
   const captureFramesTotalRef = useRef<number>(0);
   const captureFramesOkRef = useRef<number>(0);
+  // Why active frames were rejected (the readiness status, or "NOT_VISIBLE"
+  // when no person was found), and how often a rejection lasting the dropout
+  // grace discarded the movement in progress. Saved with the summary.
+  const captureRejectedByStatusRef = useRef<Record<string, number>>({});
+  const captureDropoutResetsRef = useRef<number>(0);
+  // Accepted active frames per camera frame size ("WxH"). Readings depend on
+  // the frame's shape and the thresholds were tuned on 16:9, so the summary
+  // lists every size the session measured on. Owned by the session, unlike
+  // the footer's resolution readout, which Stop clears.
+  const captureFrameSizesRef = useRef<Record<string, number>>({});
+  // Neck side bends (trend data rule 4): what a still head reads in the rests
+  // between sets, one entry per calibration from the time it was taken, so each
+  // repetition's peak can be measured from the resting position. Owned by the
+  // session like the frame sizes: Stop keeps it and Resume carries it.
+  const neckRestTallyRef = useRef<NeckRestTally>({ epochs: [] });
+  // Unsteady-tracking check (display only): its state, the part its message
+  // names, each processed frame's marks for the repetitions' tracking records,
+  // and the session's unsteady frames (→ capture_quality_summary).
+  const steadinessRef = useRef<SteadinessState>(newSteadinessState());
+  const trackingMessageRef = useRef<TrackingMessageState>(NO_TRACKING_MESSAGE);
+  const trackingMarksRef = useRef<TrackingFrameMark[]>([]);
+  const captureUnsteadyFramesRef = useRef<number>(0);
+  const captureCheckedFramesRef = useRef<number>(0);
+  const trackingHintRef = useRef<string | null>(null);
+  const [trackingHint, setTrackingHint] = useState<string | null>(null);
+  // When each arm was last found unsteady, so the arm hold's raise-or-lower
+  // hint is held back while the tracking message speaks for that arm.
+  const armUnsteadyAtMsRef = useRef<{ leftArm: number | null; rightArm: number | null }>({ leftArm: null, rightArm: null });
+  // Display-only position messages: the body turned away from the camera
+  // (bodyTurn.ts), and the picture's brightness for the wording of the
+  // no-person and tracking messages (pictureBrightness.ts).
+  const bodyTurnStateRef = useRef<BodyTurnState>(NO_BODY_TURN);
+  const turnHintRef = useRef(false);
+  const [turnHint, setTurnHint] = useState(false);
+  const pictureLumaRef = useRef<number | null>(null);
+  const lastLumaSampleMsRef = useRef(0);
+  const lumaSamplerRef = useRef<{ canvas: unknown }>({ canvas: null });
+  // The arm hold's raise-or-lower hint per arm (holdHint.ts).
+  const holdHintStateRef = useRef<HoldHintState>(newHoldHintState());
 
-  /** Reset all in-memory session-persistence state (no DB call). */
+  /**
+   * Reset all in-memory session-persistence state (no DB call).
+   *
+   * This discards anything still queued, so callers that end a session must
+   * drain the outbox FIRST — see `endSessionPersistence`. Reaching here with a
+   * non-empty queue means those outcomes were abandoned deliberately (session
+   * never adopted) or already reported to the patient as undelivered.
+   */
   const resetSessionPersistence = () => {
     sessionIdRef.current = null;
     globalRepIndexRef.current = 0;
-    pendingSetEventsRef.current = [];
-    pendingRepEventsRef.current = [];
+    eventOutboxRef.current.setSession(null);
     rawFrameIndexRef.current = 0;
     pendingRawFramesRef.current = [];
     dynamicRepQualityBufferRef.current.reset();
+    // Frame indices restart at 1, so a readout left over from the previous
+    // session names a row number that now belongs to a different session.
+    writeTraceSyncReadout(TRACE_SYNC_PLACEHOLDER);
   };
 
   /**
@@ -1346,22 +3371,47 @@ export default function CameraClient() {
    */
   const startSessionPersistence = async (): Promise<boolean> => {
     resetSessionPersistence();
+    // Cleared here, not in resetSessionPersistence: that also runs at End, and
+    // a save warning has to stay on screen after the session it describes.
+    traceUploadLossRef.current = null;
+    setTraceUploadLoss(null);
+    reportSessionIdRef.current = null;
+    showCompletionRecapAfterReportRef.current = false;
+    terminalOccurrenceAfterReportRef.current = null;
+    setPendingCompletionNavigation(null);
     pendingStaleEndReasonRef.current = undefined;
     const patientExerciseId = prescriptionRef.current.patientExerciseId;
+    const occurrenceId = prescriptionRef.current.occurrenceId;
     const exerciseId = activeDefinitionRef.current?.id;
     if (typeof patientExerciseId !== "number" || !exerciseId) return true;
+    if (typeof occurrenceId !== "number") {
+      setScheduleNotice("Choose an exercise from today's schedule before starting.");
+      return false;
+    }
     // Token for THIS run; if it changes before the create resolves, the run is
     // already over and the created row must be closed rather than adopted.
     const token = ++sessionTokenRef.current;
     sessionWallStartMsRef.current = Date.now();
     sessionPerfStartMsRef.current = performance.now();
     try {
+      const exerciseVersions = await bundleExerciseConfigVersions();
       const response = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           patientExerciseId,
+          occurrenceId,
           exerciseId,
+          coaching: coachingProvenanceRef.current ?? undefined,
+          preSessionPain: preSessionPainRef.current ?? undefined,
+          videoConsent: videoConsentRef.current || undefined,
+          videoConsentRemembered: videoConsentRef.current && videoConsentRememberedRef.current ? true : undefined,
+          videoNotice: videoConsentRef.current ? videoConsentNoticeRef.current ?? undefined : undefined,
+          // The server files the session under its own measurement version and
+          // refuses a page that measures differently (D-48), this exercise's
+          // own version included (D-49).
+          poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION,
+          exerciseConfigVersion: exerciseVersions[exerciseId],
           deviceInfo:
             typeof navigator !== "undefined"
               ? { userAgent: navigator.userAgent }
@@ -1383,7 +3433,21 @@ export default function CameraClient() {
       }
 
       const data = await response.json();
-      if (!data || typeof data.sessionId !== "number") {
+      const runtime = data?.runtimePrescription as RuntimePrescription | undefined;
+      if (
+        !data ||
+        typeof data.sessionId !== "number" ||
+        !runtime ||
+        runtime.patientExerciseId !== patientExerciseId ||
+        runtime.occurrenceId !== occurrenceId ||
+        runtime.exerciseId !== exerciseId ||
+        !Number.isInteger(runtime.occurrenceId) ||
+        !Number.isFinite(runtime.sets) ||
+        !Number.isFinite(runtime.reps) ||
+        (runtime.prescribedSide !== "both" &&
+          runtime.prescribedSide !== "left" &&
+          runtime.prescribedSide !== "right")
+      ) {
         setScheduleNotice("The session could not be saved, so it was not started.");
         resetSessionPersistence();
         return false;
@@ -1391,7 +3455,21 @@ export default function CameraClient() {
 
       if (sessionTokenRef.current === token) {
         // Still the active run — adopt the session and flush buffered outcomes.
+        // Adoption preserves anything queued while the create was in flight.
         sessionIdRef.current = data.sessionId;
+        eventOutboxRef.current.setSession(data.sessionId);
+        const authoritativePrescription: Prescription = {
+          sets: runtime.sets,
+          reps: runtime.reps,
+          restSeconds: runtime.restSeconds,
+          holdSeconds: runtime.holdSeconds,
+          patientExerciseId: runtime.patientExerciseId,
+          occurrenceId: runtime.occurrenceId,
+          prescribedSide: runtime.prescribedSide,
+          resistance: runtime.resistance,
+        };
+        prescriptionRef.current = authoritativePrescription;
+        setPrescriptionRaw(authoritativePrescription);
         flushSetEvents();
         flushRepEvents();
         flushRawFrames();
@@ -1408,7 +3486,10 @@ export default function CameraClient() {
       fetch(`/api/sessions/${data.sessionId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endReason: pendingStaleEndReasonRef.current }),
+        body: JSON.stringify({
+          completed: false,
+          endReason: pendingStaleEndReasonRef.current ?? "user",
+        }),
       }).catch((err) => console.warn("stale session close failed:", err));
       pendingStaleEndReasonRef.current = undefined;
       return false;
@@ -1429,15 +3510,30 @@ export default function CameraClient() {
   /**
    * Buffer one valid active frame for patient-session threshold/scoring
    * tuning. Inputs are raw/unsmoothed metric values and selected normalized
-   * landmarks only — never image data. Opt-in: gated on the "Record tuning
-   * trace" toggle (default OFF), so ordinary patient sessions write nothing.
+   * landmarks only — never image data. Gated on the "Record tuning trace"
+   * toggle, which is on by default since 2026-10-24, so every patient session
+   * writes the trace unless the staff panel switches it off.
    * Originally an always-on ex_007-only trace (`ex_007_upper_body_v1`);
-   * now covers every active exercise with the `upper_body_v2` payload.
+   * now covers every active exercise with the versioned V4 payload.
    */
+  /**
+   * Write the sync readout, skipping the DOM when the text has not changed.
+   *
+   * The only writer of that node. Routing every update through one function is
+   * what makes "a reading on screen belongs to the frame you are looking at"
+   * checkable rather than a property spread across the loop's branches.
+   */
+  const writeTraceSyncReadout = (text: string): void => {
+    applyTraceSyncReadout(traceSyncElRef.current, text);
+  };
+
   const bufferTuningRawFrame = (
     landmarks: NormalizedLandmark[],
+    worldLandmarks: Landmark[] | undefined,
     raw: ExerciseFrameMetrics,
+    observedTilt: TiltReference,
     tNow: number,
+    frameAspect: number,
   ) => {
     if (!tuningTraceEnabledRef.current) return;
     if (prescriptionRef.current.patientExerciseId === undefined) return;
@@ -1445,15 +3541,58 @@ export default function CameraClient() {
     if (!def || DEPRECATED_EXERCISE_IDS.has(def.id)) return;
     if (sessionStateRef.current !== "active") return;
 
+    const setIndex = completedSetsRef.current + 1;
+
+    // V4: emit the retained calibration samples ONCE per set, on the first
+    // captured frame after calibration finalizes. Repeating a ring of up to 300
+    // samples on every frame would multiply the trace size for no information,
+    // and emitting during "capturing" would persist an incomplete set.
+    // The raw ring is NOT readable here. `finalizeNeutralCalibration` frees it
+    // as soon as it has taken its medians, and only then flips the phase to
+    // "captured" that gates this block — so by the time this runs the ring is
+    // always empty. It snapshots the samples into `calibrationTraceSamplesRef`
+    // immediately before freeing them, and that snapshot is what this reads.
+    // Reading the ring instead wrote `samples: []` and still marked the set
+    // emitted, so no later frame retried; that is how the first v4
+    // implementation shipped completely inert.
+    let calibrationSamples: CalibrationSample[] | undefined;
+    if (
+      baselinePhaseRef.current === "captured" &&
+      calibrationSamplesEmittedSetRef.current !== setIndex
+    ) {
+      calibrationSamples = calibrationTraceSamplesRef.current ?? undefined;
+      if (calibrationSamples) calibrationSamplesEmittedSetRef.current = setIndex;
+    }
+
+    const frameIndex = ++rawFrameIndexRef.current;
+    const elapsedMs = Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current));
+
+    // Screen-recording sync readout, written from the SAME two locals that go
+    // into the payload below rather than from a clock of its own. That is the
+    // whole guarantee: a value read off a paused video frame names a row that
+    // EXISTS in the export, instead of one that is merely close to it. Any
+    // parallel time source here would quietly reintroduce the drift this
+    // readout exists to remove.
+    //
+    // Reaching this line is also what marks the frame as traced. Everything
+    // above returns early, and the caller only calls at all once capture is
+    // readable and a baseline is frozen, so any frame that does not get here
+    // is blanked at the bottom of the loop instead of keeping this value.
+    writeTraceSyncReadout(
+      formatTraceSyncReadout(frameIndex, elapsedMs) ?? TRACE_SYNC_PLACEHOLDER,
+    );
+    traceSyncWroteThisFrameRef.current = true;
+
     pendingRawFramesRef.current.push({
-      frameIndex: ++rawFrameIndexRef.current,
-      setIndex: completedSetsRef.current + 1,
-      elapsedMs: Math.max(0, Math.round(tNow - sessionPerfStartMsRef.current)),
+      frameIndex,
+      setIndex,
+      elapsedMs,
       capturedAt: perfToIso(tNow),
-      traceKind: "upper_body_v2",
+      traceKind: "upper_body_v4",
       metrics: upperBodyTraceMetrics(
         landmarks,
         raw,
+        observedTilt,
         def.id,
         {
           scapLeft: leftScapBaselineRef.current.value,
@@ -1461,6 +3600,16 @@ export default function CameraClient() {
           bidirectionalPrimary: bidirectionalBaselineRef.current.value,
         },
         baselinePhaseRef.current,
+        neutralCalibrationClockRef.current,
+        videoResolutionRef.current
+          ? {
+              width: videoResolutionRef.current.width,
+              height: videoResolutionRef.current.height,
+            }
+          : null,
+        calibrationSamples,
+        upperBodyTraceWorldLandmarks(worldLandmarks),
+        frameAspect,
       ),
       landmarks: upperBodyTraceLandmarks(landmarks),
     });
@@ -1471,9 +3620,15 @@ export default function CameraClient() {
   };
 
   /**
-   * Queue pending raw-frame batches for durable upload. The queue is
-   * fire-and-forget like rep/set persistence, but serializing batches avoids a
-   * burst of concurrent large JSON requests during a long set.
+   * Queue pending raw-frame batches for upload, serializing them so a long set
+   * cannot fire a burst of concurrent large JSON requests.
+   *
+   * Unlike rep/set outcomes these are tuning traces, not clinical
+   * outcome data, so they are retried a bounded number of times and then given
+   * up on rather than persisted across reloads — a trace batch is large enough
+   * that queueing it in localStorage risks the storage quota. Dropped batches
+   * are counted and drawn under the trace sync readout, because a console
+   * warning alone let whole sessions record while every upload was refused.
    */
   const flushRawFrames = () => {
     const sessionId = sessionIdRef.current;
@@ -1487,16 +3642,54 @@ export default function CameraClient() {
       rawFrameUploadChainRef.current = rawFrameUploadChainRef.current
         .catch(() => undefined)
         .then(async () => {
-          const response = await fetch(`/api/sessions/${sessionId}/raw-frames`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ frames }),
-          });
-          if (!response.ok) {
-            throw new Error(`raw-frames upload returned ${response.status}`);
+          for (let attempt = 1; attempt <= RAW_FRAME_UPLOAD_ATTEMPTS; attempt += 1) {
+            // This attempt's HTTP status for the warning; null if no response came.
+            let failedStatus: number | null = null;
+            try {
+              const response = await fetch(
+                `/api/sessions/${sessionId}/raw-frames`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ frames }),
+                },
+              );
+              // `fetch` resolves for 4xx/5xx, so the status must be checked.
+              if (!response.ok) {
+                failedStatus = response.status;
+                throw new Error(`raw-frames upload returned ${response.status}`);
+              }
+              return;
+            } catch (err) {
+              if (attempt === RAW_FRAME_UPLOAD_ATTEMPTS) {
+                rawFrameDroppedBatchesRef.current += 1;
+                console.warn(
+                  `raw-frames batch dropped after ${attempt} attempts ` +
+                    `(${rawFrameDroppedBatchesRef.current} total this session):`,
+                  err,
+                );
+                const loss = recordTraceBatchLoss(
+                  traceUploadLossRef.current,
+                  sessionId,
+                  failedStatus,
+                );
+                traceUploadLossRef.current = loss;
+                setTraceUploadLoss(loss);
+                // Toast once per session; the line under the readout keeps count.
+                // Only while the staff panel shows the readout: the toast tells
+                // the person recording to check the server, which a patient
+                // cannot do. The loss still goes to the console above.
+                if (loss.droppedBatches === 1 && traceSyncReadoutShownRef.current) {
+                  showToast({ variant: "error", message: traceUploadLossToast(loss) });
+                }
+                return;
+              }
+              await new Promise((resolve) =>
+                setTimeout(resolve, RAW_FRAME_RETRY_BASE_MS * 2 ** (attempt - 1)),
+              );
+            }
           }
-        })
-        .catch((err) => console.warn("raw-frames flush failed:", err));
+        });
     }
   };
 
@@ -1517,12 +3710,22 @@ export default function CameraClient() {
       definition?.compensationMetrics.filter(
         (spec) => getCompensationScoring(spec).mode !== "off",
       ) ?? [];
-    const compensations = dynamicRepQualityBufferRef.current.finalize(
+    const quality = dynamicRepQualityBufferRef.current.finalize(
       qualityChannel,
       event,
       scoredCompensations,
     );
-    pendingRepEventsRef.current.push({
+    // How well the camera tracked this repetition's parts, from the frames
+    // marked between its start and end (display-only tracking check); none
+    // when the marks no longer reach back to its start.
+    const tracking = repTracking(
+      trackingMarksRef.current,
+      event.startTimeMs,
+      event.endTimeMs,
+      trackingParts(definition ? trackingRegion(definition) : "arms", side === "left" || side === "right" ? side : "both"),
+    );
+    const compensations = tracking ? { ...quality, tracking } : quality;
+    eventOutboxRef.current.enqueue("rep", {
       repIndex: ++globalRepIndexRef.current,
       setIndex: completedSetsRef.current + 1,
       side,
@@ -1545,7 +3748,7 @@ export default function CameraClient() {
    * a hold that never produced a usable frame). Pure read of the accumulator
    * ref — call BEFORE the per-set reset runs.
    */
-  const finalizeHoldQuality = (centerDeg: number): HoldQuality | undefined => {
+  const finalizeHoldQuality = (centerDeg: number): HoldQualityV2 | undefined => {
     const a = holdQualityAccumRef.current;
     if (a.sampleCount === 0) return undefined;
     const side = (s: HoldSideAccum): HoldSideQuality | null => {
@@ -1565,6 +3768,10 @@ export default function CameraClient() {
       };
     };
     return {
+      version: "hold_quality_v2",
+      primaryUnits: "aspect-corrected",
+      compensationScoreSource: "smoothed-live-rule",
+      streakMode: activeDefinitionRef.current?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
       sampleCount: a.sampleCount,
       leftInBandMs: Math.round(a.left.inBandMs),
       rightInBandMs: Math.round(a.right.inBandMs),
@@ -1585,6 +3792,7 @@ export default function CameraClient() {
     record: CompletedSetRecord,
     exerciseKind: SetEventPayload["exerciseKind"],
     endPerfMs: number,
+    auditOnly = false,
   ) => {
     if (prescriptionRef.current.patientExerciseId === undefined) return;
     const durationMs = Math.max(0, record.durationMs);
@@ -1592,11 +3800,26 @@ export default function CameraClient() {
     // Read the hold-quality accumulators for isometric sets BEFORE any per-set
     // reset clears them. Uses the active exercise's target-band center.
     const def = activeDefinitionRef.current;
-    const holdQuality =
+    let holdQuality: SetMeasurement | undefined =
       exerciseKind === "isometric" && def?.kind === "isometric"
         ? finalizeHoldQuality(def.isometric.targetBand.center)
         : undefined;
-    pendingSetEventsRef.current.push({
+    const provenance = coachingProvenanceRef.current;
+    if (provenance) {
+      const coaching = coachingAuditRef.current.snapshot(provenance, endPerfMs, perfToIso(0));
+      if (holdQuality) holdQuality = { ...holdQuality, coaching };
+      else if (exerciseKind === "dynamic") holdQuality = { version: "coaching_set_v1", coaching };
+      else holdQuality = { version: "hold_quality_v2", primaryUnits: "aspect-corrected",
+        compensationScoreSource: "smoothed-live-rule", streakMode: def?.bilateralMode === "bidirectional-alternating" ? "either-side" : "simultaneous",
+        sampleCount: 0, leftInBandMs: 0, rightInBandMs: 0, outOfPositionMs: 0,
+        dropCount: 0, longestPairedStreakMs: 0, settleMs: null, left: null, right: null,
+        meanCompensationScore: null, minCompensationScore: null, coaching };
+    }
+    // Without a versioned envelope there is no safe way to classify an audit
+    // attempt. Normal Start establishes provenance before persistence opens.
+    if (auditOnly && !holdQuality) return;
+    if (auditOnly && holdQuality) holdQuality = { ...holdQuality, auditOnly: true };
+    eventOutboxRef.current.enqueue("set", {
       setIndex: record.setIndex,
       exerciseKind,
       targetReps: record.targetReps,
@@ -1612,39 +3835,23 @@ export default function CameraClient() {
       startTs: perfToIso(startPerfMs),
       endTs: perfToIso(endPerfMs),
     });
+    coachingAuditRef.current.reset();
   };
 
   /**
-   * Flush buffered set outcomes to the DB. Kept separate from rep flushing so
-   * ex_006 can persist a set even when no rep_events exist.
+   * Ask the outbox to deliver queued set outcomes. Kept separate from rep
+   * flushing so ex_006 can persist a set even when no rep_events exist.
+   *
+   * Both flushers are non-blocking: the outbox keeps items until the server
+   * acknowledges them and retries on its own, so a failure here delays delivery
+   * rather than losing it. No-op while the session id is unresolved.
    */
   const flushSetEvents = () => {
-    const sessionId = sessionIdRef.current;
-    if (sessionId === null || pendingSetEventsRef.current.length === 0) return;
-    const sets = pendingSetEventsRef.current;
-    pendingSetEventsRef.current = [];
-    fetch(`/api/sessions/${sessionId}/set-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sets }),
-    }).catch((err) => console.warn("set-events flush failed:", err));
+    void eventOutboxRef.current.flush("set");
   };
 
-  /**
-   * Flush buffered reps to the DB. No-op while `sessionIdRef` is null (keeps
-   * them buffered until the session id resolves). Fire-and-forget; on failure
-   * the reps are dropped (best-effort persistence for a proof-of-concept).
-   */
   const flushRepEvents = () => {
-    const sessionId = sessionIdRef.current;
-    if (sessionId === null || pendingRepEventsRef.current.length === 0) return;
-    const reps = pendingRepEventsRef.current;
-    pendingRepEventsRef.current = [];
-    fetch(`/api/sessions/${sessionId}/rep-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reps }),
-    }).catch((err) => console.warn("rep-events flush failed:", err));
+    void eventOutboxRef.current.flush("rep");
   };
 
   /**
@@ -1654,11 +3861,12 @@ export default function CameraClient() {
    */
   const endSessionPersistence = (
     completed = false,
-    endReason?: "user",
+    endReason?: "user" | "pain",
   ): Promise<EndSessionPersistenceResult> => {
     const sessionId = sessionIdRef.current;
     const hasPatientAssignment =
       typeof prescriptionRef.current.patientExerciseId === "number";
+    stopSessionRecording();
     // Invalidate any in-flight create for this run. If the create has not
     // resolved yet (sessionId still null), its handler will see the bumped
     // token and self-close the row it creates, so nothing is left open.
@@ -1668,24 +3876,39 @@ export default function CameraClient() {
       // can record it on the row it self-closes (e.g. a fast End press).
       pendingStaleEndReasonRef.current = endReason;
       resetSessionPersistence();
+      setLastSessionId(null);
       return Promise.resolve(hasPatientAssignment ? "pending" : "skipped");
     }
-    flushSetEvents();
-    flushRepEvents();
+    reportSessionIdRef.current = sessionId;
+    // The end card offers this session's PDF only once every result is saved.
+    setLastSessionId(null);
+    const endToken = sessionTokenRef.current;
     flushRawFrames();
-    // Session-level capture-quality summary (% of active frames with OK capture).
-    const framesTotal = captureFramesTotalRef.current;
-    const framesOk = captureFramesOkRef.current;
-    const captureQualitySummary =
-      framesTotal > 0
-        ? { framesTotal, framesOk, pctOk: Math.round((framesOk / framesTotal) * 100) }
-        : undefined;
+    // Session-level capture-quality summary: the % of active frames with OK
+    // capture, why the others were rejected, how often a sustained
+    // rejection discarded the movement in progress, and the camera frame
+    // sizes measured on (readings depend on the shape; the thresholds were
+    // tuned on 16:9).
+    const captureQualitySummary = buildCaptureQualitySummary({
+      total: captureFramesTotalRef.current,
+      ok: captureFramesOkRef.current,
+      rejectedByStatus: captureRejectedByStatusRef.current,
+      dropoutResets: captureDropoutResetsRef.current,
+      unsteady: captureUnsteadyFramesRef.current,
+      checked: captureCheckedFramesRef.current,
+      frameSizes: captureFrameSizesRef.current,
+      neckRest: neckRestTallyRef.current,
+    });
     // `completed` is true only when all prescribed sets were finished (not on a
     // manual early End) — it flips the patient_exercise to "completed" server-side.
     const endRequest = fetch(`/api/sessions/${sessionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ completed, captureQualitySummary, endReason }),
+      body: JSON.stringify({
+        completed,
+        captureQualitySummary,
+        endReason: completed ? "completed" : endReason ?? "user",
+      }),
     })
       .then((response) => {
         if (!response.ok) {
@@ -1697,8 +3920,25 @@ export default function CameraClient() {
         console.warn("session end failed:", err);
         return "failed" as const;
       });
-    resetSessionPersistence();
-    return endRequest;
+
+    // The outcome events decide the reported result alongside the session row.
+    // Previously the PATCH alone produced "Session saved.", so a session could
+    // be reported as saved with every repetition silently lost.
+    return (async (): Promise<EndSessionPersistenceResult> => {
+      const outbox = eventOutboxRef.current;
+      const [rowResult, drainResult] = await Promise.all([
+        endRequest,
+        outbox.drain({ timeoutMs: SESSION_END_DRAIN_TIMEOUT_MS }),
+      ]);
+      if (drainResult.drained) outbox.clearStorage(sessionId);
+      // Anything still queued stays persisted for the next load; reset only
+      // after the drain has had its chance, never before.
+      resetSessionPersistence();
+      const result = rowResult === "failed" ? "failed" : drainResult.drained ? "saved" : "partial";
+      // A newer run owns the end card if one started while this one drained.
+      if (sessionTokenRef.current === endToken) setLastSessionId(result === "saved" ? sessionId : null);
+      return result;
+    })();
   };
   endSessionPersistenceRef.current = endSessionPersistence;
 
@@ -1706,6 +3946,15 @@ export default function CameraClient() {
     (result: EndSessionPersistenceResult) => {
       if (result === "saved") {
         showToast({ variant: "success", message: "Session saved." });
+      } else if (result === "partial") {
+        // The session row closed but some reps/sets were not delivered. Nothing
+        // retries them once the session ends; they stay in localStorage, and the
+        // next camera page load sends them (outbox recovery).
+        showToast({
+          variant: "info",
+          message:
+            "Session saved. Some results haven't uploaded yet — they're kept on this device and will be sent the next time you open the camera.",
+        });
       } else if (result === "pending") {
         showToast({
           variant: "info",
@@ -1720,6 +3969,119 @@ export default function CameraClient() {
     },
     [showToast],
   );
+
+  const finishPostAttemptReport = () => {
+    const shouldShowCompletionRecap = showCompletionRecapAfterReportRef.current;
+    showCompletionRecapAfterReportRef.current = false;
+    const terminalOutcome = terminalOccurrenceAfterReportRef.current;
+    terminalOccurrenceAfterReportRef.current = null;
+    reportSessionIdRef.current = null;
+    setPainReportError(null);
+    setPainScore(0);
+    setPainTiming("");
+    setPainBodyArea("");
+    const currentOccurrenceId = prescriptionRef.current.occurrenceId;
+    if (terminalOutcome && currentOccurrenceId !== undefined) {
+      const { remaining, next } = removeActionableOccurrence(
+        assignedExercisesRef.current,
+        currentOccurrenceId,
+      );
+      setActionableOccurrenceIds((previous) => {
+        const next = new Set(previous);
+        next.delete(currentOccurrenceId);
+        return next;
+      });
+
+      if (terminalOutcome === "completed" && shouldShowCompletionRecap) {
+        // Keep the just-finished exercise mounted until the patient explicitly
+        // acknowledges its side-aware recap. Applying `remaining` here would
+        // remove the active definition and make the existing recap unreachable.
+        setPendingCompletionNavigation({ remaining, next });
+        setSessionState("ended");
+        return;
+      }
+
+      assignedExercisesRef.current = remaining;
+      setAssignedExercises(remaining);
+      if (user?.role === "patient") {
+        setWaitMessage("Opening your schedule…");
+        router.push("/dashboard/patient?tab=session");
+        return;
+      }
+    }
+    setSessionState("ended");
+  };
+
+  const savePainReport = async (declined: boolean) => {
+    const sessionId = reportSessionIdRef.current;
+    if (sessionId === null) {
+      finishPostAttemptReport();
+      return;
+    }
+    setPainReportSaving(true);
+    setPainReportError(null);
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/pain-report`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          declined
+            ? { status: "declined" }
+            : {
+                status: "reported",
+                score: painScore,
+                timing: painTiming || null,
+                bodyArea: painBodyArea.trim() || null,
+              },
+        ),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          body && typeof body.error === "string"
+            ? body.error
+            : "The pain report could not be saved.",
+        );
+      }
+      finishPostAttemptReport();
+    } catch (error) {
+      setPainReportError(
+        error instanceof Error
+          ? error.message
+          : "The pain report could not be saved.",
+      );
+    } finally {
+      setPainReportSaving(false);
+    }
+  };
+
+  const continueFromCompletionRecap = (destination: "next" | "schedule") => {
+    const pending = pendingCompletionNavigation;
+    if (!pending) return;
+
+    if (destination === "next" && pending.next) {
+      setPendingCompletionNavigation(null);
+      assignedExercisesRef.current = pending.remaining;
+      setAssignedExercises(pending.remaining);
+      selectedExerciseRef.current = pending.next.id;
+      setSelectedExercise(pending.next.id);
+      if (user?.role === "patient" && pending.next.occurrenceId !== undefined) {
+        router.replace(
+          `/camera?occurrenceId=${pending.next.occurrenceId}&exerciseId=${encodeURIComponent(pending.next.id)}`,
+          { scroll: false },
+        );
+      }
+      setSessionState("idle");
+      return;
+    }
+
+    if (user?.role === "patient") {
+      setWaitMessage("Opening your schedule…");
+      router.push("/dashboard/patient?tab=session");
+      return;
+    }
+    setPendingCompletionNavigation(null);
+  };
 
   /**
    * Timestamp when the CURRENT set started (used for `CompletedSetRecord.durationMs`).
@@ -1751,6 +4113,8 @@ export default function CameraClient() {
     const snapshot: ResumeSnapshot = {
       v: 1,
       sessionId,
+      poseMetricAlgorithm: POSE_METRIC_ALGORITHM_VERSION,
+      exerciseConfigVersion: computedExerciseConfigVersions()?.[def.id],
       exerciseId: def.id,
       patientExerciseId,
       kind: def.kind,
@@ -1768,6 +4132,27 @@ export default function CameraClient() {
       globalRepIndex: globalRepIndexRef.current,
       rawFrameIndex: rawFrameIndexRef.current,
       updatedAtWallMs: Date.now(),
+      completedSetsLog: completedSetsLogRef.current,
+      repOutcomes: sessionRepOutcomes(priorRepOutcomesRef.current, repLogRef.current),
+      recordVideo: recordingWantedRef.current || undefined,
+      captureFrames: {
+        total: captureFramesTotalRef.current,
+        ok: captureFramesOkRef.current,
+        rejectedByStatus: { ...captureRejectedByStatusRef.current },
+        dropoutResets: captureDropoutResetsRef.current,
+        unsteady: captureUnsteadyFramesRef.current,
+        checked: captureCheckedFramesRef.current,
+        frameSizes: { ...captureFrameSizesRef.current },
+      },
+      neckRest:
+        neckRestTallyRef.current.epochs.length > 0
+          ? {
+              epochs: neckRestTallyRef.current.epochs.map((e) => ({
+                from: e.from,
+                readings: [...e.readings],
+              })),
+            }
+          : undefined,
     };
     try {
       window.localStorage.setItem(
@@ -1864,35 +4249,62 @@ export default function CameraClient() {
     return () => clearInterval(interval);
   }, [sessionState]);
 
+  /** The positioning countdown's seconds for the baseline banner, while a calibration waits for it. */
+  useEffect(() => {
+    if (baselinePhase !== "capturing") {
+      setPositioningSec(0);
+      return;
+    }
+    const tick = () =>
+      setPositioningSec(positioningSecondsLeft(calibrationPositioningEndsAtMsRef.current, performance.now()));
+    tick();
+    const interval = setInterval(tick, 200);
+    return () => clearInterval(interval);
+  }, [baselinePhase]);
+
   /**
-   * 3-2-1 start countdown. Fires when the Start button transitions the session
-   * to "countdown". Counts from 3 to 1 at 1-second intervals, then stamps the
-   * session start timestamps and transitions to "active". The guard on
-   * `sessionStateRef` ensures that if End is clicked mid-countdown the interval
-   * does not then overwrite the "ended" state with "active".
-   *
-   * Baseline capture (for exercises that need it) runs in parallel during the
-   * countdown — both are reset together in `handleSessionStart`, so they race
-   * and typically finish around the same time.
+   * The start countdown: first the positioning countdown (no measuring, time
+   * to get into place), then the neutral calibration's. It cannot open the
+   * outcome gate early.
    */
   useEffect(() => {
     if (sessionState !== "countdown") return;
-    setCountdownSec(3);
-    let remaining = 3;
-    const interval = setInterval(() => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        clearInterval(interval);
-        // Guard: End button may have fired during the interval
-        if (sessionStateRef.current !== "countdown") return;
-        const now = performance.now();
-        sessionStartMsRef.current = now;
-        currentSetStartMsRef.current = now;
-        setSessionState("active");
+    setCountdownStage("positioning");
+    setCountdownSec(Math.ceil(NEUTRAL_CALIBRATION_POSITIONING_MS / 1_000));
+    const tick = () => {
+      const positioning =
+        baselinePhaseRef.current === "capturing"
+          ? positioningSecondsLeft(calibrationPositioningEndsAtMsRef.current, performance.now())
+          : 0;
+      if (positioning > 0) {
+        setCountdownStage("positioning");
+        setCountdownSec(positioning);
       } else {
+        const clock = neutralCalibrationClockRef.current;
+        const remaining = Math.max(
+          0,
+          Math.ceil(
+            (NEUTRAL_CALIBRATION_DURATION_MS - clock.validElapsedMs) / 1_000,
+          ),
+        );
+        setCountdownStage("baseline");
         setCountdownSec(remaining);
       }
-    }, 1000);
+      if (
+        sessionStateRef.current === "countdown" &&
+        baselinePhaseRef.current === "captured"
+      ) {
+        const now = performance.now();
+        const resumedElapsed = countdownResumeElapsedMsRef.current;
+        sessionStartMsRef.current =
+          resumedElapsed === null ? now : now - resumedElapsed;
+        currentSetStartMsRef.current = now;
+        countdownResumeElapsedMsRef.current = null;
+        setSessionState("active");
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 100);
     return () => clearInterval(interval);
   }, [sessionState]);
 
@@ -1904,6 +4316,24 @@ export default function CameraClient() {
     const max = Math.max(left, right);
     if (max === 0) return 0;
     return Math.abs(left - right) / max;
+  };
+
+  const prescribedTargetReached = (
+    left: number,
+    right: number,
+    target: number,
+  ): boolean => {
+    const side = prescriptionRef.current.prescribedSide;
+    if (side === "left") return left >= target;
+    if (side === "right") return right >= target;
+    return Math.min(left, right) >= target;
+  };
+
+  const prescribedCreditedValue = (left: number, right: number): number => {
+    const side = prescriptionRef.current.prescribedSide;
+    if (side === "left") return left;
+    if (side === "right") return right;
+    return Math.min(left, right);
   };
 
   /**
@@ -1926,10 +4356,228 @@ export default function CameraClient() {
     if (curIdx === -1) return false;
     const nextIdx = curIdx + offset;
     if (nextIdx < 0 || nextIdx >= ids.length) return false;
-    const nextId = ids[nextIdx].id;
-    selectedExerciseRef.current = nextId;
-    setSelectedExercise(nextId);
+    const nextExercise = ids[nextIdx];
+    selectedExerciseRef.current = nextExercise.id;
+    setSelectedExercise(nextExercise.id);
+    if (user?.role === "patient" && nextExercise.occurrenceId !== undefined) {
+      router.replace(
+        `/camera?occurrenceId=${nextExercise.occurrenceId}&exerciseId=${encodeURIComponent(nextExercise.id)}`,
+        { scroll: false },
+      );
+    }
     return true;
+  };
+
+  /**
+   * Marks a patient's custom (manual) exercise complete for the day when its
+   * guided session ends, through the same route the schedule used for Mark
+   * Complete, which also notifies the therapist. Resolves to an error message,
+   * or null when saved.
+   */
+  /**
+   * Before a patient's custom exercise starts, as before a camera session: the
+   * pain question, then the video question (or the answer this device
+   * remembers). Then a session opens to hold the pain answers, how the attempt
+   * ends and, with consent, its video. Resolves false when the patient pressed
+   * Back, which cancels the start.
+   */
+  const beginCustomSession = async (exercise: Exercise): Promise<CustomStartResult> => {
+    customSessionIdRef.current = null;
+    // A pain report left unanswered belongs to the earlier attempt, not this one.
+    customReportSessionIdRef.current = null;
+    customRecordingConsentRef.current = false;
+    if (
+      user?.role !== "patient" ||
+      typeof exercise.patientExerciseId !== "number" ||
+      typeof exercise.occurrenceId !== "number"
+    ) return true;
+    const pain = await askPreSessionPain();
+    if (pain === null) return false;
+    let record: boolean;
+    let remembered = false;
+    let notice: string | null = SESSION_VIDEO_NOTICE_VERSION;
+    const saved = readVideoChoice(user?.id);
+    if (saved) {
+      record = saved.record;
+      remembered = true;
+      notice = saved.notice;
+    } else {
+      const choice = await askVideoChoice();
+      if (choice === null) return false;
+      record = choice.record;
+      if (choice.remember) rememberVideoChoice(user?.id, choice.record);
+    }
+    if (record && !cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) {
+      setError("The camera could not start, so this session is not being recorded.");
+      record = false;
+    }
+    const response = await fetch("/api/sessions/manual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientExerciseId: exercise.patientExerciseId,
+        occurrenceId: exercise.occurrenceId,
+        exerciseId: exercise.id,
+        preSessionPain: pain,
+        videoConsent: record,
+        ...(record ? { videoConsentRemembered: remembered, videoNotice: notice } : {}),
+        deviceInfo: { userAgent: navigator.userAgent },
+      }),
+    }).catch(() => null);
+    const body: unknown = await response?.json().catch(() => null);
+    if (!response?.ok || !isRecord(body) || typeof body.sessionId !== "number") {
+      setError(
+        isRecord(body) && typeof body.error === "string"
+          ? body.error
+          : "This attempt could not be started. Please try again.",
+      );
+      return false;
+    }
+    const runtime = body.runtimePrescription as RuntimePrescription | undefined;
+    if (
+      !runtime || runtime.patientExerciseId !== exercise.patientExerciseId ||
+      runtime.occurrenceId !== exercise.occurrenceId || runtime.exerciseId !== exercise.id ||
+      !Number.isInteger(runtime.sets) || runtime.sets < 1 ||
+      !Number.isInteger(runtime.reps) || runtime.reps < 1 ||
+      !Number.isFinite(runtime.restSeconds) || runtime.restSeconds < 0 ||
+      (runtime.prescribedSide !== "both" && runtime.prescribedSide !== "left" && runtime.prescribedSide !== "right")
+    ) {
+      setError("The saved prescription could not be read. Reload this page before starting.");
+      return false;
+    }
+    customSessionIdRef.current = body.sessionId;
+    const authoritative = assignedExercisesRef.current.map((item) => item.occurrenceId === exercise.occurrenceId
+      ? { ...item, sets: runtime.sets, reps: runtime.reps, restSeconds: runtime.restSeconds,
+          holdSeconds: runtime.holdSeconds, prescribedSide: runtime.prescribedSide, resistance: runtime.resistance }
+      : item);
+    assignedExercisesRef.current = authoritative;
+    setAssignedExercises(authoritative);
+    if (record) {
+      // The recorder stamps each part through perfToIso, which reads these anchors.
+      sessionWallStartMsRef.current = Date.now();
+      sessionPerfStartMsRef.current = performance.now();
+      customRecordingConsentRef.current = true;
+      customRecordingStoppedRef.current = false;
+      setCustomRecordingOpen(true);
+      setRecordingState("off");
+    }
+    return { sets: runtime.sets, restSeconds: runtime.restSeconds };
+  };
+
+  /**
+   * Each custom set is its own recording part; rest is not recorded. Opening a
+   * part ends any part still recording, so while the last set's part is still
+   * closing (no rest, or a short one) the next part waits for it, and does not
+   * open if the session ended or its recording was stopped meanwhile.
+   */
+  const recordCustomSet = () => {
+    const sessionId = customSessionIdRef.current;
+    if (sessionId === null || !customRecordingConsentRef.current || customRecordingStoppedRef.current) return;
+    const closing = recorderRef.current;
+    if (!closing) {
+      startSessionRecording(sessionId);
+      return;
+    }
+    stopSessionRecording();
+    void closing.stop().finally(() => {
+      if (customSessionIdRef.current === sessionId && recorderRef.current === null) recordCustomSet();
+    });
+  };
+  const pauseCustomRecording = () => stopSessionRecording();
+
+  /** Ends a custom session through the same route as a camera session. */
+  const patchCustomSession = async (
+    sessionId: number,
+    end: { completed: true } | { endReason: "user" | "pain" },
+  ): Promise<string | null> => {
+    const response = await fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(end),
+    }).catch(() => null);
+    if (response?.ok) return null;
+    const body: unknown = await response?.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string" ? body.error : "Your session could not be saved. Please try again.";
+  };
+
+  /**
+   * The custom session ends: the recording stops and what was recorded is kept.
+   * Ended early or stopped for pain closes the session now (a pain stop pauses
+   * the day and tells the therapist, as for a camera session); after the last
+   * set completeCustomAttempt closes it as completed.
+   */
+  const endCustomSession = async (reason: "completed" | "user" | "pain"): Promise<string | null> => {
+    setCustomRecordingOpen(false);
+    // No later part opens for this session, not even one waiting for the last to close.
+    customRecordingConsentRef.current = false;
+    stopSessionRecording(true);
+    const sessionId = customSessionIdRef.current;
+    if (reason === "completed" || sessionId === null) return null;
+    const error = await patchCustomSession(sessionId, { endReason: reason });
+    if (error) return error;
+    // A retry must retain the same target until the server acknowledges it.
+    if (customSessionIdRef.current === sessionId) customSessionIdRef.current = null;
+    // "Pain after this attempt" follows an early end as it follows a pain stop.
+    customReportSessionIdRef.current = sessionId;
+    return null;
+  };
+
+  /** After the last set: the day is marked complete, through the session when there is one. */
+  const completeCustomAttempt = async (occurrenceId: number): Promise<string | null> => {
+    const sessionId = customSessionIdRef.current;
+    if (sessionId === null) {
+      customReportSessionIdRef.current = null;
+      return completeCustomOccurrence(occurrenceId);
+    }
+    const error = await patchCustomSession(sessionId, { completed: true });
+    if (!error) {
+      customSessionIdRef.current = null;
+      customReportSessionIdRef.current = sessionId;
+    }
+    return error;
+  };
+
+  /** Whether "pain after this attempt" has a session to be saved on. */
+  const customPainReportPending = () => customReportSessionIdRef.current !== null;
+
+  /** Pain after this attempt, saved on the ended custom session; null when saved. */
+  const saveCustomPainReport = async (
+    report: { status: "declined" } | { status: "reported"; score: number; timing: PainTiming | null; bodyArea: string | null },
+  ): Promise<string | null> => {
+    const sessionId = customReportSessionIdRef.current;
+    if (sessionId === null) return null;
+    const response = await fetch(`/api/sessions/${sessionId}/pain-report`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+    }).catch(() => null);
+    if (response?.ok) {
+      customReportSessionIdRef.current = null;
+      return null;
+    }
+    const body: unknown = await response?.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string" ? body.error : "The pain report could not be saved.";
+  };
+
+  /**
+   * Shows "please wait" while a link opens the next page. A click that opens
+   * a new tab (modifier keys, middle button) leaves this page as it is.
+   */
+  const waitForPage = (
+    event: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean },
+    message: string,
+  ) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    setWaitMessage(message);
+  };
+
+  const completeCustomOccurrence = async (occurrenceId: number): Promise<string | null> => {
+    const response = await fetch(`/api/exercise-occurrences/${occurrenceId}`, { method: "PATCH" });
+    if (response.ok) return null;
+    const body: unknown = await response.json().catch(() => null);
+    return isRecord(body) && typeof body.error === "string"
+      ? body.error
+      : "Your session could not be saved. Please try again.";
   };
 
   /**
@@ -1963,7 +4611,7 @@ export default function CameraClient() {
       const left = repCountsRef.current.left;
       const right = repCountsRef.current.right;
       setComplete = def.bilateral
-        ? Math.min(left, right) >= target
+        ? prescribedTargetReached(left, right, target)
         : left >= target;
       if (!setComplete) return;
       setRecord = {
@@ -1988,7 +4636,7 @@ export default function CameraClient() {
       const targetMs = prescriptionRef.current.holdSeconds * 1000;
       const leftMs = leftHoldMsRef.current;
       const rightMs = rightHoldMsRef.current;
-      setComplete = Math.min(leftMs, rightMs) >= targetMs;
+      setComplete = prescribedTargetReached(leftMs, rightMs, targetMs);
       if (!setComplete) return;
       setRecord = {
         setIndex: completedSetsRef.current + 1,
@@ -2002,20 +4650,20 @@ export default function CameraClient() {
             : 0,
         terminatedBy: "min_reached",
         asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
-        pairedHoldMs: Math.min(leftMs, rightMs),
+        pairedHoldMs: prescribedCreditedValue(leftMs, rightMs),
         targetHoldMs: targetMs,
         leftHoldMs: leftMs,
         rightHoldMs: rightMs,
       };
     } else {
-      // Per-limb isometric (ex_006): a set completes when the patient has held
-      // a valid T-pose (BOTH arms in the band simultaneously) for the
-      // prescribed duration. The paired accumulator only advanced on
-      // both-in-band frames, so this is a single threshold — no per-side
-      // min() needed.
+      // Per-limb isometric (ex_006): each arm accrues independently. "both"
+      // uses the slower arm; a unilateral prescription gates only its selected
+      // side while the other remains an observation.
       const targetMs = prescriptionRef.current.holdSeconds * 1000;
-      const pairedMs = pairedHoldMsRef.current;
-      setComplete = pairedMs >= targetMs;
+      const leftMs = leftHoldMsRef.current;
+      const rightMs = rightHoldMsRef.current;
+      const creditedMs = prescribedCreditedValue(leftMs, rightMs);
+      setComplete = prescribedTargetReached(leftMs, rightMs, targetMs);
       if (!setComplete) return;
       setRecord = {
         setIndex: completedSetsRef.current + 1,
@@ -2028,9 +4676,11 @@ export default function CameraClient() {
             ? tNow - currentSetStartMsRef.current
             : 0,
         terminatedBy: "min_reached",
-        asymmetryIndex: 0,
-        pairedHoldMs: pairedMs,
+        asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
+        pairedHoldMs: creditedMs,
         targetHoldMs: targetMs,
+        leftHoldMs: leftMs,
+        rightHoldMs: rightMs,
       };
     }
     completedSetsLogRef.current.push(setRecord);
@@ -2064,8 +4714,8 @@ export default function CameraClient() {
     setConfirmingEnd(false);
 
     if (completedSetsRef.current >= prescriptionRef.current.sets) {
-      // All prescribed sets done. Guided flow: advance to the next assigned
-      // exercise if there is one, otherwise the whole session is complete.
+      // All prescribed sets done. Close this occurrence, then require the
+      // post-attempt pain report/decline before any guided-flow advance.
       // Close the rep gate synchronously FIRST. This runs from the rAF loop,
       // and the exercise-change reset effect that also lands the next exercise
       // idle is async — so without this immediate flip there is a brief window
@@ -2076,14 +4726,18 @@ export default function CameraClient() {
       // This exercise's session is finished either way — close it (completed:
       // all prescribed sets were reached). Advancing re-selects the next
       // exercise; the patient presses Start to open a new session for it.
+      showCompletionRecapAfterReportRef.current = true;
+      terminalOccurrenceAfterReportRef.current = "completed";
       void endSessionPersistence(true).then(showSessionPersistenceToast);
       // This exercise is finished — drop its resume snapshot so a later visit
       // shows the "already completed" recap, not a resume prompt.
       clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
-      setSessionState("idle");
-      if (!goToAdjacentExercise(1)) {
-        setSessionState("ended");
-      }
+      setPainReportError(null);
+      setSessionState(
+        prescriptionRef.current.patientExerciseId !== undefined
+          ? "reporting"
+          : "ended",
+      );
     } else if (prescriptionRef.current.restSeconds > 0) {
       // More sets remain → hard-block rest between sets. Flip to "resting"
       // synchronously (closes the rep gate this frame), then start the
@@ -2109,7 +4763,57 @@ export default function CameraClient() {
    * are rebuilt so a restarted session does not inherit stale event buffers
    * or lifetime-of-instance rep indices from the previous session.
    */
-  const handleSessionStart = async () => {
+  const askPreSessionPain = () =>
+    new Promise<PreSessionPain | null>((resolve) => {
+      preSessionSurveyResolveRef.current = resolve;
+      setPreSessionSurvey({ score: 0, bodyArea: "" });
+    });
+  const answerPreSessionSurvey = (answer: PreSessionPain | null) => {
+    const resolve = preSessionSurveyResolveRef.current;
+    preSessionSurveyResolveRef.current = null;
+    setPreSessionSurvey(null);
+    resolve?.(answer);
+  };
+  const askVideoChoice = () =>
+    new Promise<{ record: boolean; remember: boolean } | null>((resolve) => {
+      videoQuestionResolveRef.current = resolve;
+      setVideoQuestion({ remember: false });
+    });
+  const answerVideoChoice = (answer: { record: boolean; remember: boolean } | null) => {
+    const resolve = videoQuestionResolveRef.current;
+    videoQuestionResolveRef.current = null;
+    setVideoQuestion(null);
+    resolve?.(answer);
+  };
+
+  /** Records the camera stream for a session whose patient opted in. Never blocks the session. */
+  const startSessionRecording = (sessionId: number) => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    void recorderRef.current?.stop();
+    const recorder = new SessionRecorder({
+      sessionId,
+      stream,
+      nowWallMs: () => Date.parse(perfToIso(performance.now())),
+      onState: (state) => { if (recorderRef.current === recorder) setRecordingState(state); },
+    });
+    recorderRef.current = recorder;
+    recordingWantedRef.current = true;
+    void recorder.start();
+  };
+
+  /** Ends the recording; what was uploaded is kept. `byPatient` also stops it for a later Resume. */
+  const stopSessionRecording = (byPatient = false) => {
+    if (byPatient) recordingWantedRef.current = false;
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    void recorder.stop().finally(() => {
+      if (recorderRef.current === recorder) recorderRef.current = null;
+    });
+  };
+
+  /** `onConfirmed` runs once the start is no longer cancellable from the survey. */
+  const handleSessionStart = async (onConfirmed?: () => void) => {
     if (!activeDefinition) return;
     // Strict schedule lock: a patient may only start an exercise that is
     // actionable today (due, or still within its make-up window). Staff debug
@@ -2117,7 +4821,7 @@ export default function CameraClient() {
     if (
       user?.role === "patient" &&
       selectedExercise &&
-      !actionableExerciseIds.has(selectedExercise)
+      !actionableOccurrenceIds.has(prescriptionRef.current.occurrenceId ?? -1)
     ) {
       setScheduleNotice(
         "This exercise isn't scheduled for today. Start it from your schedule on its due day.",
@@ -2125,41 +4829,70 @@ export default function CameraClient() {
       return;
     }
     setScheduleNotice(null);
+    // A patient's new session opens with the pain survey; Back cancels it.
+    preSessionPainRef.current = null;
+    videoConsentRef.current = false;
+    videoConsentRememberedRef.current = false;
+    videoConsentNoticeRef.current = null;
+    if (typeof prescriptionRef.current.patientExerciseId === "number") {
+      const answer = await askPreSessionPain();
+      if (answer === null) return;
+      preSessionPainRef.current = answer;
+      // Then the video question, unless this patient asked this device to
+      // remember an answer. Back cancels the start.
+      const remembered = readVideoChoice(user?.id);
+      if (remembered) {
+        videoConsentRef.current = remembered.record;
+        videoConsentRememberedRef.current = true;
+        videoConsentNoticeRef.current = remembered.notice;
+      } else {
+        const choice = await askVideoChoice();
+        if (choice === null) return;
+        videoConsentRef.current = choice.record;
+        // The question showed this page's notice.
+        videoConsentNoticeRef.current = SESSION_VIDEO_NOTICE_VERSION;
+        if (choice.remember) rememberVideoChoice(user?.id, choice.record);
+      }
+    }
+    onConfirmed?.();
+    setRecordingState("off");
+    recordingWantedRef.current = false;
+    coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
+    if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
     const canPersist = await startSessionPersistence();
     if (!canPersist) return;
+    if (videoConsentRef.current && sessionIdRef.current !== null) startSessionRecording(sessionIdRef.current);
 
     const counters = createRepCountersForDefinition(activeDefinition);
+    coachingAuditRef.current.reset();
     captureFramesTotalRef.current = 0;
     captureFramesOkRef.current = 0;
+    captureRejectedByStatusRef.current = {};
+    captureDropoutResetsRef.current = 0;
+    captureFrameSizesRef.current = {};
+    neckRestTallyRef.current = { epochs: [] };
+    captureUnsteadyFramesRef.current = 0;
+    captureCheckedFramesRef.current = 0;
+    trackingMarksRef.current = [];
     setSessionElapsedSec(0);
     setCompletedSets(0);
     completedSetsLogRef.current = [];
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
     repCountsRef.current = { left: 0, right: 0 };
     setRepCounts({ left: 0, right: 0 });
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
     resetCompensationWarnings();
-    if (
-      (activeDefinition.kind === "dynamic" &&
-        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
-      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
-    ) {
-      leftBaselineRef.current  = { samples: [], value: null };
-      rightBaselineRef.current = { samples: [], value: null };
-      bidirectionalBaselineRef.current = { samples: [], value: null };
-      leftScapBaselineRef.current  = { samples: [], value: null };
-      rightScapBaselineRef.current = { samples: [], value: null };
-      setBaselinePhase("capturing");
-      setBaselineSampleProgress(0);
-    }
+    resetNeutralCalibration("capturing");
     pairedHoldMsRef.current = 0;
     leftHoldMsRef.current = 0;
     rightHoldMsRef.current = 0;
@@ -2171,6 +4904,7 @@ export default function CameraClient() {
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
     setRestRemainingSec(0);
+    countdownResumeElapsedMsRef.current = null;
     setSessionState("countdown");
   };
 
@@ -2178,32 +4912,49 @@ export default function CameraClient() {
    * Resume a disrupted session from its localStorage snapshot: restore the
    * completed-set count, the current set's counter, and the elapsed timer, and
    * continue writing to the SAME open DB session (no new row). Mirrors
-   * `handleSessionStart`, but restores state instead of zeroing it and goes
-   * straight to `active` — routing through `countdown` would overwrite the
-   * restored timer anchor (see the countdown effect).
+   * `handleSessionStart`, but restores state instead of zeroing it. A resumed
+   * attempt recalibrates before returning to `active`.
    */
-  const resumeSession = () => {
-    if (!activeDefinition) return;
+  const resumeSession = async () => {
+    // Like Start, Resume must wait for inference readiness before restoring
+    // progress or starting a camera whose first frame could arrive too early.
+    if (!modelLoaded || !activeDefinition) return;
     const snap = readResumeSnapshot(prescriptionRef.current.patientExerciseId);
     if (!snap || snap.exerciseId !== activeDefinition.id) return;
+    if (sessionStartPendingRef.current || isStarting) return;
+    sessionStartPendingRef.current = true;
+    try {
+    if (!cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) return;
+    coachingProvenanceRef.current = await captureCoachingProvenance(activeDefinition);
+    if (!cameraReadyRef.current || !streamRef.current || activeDefinitionRef.current?.id !== activeDefinition.id) return;
+    coachingAuditRef.current.reset();
 
     const counters = createRepCountersForDefinition(activeDefinition);
-    // Capture-quality tally restarts for the resumed portion.
-    captureFramesTotalRef.current = 0;
-    captureFramesOkRef.current = 0;
+    // Restore what the snapshot carried from before the disruption, so the
+    // end-of-session card and capture summary cover the whole attempt rather
+    // than only the resumed portion. An older snapshot restores nothing here.
+    const progress = restoredSessionProgress(snap);
+    captureFramesTotalRef.current = progress.captureFrames.total;
+    captureFramesOkRef.current = progress.captureFrames.ok;
+    captureRejectedByStatusRef.current = { ...progress.captureFrames.rejectedByStatus };
+    captureDropoutResetsRef.current = progress.captureFrames.dropoutResets;
+    captureFrameSizesRef.current = { ...progress.captureFrames.frameSizes };
+    neckRestTallyRef.current = progress.neckRest;
+    captureUnsteadyFramesRef.current = progress.captureFrames.unsteady;
+    captureCheckedFramesRef.current = progress.captureFrames.checked;
+    trackingMarksRef.current = [];
 
-    // Completed-set count comes back; the live per-set log starts empty (the
-    // pre-disruption sets already live in the DB / the "already completed"
-    // analytics — the headline "Sets X/N" tracks the restored completedSets).
     setCompletedSets(snap.completedSets);
-    completedSetsLogRef.current = [];
+    completedSetsLogRef.current = progress.setsLog;
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = progress.repOutcomes;
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
 
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
@@ -2243,20 +4994,7 @@ export default function CameraClient() {
       });
     }
 
-    // Re-capture the resting baseline if the exercise needs one (same as start).
-    if (
-      (activeDefinition.kind === "dynamic" &&
-        !!activeDefinition.primaryMetric.requiresBaselineCapture) ||
-      activeDefinition.compensationMetrics.some((c) => c.requiresBaselineCapture)
-    ) {
-      leftBaselineRef.current  = { samples: [], value: null };
-      rightBaselineRef.current = { samples: [], value: null };
-      bidirectionalBaselineRef.current = { samples: [], value: null };
-      leftScapBaselineRef.current  = { samples: [], value: null };
-      rightScapBaselineRef.current = { samples: [], value: null };
-      setBaselinePhase("capturing");
-      setBaselineSampleProgress(0);
-    }
+    resetNeutralCalibration("capturing");
 
     setConfirmingEnd(false);
     restEndsAtMsRef.current = null;
@@ -2267,10 +5005,26 @@ export default function CameraClient() {
     // collide with rows already persisted under this session id.
     resetSessionPersistence();
     sessionIdRef.current = snap.sessionId;
-    globalRepIndexRef.current = snap.globalRepIndex;
-    rawFrameIndexRef.current = snap.rawFrameIndex;
+    // Anchor this page's clock before anything reads it: the recorder takes
+    // the resumed part's start time through perfToIso, and after a reload the
+    // anchors are still 0 (the part's start was then stored as milliseconds
+    // since page load, so playback could not place its overlays or markers).
     sessionWallStartMsRef.current = Date.now();
     sessionPerfStartMsRef.current = performance.now();
+    // The consent given at the start covers the rest of the session; the
+    // resumed part is recorded as a new part.
+    if (snap.recordVideo === true) startSessionRecording(snap.sessionId);
+    // Re-adopt any outcome events the interrupted run could not deliver, then
+    // let the normal flush path retry them. Inserts are idempotent by
+    // (session_id, rep_index) / (session_id, set_index), so re-sending an event
+    // that did land is a no-op rather than a duplicate.
+    eventOutboxRef.current.setSession(snap.sessionId);
+    if (eventOutboxRef.current.restoreFor(snap.sessionId) > 0) {
+      flushSetEvents();
+      flushRepEvents();
+    }
+    globalRepIndexRef.current = snap.globalRepIndex;
+    rawFrameIndexRef.current = snap.rawFrameIndex;
     sessionTokenRef.current++;
     pendingStaleEndReasonRef.current = undefined;
 
@@ -2279,14 +5033,11 @@ export default function CameraClient() {
     const now = performance.now();
     sessionStartMsRef.current = now - snap.elapsedMs;
     currentSetStartMsRef.current = now;
+    countdownResumeElapsedMsRef.current = snap.elapsedMs;
     setSessionElapsedSec(Math.floor(snap.elapsedMs / 1000));
 
-    // Manual-start page: ensure the camera is running so reps can count.
-    if (!streamRef.current) {
-      void startCamera(selectedDeviceId || undefined);
-    }
-
-    setSessionState("active");
+    setSessionState("countdown");
+    } finally { sessionStartPendingRef.current = false; }
   };
 
   /**
@@ -2295,7 +5046,7 @@ export default function CameraClient() {
    * `terminatedBy: "user"` so the session timeline reflects the
    * incomplete attempt.
    */
-  const handleSessionEnd = () => {
+  const handleSessionEnd = (reason: "user" | "pain" = "user") => {
     if (
       sessionStateRef.current !== "active" &&
       sessionStateRef.current !== "resting" &&
@@ -2317,13 +5068,10 @@ export default function CameraClient() {
       // Side-split (ex_004): per-side accumulators; credited pairedHoldMs is
       // the min (slower side gates), which can legitimately be 0 when only
       // one side was held — the per-side fields keep that partial visible.
-      const sideSplit = isSideSplitIsometric(def);
       const leftMs = leftHoldMsRef.current;
       const rightMs = rightHoldMsRef.current;
-      const pairedMs = sideSplit
-        ? Math.min(leftMs, rightMs)
-        : pairedHoldMsRef.current;
-      const anyHold = sideSplit ? leftMs > 0 || rightMs > 0 : pairedMs > 0;
+      const pairedMs = prescribedCreditedValue(leftMs, rightMs);
+      const anyHold = leftMs > 0 || rightMs > 0;
       if (anyHold) {
         const setRecord: CompletedSetRecord = {
           setIndex: completedSetsRef.current + 1,
@@ -2335,11 +5083,12 @@ export default function CameraClient() {
             currentSetStartMsRef.current !== null
               ? endedAtMs - currentSetStartMsRef.current
               : 0,
-          terminatedBy: "user",
-          asymmetryIndex: sideSplit ? computeAsymmetryIndex(leftMs, rightMs) : 0,
+          terminatedBy: reason,
+          asymmetryIndex: computeAsymmetryIndex(leftMs, rightMs),
           pairedHoldMs: pairedMs,
           targetHoldMs: prescriptionRef.current.holdSeconds * 1000,
-          ...(sideSplit ? { leftHoldMs: leftMs, rightHoldMs: rightMs } : {}),
+          leftHoldMs: leftMs,
+          rightHoldMs: rightMs,
         };
         completedSetsLogRef.current.push(setRecord);
         bufferSetEvent(setRecord, def.kind, endedAtMs);
@@ -2358,21 +5107,39 @@ export default function CameraClient() {
             currentSetStartMsRef.current !== null
               ? endedAtMs - currentSetStartMsRef.current
               : 0,
-          terminatedBy: "user",
+          terminatedBy: reason,
           asymmetryIndex: computeAsymmetryIndex(left, right),
         };
         completedSetsLogRef.current.push(setRecord);
         if (def) bufferSetEvent(setRecord, def.kind, endedAtMs);
       }
     }
+    // Preserve observations from an attempt with no credited movement. This
+    // persistence-only row does not change the live completion/recap counters.
+    if (def && coachingAuditRef.current.hasRecords()) {
+      bufferSetEvent({ setIndex: completedSetsRef.current + 1,
+        targetReps: def.kind === "dynamic" ? prescriptionRef.current.reps : 0,
+        leftReps: 0, rightReps: 0, pairedReps: 0,
+        targetHoldMs: def.kind === "isometric" ? prescriptionRef.current.holdSeconds * 1000 : 0,
+        pairedHoldMs: 0, durationMs: currentSetStartMsRef.current === null ? 0 : endedAtMs - currentSetStartMsRef.current,
+        terminatedBy: reason, asymmetryIndex: 0 }, def.kind, endedAtMs, true);
+    }
     // Flush any reps from the in-progress (partial) set and stamp ended_at.
     // endReason "user" = the End button was pressed — distinguishes a deliberate
     // early end from a tab-close/exit (which leaves the session open).
-    void endSessionPersistence(false, "user").then(showSessionPersistenceToast);
+    showCompletionRecapAfterReportRef.current = false;
+    terminalOccurrenceAfterReportRef.current =
+      reason === "pain" ? "pain_stopped" : null;
+    void endSessionPersistence(false, reason).then(showSessionPersistenceToast);
     // Deliberate end → drop the resume snapshot so this attempt is not offered
     // for resume on return (the row is also closed, the authoritative guard).
     clearResumeSnapshot(prescriptionRef.current.patientExerciseId);
-    setSessionState("ended");
+    setPainReportError(null);
+    setSessionState(
+      prescriptionRef.current.patientExerciseId !== undefined
+        ? "reporting"
+        : "ended",
+    );
   };
 
   /**
@@ -2468,6 +5235,84 @@ export default function CameraClient() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    window.enableEx004FaceShadow = () => {
+      clearEx004FaceShadow();
+      setEx004FaceShadowEnabled(true);
+      console.info(
+        "[ex004-face-shadow] enabled; select ex_004 and wait for Face ready before starting",
+      );
+    };
+    window.disableEx004FaceShadow = () => {
+      setEx004FaceShadowEnabled(false);
+      console.info("[ex004-face-shadow] disabled; buffered records retained");
+    };
+    window.clearEx004FaceShadow = () => {
+      clearEx004FaceShadow();
+      console.info("[ex004-face-shadow] cleared");
+    };
+    window.dumpEx004FaceShadow = (limit = 1200) => {
+      const records = ex004FaceShadowRecordsRef.current.slice(-limit);
+      const attemptedFrames = records.filter((record) =>
+        isEx004FaceShadowAttempt(record.status)
+      ).length;
+      const detectedFrames = records.filter(
+        (record) => record.status === "detected",
+      ).length;
+      const dump: Ex004FaceShadowDump = {
+        version: "ex004_face_shadow_dump_v2",
+        generatedAt: new Date().toISOString(),
+        enabled: ex004FaceShadowEnabledRef.current,
+        modelState: ex004FaceShadowModelStateRef.current,
+        modelAssetPath: EX004_FACE_SHADOW_MODEL_PATH,
+        authoritativeSource: "pose",
+        attemptedFrames,
+        detectedFrames,
+        coverage: attemptedFrames > 0 ? detectedFrames / attemptedFrames : null,
+        currentPhase: ex004FaceShadowPhaseRef.current,
+        faceBaselineRollDeg: ex004FaceShadowBaselineRollRef.current,
+        faceBaselineYawDeg: ex004FaceShadowBaselineYawRef.current,
+        faceBaselinePitchDeg: ex004FaceShadowBaselinePitchRef.current,
+        roi: ex004FaceShadowRoiRef.current,
+        markCount: ex004FaceShadowMarksRef.current.length,
+        marks: [...ex004FaceShadowMarksRef.current],
+        recordCount: records.length,
+        records,
+      };
+      const text = JSON.stringify(dump, null, 2);
+      console.info(text);
+      return text;
+    };
+    window.setEx004FaceShadowPhase = (phase) => {
+      if (!isEx004FaceShadowPhase(phase)) return false;
+      setEx004FaceShadowPhase(phase);
+      return true;
+    };
+    window.markEx004FaceShadowReference = (angleDeg, note) =>
+      markEx004FaceShadowReference(angleDeg, note ?? null);
+    console.info(
+      "[ex004-face-shadow] available: enableEx004FaceShadow(); setEx004FaceShadowPhase(phase); markEx004FaceShadowReference(angleDeg, note); dumpEx004FaceShadow(limit); disableEx004FaceShadow()",
+    );
+
+    return () => {
+      delete window.__ex004FaceShadow;
+      delete window.enableEx004FaceShadow;
+      delete window.disableEx004FaceShadow;
+      delete window.clearEx004FaceShadow;
+      delete window.dumpEx004FaceShadow;
+      delete window.setEx004FaceShadowPhase;
+      delete window.markEx004FaceShadowReference;
+    };
+  }, [
+    clearEx004FaceShadow,
+    markEx004FaceShadowReference,
+    setEx004FaceShadowEnabled,
+    setEx004FaceShadowPhase,
+  ]);
+
   function roundDebugNumber(
     value: number | null | undefined,
     digits = 3,
@@ -2475,6 +5320,272 @@ export default function CameraClient() {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
     const scale = 10 ** digits;
     return Math.round(value * scale) / scale;
+  }
+
+  function inferEx004FaceShadow(
+    video: HTMLVideoElement,
+    landmarks: readonly NormalizedLandmark[],
+    tNow: number,
+  ): Ex004FaceShadowInference | null {
+    if (
+      !ex004FaceShadowEnabledRef.current ||
+      activeDefinitionRef.current?.id !== "ex_004"
+    ) {
+      return null;
+    }
+
+    const landmarker = faceLandmarkerRef.current;
+    if (
+      !landmarker ||
+      ex004FaceShadowModelStateRef.current !== "ready"
+    ) {
+      return {
+        status: "model-not-ready",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: null,
+      };
+    }
+
+    let roi = ex004FaceShadowRoiRef.current;
+    if (!roi) {
+      roi = fixedFaceRoiFromPose(
+        landmarks,
+        video.videoWidth,
+        video.videoHeight,
+      );
+      if (roi) ex004FaceShadowRoiRef.current = roi;
+    }
+    if (!roi) {
+      return {
+        status: "roi-unavailable",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: null,
+      };
+    }
+
+    const lastInferenceMs = ex004FaceShadowLastInferenceMsRef.current;
+    if (
+      lastInferenceMs !== null &&
+      tNow - lastInferenceMs < EX004_FACE_SHADOW_INFERENCE_INTERVAL_MS
+    ) {
+      return null;
+    }
+    ex004FaceShadowLastInferenceMsRef.current = tNow;
+
+    const startedAt = performance.now();
+    try {
+      // FaceLandmarker.detectForVideo does not accept the Tasks ROI option.
+      // Materialize the fixed Pose-guided region in a reusable in-memory canvas
+      // instead. The canvas is overwritten every frame and is never persisted.
+      let cropCanvas = faceCropCanvasRef.current;
+      if (!cropCanvas) {
+        cropCanvas = document.createElement("canvas");
+        faceCropCanvasRef.current = cropCanvas;
+      }
+      const cropWidth = roi.pixel.x1 - roi.pixel.x0;
+      const cropHeight = roi.pixel.y1 - roi.pixel.y0;
+      if (cropCanvas.width !== cropWidth) cropCanvas.width = cropWidth;
+      if (cropCanvas.height !== cropHeight) cropCanvas.height = cropHeight;
+      const cropContext = cropCanvas.getContext("2d", { alpha: false });
+      if (!cropContext) {
+        throw new Error("Face crop canvas 2D context is unavailable.");
+      }
+      cropContext.drawImage(
+        video,
+        roi.pixel.x0,
+        roi.pixel.y0,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight,
+      );
+      const result = landmarker.detectForVideo(cropCanvas, tNow);
+      const inferenceMs = performance.now() - startedAt;
+      const faceCount = result.faceLandmarks.length;
+      const matrixCount = result.facialTransformationMatrixes.length;
+
+      if (faceCount === 0) {
+        return {
+          status: "no-face",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+      if (faceCount !== 1) {
+        return {
+          status: "multiple-faces",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+      if (matrixCount !== 1) {
+        return {
+          status: "invalid-matrix",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+
+      const rawOrientation = faceOrientationDegrees(
+        result.facialTransformationMatrixes[0],
+      );
+      if (rawOrientation === null) {
+        return {
+          status: "invalid-matrix",
+          faceCount,
+          matrixCount,
+          rawOrientation: null,
+          inferenceMs,
+        };
+      }
+
+      if (
+        baselinePhaseRef.current === "capturing" &&
+        tNow >= (calibrationPositioningEndsAtMsRef.current ?? -Infinity)
+      ) {
+        ex004FaceShadowBaselineSamplesRef.current.push(
+          rawOrientation.rollImageDeg,
+        );
+        ex004FaceShadowBaselineYawSamplesRef.current.push(
+          rawOrientation.yawDeg,
+        );
+        ex004FaceShadowBaselinePitchSamplesRef.current.push(
+          rawOrientation.pitchDeg,
+        );
+        if (ex004FaceShadowBaselineSamplesRef.current.length > 300) {
+          ex004FaceShadowBaselineSamplesRef.current.shift();
+          ex004FaceShadowBaselineYawSamplesRef.current.shift();
+          ex004FaceShadowBaselinePitchSamplesRef.current.shift();
+        }
+      }
+
+      return {
+        status: "detected",
+        faceCount,
+        matrixCount,
+        rawOrientation,
+        inferenceMs,
+      };
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      console.error("[ex004-face-shadow] inference failed", reason);
+      commitEx004FaceShadowModelState("error", message);
+      return {
+        status: "inference-error",
+        faceCount: null,
+        matrixCount: null,
+        rawOrientation: null,
+        inferenceMs: performance.now() - startedAt,
+      };
+    }
+  }
+
+  function recordEx004FaceShadow(
+    inference: Ex004FaceShadowInference | null,
+    poseSignedDeg: number | null,
+    tNow: number,
+  ): void {
+    if (!inference) return;
+    if (ex004FaceShadowStartMsRef.current === null) {
+      ex004FaceShadowStartMsRef.current = tNow;
+    }
+
+    if (isEx004FaceShadowAttempt(inference.status)) {
+      ex004FaceShadowAttemptedFramesRef.current += 1;
+      if (inference.status === "detected") {
+        ex004FaceShadowDetectedFramesRef.current += 1;
+      }
+    }
+
+    const rollBaseline = ex004FaceShadowBaselineRollRef.current;
+    const yawBaseline = ex004FaceShadowBaselineYawRef.current;
+    const pitchBaseline = ex004FaceShadowBaselinePitchRef.current;
+    const rawOrientation = inference.rawOrientation;
+    const faceSignedDeg =
+      rawOrientation !== null && rollBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.rollImageDeg, rollBaseline)
+        : null;
+    const faceYawDeltaDeg =
+      rawOrientation !== null && yawBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.yawDeg, yawBaseline)
+        : null;
+    const facePitchDeltaDeg =
+      rawOrientation !== null && pitchBaseline !== null
+        ? angleDeltaDegrees(rawOrientation.pitchDeg, pitchBaseline)
+        : null;
+    const faceMinusPoseDeg =
+      faceSignedDeg !== null && poseSignedDeg !== null
+        ? faceSignedDeg - poseSignedDeg
+        : null;
+    const record: Ex004FaceShadowRecord = {
+      version: "ex004_face_shadow_v2",
+      seq: ++ex004FaceShadowSeqRef.current,
+      tMs: Math.round(tNow),
+      elapsedMs: Math.round(tNow - ex004FaceShadowStartMsRef.current),
+      trialPhase: ex004FaceShadowPhaseRef.current,
+      sessionState: sessionStateRef.current,
+      baselinePhase: baselinePhaseRef.current,
+      modelState: ex004FaceShadowModelStateRef.current,
+      status: inference.status,
+      faceCount: inference.faceCount,
+      matrixCount: inference.matrixCount,
+      roi: ex004FaceShadowRoiRef.current,
+      poseSignedDeg: roundDebugNumber(poseSignedDeg),
+      faceRawRollDeg: roundDebugNumber(rawOrientation?.rollImageDeg),
+      faceRawYawDeg: roundDebugNumber(rawOrientation?.yawDeg),
+      faceRawPitchDeg: roundDebugNumber(rawOrientation?.pitchDeg),
+      faceBaselineRollDeg: roundDebugNumber(rollBaseline),
+      faceBaselineYawDeg: roundDebugNumber(yawBaseline),
+      faceBaselinePitchDeg: roundDebugNumber(pitchBaseline),
+      faceSignedDeg: roundDebugNumber(faceSignedDeg),
+      faceYawDeltaDeg: roundDebugNumber(faceYawDeltaDeg),
+      facePitchDeltaDeg: roundDebugNumber(facePitchDeltaDeg),
+      faceMinusPoseDeg: roundDebugNumber(faceMinusPoseDeg),
+      inferenceMs: roundDebugNumber(inference.inferenceMs),
+      authoritativeSource: "pose",
+    };
+
+    ex004FaceShadowRecordsRef.current.push(record);
+    if (
+      ex004FaceShadowRecordsRef.current.length >
+      MAX_EX004_FACE_SHADOW_RECORDS
+    ) {
+      ex004FaceShadowRecordsRef.current.shift();
+    }
+    if (typeof window !== "undefined") {
+      window.__ex004FaceShadow = ex004FaceShadowRecordsRef.current;
+    }
+
+    if (
+      tNow - ex004FaceShadowLastUiUpdateMsRef.current >=
+        EX004_FACE_SHADOW_UI_THROTTLE_MS ||
+      inference.status !== "detected"
+    ) {
+      ex004FaceShadowLastUiUpdateMsRef.current = tNow;
+      setEx004FaceShadowLive({
+        status: inference.status,
+        poseSignedDeg: record.poseSignedDeg,
+        faceSignedDeg: record.faceSignedDeg,
+        faceYawDeltaDeg: record.faceYawDeltaDeg,
+        facePitchDeltaDeg: record.facePitchDeltaDeg,
+        faceMinusPoseDeg: record.faceMinusPoseDeg,
+        inferenceMs: record.inferenceMs,
+        attemptedFrames: ex004FaceShadowAttemptedFramesRef.current,
+        detectedFrames: ex004FaceShadowDetectedFramesRef.current,
+      });
+    }
   }
 
   function landmarkDebug(
@@ -2516,21 +5627,24 @@ export default function CameraClient() {
   function lineAngleDebug(
     a: { x: number; y: number } | undefined,
     b: { x: number; y: number } | undefined,
+    frameAspect: number,
   ): number | null {
     if (!a || !b) return null;
-    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+    return Math.atan2(b.y - a.y, (b.x - a.x) * frameAspect) * 180 / Math.PI;
   }
 
   function bodyPairAngleDebug(
     subjectLeft: { x: number; y: number } | undefined,
     subjectRight: { x: number; y: number } | undefined,
+    frameAspect: number,
   ): number | null {
-    return lineAngleDebug(subjectRight, subjectLeft);
+    return lineAngleDebug(subjectRight, subjectLeft, frameAspect);
   }
 
   function headLeanFromVerticalDebug(
     hipMid: Ex005DebugPoint,
     earMid: Ex005DebugPoint,
+    frameAspect: number,
   ): number | null {
     if (
       hipMid.x === null ||
@@ -2543,25 +5657,338 @@ export default function CameraClient() {
     const rawLine = lineAngleDebug(
       { x: hipMid.x, y: hipMid.y },
       { x: earMid.x, y: earMid.y },
+      frameAspect,
     );
     return rawLine === null ? null : angleDiffDebug(rawLine, -90);
   }
 
-  function medianSample(xs: number[]): number {
-    const sorted = [...xs].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0
-      ? (sorted[mid - 1] + sorted[mid]) / 2
-      : sorted[mid];
+  const resetNeutralCalibration = useCallback((
+    phase: BaselinePhase = "capturing",
+  ): void => {
+    neutralCalibrationClockRef.current = newNeutralCalibrationClock();
+    neutralCalibrationSamplesRef.current = [];
+    // Every calibration starts with the positioning countdown; its samples are
+    // taken only after it (see NEUTRAL_CALIBRATION_POSITIONING_MS).
+    calibrationPositioningEndsAtMsRef.current =
+      phase === "capturing" ? performance.now() + NEUTRAL_CALIBRATION_POSITIONING_MS : null;
+    // The banner and the start countdown show the positioning stage from their
+    // first frame, not only after their timers' first tick.
+    const positioningSecs =
+      phase === "capturing" ? Math.ceil(NEUTRAL_CALIBRATION_POSITIONING_MS / 1_000) : 0;
+    setPositioningSec(positioningSecs);
+    if (phase === "capturing") {
+      setCountdownStage("positioning");
+      setCountdownSec(positioningSecs);
+    }
+    // Whatever prompted this, the baseline is being taken again, so the stale
+    // warning has been answered.
+    calibrationStaleRef.current = false;
+    setCalibrationStale(false);
+    // Recalibrating discards the retained samples, so the next captured
+    // frame must write the NEW ones even if this set already emitted a set.
+    calibrationSamplesEmittedSetRef.current = null;
+    calibrationTraceSamplesRef.current = null;
+    frozenTiltDegRef.current = null;
+    shoulderRestLineDegRef.current = null;
+    trunkRestLineDegRef.current = null;
+    calibrationEarLineDegRef.current = null;
+    cueCompensationFiltersRef.current.clear();
+    ex004FaceShadowRoiRef.current = null;
+    ex004FaceShadowBaselineSamplesRef.current = [];
+    ex004FaceShadowBaselineYawSamplesRef.current = [];
+    ex004FaceShadowBaselinePitchSamplesRef.current = [];
+    ex004FaceShadowBaselineRollRef.current = null;
+    ex004FaceShadowBaselineYawRef.current = null;
+    ex004FaceShadowBaselinePitchRef.current = null;
+    leftBaselineRef.current = { samples: [], value: null };
+    rightBaselineRef.current = { samples: [], value: null };
+    bidirectionalBaselineRef.current = { samples: [], value: null };
+    leftScapBaselineRef.current = { samples: [], value: null };
+    rightScapBaselineRef.current = { samples: [], value: null };
+    metricFiltersRef.current.clear();
+    leftCompensationFiltersRef.current.clear();
+    rightCompensationFiltersRef.current.clear();
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    setDisplayPerSidePrimary(null);
+    setEx004FaceShadowLive((previous) => ({
+      ...previous,
+      poseSignedDeg: null,
+      faceSignedDeg: null,
+      faceYawDeltaDeg: null,
+      facePitchDeltaDeg: null,
+      faceMinusPoseDeg: null,
+    }));
+    setBaselineProgress({ samples: 0, validElapsedMs: 0 });
+    setBaselinePhase(phase);
+  }, [setBaselinePhase]);
+
+  function updateNeutralCalibrationProgress(
+    clock: NeutralCalibrationClock,
+  ): void {
+    const samples = clock.sampleCount;
+    const validElapsedMs = Math.round(clock.validElapsedMs);
+    setBaselineProgress((previous) =>
+      previous.samples === samples &&
+      previous.validElapsedMs === validElapsedMs
+        ? previous
+        : { samples, validElapsedMs },
+    );
   }
 
-  function setBaselineSampleProgress(samples: number) {
-    const clamped = Math.max(0, Math.min(BASELINE_SAMPLE_COUNT, samples));
-    setBaselineProgress((prev) =>
-      prev.samples === clamped && prev.required === BASELINE_SAMPLE_COUNT
-        ? prev
-        : { samples: clamped, required: BASELINE_SAMPLE_COUNT },
+  function finalizeNeutralCalibration(
+    definition: ExerciseDefinition,
+  ): boolean {
+    const samples = neutralCalibrationSamplesRef.current;
+    const frozenTiltDeg = medianFinite(
+      samples
+        .filter(
+          (sample) => sample.observedTilt.confidence !== "insufficient",
+        )
+        .map((sample) => sample.observedTilt.cameraTiltDeg),
     );
+    if (frozenTiltDeg === null) return false;
+    // The neck side bend counts from the ear line over the same samples (D-49);
+    // an exercise that counts from it cannot calibrate without one.
+    const earLineDeg = restingEarLineDeg(samples);
+    if (earLineDeg === null && countsFromCalibrationEarLine(definition)) return false;
+
+    const fixedReference: TiltReference = {
+      cameraTiltDeg: frozenTiltDeg,
+      confidence: "high",
+      divergenceDeg: null,
+    };
+    const needsPrimaryBaseline =
+      definition.kind === "dynamic" &&
+      definition.primaryMetric.requiresBaselineCapture === true;
+    const needsScapBaseline = definition.compensationMetrics.some(
+      (metric) =>
+        metric.name === "scapularElevation" &&
+        metric.requiresBaselineCapture === true,
+    );
+
+    if (needsPrimaryBaseline && definition.kind === "dynamic") {
+      if (definition.bilateralMode === "bidirectional-alternating") {
+        const values = samples.map((sample) =>
+          computeTrunkLateralFlexionUncorrectedSigned(sample.landmarks, sample.frameAspect),
+        );
+        const baseline = medianFinite(
+          values.filter((value): value is number => value !== null),
+        );
+        if (baseline === null) return false;
+        bidirectionalBaselineRef.current = {
+          samples: values.filter((value): value is number => value !== null),
+          value: baseline,
+        };
+      } else if (definition.bilateralMode === "per-limb") {
+        const perFrame = samples.map((sample) =>
+          computePoseMetricsForExercise(
+            sample.landmarks,
+            definition,
+            fixedReference,
+            sample.frameAspect,
+          ).perSideMetrics,
+        );
+        const left = perFrame
+          .map((value) => value?.left)
+          .filter((value): value is number => typeof value === "number");
+        const right = perFrame
+          .map((value) => value?.right)
+          .filter((value): value is number => typeof value === "number");
+        const leftMedian = medianFinite(left);
+        const rightMedian = medianFinite(right);
+        if (leftMedian === null || rightMedian === null) return false;
+        leftBaselineRef.current = { samples: left, value: leftMedian };
+        rightBaselineRef.current = { samples: right, value: rightMedian };
+      }
+    }
+
+    if (needsScapBaseline) {
+      const left = samples
+        .map((sample) =>
+          computeScapularElevation(
+            sample.landmarks,
+            fixedReference,
+            "left",
+            sample.frameAspect,
+          ),
+        )
+        .filter((value): value is number => value !== null);
+      const right = samples
+        .map((sample) =>
+          computeScapularElevation(
+            sample.landmarks,
+            fixedReference,
+            "right",
+            sample.frameAspect,
+          ),
+        )
+        .filter((value): value is number => value !== null);
+      const leftMedian = medianFinite(left);
+      const rightMedian = medianFinite(right);
+      if (leftMedian === null || rightMedian === null) return false;
+      leftScapBaselineRef.current = { samples: left, value: leftMedian };
+      rightScapBaselineRef.current = { samples: right, value: rightMedian };
+    }
+
+    if (
+      definition.id === "ex_004" &&
+      ex004FaceShadowEnabledRef.current &&
+      ex004FaceShadowBaselineSamplesRef.current.length >=
+        EX004_FACE_SHADOW_MIN_BASELINE_SAMPLES
+    ) {
+      ex004FaceShadowBaselineRollRef.current = medianFinite(
+        ex004FaceShadowBaselineSamplesRef.current,
+      );
+      ex004FaceShadowBaselineYawRef.current = medianFinite(
+        ex004FaceShadowBaselineYawSamplesRef.current,
+      );
+      ex004FaceShadowBaselinePitchRef.current = medianFinite(
+        ex004FaceShadowBaselinePitchSamplesRef.current,
+      );
+    } else {
+      ex004FaceShadowBaselineRollRef.current = null;
+      ex004FaceShadowBaselineYawRef.current = null;
+      ex004FaceShadowBaselinePitchRef.current = null;
+    }
+
+    frozenTiltDegRef.current = frozenTiltDeg;
+    calibrationEarLineDegRef.current = earLineDeg;
+    // The LOWER cue's resting shoulder line (D-47) and the trunk-lean cue's
+    // resting trunk line (D-65), from the same samples.
+    shoulderRestLineDegRef.current = restingShoulderLineDeg(samples);
+    trunkRestLineDegRef.current = restingTrunkLineDeg(samples);
+    cueCompensationFiltersRef.current.clear();
+    // Snapshot BEFORE the ring is freed on the next line. Order matters: the
+    // trace writer only runs once the phase below flips to "captured", by
+    // which point the ring is gone.
+    calibrationTraceSamplesRef.current = neutralCalibrationSamplesRef.current.map(
+      (sample) => ({
+        landmarks: upperBodyTraceLandmarks(sample.landmarks),
+        observedCameraTiltDeg: finiteNumberOrNull(sample.observedTilt.cameraTiltDeg),
+        confidence: sample.observedTilt.confidence,
+      }),
+    );
+    neutralCalibrationSamplesRef.current = [];
+    metricFiltersRef.current.clear();
+    leftCompensationFiltersRef.current.clear();
+    rightCompensationFiltersRef.current.clear();
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    resetCompensationWarnings();
+    // Neck side bends (trend data rule 4): a new reference starts a new entry,
+    // which the still-head readings of the following rests fill. The time is
+    // the session clock the repetitions are stamped with.
+    if (NECK_REST_EXERCISES.has(definition.id)) {
+      neckRestTallyRef.current = {
+        epochs: [
+          ...neckRestTallyRef.current.epochs,
+          { from: perfToIso(performance.now()), readings: [] },
+        ],
+      };
+    }
+    setBaselinePhase("captured");
+    updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
+    return true;
+  }
+
+  /**
+   * Throw away the movement currently in progress, and nothing else.
+   *
+   * Every repetition, hold and quality figure here is an accumulator over a
+   * stretch of frames. If that stretch is interrupted — by a capture dropout,
+   * or by the patient recalibrating mid-movement — the accumulator now spans
+   * an interval nobody measured, and finishing it produces a repetition whose
+   * duration, peak and quality describe two different things joined together.
+   * Discarding is the only honest option: a repetition that was not observed
+   * end to end cannot be scored.
+   *
+   * Deliberately does NOT touch what has already been credited.
+   * `RepCounter.reset()` clears in-progress state and leaves `repIndex` alone,
+   * and `repCountsRef`/`completedSetsRef` are untouched here, so finished
+   * repetitions and closed sets survive. Nor does it touch the neutral
+   * baseline: the baseline describes the BODY, and every caller of this
+   * function has its own answer to whether the baseline is still good.
+   */
+  function discardInProgressMovement(): void {
+    metricFiltersRef.current.forEach((filter) => filter.reset());
+    leftCompensationFiltersRef.current.forEach((filter) => filter.reset());
+    rightCompensationFiltersRef.current.forEach((filter) => filter.reset());
+    leftPrimaryFilterRef.current.reset();
+    rightPrimaryFilterRef.current.reset();
+    leftRepCounterRef.current?.reset();
+    rightRepCounterRef.current?.reset();
+    bidirectionalRepCounterRef.current?.reset();
+    dynamicRepQualityBufferRef.current.reset();
+    pairedHoldMsRef.current = 0;
+    leftHoldMsRef.current = 0;
+    rightHoldMsRef.current = 0;
+    leftInBandRef.current = false;
+    rightInBandRef.current = false;
+    lastIsometricTickMsRef.current = null;
+    resetHoldQualityAccum();
+    setHoldState({
+      pairedSec: 0,
+      leftSec: 0,
+      rightSec: 0,
+      leftInBand: false,
+      rightInBand: false,
+    });
+    resetCompensationWarnings();
+  }
+
+  function resetAfterSustainedCaptureDropout(
+    definition: ExerciseDefinition | null,
+  ): void {
+    // Counted for the capture summary: each reset discards the movement in
+    // progress, so it can explain repetitions that were not counted.
+    if (sessionStateRef.current === "active") captureDropoutResetsRef.current += 1;
+    discardInProgressMovement();
+
+    if (baselinePhaseRef.current === "captured") {
+      // A FINISHED baseline is kept. It describes the body, and re-capturing it
+      // here would silently re-anchor "neutral" to whatever posture the
+      // interruption happened in — which is exactly the defect a recorded
+      // session hit, calibrating three times in eighty seconds and adopting a
+      // lean and then a slouch as the reference. Offer recalibration instead.
+      if (
+        definition &&
+        (sessionStateRef.current === "active" ||
+          sessionStateRef.current === "countdown")
+      ) {
+        calibrationStaleRef.current = true;
+        setCalibrationStale(true);
+      }
+    } else {
+      // An UNFINISHED baseline is discarded, and this is the opposite case for
+      // the same reason. The samples taken before the interruption describe a
+      // setup that has now been interrupted; the camera may have been moved,
+      // which is a common cause of the dropout in the first place. Keeping them
+      // would let one calibration straddle two setups and silently blend them
+      // into a median. There is nothing to warn about here, because no baseline
+      // was ever presented as good — calibration simply starts over.
+      resetNeutralCalibration("capturing");
+    }
+    captureDropoutResetDoneRef.current = true;
+  }
+
+  /**
+   * The Recalibrate button. Recalibrating mid-movement is a measurement
+   * boundary, not just a new baseline, so the movement in progress is thrown
+   * away first.
+   *
+   * Without the discard, a repetition that began before the button was pressed
+   * survives the calibration pause and is completed afterwards. It is then
+   * credited toward set progress and can close the set, carrying a duration
+   * that spans the unmeasured calibration interval. Worse, it accumulated its
+   * peak under the OLD frozen tilt and baselines and has its completion
+   * threshold evaluated under the NEW ones — so whenever recalibration actually
+   * moves the reference, which is the only reason to press this button, that
+   * repetition is adjudicated across two different measurement frames.
+   */
+  function handleManualRecalibration(): void {
+    discardInProgressMovement();
+    resetNeutralCalibration("capturing");
   }
 
   function ex005CounterSide(
@@ -2584,6 +6011,7 @@ export default function CameraClient() {
     kind,
     tNow,
     landmarks,
+    frameAspect,
     framingMode,
     captureOk,
     captureMessage,
@@ -2598,6 +6026,7 @@ export default function CameraClient() {
     kind: Ex005DebugRecord["kind"];
     tNow: number;
     landmarks: Array<{ x: number; y: number; visibility?: number }>;
+    frameAspect: number;
     framingMode: FramingMode;
     captureOk: boolean;
     captureMessage: string | null;
@@ -2630,9 +6059,9 @@ export default function CameraClient() {
       earMid.x !== null && hipMid.x !== null
         ? roundDebugNumber(earMid.x - hipMid.x)
         : null;
-    const uncorrectedHeadLeanDeg = headLeanFromVerticalDebug(hipMid, earMid);
-    const hipLineDeg = bodyPairAngleDebug(leftHip, rightHip);
-    const earLineDeg = bodyPairAngleDebug(leftEar, rightEar);
+    const uncorrectedHeadLeanDeg = headLeanFromVerticalDebug(hipMid, earMid, frameAspect);
+    const hipLineDeg = bodyPairAngleDebug(leftHip, rightHip, frameAspect);
+    const earLineDeg = bodyPairAngleDebug(leftEar, rightEar, frameAspect);
     const visibleSigned =
       typeof smoothedSignedDeg === "number" ? smoothedSignedDeg : rawSignedDeg;
 
@@ -2707,21 +6136,19 @@ export default function CameraClient() {
     }
     console.log(`[ex005-debug] ${JSON.stringify(record)}`);
   }
-  
-  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>({
-    tiltReference: { cameraTiltDeg: 0, confidence: "insufficient", divergenceDeg: null },
-    metrics: {},
-    compensationScore: null,
-  });
+
+  const [frameMetrics, setFrameMetrics] = useState<ExerciseFrameMetrics>(
+    emptyFrameMetrics,
+  );
   // Whether the primary movement is near peak ROM this frame. Gates the
   // `peakRelevant` compensation warnings (e.g. elbowFlexion "Straighten arms"
   // on ex_007 / ex_008) so they only surface near full extension. Updated on
   // the same throttled cadence as `frameMetrics`.
   const [nearPeak, setNearPeak] = useState(false);
- 
+
   // ── Derived display strings ──────────────────────────────────────────────
   // These keep the JSX clean and centralize all null-to-display-string logic.
- 
+
   // Low tilt confidence has two meanings:
   // 1. One reference line is missing (divergenceDeg === null): actionable
   //    camera/framing issue, so show the patient-facing banner.
@@ -2729,52 +6156,94 @@ export default function CameraClient() {
   //    exercises and retained as an internal metric flag, not a persistent
   //    patient warning.
   const showTiltWarning = hasMissingTiltReferenceLine(frameMetrics.tiltReference);
- 
+
   // `metricCards` is the list of cards to render in the left rail.
   // Built dynamically from the active exercise definition. Primary metric
   // renders first, then each compensation metric.
-  
+
   const metricCards: CardSpec[] = (() => {
     if (!activeDefinition) return [];
     const cards: CardSpec[] = [];
-  
-    if (activeDefinition.kind === "dynamic") {
-      const p = activeDefinition.primaryMetric;
+
+    const primaryMetric =
+      activeDefinition.kind === "dynamic"
+        ? activeDefinition.primaryMetric.name
+        : activeDefinition.isometric.metric;
+    const primaryIsAngle = metricUsesDegrees(primaryMetric);
+    const perLimb =
+      activeDefinition.bilateral &&
+      activeDefinition.bilateralMode === "per-limb";
+    if (perLimb && prescription.prescribedSide === "both") {
+      for (const side of ["left", "right"] as const) {
+        cards.push({
+          id: `primary:${side}`,
+          metric: primaryMetric,
+          label: `${metricLabel(primaryMetric)} · ${side}`,
+          value: displayPerSidePrimary?.[side] ?? null,
+          kind: "primary",
+          isAngle: primaryIsAngle,
+        });
+      }
+    } else if (perLimb) {
+      const side: "left" | "right" =
+        prescription.prescribedSide === "right" ? "right" : "left";
       cards.push({
-        key: p.name,
-        label: metricLabel(p.name),
-        value: frameMetrics.metrics[p.name] ?? null,
+        id: `primary:${side}`,
+        metric: primaryMetric,
+        label: `${metricLabel(primaryMetric)} · ${side}`,
+        value: displayPerSidePrimary?.[side] ?? null,
         kind: "primary",
+        isAngle: primaryIsAngle,
       });
     } else {
-      const i = activeDefinition.isometric;
       cards.push({
-        key: i.metric,
-        label: metricLabel(i.metric),
-        value: frameMetrics.metrics[i.metric] ?? null,
+        id: "primary:single",
+        metric: primaryMetric,
+        label: metricLabel(primaryMetric),
+        value: frameMetrics.metrics[primaryMetric] ?? null,
         kind: "primary",
+        isAngle: primaryIsAngle,
       });
     }
-  
+
     for (const comp of activeDefinition.compensationMetrics) {
+      const signal = compensationWarningSignalsRef.current.get(comp.name);
+      const coupled =
+        getCompensationScoring(comp).mode === "primary-coupled";
+      const sideSuffix = signal?.side ? ` · ${signal.side}` : "";
       cards.push({
-        key: comp.name,
-        label: metricLabel(comp.name),
+        id: `compensation:${comp.name}`,
+        metric: comp.name,
+        label: `${metricLabel(comp.name)}${coupled ? " DEV" : ""}${sideSuffix}`,
         value: frameMetrics.metrics[comp.name] ?? null,
         kind: "compensation",
+        isAngle: metricUsesDegrees(comp.name),
         warningThreshold: comp.warningThreshold,
         compareDirection: comp.compareDirection,
-        warningActive: activeCompensationWarnings.has(comp.name),
+        // Single-cue consumption: only the metric the selector promoted is
+        // highlighted, so the card list and the canvas overlay agree on the one
+        // thing the patient is being asked to correct. Every metric still shows
+        // its live value and threshold; the other latched warnings are simply
+        // not highlighted while another cue holds the slot.
+        warningActive:
+          selectedCoachingCueMetric === comp.name &&
+          activeCompensationWarnings.has(comp.name),
         // peakRelevant comps (elbowFlexion on ex_007/ex_008) only warn near
         // peak ROM — bent elbows are correct form lower in the movement.
-        suppressWarning: comp.peakRelevant === true && !nearPeak,
+        suppressWarning:
+          sessionState !== "active" ||
+          !captureOk ||
+          baselinePhase !== "captured" ||
+          (comp.peakRelevant === true && !nearPeak) ||
+          (prescription.prescribedSide !== "both" &&
+            comp.name === "shoulderSymmetry"),
       });
     }
     return cards;
   })();
- 
- 
-  
+
+
+
   // Derived stat-panel values (replacing the hardcoded
   // placeholders that lived here pre-2026-05-22).
 
@@ -2791,7 +6260,11 @@ export default function CameraClient() {
    * fall back to 0 so the bar doesn't show a misleading value.
    */
   const currentSetMinReps = activeDefinition?.bilateral
-    ? Math.min(repCounts.left, repCounts.right)
+    ? prescription.prescribedSide === "left"
+      ? repCounts.left
+      : prescription.prescribedSide === "right"
+        ? repCounts.right
+        : Math.min(repCounts.left, repCounts.right)
     : repCounts.left;
   const targetTotalReps = Math.max(1, prescription.sets * prescription.reps);
   const clampPct = (x: number) => Math.max(0, Math.min(100, Math.round(x)));
@@ -2811,10 +6284,16 @@ export default function CameraClient() {
             // each side owes the full hold, so the set is the average of the
             // two capped per-side holds — finishing one side reads as half
             // the set, and the faster side's surplus can't advance it further.
-            const cappedSec = isSideSplitIsometric(activeDefinition)
-              ? (Math.min(holdState.leftSec, prescription.holdSeconds) +
-                  Math.min(holdState.rightSec, prescription.holdSeconds)) / 2
-              : Math.min(holdState.pairedSec, prescription.holdSeconds);
+            const creditedSec =
+              prescription.prescribedSide === "left"
+                ? holdState.leftSec
+                : prescription.prescribedSide === "right"
+                  ? holdState.rightSec
+                  : Math.min(holdState.leftSec, holdState.rightSec);
+            const cappedSec = Math.min(
+              creditedSec,
+              prescription.holdSeconds,
+            );
             const targetTotalSec = Math.max(
               1,
               prescription.sets * prescription.holdSeconds,
@@ -2843,6 +6322,7 @@ export default function CameraClient() {
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
+        visionFilesetRef.current = vision;
         const landmarker = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: "/models/pose_landmarker_full.task",
@@ -2861,6 +6341,82 @@ export default function CameraClient() {
     initLandmarker();
   }, []);
 
+  // Opt-in staff diagnostic only. Face Landmarker is loaded lazily for
+  // ex_004 and is never consulted by feedback, hold timing, scoring, storage,
+  // or ML. numFaces=2 intentionally disables MediaPipe's single-face temporal
+  // smoothing; frames with zero or multiple faces are rejected below.
+  useEffect(() => {
+    const staffAllowed = user?.role === "admin" || user?.role === "therapist";
+    const shouldLoad =
+      staffAllowed &&
+      ex004FaceShadowEnabled &&
+      activeDefinition?.id === "ex_004";
+
+    if (!shouldLoad) {
+      faceLandmarkerRef.current?.close();
+      faceLandmarkerRef.current = null;
+      commitEx004FaceShadowModelState(
+        ex004FaceShadowEnabled ? "waiting" : "disabled",
+      );
+      return;
+    }
+
+    const vision = visionFilesetRef.current;
+    if (!modelLoaded || !vision) {
+      commitEx004FaceShadowModelState("waiting");
+      return;
+    }
+
+    let cancelled = false;
+    let created: FaceLandmarker | null = null;
+    commitEx004FaceShadowModelState("loading");
+
+    void FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: EX004_FACE_SHADOW_MODEL_PATH,
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numFaces: 2,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+      outputFaceBlendshapes: false,
+      outputFacialTransformationMatrixes: true,
+    })
+      .then((landmarker) => {
+        created = landmarker;
+        if (cancelled) {
+          landmarker.close();
+          return;
+        }
+        faceLandmarkerRef.current = landmarker;
+        commitEx004FaceShadowModelState("ready");
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        const message = reason instanceof Error ? reason.message : String(reason);
+        console.error("[ex004-face-shadow] model load failed", reason);
+        commitEx004FaceShadowModelState("error", message);
+      });
+
+    return () => {
+      cancelled = true;
+      if (created) {
+        if (faceLandmarkerRef.current === created) {
+          faceLandmarkerRef.current = null;
+        }
+        created.close();
+      }
+    };
+  }, [
+    activeDefinition?.id,
+    commitEx004FaceShadowModelState,
+    ex004FaceShadowEnabled,
+    modelLoaded,
+    user?.role,
+  ]);
+
   // Load exercises from database.
   // Admin/therapist: fetch all exercises and show ex_001–ex_006 for troubleshooting.
   // Patient: fetch only their assigned exercises.
@@ -2878,15 +6434,19 @@ export default function CameraClient() {
           // deprecated — see the @deprecated JSDocs on those entries in
           // `registry.ts`. They remain in the DB and registry for audit,
           // but should not surface in the staff dropdown.
+          // Active custom exercises follow, to preview their guide videos.
           const DEBUG_IDS = ["ex_001", "ex_004", "ex_005", "ex_006", "ex_007", "ex_008"];
           const exercises: Exercise[] = recordsField(data, "exercises")
             .flatMap((row): Exercise[] => {
               const id = stringField(row, "id");
-              if (!id || !DEBUG_IDS.includes(id)) return [];
+              const isCustom = row.is_custom === true;
+              if (!id || (!DEBUG_IDS.includes(id) && !isCustom)) return [];
               return [{
                 id,
                 name: stringField(row, "name") ?? id,
                 description: stringField(row, "description") ?? "",
+                isCustom,
+                customVideo: isCustom ? exerciseVideoFromRow(row) : null,
               // Staff debug catalog has no per-patient prescription —
               // fall back to the patient_exercises DB defaults (3 × 12)
               // so the session lifecycle still has a target to gate
@@ -2895,9 +6455,11 @@ export default function CameraClient() {
                 reps: DEFAULT_PRESCRIPTION.reps,
                 restSeconds: DEFAULT_PRESCRIPTION.restSeconds,
                 holdSeconds: DEFAULT_PRESCRIPTION.holdSeconds,
+                prescribedSide: DEFAULT_PRESCRIPTION.prescribedSide,
+                resistance: DEFAULT_PRESCRIPTION.resistance,
               }];
             })
-            .sort((a, b) => a.id.localeCompare(b.id));
+            .sort((a, b) => Number(a.isCustom) - Number(b.isCustom) || a.id.localeCompare(b.id));
           setAssignedExercises(exercises);
           if (exercises.length > 0) {
             setSelectedExercise((prev) => {
@@ -2912,13 +6474,47 @@ export default function CameraClient() {
       fetch("/api/patient-exercises")
         .then((r) => r.json())
         .then((data: unknown) => {
-          const assigned: Exercise[] = recordsField(data, "exercises").flatMap((row): Exercise[] => {
+          const assigned: Exercise[] = recordsField(data, "occurrences").flatMap((row): Exercise[] => {
+            const occurrenceId = integerField(row, "id");
             const id = stringField(row, "exercise_id");
-            if (!id) return [];
+            const dueDate = stringField(row, "due_date");
+            const makeupUntil = stringField(row, "makeup_until") ?? dueDate;
+            const status = assignmentStatus(row.status);
+            // Manual (custom) exercises come too: they run the guided session
+            // with their guide video instead of camera tracking.
+            const monitoringMode = stringField(row, "monitoring_mode");
+            const isCustom = monitoringMode === "manual";
+            if (
+              occurrenceId === undefined ||
+              !id ||
+              !dueDate ||
+              !makeupUntil ||
+              !status ||
+              (monitoringMode !== "camera" && !isCustom) ||
+              !isOccurrenceActionable(
+                { dueDate, makeupUntil, status },
+                effectiveTodayPH,
+              )
+            ) {
+              return [];
+            }
+            const prescribedSideValue = stringField(row, "prescribed_side");
+            const prescribedSide: PrescribedSide =
+              prescribedSideValue === "left" || prescribedSideValue === "right"
+                ? prescribedSideValue
+                : "both";
+            const resistanceRow = isRecord(row.resistance) ? row.resistance : {};
+            const resistanceValueRaw = resistanceRow.value;
+            const resistanceValue =
+              resistanceValueRaw === null || resistanceValueRaw === undefined
+                ? null
+                : Number(resistanceValueRaw);
             return [{
               id,
               name: stringField(row, "name") ?? id,
               description: stringField(row, "description") ?? "",
+              isCustom,
+              customVideo: isCustom ? exerciseVideoFromRow(row) : null,
             // `patient_exercises.reps` is the per-side target: prescription
             // reps = 10 means 10 reps per side. `patient_exercises.sets`
             // is total set count.
@@ -2932,33 +6528,99 @@ export default function CameraClient() {
               holdSeconds:
                 numberField(row, "hold_seconds") ??
                 DEFAULT_PRESCRIPTION.holdSeconds,
-            // patient_exercises.id — returned by the API, carried through so a
-            // session can be persisted against it. Absent → session
-            // persistence is skipped (staff debug has no such row).
-              patientExerciseId: integerField(row, "id"),
-            // Assignment status — drives the "already completed" recap.
-              status: assignmentStatus(row.status),
+              patientExerciseId: integerField(row, "patient_exercise_id"),
+              occurrenceId,
+              dueDate,
+              makeupUntil,
+              sequenceIndex: integerField(row, "sequence_index") ?? Number.MAX_SAFE_INTEGER,
+              status,
+              prescribedSide,
+              resistance: {
+                type:
+                  resistanceRow.type === "none" ||
+                  resistanceRow.type === "external_weight" ||
+                  resistanceRow.type === "resistance_band" ||
+                  resistanceRow.type === "other"
+                    ? resistanceRow.type
+                    : "unknown",
+                value:
+                  resistanceValue !== null && Number.isFinite(resistanceValue)
+                    ? resistanceValue
+                    : null,
+                unit:
+                  resistanceRow.unit === "kg" || resistanceRow.unit === "lb"
+                    ? resistanceRow.unit
+                    : null,
+                label:
+                  typeof resistanceRow.label === "string"
+                    ? resistanceRow.label
+                    : null,
+              },
             }];
-          });
+          }).sort((left, right) =>
+            compareActionableOccurrences(
+              {
+                occurrenceId: left.occurrenceId!,
+                exerciseId: left.id,
+                exerciseName: left.name,
+                sequenceIndex: left.sequenceIndex!,
+                dueDate: left.dueDate!,
+                makeupUntil: left.makeupUntil!,
+                status: left.status as OccurrenceStatus,
+              },
+              {
+                occurrenceId: right.occurrenceId!,
+                exerciseId: right.id,
+                exerciseName: right.name,
+                sequenceIndex: right.sequenceIndex!,
+                dueDate: right.dueDate!,
+                makeupUntil: right.makeupUntil!,
+                status: right.status as OccurrenceStatus,
+              },
+            ),
+          );
+          assignedExercisesRef.current = assigned;
           setAssignedExercises(assigned);
+          setActionableOccurrenceIds(
+            new Set(
+              assigned.flatMap((exercise) =>
+                exercise.occurrenceId === undefined ? [] : [exercise.occurrenceId],
+              ),
+            ),
+          );
           if (assigned.length > 0) {
-            setSelectedExercise((prev) => prev || assigned[0].id);
-          }
-
-          // Strict schedule lock: an exercise is startable today only if it has
-          // an occurrence due today or still inside its make-up window.
-          const todayPH = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
-          const actionable = new Set<string>();
-          for (const o of recordsField(data, "occurrences")) {
-            const exId = stringField(o, "exercise_id");
-            const due = stringField(o, "due_date");
-            if (!exId || !due) continue;
-            const makeup = stringField(o, "makeup_until") ?? due;
-            if (stringField(o, "status") !== "completed" && due <= todayPH && makeup >= todayPH) {
-              actionable.add(exId);
+            const exactOccurrenceWasRequested = initialOccurrenceIdParam !== null;
+            const exactOccurrence =
+              initialOccurrenceId === null
+                ? undefined
+                : assigned.find(
+                    (exercise) => exercise.occurrenceId === initialOccurrenceId,
+                  );
+            if (exactOccurrenceWasRequested && !exactOccurrence) {
+              selectedExerciseRef.current = "";
+              setSelectedExercise("");
+              setScheduleNotice(
+                "That scheduled occurrence is no longer actionable. Returning to your schedule.",
+              );
+              router.replace("/dashboard/patient?tab=session");
+              return;
             }
+            const requested =
+              exactOccurrence ??
+              assigned.find((exercise) => exercise.id === initialExerciseId) ??
+              assigned[0];
+            selectedExerciseRef.current = requested.id;
+            setSelectedExercise(requested.id);
+            if (!exactOccurrenceWasRequested && requested.occurrenceId !== undefined) {
+              router.replace(
+                `/camera?occurrenceId=${requested.occurrenceId}&exerciseId=${encodeURIComponent(requested.id)}`,
+                { scroll: false },
+              );
+            }
+          } else {
+            selectedExerciseRef.current = "";
+            setSelectedExercise("");
           }
-          setActionableExerciseIds(actionable);
         })
         .catch((err) => console.error("Error loading exercises:", err));
 
@@ -2996,8 +6658,15 @@ export default function CameraClient() {
             // end_reason 'completed' rows qualify; newest-first → first wins.
             if (stringField(s, "endReason") !== "completed") continue;
             if (recaps.has(exerciseId)) continue;
+            const recapSideValue = stringField(s, "prescribedSide");
+            const recapPrescribedSide: PrescribedSide =
+              recapSideValue === "left" || recapSideValue === "right"
+                ? recapSideValue
+                : "both";
             recaps.set(exerciseId, {
+              sessionId: numberField(s, "id") ?? null,
               exerciseKind: exerciseKind(s.exerciseKind),
+              prescribedSide: recapPrescribedSide,
               endedAt,
               durationMs: numberField(s, "durationMs") ?? null,
               setCount: numberField(s, "setCount") ?? 0,
@@ -3006,8 +6675,12 @@ export default function CameraClient() {
               completeLeftReps: numberField(s, "completeLeftReps") ?? 0,
               completeRightReps: numberField(s, "completeRightReps") ?? 0,
               avgPeakValue: numberField(s, "avgPeakValue") ?? null,
+              avgLeftPeakValue: numberField(s, "avgLeftPeakValue") ?? null,
+              avgRightPeakValue: numberField(s, "avgRightPeakValue") ?? null,
               totalPairedHoldMs: numberField(s, "totalPairedHoldMs") ?? null,
               totalTargetHoldMs: numberField(s, "totalTargetHoldMs") ?? null,
+              totalLeftHoldMs: numberField(s, "totalLeftHoldMs") ?? null,
+              totalRightHoldMs: numberField(s, "totalRightHoldMs") ?? null,
             });
           }
           setSessionRecaps(recaps);
@@ -3015,7 +6688,15 @@ export default function CameraClient() {
         })
         .catch((err) => console.warn("Error loading session recaps:", err));
     }
-  }, [initialExerciseId, user?.id, user?.role]);
+  }, [
+    effectiveTodayPH,
+    initialExerciseId,
+    initialOccurrenceId,
+    initialOccurrenceIdParam,
+    router,
+    user?.id,
+    user?.role,
+  ]);
 
   useEffect(() => {
     const assignedEntry = selectedExercise
@@ -3028,13 +6709,16 @@ export default function CameraClient() {
           restSeconds: assignedEntry.restSeconds,
           holdSeconds: assignedEntry.holdSeconds,
           patientExerciseId: assignedEntry.patientExerciseId,
+          occurrenceId: assignedEntry.occurrenceId,
+          prescribedSide: assignedEntry.prescribedSide,
+          resistance: assignedEntry.resistance,
         }
       : DEFAULT_PRESCRIPTION;
     prescriptionRef.current = nextPrescription;
     setPrescriptionRaw(nextPrescription);
   }, [selectedExercise, assignedExercises]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!selectedExercise) {
       setActiveDefinition(null);
       // Close any open persisted session (idempotent; no-op if none).
@@ -3044,14 +6728,22 @@ export default function CameraClient() {
       bidirectionalRepCounterRef.current = null;
       dynamicRepQualityBufferRef.current.reset();
       repLogRef.current = { left: [], right: [] };
+      priorRepOutcomesRef.current = { left: [], right: [] };
       neckRepDebugRef.current = [];
       neckRepDebugStartMsRef.current = null;
       neckRepDebugSeqRef.current = 0;
       if (typeof window !== "undefined") {
         window.__neckRepDebug = neckRepDebugRef.current;
       }
+      clearEx004FaceShadow();
       setRepCounts({ left: 0, right: 0 });
+      lastMetricsUpdateRef.current = 0;
+      compensationWarningSignalsRef.current.clear();
+      setDisplayPerSidePrimary(null);
+      setFrameMetrics(emptyFrameMetrics());
+      setNearPeak(false);
       resetCompensationWarnings();
+      resetNeutralCalibration("not-needed");
       return;
     }
 
@@ -3084,6 +6776,14 @@ export default function CameraClient() {
     lastIsometricTickMsRef.current = null;
     resetHoldQualityAccumRef.current();
     setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
+    // Clear every displayed value synchronously with the selected exercise.
+    // The next exercise must enter calibration with empty cards rather than
+    // briefly showing the previous side's primary/compensation telemetry.
+    lastMetricsUpdateRef.current = 0;
+    compensationWarningSignalsRef.current.clear();
+    setDisplayPerSidePrimary(null);
+    setFrameMetrics(emptyFrameMetrics());
+    setNearPeak(false);
     resetCompensationWarnings();
 
     // Reset filters whenever the exercise changes — old filter history would
@@ -3115,53 +6815,38 @@ export default function CameraClient() {
     bidirectionalRepCounterRef.current = null;
     dynamicRepQualityBufferRef.current.reset();
     repLogRef.current = { left: [], right: [] };
+    priorRepOutcomesRef.current = { left: [], right: [] };
     neckRepDebugRef.current = [];
     neckRepDebugStartMsRef.current = null;
     neckRepDebugSeqRef.current = 0;
     if (typeof window !== "undefined") {
       window.__neckRepDebug = neckRepDebugRef.current;
     }
+    clearEx004FaceShadow();
     setRepCounts({ left: 0, right: 0 });
 
-    // Reset baseline state on every exercise change. If the new exercise
-    // needs a baseline (primary metric or any compensation metric), enter
-    // "capturing"; otherwise "not-needed".
-    leftBaselineRef.current  = { samples: [], value: null };
-    rightBaselineRef.current = { samples: [], value: null };
-    bidirectionalBaselineRef.current = { samples: [], value: null };
-    leftScapBaselineRef.current  = { samples: [], value: null };
-    rightScapBaselineRef.current = { samples: [], value: null };
-    const needsBaseline =
-      (def?.kind === "dynamic" && !!def.primaryMetric.requiresBaselineCapture) ||
-      !!def?.compensationMetrics.some((c) => c.requiresBaselineCapture);
-    setBaselinePhase(needsBaseline ? "capturing" : "not-needed");
-    setBaselineSampleProgress(0);
+    // Calibration starts only after the user presses Start. Idle camera
+    // preview must not silently establish an attempt's neutral reference.
+    resetNeutralCalibration("not-needed");
 
     const counters = createRepCountersForDefinition(def);
     leftRepCounterRef.current = counters.left;
     rightRepCounterRef.current = counters.right;
     bidirectionalRepCounterRef.current = counters.bidirectional;
-  }, [selectedExercise, resetCompensationWarnings, setBaselinePhase]);
+  }, [
+    clearEx004FaceShadow,
+    resetCompensationWarnings,
+    resetNeutralCalibration,
+    selectedExercise,
+  ]);
 
   const commitCaptureState = (ok: boolean, msg: string) => {
     if (lastCaptureOkRef.current !== ok) {
-      const currentDefinition = activeDefinitionRef.current;
-      // Transition into not-ok: any already-captured baseline is now stale
-      // (patient may have shifted while we couldn't see them). Drop it and
-      // require re-capture when readiness returns.
-      if (
-        !ok &&
-        ((currentDefinition?.kind === "dynamic" &&
-          !!currentDefinition.primaryMetric.requiresBaselineCapture) ||
-          !!currentDefinition?.compensationMetrics.some((c) => c.requiresBaselineCapture))
-      ) {
-        leftBaselineRef.current  = { samples: [], value: null };
-        rightBaselineRef.current = { samples: [], value: null };
-        bidirectionalBaselineRef.current = { samples: [], value: null };
-        leftScapBaselineRef.current  = { samples: [], value: null };
-        rightScapBaselineRef.current = { samples: [], value: null };
-        setBaselinePhase("capturing");
-        setBaselineSampleProgress(0);
+      if (!ok && baselinePhaseRef.current === "capturing") {
+        neutralCalibrationClockRef.current = pauseNeutralCalibrationClock(
+          neutralCalibrationClockRef.current,
+        );
+        updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
       }
       lastCaptureOkRef.current = ok;
       setCaptureOk(ok);
@@ -3202,6 +6887,9 @@ export default function CameraClient() {
         videoResolutionRef.current = { width: video.videoWidth, height: video.videoHeight };
         setVideoResolution({ width: video.videoWidth, height: video.videoHeight });
       }
+      // The frame's shape (W/H). Every angle below is measured in the
+      // aspect-corrected image plane (D-48), so each metric call is given it.
+      const frameAspect = frameAspectOf(video.videoWidth, video.videoHeight);
       const nowFrame = performance.now();
       fpsFrameCountRef.current += 1;
       if (fpsWindowStartMsRef.current === 0) {
@@ -3234,9 +6922,26 @@ export default function CameraClient() {
         // detectForVideo cost. `inferStart` doubles as the detect timestamp,
         // which must be monotonically increasing.
         const frameStart = performance.now();
+        let coachingObservation: CoachingObservation = {
+          capture: "unavailable", sessionState: sessionStateRef.current,
+          baselineReady: baselinePhaseRef.current === "captured",
+          movement: { left: "unknown", right: "unknown", activeSide: null },
+          selected: null, rendered: [], renderEvidence: "canvas-frame", suppressedMetrics: [], absenceReason: "capture-unavailable",
+        };
         const inferStart = frameStart;
+        // Cleared here and read after the pipeline below. `bufferTuningRawFrame`
+        // sets it on the one path that persists a row; every other path — no
+        // person, capture unreadable, baseline not yet frozen, session not
+        // active, tracing off — leaves it false and blanks the readout.
+        traceSyncWroteThisFrameRef.current = false;
         const results = landmarker.detectForVideo(video, inferStart);
         const inferMs = performance.now() - inferStart;
+        // The picture's brightness, for the wording of the no-person and
+        // tracking messages (display only; a small copy twice a second).
+        if (frameStart - lastLumaSampleMsRef.current >= PICTURE_LUMA_SAMPLE_MS) {
+          lastLumaSampleMsRef.current = frameStart;
+          pictureLumaRef.current = samplePictureLuma(video, lumaSamplerRef.current);
+        }
 
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -3255,6 +6960,12 @@ export default function CameraClient() {
             lineWidth: 1,
             radius: 3,
           });
+          // A consented session video keeps this frame's pose, and below the
+          // cue drawn on it, so playback can redraw the coaching overlays.
+          // A custom exercise has no coaching, so its video keeps no overlay track.
+          const overlayFrame = customExerciseSelected()
+            ? null
+            : recorderRef.current?.addOverlayFrame(landmarks) ?? null;
 
           // Framing mode is per-exercise: exercises that reach above head
           // height (ex_007 Press, ex_008 Wall Angels — `requiresOverheadRoom:
@@ -3268,12 +6979,82 @@ export default function CameraClient() {
               : activeDefinition?.requiresLateralRoom
                 ? "lateral"
                 : "default";
-          const r = evaluateCaptureReadiness(landmarks, canvas.width, canvas.height, framingMode);
+          const r = evaluateCaptureReadiness(
+            landmarks,
+            canvas.width,
+            canvas.height,
+            framingMode,
+            prescriptionRef.current.prescribedSide,
+          );
+          if (r.ok && lastCaptureOkRef.current) {
+            coachingObservation.capture = "available";
+            coachingObservation.absenceReason = baselinePhaseRef.current !== "captured" ? "baseline-unavailable" : "not-selected";
+          }
+
+          // Body turned away from the camera (display only, bodyTurn.ts): the
+          // hip line's turn in the pose model's world landmarks. The message
+          // shows after half a second at or above the line; a hidden hand or
+          // knee while turned gets it in place of the capture message below.
+          const turnApplies = bodyTurnApplies(activeDefinition);
+          const turnDeg = turnApplies ? hipLineTurnDeg(results.worldLandmarks?.[0]) : null;
+          bodyTurnStateRef.current = turnApplies
+            ? updateBodyTurn(bodyTurnStateRef.current, turnDeg, frameStart)
+            : NO_BODY_TURN;
+          if (bodyTurnStateRef.current.shown !== turnHintRef.current) {
+            turnHintRef.current = bodyTurnStateRef.current.shown;
+            setTurnHint(bodyTurnStateRef.current.shown);
+          }
 
           // Tally capture quality for the active session (→ capture_quality_summary).
           if (sessionStateRef.current === "active") {
             captureFramesTotalRef.current += 1;
-            if (r.ok) captureFramesOkRef.current += 1;
+            if (r.ok) {
+              captureFramesOkRef.current += 1;
+              const size = `${canvas.width}x${canvas.height}`;
+              captureFrameSizesRef.current[size] = (captureFrameSizesRef.current[size] ?? 0) + 1;
+            } else {
+              const rejected = captureRejectedByStatusRef.current;
+              rejected[r.status] = (rejected[r.status] ?? 0) + 1;
+            }
+          }
+
+          // Unsteady-tracking check (display only): fed only frames that pass
+          // capture readiness, so a dropout measures nothing. Every frame is
+          // marked for the repetitions' tracking records, with the parts the
+          // check could judge; the message and the session counts use the
+          // prescribed parts.
+          const checkedNow: TrackingPart[] = [];
+          const unsteadyNow: TrackingPart[] = [];
+          let checkedPrescribed = false;
+          let unsteadyPrescribed: TrackingPart[] = [];
+          if (r.ok && activeDefinition) {
+            const steady = updateSteadiness(steadinessRef.current, landmarks, frameStart, canvas.width, canvas.height);
+            steadinessRef.current = steady.state;
+            for (const [part, judged] of Object.entries(steady.result.checked)) if (judged) checkedNow.push(part as TrackingPart);
+            for (const [part, flagged] of Object.entries(steady.result.unsteady)) if (flagged) unsteadyNow.push(part as TrackingPart);
+            for (const arm of ["leftArm", "rightArm"] as const) {
+              if (unsteadyNow.includes(arm)) armUnsteadyAtMsRef.current[arm] = frameStart;
+            }
+            const prescribed = trackingParts(trackingRegion(activeDefinition), prescriptionRef.current.prescribedSide);
+            checkedPrescribed = prescribed.some((part) => checkedNow.includes(part));
+            unsteadyPrescribed = prescribed.filter((part) => unsteadyNow.includes(part));
+          }
+          trackingMarksRef.current = addTrackingMark(trackingMarksRef.current, {
+            t: frameStart, captureOk: r.ok, checked: checkedNow, unsteady: unsteadyNow,
+          });
+          if (sessionStateRef.current === "active" && r.ok && checkedPrescribed) {
+            captureCheckedFramesRef.current += 1;
+          }
+          if (sessionStateRef.current === "active" && r.ok && unsteadyPrescribed.length > 0) {
+            captureUnsteadyFramesRef.current += 1;
+          }
+          trackingMessageRef.current = updateTrackingMessage(trackingMessageRef.current, unsteadyPrescribed, frameStart);
+          const hint = trackingMessageRef.current.part
+            ? trackingMessage(trackingMessageRef.current.part, { bright: pictureIsBright(pictureLumaRef.current) })
+            : null;
+          if (hint !== trackingHintRef.current) {
+            trackingHintRef.current = hint;
+            setTrackingHint(hint);
           }
 
           const now = performance.now();
@@ -3283,7 +7064,23 @@ export default function CameraClient() {
             if (captureDropoutStartedAtRef.current === null) {
               captureDropoutStartedAtRef.current = now;
             }
-            commitCaptureState(false, r.message);
+            // A rejected frame gives the counters no reading: lost tracking,
+            // not a camera stall (D-50).
+            if (sessionStateRef.current === "active") {
+              leftRepCounterRef.current?.noteMissing();
+              rightRepCounterRef.current?.noteMissing();
+              bidirectionalRepCounterRef.current?.noteMissing();
+            }
+            // The arm hold's hint starts over once the arms are measured again.
+            holdHintStateRef.current = newHoldHintState();
+            // A hand or knee hidden while the body is turned: the turn is the
+            // likely cause. A failed detection in a dark picture: the light is.
+            commitCaptureState(
+              false,
+              turnExplainsCaptureFailure(r.status, turnDeg)
+                ? BODY_TURN_MESSAGE
+                : captureMessageForPicture(r.status, r.message, pictureLumaRef.current),
+            );
             if (
               activeDefinition?.id === "ex_005" &&
               now - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
@@ -3293,6 +7090,7 @@ export default function CameraClient() {
                 kind: "not-ready",
                 tNow: now,
                 landmarks,
+                frameAspect,
                 framingMode,
                 captureOk: false,
                 captureMessage: r.message,
@@ -3317,7 +7115,7 @@ export default function CameraClient() {
           if (r.ok) {
             if (!activeDefinition) {
               // No exercise selected — nothing to compute. Clear stale state.
-              if (compensationWarningLatchesRef.current.size > 0) {
+              if (compensationWarningStateIsDirty()) {
                 resetCompensationWarnings();
               }
               setFrameMetrics({
@@ -3326,30 +7124,125 @@ export default function CameraClient() {
                 compensationScore: null,
               });
             } else {
-              const raw = computePoseMetricsForExercise(landmarks, activeDefinition);
               const tNow = performance.now();
+              const observedTilt = computeTiltReference(landmarks, frameAspect);
+              const ex004FaceShadowInference = inferEx004FaceShadow(
+                video,
+                landmarks,
+                tNow,
+              );
+
+              if (
+                baselinePhaseRef.current === "capturing" &&
+                tNow >= (calibrationPositioningEndsAtMsRef.current ?? -Infinity)
+              ) {
+                const clock = advanceNeutralCalibrationClock(
+                  neutralCalibrationClockRef.current,
+                  tNow,
+                );
+                neutralCalibrationClockRef.current = clock;
+                neutralCalibrationSamplesRef.current.push({
+                  landmarks: landmarks.map((landmark) => ({ ...landmark })),
+                  observedTilt,
+                  frameAspect,
+                });
+                if (neutralCalibrationSamplesRef.current.length > 300) {
+                  neutralCalibrationSamplesRef.current.shift();
+                }
+                updateNeutralCalibrationProgress(clock);
+                if (neutralCalibrationReady(clock)) {
+                  finalizeNeutralCalibration(activeDefinition);
+                }
+              }
+
+              if (
+                baselinePhaseRef.current !== "captured" ||
+                frozenTiltDegRef.current === null
+              ) {
+                if (compensationWarningStateIsDirty()) {
+                  resetCompensationWarnings();
+                }
+                setFrameMetrics({
+                  tiltReference: observedTilt,
+                  metrics: {},
+                  compensationScore: null,
+                });
+                setDisplayPerSidePrimary(null);
+                recordEx004FaceShadow(ex004FaceShadowInference, null, tNow);
+              } else {
+              const effectiveTilt = frozenNeutralTiltReference(
+                observedTilt,
+                frozenTiltDegRef.current,
+              );
+              const raw = computePoseMetricsForExercise(
+                landmarks,
+                activeDefinition,
+                effectiveTilt,
+                frameAspect,
+                // ex_004 counts from the calibration's ear line (D-49); every
+                // other primary, and every compensation, from the frozen tilt.
+                primaryReferenceFor(activeDefinition, calibrationEarLineDegRef.current),
+              );
+              // Trend data rule 4: in the rests between sets, a neck side bend
+              // records what the still head reads under the current
+              // calibration (capped at 3000 readings per calibration).
+              const neckReading = raw.metrics.neckLateralFlexion;
+              if (
+                sessionStateRef.current === "resting" &&
+                NECK_REST_EXERCISES.has(activeDefinition.id) &&
+                typeof neckReading === "number" &&
+                Number.isFinite(neckReading)
+              ) {
+                const epochs = neckRestTallyRef.current.epochs;
+                const current = epochs[epochs.length - 1];
+                if (current && current.readings.length < 3_000) current.readings.push(neckReading);
+              }
               const metricInputs: Partial<Record<MetricName, number | null>> = {
                 ...raw.metrics,
               };
+              recordEx004FaceShadow(
+                ex004FaceShadowInference,
+                activeDefinition.id === "ex_004" &&
+                  typeof raw.metrics.neckLateralFlexion === "number"
+                  ? raw.metrics.neckLateralFlexion
+                  : null,
+                tNow,
+              );
               let ex005PerFrameCorrectedSignedDeg: number | null = null;
 
-              // Durable tuning trace (opt-in, any active exercise): record
+              // Durable tuning trace (on by default, any active exercise): record
               // RAW/unsmoothed values before any One Euro filtering or
               // rep-state-machine processing. This block is already inside
               // capture-readiness `r.ok`, so unreliable frames remain
               // excluded per the logging discipline. Baseline values read
               // from the refs are the medians captured in earlier frames.
-              bufferTuningRawFrame(landmarks, raw, tNow);
+              bufferTuningRawFrame(
+                landmarks,
+                results.worldLandmarks?.[0],
+                raw,
+                observedTilt,
+                tNow,
+                frameAspect,
+              );
 
               // Direction strings for compensation overlay labels.
               // computePoseMetricsForExercise only surfaces absolute values in
               // raw.metrics; direction-rich results require calling the
               // underlying functions with the same tilt reference.
+              // The trunk-lean cue alone reads the trunk against its resting
+              // line from the calibration (D-65), for its warning below and its
+              // arrow here; without a resting line it reads as before.
+              const restLean = restReferencedTrunkLean(
+                landmarks,
+                trunkRestLineDegRef.current,
+                frameAspect,
+              );
               const metricDirections: Partial<Record<MetricName, string>> = {};
               {
                 const neckDir = computeLateralNeckTilt(
                   landmarks,
                   raw.tiltReference,
+                  frameAspect,
                 )?.direction;
                 if (neckDir && neckDir !== "center") {
                   metricDirections.neckTilt = neckDir;
@@ -3357,40 +7250,13 @@ export default function CameraClient() {
                 // (Shoulder asymmetry places its boxes/arrow by raw landmark y
                 // inside the overlay, so it needs no direction string here.)
                 // Lean side (image-space) drives the trunk "STRAIGHTEN" arrow.
-                const leanDir = computeTrunkLateralLean(
+                const leanDir = (restLean ?? computeTrunkLateralLean(
                   landmarks,
                   raw.tiltReference,
-                )?.direction;
+                  frameAspect,
+                ))?.direction;
                 if (leanDir && leanDir !== "center") {
                   metricDirections.trunkLean = leanDir;
-                }
-              }
-
-              // Smooth the camera-tilt estimate (still always needed)
-              const smoothedTilt = tiltFilterRef.current.filter(
-                raw.tiltReference.cameraTiltDeg,
-                tNow
-              );
-
-              // Re-correct the tilt-dependent COMPENSATION metrics against the
-              // smoothed camera tilt instead of the raw per-frame consensus
-              // tilt. The raw consensus tilt (hip/ear lines) carries several
-              // degrees of landmark jitter at rest, which leaked into trunk
-              // lean / shoulder symmetry / neck tilt and tripped compensation
-              // warnings while the patient held still. We reuse the same metric
-              // computation (identical sign/worst-side/rounding) with only the
-              // tilt swapped, then value-smooth as usual below. `raw.metrics`
-              // is left untouched and continues to feed the ML/log pipeline
-              // (data-flow discipline: raw -> ML, smoothed -> display/warnings).
-              const smoothedTiltMetrics = computePoseMetricsForExercise(
-                landmarks,
-                activeDefinition,
-                { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
-              );
-              for (const comp of activeDefinition.compensationMetrics) {
-                if (comp.name in smoothedTiltMetrics.metrics) {
-                  metricInputs[comp.name] =
-                    smoothedTiltMetrics.metrics[comp.name] ?? null;
                 }
               }
 
@@ -3399,32 +7265,11 @@ export default function CameraClient() {
                 activeDefinition.id === "ex_005"
               ) {
                 const primaryName = activeDefinition.primaryMetric.name;
-                const uncorrected = computeTrunkLateralFlexionUncorrectedSigned(
-                  landmarks,
-                );
                 const perFrameCorrected = raw.metrics[primaryName];
                 ex005PerFrameCorrectedSignedDeg =
                   typeof perFrameCorrected === "number"
                     ? perFrameCorrected
                     : null;
-
-                if (baselinePhaseRef.current === "capturing") {
-                  if (typeof uncorrected === "number") {
-                    bidirectionalBaselineRef.current.samples.push(uncorrected);
-                  }
-                  // Progress is updated (and phase transitioned) by the scap
-                  // compensation baseline block below so both baselines complete
-                  // together. Only compute the median here once ready.
-                  if (
-                    bidirectionalBaselineRef.current.samples.length >=
-                    BASELINE_SAMPLE_COUNT
-                  ) {
-                    bidirectionalBaselineRef.current.value = medianSample(
-                      bidirectionalBaselineRef.current.samples,
-                    );
-                    metricFiltersRef.current.delete(primaryName);
-                  }
-                }
 
                 const neutralBaseline = bidirectionalBaselineRef.current.value;
                 metricInputs[primaryName] =
@@ -3432,6 +7277,7 @@ export default function CameraClient() {
                     ? computeTrunkLateralFlexionFromNeutralSigned(
                         landmarks,
                         neutralBaseline,
+                        frameAspect,
                       )
                     : null;
               }
@@ -3446,74 +7292,19 @@ export default function CameraClient() {
               let scapDeltaRight: number | null = null;
 
               // ── Scapular elevation compensation baseline ─────────────────
-              // For any exercise whose scapularElevation compensation metric
-              // carries requiresBaselineCapture, capture 90 resting frames
-              // per side, compute per-side medians, then replace the raw
-              // absolute projection in metricInputs with (baseline − raw).
+              // For an exercise whose scapularElevation compensation metric
+              // requires a neutral baseline, replace the raw projection with
+              // (baseline − raw). The medians were finalized from the shared
+              // time-based calibration window before this outcome path opened.
               // At rest the delta ≈ 0; it grows positive when the patient
               // shrugs, making the 0.04 warningThreshold meaningful.
-              // This block is also the single "captured" transition point for
-              // ex_005, where both the primary bidirectional baseline and this
-              // scap baseline must complete before the phase advances.
               const needsScapCompBaseline = activeDefinition.compensationMetrics.some(
                 (c) => c.name === "scapularElevation" && c.requiresBaselineCapture,
               );
-              const needsPrimaryBaseline =
-                activeDefinition.kind === "dynamic" &&
-                !!activeDefinition.primaryMetric.requiresBaselineCapture;
 
               if (needsScapCompBaseline) {
-                const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left");
-                const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right");
-
-                if (baselinePhaseRef.current === "capturing") {
-                  if (typeof rawScapLeft  === "number") leftScapBaselineRef.current.samples.push(rawScapLeft);
-                  if (typeof rawScapRight === "number") rightScapBaselineRef.current.samples.push(rawScapRight);
-
-                  // Finalize medians once both sides have enough samples
-                  if (
-                    leftScapBaselineRef.current.value === null &&
-                    leftScapBaselineRef.current.samples.length  >= BASELINE_SAMPLE_COUNT &&
-                    rightScapBaselineRef.current.samples.length >= BASELINE_SAMPLE_COUNT
-                  ) {
-                    leftScapBaselineRef.current.value  = medianSample(leftScapBaselineRef.current.samples);
-                    rightScapBaselineRef.current.value = medianSample(rightScapBaselineRef.current.samples);
-                  }
-
-                  // Overall progress = min across all active baselines
-                  const scapProg = Math.min(
-                    leftScapBaselineRef.current.samples.length,
-                    rightScapBaselineRef.current.samples.length,
-                  );
-                  const primaryProg = needsPrimaryBaseline
-                    ? (activeDefinition.kind === "dynamic" &&
-                       activeDefinition.bilateralMode === "bidirectional-alternating"
-                         ? bidirectionalBaselineRef.current.samples.length
-                         : Math.min(
-                             leftBaselineRef.current.samples.length,
-                             rightBaselineRef.current.samples.length,
-                           ))
-                    : BASELINE_SAMPLE_COUNT;
-                  setBaselineSampleProgress(Math.min(scapProg, primaryProg));
-
-                  // Transition to "captured" only when ALL needed baselines
-                  // are ready (prevents early completion on ex_005 where both
-                  // primary bidirectional and scap baselines must finish).
-                  const scapDone =
-                    leftScapBaselineRef.current.value  !== null &&
-                    rightScapBaselineRef.current.value !== null;
-                  const primaryDone = !needsPrimaryBaseline || (
-                    activeDefinition.kind === "dynamic" &&
-                    activeDefinition.bilateralMode === "bidirectional-alternating"
-                      ? bidirectionalBaselineRef.current.value !== null
-                      : leftBaselineRef.current.value  !== null &&
-                        rightBaselineRef.current.value !== null
-                  );
-                  if (scapDone && primaryDone) {
-                    setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
-                    setBaselinePhase("captured");
-                  }
-                }
+                const rawScapLeft  = computeScapularElevation(landmarks, raw.tiltReference, "left", frameAspect);
+                const rawScapRight = computeScapularElevation(landmarks, raw.tiltReference, "right", frameAspect);
 
                 // Override metricInputs with baseline-adjusted delta.
                 // (baseline − raw) is positive when shrugging; worst side
@@ -3580,59 +7371,148 @@ export default function CameraClient() {
                 }
                 const filtered = filter.filterWithDerivative(value, tNow);
                 smoothedMetrics[metricName] =
-                  Math.round(filtered.value * 10) / 10;
+                  roundFilteredMetric(metricName, filtered.value);
                 smoothedMetricVelocities[metricName] = filtered.velocity;
               }
 
-              // ── Per-frame compensation score ─────────────────────────────
-              // Computed once and reused by the isometric hold-quality
-              // accumulator and the frame-metrics UI update below.
-              //
-              // For per-limb exercises (ex_001 dynamic, ex_006 isometric) each
-              // side is scored against its OWN primary so a `primary-coupled`
-              // metric's expected baseline (scapular elevation rising with
-              // abduction) is anatomically paired, then the WORSE side is
-              // surfaced — a clean arm cannot mask a compensating one. We reuse
-              // the smoothed whole-body metrics for both sides and override
-              // only scapularElevation with that side's raw per-side delta
-              // (trunkLean / shoulderSymmetry are single whole-body measures;
-              // any future scored metric flows through unchanged). Per-side
-              // scap/primary are read raw: their frame jitter (~0.006 scap,
-              // ~1° primary → ~0.0015 expected) sits well below the coupled
-              // residual's 0.02 noise floor, so smoothing would not move the
-              // rounded score. Bidirectional/unilateral exercises pass the
-              // single smoothed primary.
+              // Per-limb primary streams are filtered once and reused by the
+              // counter, card, coupled warning, and live score. This prevents
+              // one surface from silently reading the legacy scalar-left slot.
               const scoreIsPerLimb =
                 activeDefinition.bilateral &&
                 activeDefinition.bilateralMode === "per-limb";
+              const scorePrimaryName =
+                activeDefinition.kind === "dynamic"
+                  ? activeDefinition.primaryMetric.name
+                  : activeDefinition.isometric.metric;
+              const primaryNeedsBaseline =
+                activeDefinition.kind === "dynamic" &&
+                activeDefinition.primaryMetric.requiresBaselineCapture === true;
+              const primaryScale =
+                scorePrimaryName === "wristShoulderVertical" ? 1_000 : 10;
+              const adjustedPrimary = (
+                value: number | null | undefined,
+                baseline: number | null,
+              ): number | null =>
+                typeof value !== "number"
+                  ? null
+                  : primaryNeedsBaseline && baseline !== null
+                    ? baseline - value
+                    : value;
+              const rawPrimaryLeft = scoreIsPerLimb
+                ? adjustedPrimary(
+                    raw.perSideMetrics?.left,
+                    leftBaselineRef.current.value,
+                  )
+                : null;
+              const rawPrimaryRight = scoreIsPerLimb
+                ? adjustedPrimary(
+                    raw.perSideMetrics?.right,
+                    rightBaselineRef.current.value,
+                  )
+                : null;
+              const smoothedPrimaryLeft =
+                rawPrimaryLeft === null
+                  ? null
+                  : Math.round(
+                      leftPrimaryFilterRef.current.filter(rawPrimaryLeft, tNow) *
+                        primaryScale,
+                    ) / primaryScale;
+              const smoothedPrimaryRight =
+                rawPrimaryRight === null
+                  ? null
+                  : Math.round(
+                      rightPrimaryFilterRef.current.filter(rawPrimaryRight, tNow) *
+                        primaryScale,
+                    ) / primaryScale;
+
+              const filterSideCompensation = (
+                filters: Map<MetricName, OneEuroFilter>,
+                name: MetricName,
+                value: number | null | undefined,
+                threshold: number,
+              ): number | null => {
+                if (typeof value !== "number") return null;
+                let filter = filters.get(name);
+                if (!filter) {
+                  filter = new OneEuroFilter(1.0, 0.1);
+                  filters.set(name, filter);
+                }
+                const scale = threshold < 1 ? 1_000 : 10;
+                return (
+                  Math.round(filter.filter(value, tNow) * scale) / scale
+                );
+              };
+              const smoothedLeftCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              const smoothedRightCompensations: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              if (scoreIsPerLimb) {
+                for (const comp of activeDefinition.compensationMetrics) {
+                  const leftValue =
+                    comp.name === "scapularElevation" && needsScapCompBaseline
+                      ? scapDeltaLeft
+                      : raw.perSideCompensationMetrics?.left[comp.name] ??
+                        metricInputs[comp.name];
+                  const rightValue =
+                    comp.name === "scapularElevation" && needsScapCompBaseline
+                      ? scapDeltaRight
+                      : raw.perSideCompensationMetrics?.right[comp.name] ??
+                        metricInputs[comp.name];
+                  smoothedLeftCompensations[comp.name] =
+                    filterSideCompensation(
+                      leftCompensationFiltersRef.current,
+                      comp.name,
+                      leftValue,
+                      comp.warningThreshold,
+                    );
+                  smoothedRightCompensations[comp.name] =
+                    filterSideCompensation(
+                      rightCompensationFiltersRef.current,
+                      comp.name,
+                      rightValue,
+                      comp.warningThreshold,
+                    );
+                }
+              }
+
+              // ── Per-frame compensation score ─────────────────────────────
+              // Each limb is paired with its own primary. A unilateral
+              // prescription surfaces its prescribed limb; "both" surfaces
+              // the worse score so a clean limb cannot mask compensation.
               let leftFrameCompensationScore: number | null = null;
               let rightFrameCompensationScore: number | null = null;
               let frameCompensationScore: number | null;
               if (scoreIsPerLimb) {
                 leftFrameCompensationScore = computeCompensationScore(
                   activeDefinition,
-                  { ...smoothedMetrics, scapularElevation: scapDeltaLeft },
-                  raw.perSideMetrics?.left ?? null,
+                  smoothedLeftCompensations,
+                  smoothedPrimaryLeft,
                 );
                 rightFrameCompensationScore = computeCompensationScore(
                   activeDefinition,
-                  { ...smoothedMetrics, scapularElevation: scapDeltaRight },
-                  raw.perSideMetrics?.right ?? null,
+                  smoothedRightCompensations,
+                  smoothedPrimaryRight,
                 );
-                frameCompensationScore =
-                  leftFrameCompensationScore === null
-                    ? rightFrameCompensationScore
-                    : rightFrameCompensationScore === null
-                      ? leftFrameCompensationScore
-                      : Math.min(
-                          leftFrameCompensationScore,
-                          rightFrameCompensationScore,
-                        );
+                const prescribed = prescriptionRef.current.prescribedSide;
+                if (prescribed === "left") {
+                  frameCompensationScore = leftFrameCompensationScore;
+                } else if (prescribed === "right") {
+                  frameCompensationScore = rightFrameCompensationScore;
+                } else {
+                  frameCompensationScore =
+                    leftFrameCompensationScore === null
+                      ? rightFrameCompensationScore
+                      : rightFrameCompensationScore === null
+                        ? leftFrameCompensationScore
+                        : Math.min(
+                            leftFrameCompensationScore,
+                            rightFrameCompensationScore,
+                          );
+                }
               } else {
-                const scorePrimaryName =
-                  activeDefinition.kind === "dynamic"
-                    ? activeDefinition.primaryMetric.name
-                    : activeDefinition.isometric.metric;
                 frameCompensationScore = computeCompensationScore(
                   activeDefinition,
                   smoothedMetrics,
@@ -3665,6 +7545,286 @@ export default function CameraClient() {
                 rawRightCompensations.scapularElevation = scapDeltaRight;
               }
 
+              // The LOWER cue alone reads the shoulders against their resting
+              // line from the calibration (D-47), smoothed by its own filter;
+              // the score above keeps the frozen-tilt reading. Without a
+              // resting line the cue reads as before.
+              const restShoulder = restReferencedShoulderSymmetry(
+                landmarks,
+                shoulderRestLineDegRef.current,
+                frameAspect,
+              );
+              const shoulderSpec = activeDefinition.compensationMetrics.find(
+                (c) => c.name === "shoulderSymmetry",
+              );
+              const cueShoulderValue =
+                restShoulder !== null && shoulderSpec
+                  ? filterSideCompensation(
+                      cueCompensationFiltersRef.current,
+                      "shoulderSymmetry",
+                      restShoulder.angleDeg,
+                      shoulderSpec.warningThreshold,
+                    )
+                  : null;
+              // The trunk-lean cue likewise, against the resting trunk line
+              // (D-65, `restLean` above).
+              const leanSpec = activeDefinition.compensationMetrics.find(
+                (c) => c.name === "trunkLean",
+              );
+              const cueLeanValue =
+                restLean !== null && leanSpec
+                  ? filterSideCompensation(
+                      cueCompensationFiltersRef.current,
+                      "trunkLean",
+                      restLean.angleDeg,
+                      leanSpec.warningThreshold,
+                    )
+                  : null;
+              const cueValue = (
+                name: MetricName,
+                smoothed: number | null,
+              ): number | null =>
+                name === "shoulderSymmetry" && cueShoulderValue !== null
+                  ? cueShoulderValue
+                  : name === "trunkLean" && cueLeanValue !== null
+                    ? cueLeanValue
+                    : smoothed;
+
+              // Warning/card inputs use the same transformed signal as the
+              // score (except the LOWER and trunk-lean cues' references,
+              // above). Coupled metrics therefore show and threshold their
+              // residual from the expected value, not the raw movement that
+              // naturally accompanies the exercise.
+              const warningDisplayMetrics: Partial<
+                Record<MetricName, number | null>
+              > = { ...smoothedMetrics };
+              const warningSignals = new Map<
+                MetricName,
+                CompensationWarningSignal
+              >();
+              // Coupled deviations exist only while the movement is under way:
+              // below the repetition start threshold the body is at rest and
+              // gives no coupled warning value, so it cannot raise a cue.
+              const warningRestOptions = {
+                restBelow:
+                  activeDefinition.kind === "dynamic"
+                    ? activeDefinition.primaryMetric.thresholds.startThreshold
+                    : undefined,
+              };
+              for (const comp of activeDefinition.compensationMetrics) {
+                // A cue with a rep window is judged once per repetition, per
+                // limb, inside that window (see repWindowWarning.ts).
+                const repWindow = comp.cue?.evaluation;
+                if (
+                  repWindow &&
+                  scoreIsPerLimb &&
+                  activeDefinition.kind === "dynamic"
+                ) {
+                  const result = repWindowCompensationWarningSignal(
+                    comp,
+                    prescriptionRef.current.prescribedSide,
+                    {
+                      left: {
+                        value: cueValue(comp.name, smoothedLeftCompensations[comp.name] ?? null),
+                        primary: smoothedPrimaryLeft,
+                        phase: leftRepCounterRef.current?.getState() ?? null,
+                      },
+                      right: {
+                        value: cueValue(comp.name, smoothedRightCompensations[comp.name] ?? null),
+                        primary: smoothedPrimaryRight,
+                        phase: rightRepCounterRef.current?.getState() ?? null,
+                      },
+                    },
+                    repWindowStatesRef.current.get(comp.name) ?? newRepWindowState(),
+                    tNow,
+                    {
+                      from: activeDefinition.primaryMetric.thresholds.startThreshold,
+                      upTo: repWindow.upTo,
+                      persistMs: repWindow.persistMs,
+                    },
+                  );
+                  repWindowStatesRef.current.set(comp.name, result.state);
+                  warningSignals.set(comp.name, result.signal);
+                  warningDisplayMetrics[comp.name] = result.signal.value;
+                  if (result.signal.side !== null && limbSideIsOverlayDirection(comp.name)) {
+                    metricDirections[comp.name] = result.signal.side;
+                  }
+                  continue;
+                }
+                const signal = scoreIsPerLimb
+                  ? perLimbCompensationWarningSignal(
+                      comp,
+                      prescriptionRef.current.prescribedSide,
+                      {
+                        leftValue:
+                          cueValue(comp.name, smoothedLeftCompensations[comp.name] ?? null),
+                        leftPrimary: smoothedPrimaryLeft,
+                        rightValue:
+                          cueValue(comp.name, smoothedRightCompensations[comp.name] ?? null),
+                        rightPrimary: smoothedPrimaryRight,
+                      },
+                      warningRestOptions,
+                    )
+                  : singleCompensationWarningSignal(
+                      comp,
+                      cueValue(comp.name, smoothedMetrics[comp.name] ?? null),
+                      smoothedMetrics[scorePrimaryName] ?? null,
+                      warningRestOptions,
+                    );
+                warningSignals.set(comp.name, signal);
+                warningDisplayMetrics[comp.name] = signal.value;
+                // An arm side must not replace the trunk-lean or neck-tilt lean
+                // direction set above (limbSideIsOverlayDirection).
+                if (signal.side !== null && limbSideIsOverlayDirection(comp.name)) {
+                  metricDirections[comp.name] = signal.side;
+                }
+              }
+              // Height guidance starts after any prescribed arm earns hold
+              // time in this set. Cumulative credit keeps it enabled if both
+              // arms later leave the band; a new set's zeroed timers reset it.
+              // This only gates display and never gates independent accrual.
+              const hasHoldProgress = prescribedOutcomeSides(
+                prescriptionRef.current.prescribedSide,
+              ).some((side) =>
+                (side === "left" ? leftHoldMsRef.current : rightHoldMsRef.current) > 0,
+              );
+              // Display-only coaching checks (hipShiftWarning.ts,
+              // elbowBendWarning.ts, overRaiseWarning.ts,
+              // otherArmDownWarning.ts): warned and cued like a compensation,
+              // but never scored or stored.
+              for (const check of activeDefinition.coachingChecks ?? []) {
+                if (check.name === "otherArmDown" || check.name === "armAboveHold") {
+                  if (activeDefinition.kind !== "isometric") continue;
+                  // The hold's own raw readings and conditions: both arms
+                  // prescribed, the hold being timed (session active, baseline
+                  // captured) with first credit earned, neither arm found
+                  // unsteady lately, as for the
+                  // panel's hint (holdHint.ts), and an arm that has reached its
+                  // hold left to rest, as the panel shows it done
+                  // (holdDisplay.ts).
+                  const unsteadyRecently = (at: number | null) =>
+                    at !== null && tNow - at < TRACKING_STEADINESS.messageHoldMs;
+                  const holdTargetMs = prescriptionRef.current.holdSeconds * 1000;
+                  const band = activeDefinition.isometric.targetBand;
+                  const low = band.center - band.tolerance;
+                  const high = band.center + band.tolerance;
+                  const leftReading = raw.perSideMetrics?.left ?? null;
+                  const rightReading = raw.perSideMetrics?.right ?? null;
+                  const straddlesBand = leftReading !== null && rightReading !== null &&
+                    (leftReading < low && rightReading > high || rightReading < low && leftReading > high);
+                  // Preserve posture coaching for actual latched faults. An
+                  // out-of-band opposite arm alone is not proof of trunk lean.
+                  const postureFirst = compensationWarningLatchesRef.current.get("trunkLean")?.active === true ||
+                    straddlesBand && compensationWarningLatchesRef.current.get("shoulderSymmetry")?.active === true;
+                  const updateHeight = check.name === "otherArmDown" ? updateOtherArmDown : updateArmAboveHold;
+                  const result = updateHeight(
+                    otherArmDownStatesRef.current.get(check.name) ?? newOtherArmDownState(),
+                    {
+                      left: {
+                        value: raw.perSideMetrics?.left ?? null,
+                        unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.leftArm),
+                        done: leftHoldMsRef.current >= holdTargetMs,
+                      },
+                      right: {
+                        value: raw.perSideMetrics?.right ?? null,
+                        unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.rightArm),
+                        done: rightHoldMsRef.current >= holdTargetMs,
+                      },
+                      timed:
+                        prescriptionRef.current.prescribedSide === "both" &&
+                        sessionStateRef.current === "active" &&
+                        hasHoldProgress &&
+                        baselinePhaseRef.current === "captured" && !postureFirst,
+                      nowMs: tNow,
+                    },
+                    {
+                      persistMs: check.check.persistMs,
+                      low,
+                      high,
+                    },
+                  );
+                  otherArmDownStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                  warningDisplayMetrics[check.name] = result.value;
+                  if (result.side !== null) metricDirections[check.name] = result.side;
+                  continue;
+                }
+                if (check.name === "overRaise") {
+                  if (activeDefinition.kind !== "dynamic") continue;
+                  // Each arm is judged from its own raise reading, the one the
+                  // repetition counter reads.
+                  const result = updateOverRaise(
+                    overRaiseStatesRef.current.get(check.name) ?? newOverRaiseState(),
+                    {
+                      left: smoothedPrimaryLeft,
+                      right: smoothedPrimaryRight,
+                      sides: prescribedOutcomeSides(prescriptionRef.current.prescribedSide),
+                      nowMs: tNow,
+                    },
+                    {
+                      ...check.check,
+                      clearBelow: cueClearLevel(check),
+                    },
+                    cueTriggerLevel(check),
+                  );
+                  overRaiseStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                  warningDisplayMetrics[check.name] = result.value;
+                  if (result.side !== null) metricDirections[check.name] = result.side;
+                  continue;
+                }
+                if (check.name === "hipShift") {
+                  if (activeDefinition.kind !== "dynamic") continue;
+                  const result = updateHipShift(
+                    hipShiftStatesRef.current.get(check.name) ?? newHipShiftState(),
+                    {
+                      geometry: hipShiftGeometry(landmarks),
+                      lean: smoothedMetrics[activeDefinition.primaryMetric.name] ?? null,
+                      nowMs: tNow,
+                    },
+                    {
+                      ...check.check,
+                      restBelow: activeDefinition.primaryMetric.thresholds.startThreshold,
+                    },
+                    cueTriggerLevel(check),
+                  );
+                  hipShiftStatesRef.current.set(check.name, result.state);
+                  warningSignals.set(check.name, { name: check.name, value: result.value, side: null });
+                  warningDisplayMetrics[check.name] = result.value;
+                  continue;
+                }
+                // Each arm is judged from its own raise reading, with the
+                // elbow angle the tuning trace stores (elbowFlexionDeg).
+                const result = updateElbowBend(
+                  elbowBendStatesRef.current.get(check.name) ?? newElbowBendState(),
+                  {
+                    left: {
+                      primary: smoothedPrimaryLeft,
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "left", frameAspect),
+                    },
+                    right: {
+                      primary: smoothedPrimaryRight,
+                      elbow: computeElbowFlexion(landmarks, raw.tiltReference, "right", frameAspect),
+                    },
+                    sides: prescribedOutcomeSides(prescriptionRef.current.prescribedSide),
+                    nowMs: tNow,
+                  },
+                  {
+                    ...check.check,
+                    restBelow:
+                      activeDefinition.kind === "dynamic"
+                        ? activeDefinition.primaryMetric.thresholds.startThreshold
+                        : 0,
+                  },
+                  cueTriggerLevel(check),
+                );
+                elbowBendStatesRef.current.set(check.name, result.state);
+                warningSignals.set(check.name, { name: check.name, value: result.value, side: result.side });
+                warningDisplayMetrics[check.name] = result.value;
+                if (result.side !== null) metricDirections[check.name] = result.side;
+              }
+              compensationWarningSignalsRef.current = warningSignals;
+
               // Near-peak gate for `peakRelevant` compensation warnings
               // (elbowFlexion "Straighten arms" on ex_007/ex_008). Driven by
               // the per-side primary (raw.perSideMetrics) for per-limb
@@ -3673,14 +7833,19 @@ export default function CameraClient() {
               // warning, because bent elbows are correct form there.
               const nearPeakNow = isNearPeak(
                 activeDefinition,
-                raw.perSideMetrics,
+                scoreIsPerLimb
+                  ? {
+                      left: smoothedPrimaryLeft,
+                      right: smoothedPrimaryRight,
+                    }
+                  : raw.perSideMetrics,
                 activeDefinition.kind === "dynamic"
                   ? smoothedMetrics[activeDefinition.primaryMetric.name] ?? null
                   : null,
               );
 
               const baselineReadyForExercise =
-                baselinePhaseRef.current !== "capturing";
+                baselinePhaseRef.current === "captured";
 
               // ── Rep counting ──────────────────────────────────────────
               // Feeds the appropriate counter(s) based on the exercise's
@@ -3704,90 +7869,10 @@ export default function CameraClient() {
                   // while right elbow is visible). Each side handles its own null.
                   const perSide = raw.perSideMetrics;
                   if (perSide) {
-                    const primaryNeedsBaseline =
-                      !!activeDefinition.primaryMetric.requiresBaselineCapture;
-                    // Read via ref — the rAF chain captured a stale state value.
-                    if (
-                      primaryNeedsBaseline &&
-                      baselinePhaseRef.current === "capturing"
-                    ) {
-                      // Accumulate raw projections until each side has enough
-                      // samples to summarize. Rep counting stays paused while
-                      // the primary metric is in calibration. Compensation-only
-                      // baselines must not calibrate or transform rep inputs.
-                      if (typeof perSide.left === "number") {
-                        leftBaselineRef.current.samples.push(perSide.left);
-                      }
-                      if (typeof perSide.right === "number") {
-                        rightBaselineRef.current.samples.push(perSide.right);
-                      }
-                      setBaselineSampleProgress(
-                        Math.min(
-                          leftBaselineRef.current.samples.length,
-                          rightBaselineRef.current.samples.length,
-                        ),
-                      );
-                      if (
-                        leftBaselineRef.current.samples.length >=
-                          BASELINE_SAMPLE_COUNT &&
-                        rightBaselineRef.current.samples.length >=
-                          BASELINE_SAMPLE_COUNT
-                      ) {
-                        // Median, not mean — robust to single-frame spikes
-                        // if the patient briefly shifted during capture.
-                        leftBaselineRef.current.value = medianSample(
-                          leftBaselineRef.current.samples,
-                        );
-                        rightBaselineRef.current.value = medianSample(
-                          rightBaselineRef.current.samples,
-                        );
-                        setBaselineSampleProgress(BASELINE_SAMPLE_COUNT);
-                        setBaselinePhase("captured");
-                      }
-                    } else {
-                      // For requiresBaselineCapture exercises, the registry's
-                      // thresholds expect (baseline − raw): a shrug DECREASES
-                      // the raw projection, so subtracting from the captured
-                      // resting value yields a positive delta that increases
-                      // during the rep — matching what the state machine expects.
-                      // Pass-through when no baseline was captured.
-                      const lb = leftBaselineRef.current.value;
-                      const rb = rightBaselineRef.current.value;
-                      const inputLeft =
-                        typeof perSide.left === "number"
-                          ? primaryNeedsBaseline && lb !== null
-                            ? lb - perSide.left
-                            : perSide.left
-                          : null;
-                      const inputRight =
-                        typeof perSide.right === "number"
-                          ? primaryNeedsBaseline && rb !== null
-                            ? rb - perSide.right
-                            : perSide.right
-                          : null;
-
-                      // ex_007's normalized wrist-height calibration groups
-                      // are separated by hundredths (low <= 0.18, intended
-                      // partial >= 0.24). One-decimal rounding collapses both
-                      // into 0.2 before the RepCounter sees them, so preserve
-                      // three decimals for that metric. Degree-scale metrics
-                      // keep their existing one-decimal behavior.
-                      const primaryInputScale =
-                        primaryName === "wristShoulderVertical" ? 1000 : 10;
-                      const smoothedLeft =
-                        inputLeft !== null
-                          ? Math.round(
-                              leftPrimaryFilterRef.current.filter(inputLeft, tNow) *
-                                primaryInputScale,
-                            ) / primaryInputScale
-                          : null;
-                      const smoothedRight =
-                        inputRight !== null
-                          ? Math.round(
-                              rightPrimaryFilterRef.current.filter(inputRight, tNow) *
-                                primaryInputScale,
-                            ) / primaryInputScale
-                          : null;
+                      const inputLeft = rawPrimaryLeft;
+                      const inputRight = rawPrimaryRight;
+                      const smoothedLeft = smoothedPrimaryLeft;
+                      const smoothedRight = smoothedPrimaryRight;
 
                       // Rep counting is gated on the active session state and
                       // completed baseline capture. During calibration, metrics
@@ -3841,6 +7926,10 @@ export default function CameraClient() {
                           checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} left`, event);
                         }
+                      } else if (sessionStateRef.current === "active") {
+                        // Processed, but no reading for this side: lost
+                        // tracking, not a camera stall (D-50).
+                        leftRepCounterRef.current?.noteMissing();
                       }
                       if (
                         sessionIsActive &&
@@ -3860,8 +7949,9 @@ export default function CameraClient() {
                           checkAndHandleSetCompletion(tNow);
                           console.log(`[rep] ${activeDefinition.id} right`, event);
                         }
+                      } else if (sessionStateRef.current === "active") {
+                        rightRepCounterRef.current?.noteMissing();
                       }
-                    }
                   }
                 } else {
                   // Bidirectional-alternating or unilateral — single smoothed value.
@@ -3894,6 +7984,7 @@ export default function CameraClient() {
                       kind: "frame",
                       tNow,
                       landmarks,
+                      frameAspect,
                       framingMode,
                       captureOk: true,
                       captureMessage: null,
@@ -3974,6 +8065,7 @@ export default function CameraClient() {
                             kind: "rep",
                             tNow,
                             landmarks,
+                            frameAspect,
                             framingMode,
                             captureOk: true,
                             captureMessage: null,
@@ -4091,6 +8183,11 @@ export default function CameraClient() {
                         }
                       }
                     }
+                  } else if (sessionStateRef.current === "active") {
+                    // Processed, but no reading: lost tracking, not a camera
+                    // stall (D-50).
+                    leftRepCounterRef.current?.noteMissing();
+                    bidirectionalRepCounterRef.current?.noteMissing();
                   }
                 }
               } else if (activeDefinition.kind === "isometric") {
@@ -4141,6 +8238,27 @@ export default function CameraClient() {
                   rInBand = !!perSide && inBand(perSide.right);
                   leftAngle = perSide?.left ?? null;
                   rightAngle = perSide?.right ?? null;
+                  // Display-only hint: which way each arm should move to get
+                  // back into the band (holdHint.ts), held back while the
+                  // tracking check finds that arm unsteady. Only while the
+                  // hold is being timed and a prescribed arm has earned time
+                  // in this set. Before first credit, before the baseline, and
+                  // between sets, the hint and its wait stay reset.
+                  if (sessionStateRef.current === "active" && baselineReadyForExercise && hasHoldProgress) {
+                    const unsteadyRecently = (at: number | null) =>
+                      at !== null && tNow - at < TRACKING_STEADINESS.messageHoldMs;
+                    holdHintStateRef.current = updateHoldHint(
+                      holdHintStateRef.current,
+                      {
+                        left: { value: leftAngle, unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.leftArm) },
+                        right: { value: rightAngle, unsteady: unsteadyRecently(armUnsteadyAtMsRef.current.rightArm) },
+                        nowMs: tNow,
+                      },
+                      { lo, hi },
+                    );
+                  } else {
+                    holdHintStateRef.current = newHoldHintState();
+                  }
                 }
                 leftInBandRef.current = lInBand;
                 rightInBandRef.current = rInBand;
@@ -4208,8 +8326,13 @@ export default function CameraClient() {
                       }
                       acc.prevPairedInBand = anyIn;
                     } else {
-                      // Paired (true T-pose) bookkeeping: hold accrual, streak,
-                      // drops, settle time, out-of-position time.
+                      // Per-limb hold accrual stays independent. A bilateral
+                      // prescription later gates on the slower side; a
+                      // unilateral prescription gates only its selected side.
+                      // The simultaneous accumulator remains a quality field,
+                      // not the completion source.
+                      if (lInBand) leftHoldMsRef.current += dt;
+                      if (rInBand) rightHoldMsRef.current += dt;
                       const pairedIn = lInBand && rInBand;
                       if (pairedIn) {
                         pairedHoldMsRef.current += dt;
@@ -4248,29 +8371,132 @@ export default function CameraClient() {
                 }
               }
 
-              if (tNow - lastMetricsUpdateRef.current > 150) {
+              if (tNow - lastMetricsUpdateRef.current > COACHING_TICK_MS) {
                 lastMetricsUpdateRef.current = tNow;
+                // Compensation metrics, then display-only coaching checks.
+                const cueSpecs = coachingWarningSpecs(activeDefinition);
+                const coachingWarningsEnabled =
+                  sessionStateRef.current === "active" &&
+                  lastCaptureOkRef.current &&
+                  baselineReadyForExercise;
                 const suppressedWarningNames = new Set(
-                  activeDefinition.compensationMetrics
-                    .filter((comp) => comp.peakRelevant === true && !nearPeakNow)
+                  cueSpecs
+                    .filter(
+                      (comp) =>
+                        !coachingWarningsEnabled ||
+                        (comp.peakRelevant === true && !nearPeakNow) ||
+                        (prescriptionRef.current.prescribedSide !== "both" &&
+                          comp.name === "shoulderSymmetry"),
+                    )
                     .map((comp) => comp.name),
                 );
                 const activeWarningNames = updateCompensationWarningMap(
                   compensationWarningLatchesRef.current,
-                  activeDefinition.compensationMetrics,
-                  smoothedMetrics,
+                  cueSpecs,
+                  warningDisplayMetrics,
                   tNow,
                   suppressedWarningNames,
                 );
+
+                // Arbitrate the latched warnings down to the single cue the
+                // patient is shown. This decides WHICH warning surfaces; it
+                // does not decide whether one exists, and it owns no
+                // thresholds. Runs on the metrics tick, not per frame, so the
+                // per-cue timing is measured on one consistent clock.
+                const cueDecision = selectCoachingCue(
+                  coachingCueStateRef.current,
+                  cueSpecs,
+                  activeWarningNames,
+                  warningDisplayMetrics,
+                  tNow,
+                );
+                coachingCueStateRef.current = cueDecision.state;
+                coachingDecisionRef.current = {
+                  cueId: cueDecision.cueId, metric: cueDecision.metric,
+                  declaredMessage: cueDecision.message, reason: cueDecision.reason,
+                  decisionAtMs: tNow, selectedSinceMs: cueDecision.state.currentSinceMs,
+                  side: cueDecision.metric ? warningSignals.get(cueDecision.metric)?.side ?? null : null,
+                  warningValuesSmoothed: Object.fromEntries(cueSpecs.map(comp => [comp.name, warningDisplayMetrics[comp.name] ?? null])),
+                  activeLatches: [...activeWarningNames],
+                };
+                if (selectedCoachingCueMetricRef.current !== cueDecision.metric) {
+                  selectedCoachingCueMetricRef.current = cueDecision.metric;
+                  setSelectedCoachingCueMetric(cueDecision.metric);
+                }
+
+                if (
+                  coachingShadowEnabledRef.current &&
+                  coachingShadowStaffAllowedRef.current
+                ) {
+                  const startedAt =
+                    coachingShadowStartMsRef.current ??
+                    (coachingShadowStartMsRef.current = tNow);
+                  coachingShadowSeqRef.current += 1;
+                  const records = coachingShadowRecordsRef.current;
+                  records.push({
+                    seq: coachingShadowSeqRef.current,
+                    tMs: tNow,
+                    tShadowMs: tNow - startedAt,
+                    wallIso: new Date().toISOString(),
+                    exerciseId: activeDefinition.id,
+                    prescribedSide: prescriptionRef.current.prescribedSide,
+                    sessionState: sessionStateRef.current,
+                    captureOk: lastCaptureOkRef.current,
+                    captureMessage: lastCaptureMsgRef.current,
+                    baselinePhase: baselinePhaseRef.current,
+                    frozenTiltDeg: frozenTiltDegRef.current,
+                    tiltConfidence: raw.tiltReference.confidence,
+                    nearPeak: nearPeakNow,
+                    activeLatches: [...activeWarningNames],
+                    suppressedMetrics: [...suppressedWarningNames],
+                    segmentLabel: coachingShadowSegmentLabelRef.current,
+                    segmentIntent: coachingShadowSegmentIntentRef.current,
+                    selectedCueId: cueDecision.cueId,
+                    selectedMetric: cueDecision.metric,
+                    selectedMessage: cueDecision.message,
+                    reason: cueDecision.reason,
+                    displayedForMs: cueDecision.displayedForMs,
+                    clearedCueId: cueDecision.clearedCueId,
+                    candidates: cueDecision.candidates.map((candidate) => ({
+                      ...candidate,
+                      side:
+                        compensationWarningSignalsRef.current.get(candidate.metric)
+                          ?.side ?? null,
+                    })),
+                  });
+                  // Bounded ring. Overflow is counted, never silently dropped —
+                  // the export reports it.
+                  while (records.length > COACHING_SHADOW_RING_LIMIT) {
+                    records.shift();
+                    coachingShadowDroppedRef.current += 1;
+                  }
+                  if (coachingShadowExportedRef.current) {
+                    coachingShadowExportedRef.current = false;
+                  }
+                  if (tNow - coachingShadowLastUiUpdateMsRef.current > 500) {
+                    coachingShadowLastUiUpdateMsRef.current = tNow;
+                    setCoachingShadowCount(coachingShadowSeqRef.current);
+                    setCoachingShadowExported(false);
+                  }
+                }
+
                 setFrameMetrics({
-                  tiltReference: { ...raw.tiltReference, cameraTiltDeg: smoothedTilt },
-                  metrics: smoothedMetrics,
+                  tiltReference: raw.tiltReference,
+                  metrics: warningDisplayMetrics,
                   // Single per-frame score computed above from the SAME
                   // smoothed values the metric cards render (with per-side
                   // primaries for per-limb exercises). raw.metrics is still
                   // available separately for the ML/log pipeline.
                   compensationScore: frameCompensationScore,
                 });
+                setDisplayPerSidePrimary(
+                  scoreIsPerLimb
+                    ? {
+                        left: smoothedPrimaryLeft,
+                        right: smoothedPrimaryRight,
+                      }
+                    : null,
+                );
                 setNearPeak(nearPeakNow);
                 setActiveCompensationWarnings(activeWarningNames);
                 if (activeDefinition.kind === "isometric") {
@@ -4280,30 +8506,147 @@ export default function CameraClient() {
                     rightSec: rightHoldMsRef.current / 1000,
                     leftInBand: leftInBandRef.current,
                     rightInBand: rightInBandRef.current,
+                    leftHint: holdHintStateRef.current.left.shown,
+                    rightHint: holdHintStateRef.current.right.shown,
                   });
                 }
               }
-              // Suppress `peakRelevant` compensation warnings (elbowFlexion
-              // "Straighten arms" on ex_007/ex_008) unless the movement is near
-              // peak ROM — drawn every frame, so gate with the per-frame value.
+              // Draw at most ONE cue. The selector already chose it on the
+              // metrics tick; this per-frame path re-applies the same
+              // suppression gates the latch layer uses, because `nearPeak` and
+              // capture readiness move between ticks and a stale cue must not
+              // survive them. `peakRelevant` warnings (elbowFlexion
+              // "Straighten arms" on ex_007/ex_008) are the reason that matters
+              // in practice.
+              //
+              // `drawCompensationOverlay` keeps its existing signature: it is
+              // handed a one-entry spec list and a one-entry active-name set
+              // rather than the whole compensation list, so nothing about how
+              // it draws (or its tests) changes.
               const overlayWarningNames = new Set<MetricName>();
-              const overlayComps = activeDefinition.compensationMetrics.filter((comp) => {
+              const overlayComps = coachingWarningSpecs(activeDefinition).filter((comp) => {
+                if (comp.name !== selectedCoachingCueMetricRef.current) return false;
+                if (
+                  sessionStateRef.current !== "active" ||
+                  !lastCaptureOkRef.current ||
+                  !baselineReadyForExercise
+                ) {
+                  return false;
+                }
                 if (comp.peakRelevant === true && !nearPeakNow) return false;
+                if (
+                  prescriptionRef.current.prescribedSide !== "both" &&
+                  comp.name === "shoulderSymmetry"
+                ) {
+                  return false;
+                }
+                // Height instructions describe the current arm position. Drop
+                // them on this frame after correction or any tracking/timing/
+                // finished-arm guard, rather than drawing a stale instruction
+                // until the next selector tick or its minimum visible time.
+                if (
+                  (comp.name === "overRaise" || comp.name === "otherArmDown" || comp.name === "armAboveHold") &&
+                  warningSignals.get(comp.name)?.value == null
+                ) {
+                  if (lastDrawnCueRef.current?.metric === comp.name) lastDrawnCueRef.current = null;
+                  return false;
+                }
+                // A cue the selector keeps for its minimum visible time stays
+                // drawn after its warning clears, so it can be read.
                 const isActive =
-                  compensationWarningLatchesRef.current.get(comp.name)?.active === true;
+                  compensationWarningLatchesRef.current.get(comp.name)?.active === true ||
+                  coachingDecisionRef.current?.reason === "held-min-visible";
                 if (isActive) overlayWarningNames.add(comp.name);
                 return isActive;
               });
-              drawCompensationOverlay(
+              // The LOWER arrow keeps the shoulder it first appeared on until
+              // the cue leaves the slot, and moves only once the other shoulder
+              // reads higher than the cue's switch-off level (lowerArrowShoulder),
+              // read against the resting shoulder line like the cue (D-47).
+              const lowerSpec = overlayComps.find((comp) => comp.name === "shoulderSymmetry");
+              if (lowerSpec) {
+                lockedShoulderIndexRef.current = lowerArrowShoulder(
+                  lockedShoulderIndexRef.current,
+                  landmarks,
+                  restShoulder ?? computeShoulderSymmetry(landmarks, raw.tiltReference, frameAspect),
+                  cueClearLevel(lowerSpec),
+                );
+              } else if (selectedCoachingCueMetricRef.current !== "shoulderSymmetry") {
+                lockedShoulderIndexRef.current = null;
+              }
+              // A shown cue whose reading has gone (the per-repetition, hip and
+              // coupled readings are absent at rest) is drawn with the reading
+              // and direction it was last drawn with, so its minimum visible
+              // time holds on screen. A shown cue with no direction this frame
+              // (a trunk lean momentarily centred) keeps its last direction, so
+              // its label does not switch while it is held. The gates above
+              // still apply.
+              const drawValues: Partial<Record<MetricName, number | null>> = { ...warningDisplayMetrics };
+              const drawDirections: Partial<Record<MetricName, string>> = { ...metricDirections };
+              const lastDrawn = lastDrawnCueRef.current;
+              for (const comp of overlayComps) {
+                if (!lastDrawn || lastDrawn.metric !== comp.name) continue;
+                if (typeof drawValues[comp.name] !== "number") drawValues[comp.name] = lastDrawn.value;
+                if (lastDrawn.direction !== null) drawDirections[comp.name] ??= lastDrawn.direction;
+              }
+              const renderedCues = drawCompensationOverlay(
                 ctx,
                 landmarks,
                 canvas.width,
                 canvas.height,
                 overlayComps,
-                smoothedMetrics,
-                metricDirections,
+                drawValues,
+                drawDirections,
                 overlayWarningNames,
+                { shoulderElevatedIndex: lockedShoulderIndexRef.current ?? undefined },
               );
+              const drawnCue = renderedCues[0];
+              if (drawnCue) {
+                lastDrawnCueRef.current = {
+                  metric: drawnCue.metric,
+                  value: drawValues[drawnCue.metric] as number,
+                  direction: drawDirections[drawnCue.metric] ?? null,
+                };
+              } else if (lastDrawnCueRef.current?.metric !== selectedCoachingCueMetricRef.current) {
+                lastDrawnCueRef.current = null;
+              }
+              // The saved video's track records the cue as drawn, including the
+              // shoulder the LOWER arrow is locked to and whether the past-
+              // shoulder-height box went around one arm, so playback matches.
+              if (overlayFrame && drawnCue) {
+                overlayFrame.cue = {
+                  metric: drawnCue.metric,
+                  direction: drawnCue.direction,
+                  ...(drawnCue.metric === "shoulderSymmetry" && lockedShoulderIndexRef.current !== null
+                    ? { shoulder: lockedShoulderIndexRef.current }
+                    : {}),
+                  ...(drawnCue.metric === "overRaise" && (drawnCue.direction === "left" || drawnCue.direction === "right")
+                    ? { armBox: true as const }
+                    : {}),
+                };
+              }
+              const suppressedMetrics = coachingWarningSpecs(activeDefinition).filter(comp =>
+                sessionStateRef.current !== "active" || !lastCaptureOkRef.current || !baselineReadyForExercise ||
+                comp.peakRelevant === true && !nearPeakNow ||
+                prescriptionRef.current.prescribedSide !== "both" && comp.name === "shoulderSymmetry",
+              ).map(comp => comp.name);
+              const singleAvailable = typeof metricInputs[scorePrimaryName] === "number";
+              coachingObservation = {
+                capture: lastCaptureOkRef.current ? "available" : "unavailable",
+                sessionState: sessionStateRef.current, baselineReady: baselineReadyForExercise,
+                movement: observeMovement(activeDefinition, {
+                  left: leftRepCounterRef.current, right: rightRepCounterRef.current,
+                  bidirectional: bidirectionalRepCounterRef.current,
+                }, { left: scoreIsPerLimb ? rawPrimaryLeft !== null : singleAvailable,
+                  right: scoreIsPerLimb ? rawPrimaryRight !== null : singleAvailable },
+                { left: leftInBandRef.current, right: rightInBandRef.current }),
+                selected: coachingDecisionRef.current, rendered: renderedCues, renderEvidence: "canvas-frame", suppressedMetrics,
+                absenceReason: renderedCues.length ? null : !lastCaptureOkRef.current ? "capture-unavailable" :
+                  !baselineReadyForExercise ? "baseline-unavailable" : sessionStateRef.current !== "active" ? "session-inactive" :
+                  selectedCoachingCueMetricRef.current && suppressedMetrics.includes(selectedCoachingCueMetricRef.current) ? "suppressed" :
+                  selectedCoachingCueMetricRef.current ? "not-rendered" : "not-selected",
+              };
+              }
             }
           } else {
             // Pause isometric dt accumulation immediately on any unverified
@@ -4317,31 +8660,7 @@ export default function CameraClient() {
               !captureDropoutResetDoneRef.current &&
               dropoutElapsedMs >= CAPTURE_READINESS_RESET_GRACE_MS
             ) {
-              // A sustained not-ready interval is a true capture dropout:
-              // reset filters/counters so the next good frame does not blend
-              // against stale pre-dropout state. Short flickers only pause
-              // computation; resetting on those was discarding valid reps.
-              tiltFilterRef.current.reset();
-              metricFiltersRef.current.forEach((f) => f.reset());
-              leftPrimaryFilterRef.current.reset();
-              rightPrimaryFilterRef.current.reset();
-              leftRepCounterRef.current?.reset();
-              rightRepCounterRef.current?.reset();
-              bidirectionalRepCounterRef.current?.reset();
-              dynamicRepQualityBufferRef.current.reset();
-              // Discard any in-progress isometric hold — a sustained dropout
-              // means we couldn't verify the band, so the partial accumulation
-              // is stale (matches the rep-counter reset philosophy).
-              pairedHoldMsRef.current = 0;
-              leftHoldMsRef.current = 0;
-              rightHoldMsRef.current = 0;
-              leftInBandRef.current = false;
-              rightInBandRef.current = false;
-              lastIsometricTickMsRef.current = null;
-              resetHoldQualityAccum();
-              setHoldState({ pairedSec: 0, leftSec: 0, rightSec: 0, leftInBand: false, rightInBand: false });
-              resetCompensationWarnings();
-              captureDropoutResetDoneRef.current = true;
+              resetAfterSustainedCaptureDropout(activeDefinition);
             }
 
             setFrameMetrics({
@@ -4354,15 +8673,64 @@ export default function CameraClient() {
           // No tracked person means no verified in-band interval. Do not erase
           // accumulated hold time for a flicker; just restart the dt anchor.
           lastIsometricTickMsRef.current = null;
-          commitCaptureState(false, "No person detected. Step into the frame.");
+          const noPersonNow = performance.now();
+          if (captureDropoutStartedAtRef.current === null) {
+            captureDropoutStartedAtRef.current = noPersonNow;
+          }
+          neutralCalibrationClockRef.current = pauseNeutralCalibrationClock(
+            neutralCalibrationClockRef.current,
+          );
+          updateNeutralCalibrationProgress(neutralCalibrationClockRef.current);
+          commitCaptureState(
+            false,
+            captureMessageForPicture("NOT_VISIBLE", "No person detected. Step into the frame.", pictureLumaRef.current),
+          );
+          // Nobody to judge: the turn and hold-hint states start over.
+          bodyTurnStateRef.current = NO_BODY_TURN;
+          holdHintStateRef.current = newHoldHintState();
+          if (turnHintRef.current) {
+            turnHintRef.current = false;
+            setTurnHint(false);
+          }
+          if (
+            !captureDropoutResetDoneRef.current &&
+            noPersonNow - captureDropoutStartedAtRef.current >=
+              CAPTURE_READINESS_RESET_GRACE_MS
+          ) {
+            resetAfterSustainedCaptureDropout(activeDefinition);
+          }
           // Count as a not-OK frame so a patient who steps out of frame lowers
           // pctOk rather than being invisible to the capture-quality summary.
           if (sessionStateRef.current === "active") {
             captureFramesTotalRef.current += 1;
+            const rejected = captureRejectedByStatusRef.current;
+            rejected.NOT_VISIBLE = (rejected.NOT_VISIBLE ?? 0) + 1;
+            // Nor do the counters get a reading: lost tracking, not a camera
+            // stall (D-50).
+            leftRepCounterRef.current?.noteMissing();
+            rightRepCounterRef.current?.noteMissing();
+            bidirectionalRepCounterRef.current?.noteMissing();
           }
+          trackingMarksRef.current = addTrackingMark(trackingMarksRef.current, {
+            t: performance.now(), captureOk: false, checked: [], unsteady: [],
+          });
         }
 
+        // A custom exercise is not tracked: the skeleton, framing target and
+        // form highlights drawn above are cleared, so only the camera picture shows.
+        if (customExerciseSelected()) ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
+        if (sessionStateRef.current === "active") {
+          coachingAuditRef.current.observe(performance.now(), coachingObservation);
+        }
+
+        // Blank the sync readout on any frame that produced no trace row, so a
+        // reading on screen always belongs to the video frame showing it.
+        // Leaving the last good value up instead is what would let someone
+        // pause inside a gap and label an older row with a later posture.
+        if (!traceSyncWroteThisFrameRef.current) {
+          writeTraceSyncReadout(TRACE_SYNC_PAUSED);
+        }
 
         // Tally this frame's timing for the rolling average (flushed when the
         // FPS window closes above).
@@ -4381,16 +8749,27 @@ export default function CameraClient() {
   const canUseMediaDevices =
     mounted && typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
-  async function stopCamera() {
+  const stopCamera = useCallback(async () => {
+    cameraStartEpochRef.current++;
+    cameraReadyRef.current = false;
+    if (sessionStateRef.current === "active") coachingAuditRef.current.interrupt(performance.now(), sessionStateRef.current);
     try {
       if (videoRef.current) videoRef.current.srcObject = null;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      setCameraStreamActive(false);
 
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
         requestRef.current = null;
       }
+
+      // Clear the sync readout here specifically because the frame loop is the
+      // thing that normally repairs it, and the line above just cancelled it.
+      // Without this a stopped camera keeps the last traced row on screen with
+      // nothing left running to blank it. Called through the module helper
+      // rather than the local wrapper so this callback needs no extra dep.
+      applyTraceSyncReadout(traceSyncElRef.current, TRACE_SYNC_PLACEHOLDER);
 
       // Drop footer telemetry so a stopped/restarting camera doesn't show a
       // stale resolution or FPS.
@@ -4403,10 +8782,17 @@ export default function CameraClient() {
       frameMsSumRef.current = 0;
       perfSampleCountRef.current = 0;
       setPerfMs(null);
+      if (
+        activeDefinitionRef.current &&
+        (sessionStateRef.current === "active" ||
+          sessionStateRef.current === "countdown")
+      ) {
+        resetNeutralCalibration("capturing");
+      }
     } catch {
       // ignore
     }
-  }
+  }, [resetNeutralCalibration]);
 
   async function listCameras() {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -4416,15 +8802,16 @@ export default function CameraClient() {
     if (!selectedDeviceId && cams[0]?.deviceId) setSelectedDeviceId(cams[0].deviceId);
   }
 
-  async function startCamera(deviceId?: string) {
+  async function startCamera(deviceId?: string): Promise<boolean> {
     if (!canUseMediaDevices) {
       setError("Camera API not available in this browser/environment.");
-      return;
+      return false;
     }
 
     setIsStarting(true);
     setError(null);
     await stopCamera();
+    const epoch = cameraStartEpochRef.current;
 
     try {
       const constraints: MediaStreamConstraints = {
@@ -4435,23 +8822,48 @@ export default function CameraClient() {
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadeddata = () => {
-          videoRef.current?.play();
-          predictWebcam();
-        };
+      if (epoch !== cameraStartEpochRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return false;
       }
-
-      await listCameras();
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) throw new Error("Video element unavailable");
+      video.srcObject = stream;
+      let videoTimeout: ReturnType<typeof setTimeout> | undefined;
+      await new Promise<void>((resolve, reject) => {
+        let playing = false;
+        videoTimeout = setTimeout(() => reject(new Error("Camera video timed out")), 10_000);
+        const play = () => {
+          if (playing) return;
+          playing = true;
+          void video.play().then(resolve, reject);
+        };
+        video.onloadeddata = play;
+        video.onerror = () => reject(new Error("Camera video failed"));
+        if (video.readyState >= 2) play();
+        // Also clear callbacks after timeout/rejection, so a late frame cannot
+        // start inference after this attempt has failed.
+      }).finally(() => {
+        clearTimeout(videoTimeout);
+        video.onloadeddata = null;
+        video.onerror = null;
+      });
+      if (epoch !== cameraStartEpochRef.current) return false;
+      cameraReadyRef.current = true;
+      setCameraStreamActive(true);
+      predictWebcam();
+      // Enumeration is optional UI metadata; camera capture already succeeded.
+      await listCameras().catch(() => undefined);
+      return true;
     } catch (e) {
       const name = getErrorName(e);
       if (name === "NotAllowedError") setError("Permission denied. Please allow camera access.");
       else if (name === "NotFoundError") setError("No camera found on this device.");
       else if (name === "NotReadableError") setError("Camera is already in use by another app.");
       else setError(`Failed to start camera: ${name}`);
+      if (epoch === cameraStartEpochRef.current) await stopCamera();
+      return false;
     } finally {
       setIsStarting(false);
     }
@@ -4460,26 +8872,25 @@ export default function CameraClient() {
   useEffect(() => {
     setMounted(true);
     return () => {
-      stopCamera();
+      void stopCamera();
     };
-  }, []);
+  }, [stopCamera]);
 
+  // Leaving the page ends any session recording; the uploaded part is kept.
   useEffect(() => {
-    const updateDateTime = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleTimeString());
-    };
-    updateDateTime();
-    const interval = setInterval(updateDateTime, 1000);
-    return () => clearInterval(interval);
+    const recorders = recorderRef;
+    return () => { void recorders.current?.stop(); };
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
-    updateViewportWidth();
-    window.addEventListener("resize", updateViewportWidth);
-    return () => window.removeEventListener("resize", updateViewportWidth);
+    const updateViewportSize = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
+    updateViewportSize();
+    window.addEventListener("resize", updateViewportSize);
+    return () => window.removeEventListener("resize", updateViewportSize);
   }, []);
 
   if (!mounted) {
@@ -4491,12 +8902,24 @@ export default function CameraClient() {
   }
 
   const selectedExerciseObj = assignedExercises.find((e) => e.id === selectedExercise);
+  // A custom exercise is guided, not tracked: its camera view keeps only the
+  // room and lighting checks, with no coaching, baseline or live metrics.
+  const isCustomSelected = selectedExerciseObj?.isCustom === true;
+  const ex004FaceShadowStaffAllowed =
+    user?.role === "admin" || user?.role === "therapist";
+  const ex004FaceShadowCoverage =
+    ex004FaceShadowLive.attemptedFrames > 0
+      ? ex004FaceShadowLive.detectedFrames /
+        ex004FaceShadowLive.attemptedFrames
+      : null;
   // "Already completed" recap: the selected exercise finished in a prior visit.
   // Status stays "completed" across redos (a restart only moves pending →
   // in_progress server-side), so this keeps showing. Gated on idle so it never
   // overlays a live session, and on a dismiss flag so the patient can close it.
   const selectedRecap = sessionRecaps.get(selectedExercise) ?? null;
   const selectedExerciseCompleted = selectedExerciseObj?.status === "completed";
+  const selectedExercisePainStopped =
+    selectedExerciseObj?.status === "pain_stopped";
   const showCompletedRecap =
     sessionState === "idle" &&
     selectedExerciseCompleted &&
@@ -4508,9 +8931,10 @@ export default function CameraClient() {
   // exercise-switch (row closed) even though both also read "in_progress".
   const openSession = openSessions.get(selectedExercise) ?? null;
   // Only read localStorage when idle — avoids parsing it on every frame of an
-  // active session (the prompt/pill only matter at idle anyway).
+  // active session (the prompt/pill only matter at idle anyway). It is read
+  // again once the page's exercise versions have settled (D-49).
   const resumeSnap =
-    sessionState === "idle"
+    sessionState === "idle" && exerciseVersionsSettled
       ? readResumeSnapshot(selectedExerciseObj?.patientExerciseId)
       : null;
   const resumeEligible =
@@ -4522,6 +8946,32 @@ export default function CameraClient() {
     Date.now() - resumeSnap.updatedAtWallMs < RESUME_MAX_AGE_MS;
   const showResumePrompt =
     sessionState === "idle" && resumeEligible && !resumeDismissed;
+  // Read only when idle or ended, like the resume snapshot above.
+  const rememberedVideoChoice =
+    user?.role === "patient" && (sessionState === "idle" || sessionState === "ended")
+      ? readVideoChoice(user.id)
+      : null;
+  // Shown beside Start session, camera or custom, with "Ask me each time" to undo it.
+  const videoChoiceNote = rememberedVideoChoice && (
+    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+      Session video: {rememberedVideoChoice.record ? "recorded" : "not recorded"}, as you asked this
+      device to remember.{" "}
+      <button
+        type="button"
+        onClick={() => { forgetVideoChoice(user?.id); setVideoChoiceVersion((v) => v + 1); }}
+        style={{
+          padding: 0,
+          border: "none",
+          background: "none",
+          color: ACCENT.text,
+          textDecoration: "underline",
+          fontFamily: "var(--sans)",
+          fontSize: 13,
+          cursor: "pointer",
+        }}
+      >Ask me each time</button>
+    </p>
+  );
   const selectedExerciseIndex = assignedExercises.findIndex((e) => e.id === selectedExercise);
   const hasPrevExercise = selectedExerciseIndex > 0;
   const hasNextExercise =
@@ -4532,107 +8982,223 @@ export default function CameraClient() {
   const blockedBySchedule =
     user?.role === "patient" &&
     !!selectedExercise &&
-    !actionableExerciseIds.has(selectedExercise);
+    !actionableOccurrenceIds.has(selectedExerciseObj?.occurrenceId ?? -1);
   // Stepper navigation locked while a session is in progress.
   const sessionBusy =
+    preSessionSurvey !== null ||
+    videoQuestion !== null ||
     sessionState === "active" ||
     sessionState === "resting" ||
-    sessionState === "countdown";
+    sessionState === "countdown" ||
+    sessionState === "reporting";
   const baselineVisible = baselinePhase === "capturing";
-  const baselineSamples = Math.min(
-    baselineProgress.samples,
-    baselineProgress.required,
-  );
-  const baselineProgressPct = Math.round(
-    (baselineSamples / Math.max(1, baselineProgress.required)) * 100,
-  );
+  // At the start, the positioning stage has its own overlay and the baseline
+  // banner takes over for the 3 s baseline, so the two never show together
+  // and nothing dims the camera view while the baseline is taken. A
+  // recalibration mid-session shows both stages in the banner.
+  const positioningOverlayVisible =
+    sessionState === "countdown" && countdownStage === "positioning";
+  const bannerPositioningSec = sessionState === "countdown" ? 0 : positioningSec;
+  const baselineProgressPct = neutralCalibrationProgressPct({
+    validElapsedMs: baselineProgress.validElapsedMs,
+    sampleCount: baselineProgress.samples,
+    lastValidAtMs: null,
+  });
   const baselineRemainingSec = Math.max(
     0,
-    Math.ceil((baselineProgress.required - baselineSamples) / 30),
+    Math.ceil(
+      (NEUTRAL_CALIBRATION_DURATION_MS - baselineProgress.validElapsedMs) /
+        1_000,
+    ),
   );
+  const baselineFinishingSamples =
+    baselineRemainingSec === 0 &&
+    baselineProgress.samples < NEUTRAL_CALIBRATION_MIN_SAMPLES;
   const score = frameMetrics.compensationScore;
   const tier = scoreTier(score);
   const cameraBg = "oklch(0.20 0.008 240)";
   const currentSetIdx = Math.min(completedSets + 1, prescription.sets);
   const showTiltBanner = captureOk && showTiltWarning;
-  const patientAlertVisible = !captureOk || showTiltBanner;
   const compactLayout = viewportWidth < 1024;
   const tightLayout = viewportWidth < 720;
   const prescriptionTargetText =
     activeDefinition?.kind === "isometric"
-      ? isSideSplitIsometric(activeDefinition)
-        ? `${prescription.holdSeconds}s hold/side`
-        : `${prescription.holdSeconds}s hold`
+      ? `${prescription.holdSeconds}s hold${
+          prescription.prescribedSide === "both"
+            ? "/side"
+            : ` · ${prescription.prescribedSide}`
+        }`
       : activeDefinition?.bilateral
-        ? `${prescription.reps} reps/side`
+        ? `${prescription.reps} reps${
+            prescription.prescribedSide === "both"
+              ? "/side"
+              : ` · ${prescription.prescribedSide}`
+          }`
         : `${prescription.reps} reps`;
+
+  const cameraOn = cameraStreamActive;
+  // The frame loop records a video size on its first frame; until then the
+  // readiness state still describes the previous stream.
+  const cameraFramesFlowing = cameraOn && videoResolution !== null;
+  const trackingPaused = cameraFramesFlowing && !captureOk;
+  const cameraStatus: CameraStatus =
+    isStarting || (cameraOn && videoResolution === null)
+      ? "starting"
+      : cameraOn
+        ? "on"
+        : "off";
+  // A tour step can hold the camera menu open so its tray can be pointed out.
+  // On a narrow screen the open tray would cover the Start camera button the
+  // same step points at, so it stays closed there; the step's text names it.
+  const cameraMenuShown =
+    cameraMenuOpen || (showTutorial && !compactLayout && TOUR_STEPS[tutorialStep]?.opensCameraMenu === true);
+  const exerciseQueueLabel =
+    selectedExerciseIndex >= 0
+      ? `Exercise ${selectedExerciseIndex + 1} of ${assignedExercises.length} today`
+      : `${assignedExercises.length} exercises today`;
+  // The form-check card may only point at a highlight the overlay is actually
+  // drawing, so it reads the same gates as the metric rows: the selector's one
+  // promoted cue, latched, and not suppressed this tick.
+  const formCheckWarning =
+    cameraFramesFlowing &&
+    metricCards.some(
+      (card) =>
+        card.kind === "compensation" &&
+        card.warningActive === true &&
+        !card.suppressWarning &&
+        card.value !== null,
+    );
+  const formCheckState: FormCheckState = formCheckWarning
+    ? "warning"
+    : cameraFramesFlowing && captureOk && baselinePhase === "captured"
+      ? "clear"
+      : baselineVisible
+        ? "setup"
+        : "paused";
+  const restElapsedPct =
+    prescription.restSeconds > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round((1 - restRemainingSec / prescription.restSeconds) * 100),
+          ),
+        )
+      : 0;
+  // As a rest period opens, the camera view keeps the finished set's count for
+  // two seconds, then rolls it back to zero and moves the set number on. The
+  // counters themselves reset in the same frame as a set's last rep, so the
+  // final count would otherwise never be drawn. Display only: the values come
+  // from the set record just logged, and Skip rest or the next set ends the hold.
+  const REST_HOLD_SEC = 2;
+  const finishedSet =
+    sessionState === "resting" &&
+    restRemainingSec > prescription.restSeconds - REST_HOLD_SEC
+      ? completedSetsLogRef.current[completedSetsLogRef.current.length - 1]
+      : undefined;
+  const hudRepCounts = finishedSet
+    ? { left: finishedSet.leftReps, right: finishedSet.rightReps }
+    : repCounts;
+  const hudHoldState =
+    finishedSet && activeDefinition?.kind === "isometric"
+      ? {
+          pairedSec: (finishedSet.pairedHoldMs ?? 0) / 1000,
+          leftSec: (finishedSet.leftHoldMs ?? 0) / 1000,
+          rightSec: (finishedSet.rightHoldMs ?? 0) / 1000,
+          leftInBand: false,
+          rightInBand: false,
+        }
+      : holdState;
+  const hudSetIdx = finishedSet ? finishedSet.setIndex : currentSetIdx;
+  // A wider right column on tall screens, where the demonstration would otherwise
+  // stay small; the camera view keeps at least 70% of the width. A custom
+  // exercise is followed from its guide video alone, with nothing tracked, so
+  // its column takes up to 45% and the video grows with it.
+  const asideWidth = compactLayout
+    ? "100%"
+    : selectedExerciseObj?.isCustom
+      ? Math.round(Math.min(860, viewportWidth * 0.45))
+      : Math.round(Math.min(480, viewportWidth * 0.3, Math.max(340, (viewportHeight - 420) * 0.62)));
+  // A session started with no camera running would count nothing, so bring the
+  // camera up first, as resuming already does. Never before the pose model is
+  // ready: `predictWebcam` returns without scheduling another frame when the
+  // first frame arrives before the model, and nothing restarts the loop when
+  // the model finishes loading. The buttons that call this stay disabled too,
+  // matching the Start camera buttons.
+  const startSessionWithCamera = async (onConfirmed?: () => void) => {
+    if (!modelLoaded || isStarting || sessionStartPendingRef.current) return;
+    sessionStartPendingRef.current = true;
+    try {
+      if (!cameraReadyRef.current && !(await startCamera(selectedDeviceId || undefined))) return;
+      await handleSessionStart(onConfirmed);
+    } finally { sessionStartPendingRef.current = false; }
+  };
+
+  // Trace sync readout — the join key between a screen recording and the
+  // exported trace. Gated on a patient with tracing switched on AND the staff
+  // panel's "Show trace sync readout", which defaults OFF: the trace itself is
+  // on by default, so this is what keeps it off an ordinary session. The
+  // session card of whichever state is showing renders it, with the label
+  // stacked above the reading so the reading keeps its full width in a narrow
+  // column.
+  // `bufferTuningRawFrame` writes the text directly to this node from the same
+  // values it persists.
+  const traceSyncReadout = user?.role === "patient" && tuningTraceEnabled && traceSyncReadoutShown && (
+    <div style={{
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid oklch(0.92 0.003 240)",
+      background: "oklch(0.97 0.004 240)",
+    }}>
+      <div style={{
+        marginBottom: 3,
+        fontFamily: "var(--mono)",
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: ".14em",
+        textTransform: "uppercase",
+        color: "oklch(0.45 0.01 240)",
+      }}>
+        Trace sync — frame / elapsed
+      </div>
+      <div
+        ref={traceSyncElRef}
+        aria-live="off"
+        style={{
+          // Read back off compressed video, where small monospace digits
+          // smear; tabular figures keep the field from shifting as digits change.
+          fontFamily: "var(--mono)",
+          fontSize: 20,
+          fontWeight: 600,
+          letterSpacing: ".02em",
+          fontVariantNumeric: "tabular-nums",
+          color: "oklch(0.20 0.01 240)",
+        }}
+      >
+        {TRACE_SYNC_PLACEHOLDER}
+      </div>
+      {traceUploadLoss && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 4,
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      lineHeight: 1.35,
+                      color: "oklch(0.55 0.17 25)",
+                    }}
+                  >
+                    {traceUploadLossLabel(traceUploadLoss)}
+                  </div>
+                )}
+    </div>
+  );
 
   return (
     <>
-      {/* Sidebar overlay backdrop */}
-      {sidebarOpen && (
-        <div
-          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, background: "rgba(0,0,0,0.4)" }}
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Slide-in navigation sidebar */}
-      <aside
-        style={{
-          position: "fixed",
-          top: 0,
-          bottom: 0,
-          left: 0,
-          zIndex: 40,
-          width: 256,
-          background: "white",
-          borderRight: "1px solid oklch(0.93 0.003 240)",
-          display: "flex",
-          flexDirection: "column",
-          padding: 24,
-          transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-          transition: "transform 0.2s",
-          boxShadow: sidebarOpen ? "4px 0 16px oklch(0 0 0 / 0.08)" : "none",
-        }}
-      >
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>Postural</span>
-          </div>
-          {user?.name && (
-            <div style={{ fontSize: 12, color: "oklch(0.50 0.01 240)", marginTop: 4 }}>{user.name}</div>
-          )}
-        </div>
-
-        <nav>
-          <Link
-            href={dashboardHref}
-            style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "8px 10px", borderRadius: 6,
-              fontSize: 13, color: "oklch(0.30 0.01 240)",
-              textDecoration: "none",
-            }}
-            onClick={() => setSidebarOpen(false)}
-          >
-            <CameraHomeIcon /> Back to Dashboard
-          </Link>
-        </nav>
-
-        <div style={{ marginTop: "auto", paddingTop: 24 }}>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            style={{
-              width: "100%", padding: "8px 12px", borderRadius: 6,
-              border: "1px solid oklch(0.90 0.003 240)", background: "white",
-              fontSize: 13, color: "oklch(0.35 0.01 240)", cursor: "pointer",
-            }}
-          >
-            ✕ Close
-          </button>
-        </div>
-      </aside>
+      {/* Wheel animation for the rolling set and rep counts */}
+      <style>{ROLLING_NUMBER_CSS}</style>
 
       {/* Full page wrapper */}
       <div style={{
@@ -4641,577 +9207,1717 @@ export default function CameraClient() {
         background: "oklch(0.985 0.003 90)",
         height: compactLayout ? "auto" : "100vh",
         minHeight: "100vh",
-        width: "100vw",
-        overflow: compactLayout ? "auto" : "hidden",
+        width: "100%",
+        overflow: compactLayout ? "visible" : "hidden",
         display: "flex",
         flexDirection: "column",
       }}>
         {/* HEADER */}
         <header style={{
-          height: 56,
+          minHeight: 68,
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           flexWrap: compactLayout ? "wrap" : "nowrap",
-          gap: compactLayout ? 12 : 0,
-          padding: compactLayout ? "10px 12px" : "0 24px",
+          gap: 12,
+          padding: compactLayout ? "10px 16px" : "0 28px",
           background: "white",
           borderBottom: "1px solid oklch(0.93 0.003 240)",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 20 }}>
-            <button
-              id="cam-tour-sidebar"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
-              style={{
-                width: 28, height: 28, border: "1px solid oklch(0.90 0.003 240)",
-                background: "white", borderRadius: 6, cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                color: "oklch(0.35 0.01 240)",
-              }}
+          <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 10 : 16, minWidth: 0 }}>
+            <Link
+              href={dashboardHref}
+              aria-label="Back to Dashboard"
+              title="Back to Dashboard"
+              onClick={(event) => waitForPage(event, "Opening your dashboard…")}
+              style={ICON_BUTTON_STYLE}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="3" y1="6" x2="21" y2="6"/>
-                <line x1="3" y1="12" x2="21" y2="12"/>
-                <line x1="3" y1="18" x2="21" y2="18"/>
-              </svg>
-            </button>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em" }}>Postural</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-              <span style={{ color: "oklch(0.75 0.01 240)" }}>/</span>
-              <span style={{ color: "oklch(0.20 0.01 240)" }}>Camera</span>
-            </div>
+              <CameraHomeIcon />
+            </Link>
+            <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}>Postural</span>
+            <span style={{ color: "oklch(0.80 0.01 240)" }}>/</span>
+            <span style={{ fontSize: 15, color: "oklch(0.25 0.01 240)", whiteSpace: "nowrap" }}>Camera</span>
           </div>
 
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: compactLayout ? "flex-start" : "flex-end",
-            flexWrap: "wrap",
-            gap: compactLayout ? 10 : 16,
-          }}>
-            <div id="cam-tour-status" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ClinicalStatusDot ok={modelLoaded} />
-              <span style={{ fontSize: 12, color: "oklch(0.30 0.01 240)" }}>
-                {modelLoaded ? "AI ready" : "Loading model"}
-              </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {/* The camera menu: the dot beside the camera icon shows whether the
+                camera is on, and a click opens the device and display settings.
+                Pose-model readiness has its own "AI" indicator on the camera view. */}
+            <div id="cam-tour-camera" style={{ position: "relative" }}>
+              <CameraStatusButton
+                status={cameraStatus}
+                open={cameraMenuShown}
+                onToggle={() => setCameraMenuOpen((open) => !open)}
+              />
+
+              {cameraMenuShown && (
+                <>
+                  <div
+                    aria-hidden="true"
+                    onClick={() => setCameraMenuOpen(false)}
+                    style={{ position: "fixed", inset: 0, zIndex: 49 }}
+                  />
+                  <div id="cam-tour-camera-menu" role="dialog" aria-label="Camera settings" ref={keepTrayOnScreen} style={{
+                    position: "absolute",
+                    top: "calc(100% + 10px)",
+                    // Aligned to the button's right edge: the button sits near the right
+                    // of the header, and a left-aligned tray ran past the window edge.
+                    // keepTrayOnScreen moves it when that edge leaves too little room.
+                    right: 0,
+                    zIndex: 50,
+                    width: 320,
+                    maxWidth: "calc(100vw - 24px)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                    padding: 16,
+                    borderRadius: 12,
+                    background: "white",
+                    border: "1px solid oklch(0.90 0.004 240)",
+                    boxShadow: "0 14px 40px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <div style={STAFF_HEADING_STYLE}>Capture</div>
+                    <div>
+                      <label htmlFor="camera-device-select" style={{ display: "block", marginBottom: 4, fontSize: 11, color: "oklch(0.45 0.01 240)" }}>
+                        Device
+                      </label>
+                      <select
+                        id="camera-device-select"
+                        value={selectedDeviceId}
+                        onChange={(e) => setSelectedDeviceId(e.target.value)}
+                        style={FIELD_STYLE}
+                      >
+                        {devices.length === 0 ? (
+                          <option value="">(Allow camera access to list devices)</option>
+                        ) : (
+                          devices.map((d) => (
+                            <option key={d.deviceId} value={d.deviceId}>
+                              {d.label || `Camera ${d.deviceId.slice(0, 6)}…`}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    {cameraOn ? (
+                      <button
+                        type="button"
+                        onClick={() => { void stopCamera(); setCameraMenuOpen(false); }}
+                        style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "11px 14px", fontSize: 15 }}
+                      >
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { void startCamera(selectedDeviceId || undefined); setCameraMenuOpen(false); }}
+                        disabled={isStarting || !modelLoaded}
+                        style={{
+                          ...PRIMARY_BUTTON_STYLE,
+                          width: "100%",
+                          padding: "11px 14px",
+                          fontSize: 15,
+                          opacity: isStarting || !modelLoaded ? 0.5 : 1,
+                        }}
+                      >
+                        {isStarting ? "Starting…" : "Start camera"}
+                      </button>
+                    )}
+                    <div style={{ paddingTop: 6, borderTop: "1px solid oklch(0.93 0.003 240)" }}>
+                      <ClinicalSettingRow
+                        label="Mirror"
+                        sub="Front cam feel"
+                        on={mirror}
+                        onChange={setMirror}
+                      />
+                      <ClinicalSettingRow
+                        label="Prefer front camera"
+                        sub="When no device selected"
+                        on={useFrontCameraHint}
+                        onChange={setUseFrontCameraHint}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ClinicalStatusDot ok={captureOk} />
-              <span
-                title={captureMessage}
-                style={{
-                  fontSize: 12,
-                  color: "oklch(0.30 0.01 240)",
-                  maxWidth: 220,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {captureOk ? "Capture OK" : captureMessage}
-              </span>
-            </div>
-            </div>{/* end cam-tour-status */}
-            <div style={{ width: 1, height: 20, background: "oklch(0.92 0.003 240)", display: tightLayout ? "none" : "block" }} />
-            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)", display: tightLayout ? "none" : "inline" }}>
-              {currentTime}
-            </span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                id="cam-tour-stop"
-                onClick={stopCamera}
-                style={{
-                  padding: "6px 14px", border: "1px solid oklch(0.90 0.003 240)",
-                  background: "white", borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                }}
-              >Stop</button>
-              <button
-                id="cam-tour-start"
-                onClick={() => startCamera(selectedDeviceId || undefined)}
-                disabled={isStarting || !modelLoaded}
-                style={{
-                  padding: "6px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex,
-                  borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: "white", cursor: "pointer",
-                  opacity: (isStarting || !modelLoaded) ? 0.5 : 1,
-                }}
-              >
-                {isStarting ? "Starting…" : "Start camera"}
-              </button>
-              <button
-                onClick={() => { setTutorialStep(0); setShowTutorial(true); }}
-                style={{
-                  padding: "6px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: "white",
-                  borderRadius: 6, fontSize: 12, fontWeight: 500,
-                  color: ACCENT.text, cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 5,
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <line x1="12" y1="8" x2="12" y2="12"/>
-                  <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                How to Use
-              </button>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => { setCameraMenuOpen(false); setTutorialStep(0); setShowTutorial(true); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "9px 16px", borderRadius: 8,
+                border: `1px solid ${ACCENT.hex}`, background: "white",
+                fontFamily: "var(--sans)", fontSize: 14, fontWeight: 600,
+                color: ACCENT.text, cursor: "pointer",
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              How to Use
+            </button>
           </div>
         </header>
 
         {/* Error bar */}
         {error && (
-          <div style={{
-            padding: "8px 24px",
+          <div role="alert" style={{
+            padding: compactLayout ? "10px 16px" : "10px 28px",
             background: "oklch(0.96 0.04 25)",
             borderBottom: "1px solid oklch(0.88 0.06 25)",
-            fontSize: 12,
+            fontSize: 14,
             color: "oklch(0.40 0.12 25)",
           }}>
             {error}
           </div>
         )}
 
-        {/* BODY: 3-column grid */}
+        {/* BODY: [staff panel] camera view | exercise and demonstration column */}
         <div style={{
           flex: 1,
-          display: "grid",
-          gridTemplateColumns: compactLayout ? "1fr" : "240px minmax(0, 1fr) 300px",
+          display: "flex",
+          flexDirection: compactLayout ? "column" : "row",
           minHeight: 0,
+          padding: compactLayout ? 12 : 20,
+          gap: compactLayout ? 12 : 16,
         }}>
-          {/* LEFT RAIL — live metrics */}
-          <aside id="cam-tour-metrics" style={{
-            background: "white",
-            borderRight: compactLayout ? "none" : "1px solid oklch(0.93 0.003 240)",
-            borderTop: compactLayout ? "1px solid oklch(0.93 0.003 240)" : "none",
-            display: "flex",
-            flexDirection: "column",
+          <main style={{
+            flex: 1,
+            minWidth: 0,
             minHeight: 0,
-            overflow: compactLayout ? "visible" : "hidden",
-            order: compactLayout ? 2 : 0,
+            display: "flex",
+            flexDirection: compactLayout ? "column" : "row",
+            gap: 14,
           }}>
-            <div style={{
-              padding: "14px 16px",
-              borderBottom: "1px solid oklch(0.93 0.003 240)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}>
-              <span style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
-              }}>Live Metrics</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "oklch(0.55 0.01 240)" }}>°</span>
-            </div>
-
-            <ClinicalScoreRow score={score} tier={tier} />
-
-            {metricCards.map((card) => (
-              <ClinicalMetricRow key={card.key} card={card} />
-            ))}
-
-            <div style={{ flex: 1 }} />
-
-            {/* Opt-in tuning-trace recording (patient sessions only persist) */}
-            {user?.role === "patient" && (
-              <div style={{
-                padding: "10px 16px",
-                borderTop: "1px solid oklch(0.93 0.003 240)",
+            {/* STAFF DIAGNOSTICS. Opened from the (i) button on the camera view;
+                it docks on the left and the camera view narrows beside it. */}
+            {staffDrawerOpen && (
+              <aside aria-label="Staff diagnostics" style={{
+                width: compactLayout ? "100%" : 360,
+                flexShrink: 0,
+                minHeight: 0,
                 display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
+                flexDirection: "column",
+                gap: 12,
+                overflowY: compactLayout ? "visible" : "auto",
+                padding: 12,
+                borderRadius: 12,
+                background: "oklch(0.985 0.003 240)",
+                border: "1px solid oklch(0.93 0.003 240)",
               }}>
-                <input
-                  type="checkbox"
-                  id="tuning-trace-toggle"
-                  checked={tuningTraceEnabled}
-                  onChange={(e) => setTuningTraceEnabled(e.target.checked)}
-                  style={{ marginTop: 2, accentColor: ACCENT.hex }}
-                />
-                <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
-                  <div style={{
-                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                    textTransform: "uppercase", color: "oklch(0.30 0.01 240)", fontWeight: 600,
-                  }}>
-                    Record tuning trace
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ ...STAFF_HEADING_STYLE, fontSize: 11 }}>Staff diagnostics</span>
+                  <button
+                    type="button"
+                    onClick={() => setStaffDrawerOpen(false)}
+                    aria-label="Close staff diagnostics"
+                    style={{ ...ICON_BUTTON_STYLE, width: 30, height: 30 }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Live Metrics */}
+                <div style={{ ...CARD_STYLE, flexShrink: 0, overflow: "hidden" }}>
+                  <div style={{ ...STAFF_HEADING_STYLE, padding: "12px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+                    {isCustomSelected ? "Live Metrics" : "Live Metrics · angles are camera estimates"}
                   </div>
-                  <div style={{ fontSize: 11, color: "oklch(0.50 0.01 240)", marginTop: 2 }}>
-                    Saves raw movement metrics (no video) for threshold tuning.
+                  {isCustomSelected ? (
+                    <p style={{ margin: 0, padding: "14px 16px", fontSize: 13, lineHeight: 1.5, color: "oklch(0.40 0.01 240)" }}>
+                      Not measured. This is a custom exercise: the camera does not track, count or score it,
+                      so there is no posture score or joint angle. Only the room and lighting checks run.
+                    </p>
+                  ) : (
+                    <>
+                      <ClinicalScoreRow score={score} tier={tier} />
+                      {metricCards.map((card) => (
+                        <ClinicalMetricRow key={card.id} card={card} />
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                {/* Capture telemetry */}
+                <div style={{ ...CARD_STYLE, flexShrink: 0, padding: "12px 16px" }}>
+                  <div style={{ ...STAFF_HEADING_STYLE, marginBottom: 10 }}>Capture</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <StaffStat label="Pose model" value={modelLoaded ? "AI ready" : "Loading model"} />
+                    <StaffStat label="Capture" value={!cameraFramesFlowing ? "—" : captureOk ? "Capture OK" : captureMessage} />
+                    <StaffStat label="Resolution" value={videoResolution ? `${videoResolution.width} × ${videoResolution.height}` : "—"} />
+                    <StaffStat label="Frame rate" value={fps !== null ? `${fps} fps` : "—"} />
+                    <StaffStat label="Pose infer" value={perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"} />
+                    <StaffStat label="Frame total" value={perfMs ? `${perfMs.frame.toFixed(1)} ms` : "—"} />
+                    <StaffStat label="Session progress" value={`${progressPct}%`} />
                   </div>
-                </label>
-              </div>
+                </div>
+
+                {/* Tuning-trace recording, on by default (patient sessions only persist) */}
+                {user?.role === "patient" && (
+                  <div style={{ ...CARD_STYLE, flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 16px" }}>
+                    <input
+                      type="checkbox"
+                      id="tuning-trace-toggle"
+                      checked={tuningTraceEnabled}
+                      onChange={(e) => setTuningTraceEnabled(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="tuning-trace-toggle" style={{ cursor: "pointer" }}>
+                      <div style={STAFF_HEADING_STYLE}>Record tuning trace</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "oklch(0.50 0.01 240)" }}>
+                        Saves raw movement metrics (no video) with every session. On by default.
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {/* The readout for screen-recorded tuning sessions, off by default */}
+                {user?.role === "patient" && tuningTraceEnabled && (
+                  <div style={{ ...CARD_STYLE, flexShrink: 0, display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 16px" }}>
+                    <input
+                      type="checkbox"
+                      id="trace-sync-readout-toggle"
+                      checked={traceSyncReadoutShown}
+                      onChange={(e) => setTraceSyncReadoutShown(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="trace-sync-readout-toggle" style={{ cursor: "pointer" }}>
+                      <div style={STAFF_HEADING_STYLE}>Show trace sync readout</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "oklch(0.50 0.01 240)" }}>
+                        Frame number and time for screen recordings, and a warning if the server misses trace batches.
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {ex004FaceShadowStaffAllowed && activeDefinition?.id === "ex_004" && (
+                  <div
+                    data-testid="ex004-face-shadow"
+                    style={{
+                      margin: 0,
+                      padding: 10,
+                      border: "1px solid oklch(0.88 0.02 250)",
+                      borderRadius: 6,
+                      background: "oklch(0.975 0.01 250)",
+                    }}
+                  >
+                    <label
+                      htmlFor="ex004-face-shadow-toggle"
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 7,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        id="ex004-face-shadow-toggle"
+                        type="checkbox"
+                        checked={ex004FaceShadowEnabled}
+                        onChange={(event) => {
+                          if (event.target.checked) clearEx004FaceShadow();
+                          setEx004FaceShadowEnabled(event.target.checked);
+                        }}
+                        style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                      />
+                      <span>
+                        <span
+                          style={{
+                            display: "block",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".12em",
+                            textTransform: "uppercase",
+                            color: "oklch(0.30 0.05 250)",
+                          }}
+                        >
+                          Face shadow comparison
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: 2,
+                            fontSize: 10,
+                            lineHeight: 1.35,
+                            color: "oklch(0.48 0.02 250)",
+                          }}
+                        >
+                          Diagnostic only. Pose remains authoritative.
+                        </span>
+                      </span>
+                    </label>
+
+                    {ex004FaceShadowEnabled && (
+                      <div
+                        style={{
+                          marginTop: 9,
+                          paddingTop: 8,
+                          borderTop: "1px solid oklch(0.90 0.01 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 10,
+                          lineHeight: 1.55,
+                          color: "oklch(0.32 0.02 250)",
+                        }}
+                      >
+                        <div>
+                          Status: {ex004FaceShadowModelState}
+                          {ex004FaceShadowLive.status
+                            ? ` / ${ex004FaceShadowLive.status}`
+                            : ""}
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto",
+                            gap: 6,
+                            alignItems: "end",
+                            margin: "6px 0",
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Trial phase</span>
+                            <select
+                              aria-label="Face shadow trial phase"
+                              value={ex004FaceShadowPhase}
+                              onChange={(event) => {
+                                if (isEx004FaceShadowPhase(event.target.value)) {
+                                  setEx004FaceShadowPhase(event.target.value);
+                                }
+                              }}
+                              style={{
+                                minWidth: 0,
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            >
+                              {EX004_FACE_SHADOW_PHASE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              appendEx004FaceShadowMark(
+                                "phase",
+                                ex004FaceShadowPhaseRef.current,
+                              );
+                              showToast({
+                                variant: "success",
+                                message: "Face trial phase marked.",
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark phase
+                          </button>
+                        </div>
+                        <div>
+                          Face baseline: {baselinePhase === "capturing"
+                            ? "calibrating"
+                            : baselinePhase === "captured"
+                              ? ex004FaceShadowBaselineRollRef.current !== null
+                                ? "ready"
+                                : "unavailable — restart after Face is ready"
+                              : "not started"}
+                        </div>
+                        <div>
+                          Pose / Face roll: {ex004FaceShadowLive.poseSignedDeg?.toFixed(1) ?? "—"}
+                          {"° / "}
+                          {ex004FaceShadowLive.faceSignedDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Face yaw / pitch: {ex004FaceShadowLive.faceYawDeltaDeg?.toFixed(1) ?? "—"}
+                          {"° / "}
+                          {ex004FaceShadowLive.facePitchDeltaDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Face − Pose: {ex004FaceShadowLive.faceMinusPoseDeg?.toFixed(1) ?? "—"}°
+                        </div>
+                        <div>
+                          Coverage: {ex004FaceShadowCoverage !== null
+                            ? `${(ex004FaceShadowCoverage * 100).toFixed(1)}%`
+                            : "—"}
+                        </div>
+                        <div>
+                          Face inference: {ex004FaceShadowLive.inferenceMs?.toFixed(1) ?? "—"} ms
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto",
+                            gap: 6,
+                            alignItems: "end",
+                            marginTop: 7,
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Reference angle (optional)</span>
+                            <input
+                              aria-label="Independent reference angle in degrees"
+                              type="number"
+                              step="0.1"
+                              inputMode="decimal"
+                              value={ex004FaceShadowReferenceInput}
+                              onChange={(event) =>
+                                setEx004FaceShadowReferenceInput(event.target.value)
+                              }
+                              placeholder="degrees"
+                              style={{
+                                minWidth: 0,
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            disabled={
+                              ex004FaceShadowReferenceInput.trim() === "" ||
+                              !Number.isFinite(Number(ex004FaceShadowReferenceInput))
+                            }
+                            onClick={() => {
+                              const angle = Number(ex004FaceShadowReferenceInput);
+                              if (!markEx004FaceShadowReference(angle)) return;
+                              setEx004FaceShadowReferenceInput("");
+                              showToast({
+                                variant: "success",
+                                message: "Reference angle marked.",
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark reference
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const dump = window.dumpEx004FaceShadow?.();
+                            if (!dump) return;
+                            void navigator.clipboard.writeText(dump)
+                              .then(() => {
+                                showToast({
+                                  variant: "success",
+                                  message: "Face shadow diagnostics copied.",
+                                });
+                              })
+                              .catch((reason: unknown) => {
+                                console.error(
+                                  "[ex004-face-shadow] clipboard copy failed",
+                                  reason,
+                                );
+                                showToast({
+                                  variant: "error",
+                                  message: "Could not copy Face diagnostics.",
+                                });
+                              });
+                          }}
+                          style={{
+                            marginTop: 7,
+                            padding: "5px 8px",
+                            border: "1px solid oklch(0.82 0.03 250)",
+                            borderRadius: 4,
+                            background: "white",
+                            color: "oklch(0.30 0.05 250)",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".08em",
+                            textTransform: "uppercase",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Copy diagnostics
+                        </button>
+                        {ex004FaceShadowModelError && (
+                          <div style={{ color: "oklch(0.45 0.14 25)" }}>
+                            {ex004FaceShadowModelError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Staff-only coaching shadow log. Records what the single-cue
+                    selector decided and why; it does not change the cue itself, so
+                    turning it on is invisible to the patient. */}
+                {coachingShadowStaffAllowed && !!activeDefinition && (
+                  <div
+                    data-testid="coaching-shadow"
+                    style={{
+                      margin: 0,
+                      padding: 10,
+                      border: "1px solid oklch(0.88 0.02 250)",
+                      borderRadius: 6,
+                      background: "oklch(0.975 0.01 250)",
+                    }}
+                  >
+                    <label
+                      htmlFor="coaching-shadow-toggle"
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 7,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        id="coaching-shadow-toggle"
+                        type="checkbox"
+                        checked={coachingShadowEnabled}
+                        onChange={(event) => {
+                          if (event.target.checked) clearCoachingShadow();
+                          setCoachingShadowEnabled(event.target.checked);
+                        }}
+                        style={{ marginTop: 2, accentColor: ACCENT.hex }}
+                      />
+                      <span>
+                        <span
+                          style={{
+                            display: "block",
+                            fontFamily: "var(--mono)",
+                            fontSize: 9,
+                            fontWeight: 700,
+                            letterSpacing: ".12em",
+                            textTransform: "uppercase",
+                            color: "oklch(0.30 0.05 250)",
+                          }}
+                        >
+                          Coaching shadow log
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: 2,
+                            fontSize: 10,
+                            lineHeight: 1.35,
+                            color: "oklch(0.48 0.02 250)",
+                          }}
+                        >
+                          Records cue decisions. Does not change what the patient sees.
+                        </span>
+                      </span>
+                    </label>
+
+                    {coachingShadowEnabled && (
+                      <div
+                        style={{
+                          marginTop: 9,
+                          paddingTop: 8,
+                          borderTop: "1px solid oklch(0.90 0.01 250)",
+                          fontFamily: "var(--mono)",
+                          fontSize: 10,
+                          lineHeight: 1.55,
+                          color: "oklch(0.32 0.02 250)",
+                        }}
+                      >
+                        <div>Schema: {COACHING_SHADOW_SCHEMA}</div>
+                        <div style={{ color: "oklch(0.45 0.02 250)" }}>
+                          Remote: <strong>F8</strong> starts the step · <strong>F9</strong> ends it ·
+                          or park the cursor on the big control and left-click
+                        </div>
+                        <div>
+                          Recording as: {coachingShadowActiveSegment
+                            ? `${coachingShadowActiveSegment.label} · ${coachingShadowActiveSegment.intent}`
+                            : "— not declared"}
+                        </div>
+                        {(() => {
+                          const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+                          if (!step) {
+                            return (
+                              <div
+                                style={{
+                                  marginTop: 7,
+                                  padding: "7px 8px",
+                                  border: "1px solid oklch(0.82 0.03 250)",
+                                  borderRadius: 4,
+                                  background: "white",
+                                }}
+                              >
+                                <div style={{ fontWeight: 700 }}>Plan complete</div>
+                                <div style={{ marginTop: 2 }}>
+                                  Export this capture, then run E3 (patient login) unrecorded.
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={restartCoachingShadowPlan}
+                                  style={{
+                                    marginTop: 6,
+                                    padding: "4px 7px",
+                                    border: "1px solid oklch(0.82 0.03 250)",
+                                    borderRadius: 4,
+                                    background: "white",
+                                    color: "inherit",
+                                    font: "inherit",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Restart plan
+                                </button>
+                              </div>
+                            );
+                          }
+                          const wrongExercise = activeDefinition?.id !== step.exerciseId;
+                          return (
+                            <div
+                              style={{
+                                marginTop: 7,
+                                padding: "7px 8px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderLeft: step.startsCapture
+                                  ? "3px solid oklch(0.65 0.16 60)"
+                                  : "3px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>
+                                Step {coachingPlanIndex + 1}/{COACHING_SESSION_PLAN.length}
+                                {" · "}{step.captureId}{" · "}{step.exerciseId}
+                              </div>
+                              <div style={{ marginTop: 2 }}>
+                                {step.label}{" · "}{step.intent}
+                              </div>
+                              <div style={{ marginTop: 3, color: "oklch(0.45 0.02 250)" }}>
+                                {step.hint}
+                              </div>
+                              {step.startsCapture && (
+                                <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.50 0.14 45)" }}>
+                                  Stop/Start first, confirm set 1 · 0 reps · baseline captured, then Clear.
+                                </div>
+                              )}
+                              {wrongExercise && (
+                                <div style={{ marginTop: 3, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                                  Selected exercise is {activeDefinition?.id ?? "none"} — this step needs {step.exerciseId}.
+                                </div>
+                              )}
+                              {(() => {
+                                const recordingThis =
+                                  coachingShadowActiveSegment?.label === step.label;
+                                const blockAdvance = coachingShadowAdvanceBlocked;
+                                return (
+                                  <>
+                                    <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        disabled={coachingPlanIndex === 0}
+                                        onClick={stepBackCoachingShadowPlan}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: "inherit",
+                                          font: "inherit",
+                                          cursor: coachingPlanIndex === 0 ? "default" : "pointer",
+                                        }}
+                                      >
+                                        Back
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={recordingThis}
+                                        onClick={() => {
+                                          if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                                          setCoachingShadowSegmentLabel(step.label);
+                                          setCoachingShadowSegmentIntent(step.intent);
+                                          showToast({
+                                            variant: "success",
+                                            message: `Recording ${step.label} (${step.intent}).`,
+                                          });
+                                        }}
+                                        style={{
+                                          padding: "4px 8px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: recordingThis ? "white" : ACCENT.hex,
+                                          color: recordingThis ? "oklch(0.55 0.02 250)" : "white",
+                                          font: "inherit",
+                                          fontWeight: 700,
+                                          cursor: recordingThis ? "default" : "pointer",
+                                        }}
+                                      >
+                                        {recordingThis ? "Recording…" : "Start this step"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={!recordingThis}
+                                        onClick={() => {
+                                          endCoachingShadowSegment();
+                                          showToast({
+                                            variant: "success",
+                                            message: `Ended ${step.label}.`,
+                                          });
+                                        }}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: "inherit",
+                                          font: "inherit",
+                                          fontWeight: 700,
+                                          cursor: recordingThis ? "pointer" : "default",
+                                        }}
+                                      >
+                                        End step
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={blockAdvance}
+                                        onClick={advanceCoachingShadowPlan}
+                                        style={{
+                                          padding: "4px 7px",
+                                          border: "1px solid oklch(0.82 0.03 250)",
+                                          borderRadius: 4,
+                                          background: "white",
+                                          color: blockAdvance ? "oklch(0.60 0.02 250)" : "inherit",
+                                          font: "inherit",
+                                          cursor: blockAdvance ? "default" : "pointer",
+                                        }}
+                                      >
+                                        Next →
+                                      </button>
+                                    </div>
+                                    {blockAdvance && (
+                                      <div style={{ marginTop: 4, fontWeight: 700, color: "oklch(0.45 0.14 25)" }}>
+                                        This capture has {coachingShadowCount} unexported decisions. Download the log before moving on.
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          );
+                        })()}
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                            gap: 6,
+                            alignItems: "end",
+                            margin: "6px 0",
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Capture / segment</span>
+                            <input
+                              aria-label="Capture or segment label"
+                              type="text"
+                              value={coachingShadowSegmentLabel}
+                              onChange={(event) =>
+                                setCoachingShadowSegmentLabel(event.target.value)
+                              }
+                              placeholder="A2-trunk"
+                              style={{
+                                minWidth: 0,
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 3 }}>
+                            <span>Intent</span>
+                            <select
+                              aria-label="Declared movement intent for this segment"
+                              value={coachingShadowSegmentIntent}
+                              onChange={(event) =>
+                                setCoachingShadowSegmentIntent(
+                                  event.target.value as CoachingShadowIntent,
+                                )
+                              }
+                              style={{
+                                padding: "4px 5px",
+                                border: "1px solid oklch(0.82 0.03 250)",
+                                borderRadius: 4,
+                                background: "white",
+                                color: "inherit",
+                                font: "inherit",
+                              }}
+                            >
+                              <option value="clean">clean</option>
+                              <option value="faulty">faulty</option>
+                              <option value="transition">transition</option>
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={coachingShadowSegmentLabel.trim() === ""}
+                            onClick={() => {
+                              if (
+                                !markCoachingShadowSegment(
+                                  coachingShadowSegmentLabel,
+                                  coachingShadowSegmentIntent,
+                                )
+                              ) {
+                                return;
+                              }
+                              showToast({
+                                variant: "success",
+                                message: `Segment ${coachingShadowSegmentLabel.trim()} started.`,
+                              });
+                            }}
+                            style={{
+                              padding: "5px 7px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "inherit",
+                              font: "inherit",
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Mark
+                          </button>
+                        </div>
+                        <div>
+                          Selected cue: {selectedCoachingCueMetric ?? "—"}
+                        </div>
+                        <div>
+                          Active latches: {activeCompensationWarnings.size > 0
+                            ? [...activeCompensationWarnings].join(", ")
+                            : "—"}
+                        </div>
+                        <div>
+                          Decisions: {coachingShadowCount} recorded
+                          {coachingShadowDroppedRef.current > 0
+                            ? ` · ${coachingShadowDroppedRef.current} dropped from the ring`
+                            : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 7 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const result = downloadCoachingShadow();
+                              if (!result) {
+                                showToast({
+                                  variant: "error",
+                                  message: "No coaching decisions recorded yet.",
+                                });
+                                return;
+                              }
+                              coachingShadowExportedRef.current = true;
+                              setCoachingShadowExported(true);
+                              if (result.warnings.length > 0) {
+                                for (const warning of result.warnings) {
+                                  console.warn("[coaching-shadow] " + warning);
+                                }
+                                showToast({
+                                  variant: "error",
+                                  message: `Downloaded with ${result.warnings.length} issue(s): ${result.warnings[0]}`,
+                                });
+                                return;
+                              }
+                              showToast({
+                                variant: "success",
+                                message: `Downloaded. ${result.checksRun} automated checks passed — still open the file.`,
+                              });
+                            }}
+                            style={{
+                              padding: "5px 8px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "oklch(0.30 0.05 250)",
+                              fontFamily: "var(--mono)",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              letterSpacing: ".08em",
+                              textTransform: "uppercase",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Download log
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (coachingShadowCount > 0 && !coachingShadowExported) {
+                                showToast({
+                                  variant: "error",
+                                  message: `${coachingShadowCount} decisions have not been exported. Download first, or press Clear again to discard.`,
+                                });
+                                setCoachingShadowExported(true);
+                                return;
+                              }
+                              clearCoachingShadow();
+                            }}
+                            style={{
+                              padding: "5px 8px",
+                              border: "1px solid oklch(0.82 0.03 250)",
+                              borderRadius: 4,
+                              background: "white",
+                              color: "oklch(0.30 0.05 250)",
+                              fontFamily: "var(--mono)",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              letterSpacing: ".08em",
+                              textTransform: "uppercase",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </aside>
             )}
 
-            {/* Footer: resolution + fps + inference/frame-total timing split */}
-            <div style={{
-              padding: "12px 16px",
-              borderTop: "1px solid oklch(0.93 0.003 240)",
-              background: "oklch(0.985 0.003 240)",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-            }}>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Resolution</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>
-                  {videoResolution ? `${videoResolution.width} × ${videoResolution.height}` : "—"}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame rate</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{fps !== null ? `${fps} fps` : "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Inference</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.infer.toFixed(1)} ms` : "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)", marginBottom: 2 }}>Frame total</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)" }}>{perfMs ? `${perfMs.frame.toFixed(1)} ms` : "—"}</div>
-              </div>
-            </div>
-          </aside>
-
-          {/* CAMERA CENTER */}
-          <main id="cam-tour-feed" style={{
-            minWidth: 0,
-            padding: compactLayout ? 12 : 16,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: compactLayout ? 560 : 0,
-            order: compactLayout ? 1 : 0,
-          }}>
-            <div style={{
+            {/* CAMERA VIEW */}
+            <div id="cam-tour-feed" style={{
               flex: 1,
               position: "relative",
-              borderRadius: 8,
+              minWidth: 0,
+              minHeight: compactLayout ? (tightLayout ? 380 : 500) : 0,
+              borderRadius: 12,
               overflow: "hidden",
               background: cameraBg,
-              border: "1px solid oklch(0.92 0.003 240)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              minHeight: 0,
+              border: "1px solid oklch(0.90 0.004 240)",
             }}>
-              {/* Subtle radial gradient */}
-              <div style={{
-                position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                background: `radial-gradient(ellipse at center, oklch(0.25 0.008 240) 0%, ${cameraBg} 60%)`,
-                pointerEvents: "none",
-              }} />
-
-              {/* Mirrored video + canvas layer */}
+              {/* Mirrored video + canvas layer. Letterboxed, never cropped, so the
+                  whole frame stays visible whatever width the view is given. */}
               <div style={{
                 position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
                 transform: mirror ? "scaleX(-1)" : "none",
               }}>
-                <video ref={videoRef} playsInline muted style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-                <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                <video ref={videoRef} playsInline muted style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+                <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }} />
               </div>
 
-              {/* Corner ticks */}
-              <ClinicalCornerTicks />
-
-              {/* Tilt confidence warning */}
-              {!captureOk && (
-                <div style={{
-                  position: "absolute",
-                  top: 16,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "oklch(0.99 0.02 80)",
-                  border: "2px solid oklch(0.70 0.16 65)",
-                  borderRadius: 8,
-                  padding: "10px 18px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
-                  <span style={{
-                    width: 10,
-                    height: 10,
+              {/* Diagnostics corner: the staff (i) button and the processing
+                  rate. Above the camera-off cover and the countdown, so the rate
+                  is always on screen. The trace sync readout lives in the session
+                  card, where a narrow camera view cannot clip it. */}
+              <div style={{
+                position: "absolute",
+                top: tightLayout ? 10 : 14,
+                left: tightLayout ? 10 : 14,
+                zIndex: 36,
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 8,
+                // Leaves the top-right corner to the AI indicator, so the
+                // recording badge wraps below instead of running into it.
+                maxWidth: "calc(100% - 120px)",
+              }}>
+                <button
+                  type="button"
+                  id="cam-tour-metrics"
+                  onClick={() => setStaffDrawerOpen((open) => !open)}
+                  aria-label={staffDrawerOpen ? "Close staff diagnostics" : "Open staff diagnostics"}
+                  aria-pressed={staffDrawerOpen}
+                  title="Staff diagnostics"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     borderRadius: 999,
-                    background: "oklch(0.70 0.16 65)",
-                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: tightLayout ? 13 : 18,
-                    letterSpacing: ".12em",
-                    textTransform: "uppercase",
-                    color: "oklch(0.45 0.10 65)",
-                    fontWeight: 700,
-                    flexShrink: 0,
-                  }}>Paused</span>
-                  <span style={{
-                    fontSize: tightLayout ? 13 : 18,
-                    fontWeight: 500,
-                    color: "oklch(0.25 0.05 65)",
-                    overflowWrap: "anywhere",
+                    border: "1px solid oklch(1 0 0 / 0.25)",
+                    background: staffDrawerOpen ? "white" : "oklch(0.16 0.01 240 / 0.72)",
+                    color: staffDrawerOpen ? "oklch(0.25 0.01 240)" : "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="11" x2="12" y2="17"/>
+                    <line x1="12" y1="7" x2="12.01" y2="7"/>
+                  </svg>
+                </button>
+                <div title="Frame rate" style={FEED_CHIP_STYLE}>
+                  {fps !== null ? `${fps} fps` : "—"}
+                </div>
+                {/* Session video indicator: always visible while recording, beside
+                    the diagnostics button and frame rate so it never covers them. */}
+                {recordingState !== "off" && recordingState !== "stopped" &&
+                  (sessionState === "countdown" || sessionState === "active" || sessionState === "resting" || customRecordingOpen) && (
+                  <div role="status" style={{
+                    minHeight: 36,
+                    maxWidth: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    background: recordingState === "recording" ? "oklch(0.25 0.02 25 / 0.85)" : "oklch(0.30 0.05 75 / 0.9)",
+                    color: "white",
+                    fontSize: 13,
+                    fontWeight: 600,
                   }}>
-                    {captureMessage}
-                  </span>
-                </div>
-              )}
+                    {recordingState === "recording" ? (
+                      <>
+                        <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 999, background: "oklch(0.63 0.24 25)" }} />
+                        Recording video
+                        <button
+                          type="button"
+                          onClick={() => setConfirmStopRecording(true)}
+                          style={{
+                            padding: "2px 10px",
+                            borderRadius: 999,
+                            border: "1px solid oklch(1 0 0 / 0.6)",
+                            background: "transparent",
+                            color: "white",
+                            fontFamily: "var(--sans)",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >Stop</button>
+                      </>
+                    ) : recordingState === "unsupported" ? (
+                      "This browser cannot record video. Your exercise results are not affected."
+                    ) : (
+                      "Video recording stopped: it could not be saved. Your exercise results are not affected."
+                    )}
+                  </div>
+                )}
 
-              {showTiltBanner && (
-                <div style={{
-                  position: "absolute",
-                  top: 16, left: "50%", transform: "translateX(-50%)",
-                  background: "oklch(0.99 0.02 80)",
-                  border: "2px solid oklch(0.70 0.16 65)",
-                  borderRadius: 8,
-                  padding: "10px 18px",
-                  display: "flex", alignItems: "center", gap: 14,
-                  boxShadow: "0 2px 8px oklch(0 0 0 / 0.20)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
-                  <span style={{
-                    width: 10, height: 10, borderRadius: 999,
-                    background: "oklch(0.70 0.16 65)",
-                    boxShadow: "0 0 0 5px oklch(0.70 0.16 65 / 0.15)",
-                    flexShrink: 0,
-                    display: "inline-block",
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--mono)", fontSize: 18, letterSpacing: ".12em",
-                    textTransform: "uppercase", color: "oklch(0.45 0.10 65)", fontWeight: 700,
-                    flexShrink: 0,
-                  }}>Tilt</span>
-                  <span style={{ fontSize: 18, fontWeight: 500, color: "oklch(0.25 0.05 65)", whiteSpace: "nowrap" }}>
-                    Keep hips &amp; head visible
-                  </span>
-                </div>
-              )}
+              </div>
 
-              {/* Baseline-capture banner */}
-              {baselineVisible && (
-                <div style={{
+              {/* AI indicator, top right: whether the pose model has loaded.
+                  Above the camera-off cover and the countdown, like the
+                  diagnostics corner opposite. */}
+              <div
+                id="cam-tour-ai"
+                role="img"
+                aria-label={modelLoaded ? "AI ready" : "AI loading"}
+                title={modelLoaded ? "AI ready" : "AI loading"}
+                style={{
+                  ...FEED_CHIP_STYLE,
                   position: "absolute",
-                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "white",
-                  border: "1px solid oklch(0.92 0.003 240)",
-                  borderRadius: 8,
-                  padding: "10px 16px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
-                  maxWidth: "calc(100% - 32px)",
-                  zIndex: 5,
-                }}>
+                  top: tightLayout ? 10 : 14,
+                  right: tightLayout ? 10 : 14,
+                  zIndex: 36,
+                  gap: 8,
+                  fontFamily: "var(--sans)",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  letterSpacing: ".04em",
+                }}
+              >
+                AI
+                <span aria-hidden="true" style={{
+                  width: 10,
+                  height: 10,
+                  flexShrink: 0,
+                  borderRadius: 999,
+                  background: modelLoaded ? "oklch(0.72 0.17 145)" : "oklch(0.78 0.15 75)",
+                  boxShadow: modelLoaded
+                    ? "0 0 0 3px oklch(0.72 0.17 145 / 0.28)"
+                    : "0 0 0 3px oklch(0.78 0.15 75 / 0.30)",
+                }} />
+              </div>
+
+              {/* Status, positioning hint and set numbers share one column at
+                  the bottom of the view. The top stays clear: that is where the
+                  capture check draws its head-zone target when framing fails. */}
+              <div style={{
+                position: "absolute",
+                left: tightLayout ? 10 : 16,
+                right: tightLayout ? 10 : 16,
+                bottom: tightLayout ? 10 : 16,
+                zIndex: 22,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+                pointerEvents: "none",
+              }}>
+                {trackingPaused && (sessionState === "idle" || sessionState === "active") &&
+                  (!isCustomSelected || captureMessage === DARK_PICTURE_MESSAGE) && (
                   <div style={{
-                    width: 6, height: 6, borderRadius: 999, background: ACCENT.hex,
-                    boxShadow: `0 0 0 4px ${ACCENT.soft}`,
-                    display: "inline-block",
-                  }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 2,
-                    }}>Baseline capture</div>
-                    <div style={{ fontSize: 12, color: "oklch(0.35 0.01 240)" }}>
-                      {captureOk ? "Stand naturally, arms relaxed" : "Paused — improve framing"}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 500, color: "oklch(0.18 0.01 240)", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
-                      {baselineRemainingSec}<span style={{ fontSize: 12, color: "oklch(0.55 0.01 240)", marginLeft: 2 }}>s</span>
-                    </div>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em", color: "oklch(0.55 0.01 240)", marginTop: 3 }}>
-                      {baselineProgressPct}% READY
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Resting banner */}
-              {sessionState === "resting" && (
-                <div style={{
-                  position: "absolute",
-                  top: patientAlertVisible ? (tightLayout ? 96 : 84) : 16, left: "50%", transform: "translateX(-50%)",
-                  background: "white",
-                  border: `1px solid ${ACCENT.soft}`,
-                  borderRadius: 8,
-                  padding: "8px 16px",
-                  display: "flex", alignItems: "center", gap: 14,
-                  boxShadow: "0 1px 2px oklch(0 0 0 / 0.04)",
-                  zIndex: 5,
-                }}>
-                  <span style={{
-                    fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                    textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
-                  }}>Rest period</span>
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 16, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" }}>
-                    {formatElapsedTime(restRemainingSec)}
-                  </span>
-                  <span style={{ fontSize: 11, color: "oklch(0.55 0.01 240)" }}>
-                    Set {currentSetIdx} of {prescription.sets} starts automatically
-                  </span>
-                </div>
-              )}
-
-              {/* 3-2-1 countdown overlay */}
-              {sessionState === "countdown" && (
-                <div style={{
-                  position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  zIndex: 30, pointerEvents: "none",
-                }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                    <span
-                      key={countdownSec}
-                      style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: tightLayout ? 12 : 16,
+                    maxWidth: 760,
+                    padding: tightLayout ? "12px 16px" : "16px 22px",
+                    borderRadius: 12,
+                    background: "oklch(0.18 0.01 240 / 0.86)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 8px 24px oklch(0 0 0 / 0.25)",
+                  }}>
+                    <span aria-hidden="true" style={{
+                      width: tightLayout ? 36 : 48,
+                      height: tightLayout ? 36 : 48,
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      background: "oklch(0.70 0.16 65)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.6" strokeLinecap="round">
+                        <line x1="12" y1="6" x2="12" y2="14"/>
+                        <line x1="12" y1="18" x2="12.01" y2="18"/>
+                      </svg>
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{
+                        display: "block",
+                        marginBottom: 4,
                         fontFamily: "var(--mono)",
-                        fontSize: "6rem",
-                        fontWeight: 900,
-                        lineHeight: 1,
+                        fontSize: tightLayout ? 13 : 16,
+                        fontWeight: 700,
+                        letterSpacing: ".12em",
+                        textTransform: "uppercase",
+                        color: "oklch(0.82 0.13 70)",
+                      }}>
+                        {isCustomSelected ? "Lighting" : "Paused"}
+                      </span>
+                      <span style={{
+                        display: "block",
+                        fontSize: tightLayout ? 18 : 26,
+                        fontWeight: 700,
+                        letterSpacing: "-0.01em",
+                        lineHeight: 1.2,
                         color: "white",
-                        filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.8))",
-                        userSelect: "none",
-                        fontVariantNumeric: "tabular-nums",
+                        overflowWrap: "anywhere",
+                      }}>
+                        {captureMessage}
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                {showTiltBanner && cameraFramesFlowing && (
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Tilt</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      Keep hips &amp; head visible
+                    </span>
+                  </div>
+                )}
+
+                {/* Unsteady-tracking message: display only, it never pauses the
+                    exercise or changes a measurement. */}
+                {trackingHint && captureOk && cameraFramesFlowing && !isCustomSelected && (
+                  <div role="status" style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Tracking</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      {trackingHint}
+                    </span>
+                  </div>
+                )}
+
+                {/* Body turned away from the camera: display only, it never
+                    pauses the exercise or changes a measurement (bodyTurn.ts). */}
+                {turnHint && captureOk && cameraFramesFlowing && !isCustomSelected && (
+                  <div role="status" style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    maxWidth: "100%",
+                    padding: "10px 18px",
+                    borderRadius: 12,
+                    background: "oklch(0.99 0.02 80)",
+                    border: "2px solid oklch(0.70 0.16 65)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <span style={{ ...EYEBROW_STYLE, color: "oklch(0.45 0.10 65)", flexShrink: 0 }}>Position</span>
+                    <span style={{ fontSize: tightLayout ? 15 : 18, fontWeight: 600, color: "oklch(0.25 0.05 65)" }}>
+                      {BODY_TURN_MESSAGE}
+                    </span>
+                  </div>
+                )}
+
+                {/* Baseline-capture banner. The loudest card on the view, because
+                    the patient has to hold still while it runs. At the start it
+                    follows the positioning overlay. */}
+                {baselineVisible && !positioningOverlayVisible && !isCustomSelected && (
+                  <div style={{
+                    alignSelf: "stretch",
+                    width: "100%",
+                    maxWidth: 820,
+                    margin: "0 auto",
+                    padding: tightLayout ? "14px 16px" : "20px 26px",
+                    borderRadius: 14,
+                    background: "white",
+                    border: `3px solid ${ACCENT.hex}`,
+                    boxShadow: "0 10px 30px oklch(0 0 0 / 0.30)",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: tightLayout ? 12 : 20 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ ...EYEBROW_STYLE, fontSize: tightLayout ? 13 : 16, color: ACCENT.text, marginBottom: 6 }}>
+                          {bannerPositioningSec > 0 ? "Before the baseline" : "Baseline capture"}
+                        </div>
+                        <div style={{ fontSize: tightLayout ? 22 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15, color: "oklch(0.18 0.01 240)" }}>
+                          {bannerPositioningSec > 0
+                            ? "Get into position"
+                            : captureOk
+                              ? baselineFinishingSamples
+                                ? "Finishing setup — stand still"
+                                : "Stand naturally, arms relaxed"
+                              : "Paused — improve framing"}
+                        </div>
+                      </div>
+                      <div style={{ flexShrink: 0, fontFamily: "var(--mono)", fontSize: tightLayout ? 36 : 56, fontWeight: 600, lineHeight: 1, color: ACCENT.text, fontVariantNumeric: "tabular-nums" }}>
+                        {bannerPositioningSec > 0
+                          ? bannerPositioningSec
+                          : baselineFinishingSamples
+                            ? `${Math.min(
+                                baselineProgress.samples,
+                                NEUTRAL_CALIBRATION_MIN_SAMPLES,
+                              )}/${NEUTRAL_CALIBRATION_MIN_SAMPLES}`
+                            : baselineRemainingSec}
+                        {(bannerPositioningSec > 0 || !baselineFinishingSamples) && (
+                          <span style={{ fontSize: tightLayout ? 18 : 24, marginLeft: 2 }}>s</span>
+                        )}
+                      </div>
+                    </div>
+                    {/* No progress while getting into position: nothing is measured yet. */}
+                    {bannerPositioningSec === 0 && (
+                      <>
+                        <div style={{ height: 10, marginTop: 14, borderRadius: 5, overflow: "hidden", background: "oklch(0.93 0.01 200)" }}>
+                          <div style={{ height: "100%", width: `${baselineProgressPct}%`, borderRadius: 5, background: ACCENT.hex, transition: "width .3s" }} />
+                        </div>
+                        <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".14em", color: "oklch(0.50 0.01 240)" }}>
+                          {baselineProgressPct}% READY
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Stale-baseline prompt. Raised when tracking was interrupted
+                    AFTER the neutral baseline was captured. The baseline is kept
+                    rather than re-taken, because re-taking it here would anchor
+                    "neutral" to whatever posture the interruption happened in.
+                    Recalibrating is offered, never performed automatically. */}
+                {calibrationStale && !baselineVisible && (
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
+                    maxWidth: 640,
+                    padding: "12px 18px",
+                    borderRadius: 12,
+                    background: "white",
+                    border: "1px solid oklch(0.86 0.06 75)",
+                    boxShadow: "0 4px 14px oklch(0 0 0 / 0.14)",
+                    pointerEvents: "auto",
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ ...EYEBROW_STYLE, color: "oklch(0.48 0.10 75)", marginBottom: 3 }}>
+                        Tracking was interrupted
+                      </div>
+                      <div style={{ fontSize: 15, lineHeight: 1.4, color: "oklch(0.30 0.01 240)" }}>
+                        Your setup baseline is still the one taken at the start. Recalibrate
+                        only if you or the camera moved.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleManualRecalibration}
+                      style={{
+                        flexShrink: 0,
+                        padding: "10px 16px",
+                        borderRadius: 8,
+                        border: "1px solid oklch(0.86 0.06 75)",
+                        background: "oklch(0.97 0.02 75)",
+                        color: "oklch(0.40 0.10 75)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 15,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                        cursor: "pointer",
                       }}
                     >
-                      {countdownSec}
-                    </span>
-                    <span style={{
-                      fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.8)",
-                      textTransform: "uppercase", letterSpacing: "0.2em",
-                      filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.9))",
-                    }}>
-                      Get ready
-                    </span>
+                      Recalibrate
+                    </button>
+                  </div>
+                )}
+
+                {/* Positioning hint before a session starts */}
+                {sessionState === "idle" && cameraFramesFlowing && captureOk && !showResumePrompt && !showCompletedRecap && !!activeDefinition && !blockedBySchedule && (
+                  <div style={{
+                    alignSelf: "flex-start",
+                    maxWidth: 620,
+                    padding: tightLayout ? "14px 18px" : "18px 24px",
+                    borderRadius: 12,
+                    background: "oklch(1 0 0 / 0.96)",
+                    boxShadow: "0 6px 20px oklch(0 0 0 / 0.18)",
+                  }}>
+                    <div style={{ fontSize: tightLayout ? 18 : 24, fontWeight: 600, lineHeight: 1.25 }}>
+                      Stand where the camera can see you from head to knees
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: tightLayout ? 15 : 18, color: "oklch(0.45 0.01 240)" }}>
+                      Then press Start session.
+                    </div>
+                  </div>
+                )}
+
+                {/* Set numbers sit on the camera view, where the patient is already
+                    looking. They stay up through rest, so the reset to zero and the
+                    next set number are seen rolling in. */}
+                {(sessionState === "active" || sessionState === "resting") && activeDefinition && (
+                  <CameraSetHud
+                    activeDefinition={activeDefinition}
+                    repCounts={hudRepCounts}
+                    holdState={hudHoldState}
+                    timer={timer}
+                    prescription={prescription}
+                    currentSetIdx={hudSetIdx}
+                    compact={tightLayout}
+                  />
+                )}
+              </div>
+
+              {/* Rest */}
+              {sessionState === "resting" && (
+                <RestOverlay
+                  remainingSec={restRemainingSec}
+                  elapsedPct={restElapsedPct}
+                  nextSet={currentSetIdx}
+                  sets={prescription.sets}
+                  compact={tightLayout}
+                  note={trackingPaused ? captureMessage : undefined}
+                />
+              )}
+
+              {/* A custom exercise's rest uses the same overlay, above the
+                  camera-off cover since its camera may be off. */}
+              {customRest && (
+                <RestOverlay
+                  remainingSec={customRest.remainingSec}
+                  elapsedPct={customRest.totalSec > 0
+                    ? Math.max(0, Math.min(100, Math.round((1 - customRest.remainingSec / customRest.totalSec) * 100)))
+                    : 0}
+                  nextSet={customRest.nextSet}
+                  sets={customRest.sets}
+                  compact={tightLayout}
+                  zIndex={30}
+                  opaque={!cameraOn}
+                />
+              )}
+
+              {/* Camera off */}
+              {!cameraOn && (
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 25,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: tightLayout ? 14 : 20,
+                  padding: tightLayout ? 20 : 40,
+                  textAlign: "center",
+                  background: "oklch(0.22 0.006 240)",
+                }}>
+                  <div aria-hidden="true" style={{
+                    width: tightLayout ? 64 : 84,
+                    height: tightLayout ? 64 : 84,
+                    borderRadius: 999,
+                    background: "oklch(0.30 0.008 240)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="oklch(0.78 0.01 240)" strokeWidth="1.8" strokeLinecap="round">
+                      <path d="M16 16H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1"/>
+                      <path d="M10 6h4a2 2 0 0 1 2 2v1.5l5-3v11l-5-3"/>
+                      <line x1="2" y1="2" x2="22" y2="22"/>
+                    </svg>
+                  </div>
+                  <button
+                    id="cam-tour-start"
+                    type="button"
+                    onClick={() => startCamera(selectedDeviceId || undefined)}
+                    disabled={isStarting || !modelLoaded}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: tightLayout ? "14px 26px" : "18px 40px",
+                      borderRadius: 12,
+                      border: "none",
+                      background: ACCENT.hex,
+                      color: "white",
+                      fontFamily: "var(--sans)",
+                      fontSize: tightLayout ? 18 : 22,
+                      fontWeight: 600,
+                      cursor: isStarting || !modelLoaded ? "default" : "pointer",
+                      opacity: isStarting || !modelLoaded ? 0.6 : 1,
+                    }}
+                  >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+                      <path d="M17 10.5l5-3v9l-5-3"/>
+                    </svg>
+                    {isStarting ? "Starting…" : "Start camera"}
+                  </button>
+                  <div style={{ maxWidth: 520, fontSize: tightLayout ? 15 : 18, lineHeight: 1.4, color: "oklch(0.82 0.01 240)" }}>
+                    Please click Allow when browser asks for camera permission.
                   </div>
                 </div>
               )}
 
-              {/* Post-session summary — recap of the just-finished session. Shown
-                  in the "ended" state (last exercise complete, or a manual End;
-                  the guided flow auto-advances between exercises otherwise). */}
-              {sessionState === "ended" && (() => {
+              {/* Start countdown overlay: the positioning stage only. The
+                  baseline that follows shows in the baseline banner, with the
+                  camera view clear. */}
+              {positioningOverlayVisible && (
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 30,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  background: "oklch(0.18 0.01 240 / 0.55)",
+                  pointerEvents: "none",
+                }}>
+                  <span
+                    key={countdownSec}
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: "clamp(96px, 21vh, 190px)",
+                      fontWeight: 700,
+                      lineHeight: 1,
+                      color: "white",
+                      userSelect: "none",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {countdownSec}
+                  </span>
+                  <span style={{
+                    fontSize: tightLayout ? 20 : 26,
+                    fontWeight: 600,
+                    letterSpacing: ".12em",
+                    textTransform: "uppercase",
+                    color: "oklch(0.92 0.01 240)",
+                  }}>
+                    Get into position
+                  </span>
+                  <span style={{
+                    fontSize: tightLayout ? 13 : 15,
+                    fontWeight: 500,
+                    color: "oklch(0.92 0.01 240)",
+                    textAlign: "center",
+                    maxWidth: "80%",
+                  }}>
+                    Step into place where the camera can see you.
+                  </span>
+                </div>
+              )}
+
+              {/* Post-session summary — recap of the just-finished session. A
+                  completed patient attempt reaches this only after the required
+                  pain report/decline, and navigation waits for acknowledgement. */}
+              {sessionState === "ended" && !preSessionSurvey && !videoQuestion && (() => {
                 const def = activeDefinition;
                 const isIso = def?.kind === "isometric";
                 const setsLog = completedSetsLogRef.current;
                 const setsDone = setsLog.length;
 
-                // Per-side tallies — NEVER summed (preserves the asymmetry signal).
-                const L = repLogRef.current.left;
-                const R = repLogRef.current.right;
-                const lComplete = L.filter((e) => e.classification === "complete").length;
-                const rComplete = R.filter((e) => e.classification === "complete").length;
-                const peaks = [...L, ...R].map((e) => e.peakValue);
-                const avgPeak = peaks.length ? peaks.reduce((a, b) => a + b, 0) / peaks.length : null;
+                // Whole attempt: outcomes restored after a Resume plus this page's.
+                const outcomes = sessionRepOutcomes(priorRepOutcomesRef.current, repLogRef.current);
+                const L = outcomes.left;
+                const R = outcomes.right;
+                const outcomeSides = prescribedOutcomeSides(
+                  prescription.prescribedSide,
+                );
+                const showAsymmetry = shouldShowOutcomeAsymmetry(
+                  prescription.prescribedSide,
+                );
+                const repEventsBySide = { left: L, right: R };
+                const completeBySide = {
+                  left: L.filter((event) => event.classification === "complete").length,
+                  right: R.filter((event) => event.classification === "complete").length,
+                };
+                const averagePeak = (events: RepOutcome[]) =>
+                  events.length > 0
+                    ? events.reduce((sum, event) => sum + event.peakValue, 0) /
+                      events.length
+                    : null;
+                const avgPeakBySide = {
+                  left: averagePeak(L),
+                  right: averagePeak(R),
+                };
                 const isAngle = def && def.kind === "dynamic" ? def.primaryMetric.name !== "wristShoulderVertical" : true;
                 const target = def && def.kind === "dynamic" ? def.primaryMetric.thresholds.targetROM : 0;
-                const unit = isAngle ? "°" : "";
                 const fmtVal = (v: number) => (isAngle ? `${Math.round(v)}` : v.toFixed(2));
                 const avgAsym = setsDone ? setsLog.reduce((s, r) => s + r.asymmetryIndex, 0) / setsDone : 0;
                 const asymLabel = avgAsym < 0.1 ? "Low" : avgAsym < 0.25 ? "Moderate" : "High";
-                const heldMs = setsLog.reduce((s, r) => s + (r.pairedHoldMs ?? 0), 0);
                 const targetMs = setsLog.reduce((s, r) => s + (r.targetHoldMs ?? 0), 0);
-                // Side-split isometric (ex_004): per-side hold totals, shown
-                // as separate rows — never merged into one number.
-                const sideSplitIso = isIso && isSideSplitIsometric(def);
-                const leftHeldMs = setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0);
-                const rightHeldMs = setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0);
+                const heldMsBySide = {
+                  left: setsLog.reduce((s, r) => s + (r.leftHoldMs ?? 0), 0),
+                  right: setsLog.reduce((s, r) => s + (r.rightHoldMs ?? 0), 0),
+                };
                 const isPatient = prescription.patientExerciseId !== undefined;
 
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
-
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 700, marginBottom: 4,
-                      }}>Session complete</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16 }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.38 0.07 145)", marginBottom: 8 }}>
+                        {completedSets >= prescription.sets ? "Session complete" : "Session ended early"}
+                      </div>
+                      <div style={{ marginBottom: 22, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {def?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {sideSplitIso ? (
-                          <>
-                            <div style={rowStyle}><span style={labelStyle}>Left hold</span><span style={valStyle}>{Math.round(leftHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right hold</span><span style={valStyle}>{Math.round(rightHeldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
-                        ) : isIso ? (
-                          <>
-                            <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{Math.round(heldMs / 1000)}s{targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
-                        ) : (
-                          <>
-                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{lComplete}/{L.length} complete</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{rComplete}/{R.length} complete</span></div>
-                            {avgPeak !== null && (
-                              <div style={rowStyle}><span style={labelStyle}>Avg peak</span><span style={valStyle}>{fmtVal(avgPeak)}{unit}{target ? ` · target ${fmtVal(target)}${unit}` : ""}</span></div>
-                            )}
-                            <div style={rowStyle}><span style={labelStyle}>Asymmetry</span><span style={valStyle}>{asymLabel}</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{setsDone} / {prescription.sets}</span></div>
-                          </>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        {isIso
+                          ? outcomeSides.map((side) => (
+                              <div key={side} style={MODAL_ROW_STYLE}>
+                                <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} hold</span>
+                                <span style={MODAL_VALUE_STYLE}>
+                                  {Math.round(heldMsBySide[side] / 1000)}s
+                                  {targetMs ? ` / ${Math.round(targetMs / 1000)}s` : ""}
+                                </span>
+                              </div>
+                            ))
+                          : outcomeSides.map((side) => (
+                              <div key={side} style={{ display: "contents" }}>
+                                <div style={MODAL_ROW_STYLE}>
+                                  <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} reps</span>
+                                  <span style={MODAL_VALUE_STYLE}>
+                                    {fullRomOutcomeText(
+                                      completeBySide[side],
+                                      repEventsBySide[side].length,
+                                    )}
+                                  </span>
+                                </div>
+                                {avgPeakBySide[side] !== null && (
+                                  <div style={MODAL_ROW_STYLE}>
+                                    <span style={MODAL_LABEL_STYLE}>
+                                      {sideLabel(side)} avg peak{isAngle ? ` ${ANGLE_ESTIMATE_LABEL}` : ""}
+                                    </span>
+                                    <span style={MODAL_VALUE_STYLE}>
+                                      {fmtVal(avgPeakBySide[side]!)}
+                                      {target ? ` · target ${fmtVal(target)}` : ""}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                        {showAsymmetry && (
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Asymmetry</span><span style={MODAL_VALUE_STYLE}>{asymLabel}</span></div>
                         )}
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets completed</span><span style={MODAL_VALUE_STYLE}>{completedSets} / {prescription.sets}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={handleSessionStart}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
-                        >Redo</button>
-                        {hasNextExercise && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                        {(pendingCompletionNavigation?.next ||
+                          (!pendingCompletionNavigation && hasNextExercise)) && (
                           <button
                             type="button"
-                            onClick={() => goToAdjacentExercise(1)}
-                            style={{
-                              width: "100%", padding: "10px 12px",
-                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
-                            }}
+                            onClick={() =>
+                              pendingCompletionNavigation
+                                ? continueFromCompletionRecap("next")
+                                : goToAdjacentExercise(1)
+                            }
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Next exercise →</button>
                         )}
-                        {isPatient && (
+                        {!pendingCompletionNavigation && (
+                          <button
+                            type="button"
+                            onClick={() => void startSessionWithCamera()}
+                            disabled={!modelLoaded}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
+                          >Redo</button>
+                        )}
+                        {isPatient && lastSessionId !== null && (
+                          <ReportButton
+                            label="Session report (PDF)"
+                            onDownload={async () => {
+                              const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
+                              await downloadSessionReport(lastSessionId, user?.name ?? "Patient");
+                            }}
+                            wrapperStyle={{ flex: "1 1 160px" }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                            waitPopup
+                          />
+                        )}
+                        {isPatient && pendingCompletionNavigation ? (
+                          <button
+                            type="button"
+                            onClick={() => continueFromCompletionRecap("schedule")}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                          >
+                            {pendingCompletionNavigation.next
+                              ? "Back to schedule"
+                              : "Finish and return to schedule"}
+                          </button>
+                        ) : isPatient ? (
                           <Link
                             href="/dashboard/patient"
-                            style={{
-                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
-                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
-                            }}
+                            onClick={(event) => waitForPage(event, "Opening your schedule…")}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -5222,7 +10928,7 @@ export default function CameraClient() {
                   when the selected exercise was finished in a prior visit. Built
                   from the persisted latest-finished session (the live in-memory
                   summary above is gone after the route unmounts). Dismissable. */}
-              {showCompletedRecap && selectedRecap && (() => {
+              {showCompletedRecap && selectedRecap && !preSessionSurvey && !videoQuestion && (() => {
                 const recap = selectedRecap;
                 const isIso = recap.exerciseKind === "isometric";
                 const isPatient = prescription.patientExerciseId !== undefined;
@@ -5236,95 +10942,123 @@ export default function CameraClient() {
                       minute: "2-digit",
                     })
                   : "—";
-                const heldSec =
-                  recap.totalPairedHoldMs != null
-                    ? Math.round(recap.totalPairedHoldMs / 1000)
-                    : 0;
+                const outcomeSides = prescribedOutcomeSides(
+                  recap.prescribedSide,
+                );
+                const repCountBySide = {
+                  left: recap.leftReps,
+                  right: recap.rightReps,
+                };
+                const completeBySide = {
+                  left: recap.completeLeftReps,
+                  right: recap.completeRightReps,
+                };
+                const holdMsBySide = {
+                  left: recap.totalLeftHoldMs ?? recap.totalPairedHoldMs ?? 0,
+                  right: recap.totalRightHoldMs ?? recap.totalPairedHoldMs ?? 0,
+                };
                 const targetSec =
                   recap.totalTargetHoldMs != null
                     ? Math.round(recap.totalTargetHoldMs / 1000)
                     : 0;
-
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
+                const peakBySide = {
+                  left: recap.avgLeftPeakValue,
+                  right: recap.avgRightPeakValue,
+                };
+                const recapIsAngle =
+                  activeDefinition?.kind === "dynamic"
+                    ? activeDefinition.primaryMetric.name !== "wristShoulderVertical"
+                    : true;
+                const formatRecapPeak = (value: number) =>
+                  recapIsAngle ? `${Math.round(value)}` : value.toFixed(2);
 
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      position: "relative",
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
                       <button
                         type="button"
                         onClick={() => setRecapDismissed(true)}
                         aria-label="Dismiss"
-                        style={{
-                          position: "absolute", top: 12, right: 12,
-                          width: 28, height: 28, display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
-                          fontSize: 15, lineHeight: 1,
-                        }}
+                        style={MODAL_DISMISS_STYLE}
                       >✕</button>
 
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: "oklch(0.40 0.07 145)", fontWeight: 700, marginBottom: 4,
-                      }}>Already completed</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.38 0.07 145)", marginBottom: 8 }}>
+                        Already completed
+                      </div>
+                      <div style={{ marginBottom: 22, paddingRight: 36, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        {isIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold time</span><span style={valStyle}>{heldSec}s{targetSec ? ` / ${targetSec}s` : ""}</span></div>
-                        ) : (
-                          <>
-                            <div style={rowStyle}><span style={labelStyle}>Left</span><span style={valStyle}>{recap.completeLeftReps}/{recap.leftReps} complete</span></div>
-                            <div style={rowStyle}><span style={labelStyle}>Right</span><span style={valStyle}>{recap.completeRightReps}/{recap.rightReps} complete</span></div>
-                          </>
-                        )}
-                        <div style={rowStyle}><span style={labelStyle}>Sets</span><span style={valStyle}>{recap.setCount} / {prescription.sets}</span></div>
-                        <div style={rowStyle}><span style={labelStyle}>Duration</span><span style={valStyle}>{duration}</span></div>
-                        <div style={rowStyle}><span style={labelStyle}>Finished</span><span style={valStyle}>{finishedAt}</span></div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        {isIso
+                          ? outcomeSides.map((side) => (
+                              <div key={side} style={MODAL_ROW_STYLE}>
+                                <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} hold</span>
+                                <span style={MODAL_VALUE_STYLE}>
+                                  {Math.round(holdMsBySide[side] / 1000)}s
+                                  {targetSec ? ` / ${targetSec}s` : ""}
+                                </span>
+                              </div>
+                            ))
+                          : outcomeSides.map((side) => (
+                              <div key={side} style={{ display: "contents" }}>
+                                <div style={MODAL_ROW_STYLE}>
+                                  <span style={MODAL_LABEL_STYLE}>{sideLabel(side)} reps</span>
+                                  <span style={MODAL_VALUE_STYLE}>
+                                    {fullRomOutcomeText(
+                                      completeBySide[side],
+                                      repCountBySide[side],
+                                    )}
+                                  </span>
+                                </div>
+                                {peakBySide[side] !== null && (
+                                  <div style={MODAL_ROW_STYLE}>
+                                    <span style={MODAL_LABEL_STYLE}>
+                                      {sideLabel(side)} avg peak{recapIsAngle ? ` ${ANGLE_ESTIMATE_LABEL}` : ""}
+                                    </span>
+                                    <span style={MODAL_VALUE_STYLE}>
+                                      {formatRecapPeak(peakBySide[side]!)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Sets</span><span style={MODAL_VALUE_STYLE}>{recap.setCount} / {prescription.sets}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Duration</span><span style={MODAL_VALUE_STYLE}>{duration}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Finished</span><span style={MODAL_VALUE_STYLE}>{finishedAt}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        <button
-                          type="button"
-                          onClick={handleSessionStart}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
-                        >Redo</button>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                         {hasNextExercise && (
                           <button
                             type="button"
                             onClick={() => goToAdjacentExercise(1)}
-                            style={{
-                              width: "100%", padding: "10px 12px",
-                              background: "white", border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                              fontSize: 13, fontWeight: 600, color: ACCENT.text, cursor: "pointer",
-                            }}
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Next exercise →</button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void startSessionWithCamera()}
+                          disabled={!modelLoaded}
+                          style={{ ...(hasNextExercise ? SECONDARY_BUTTON_STYLE : PRIMARY_BUTTON_STYLE), flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
+                        >Redo</button>
+                        {isPatient && recap.sessionId !== null && (
+                          <ReportButton
+                            label="Session report (PDF)"
+                            onDownload={async () => {
+                              const { downloadSessionReport } = await import("@/lib/reports/sessionReport");
+                              await downloadSessionReport(recap.sessionId!, user?.name ?? "Patient");
+                            }}
+                            wrapperStyle={{ flex: "1 1 160px" }}
+                            style={{ ...SECONDARY_BUTTON_STYLE, width: "100%" }}
+                            waitPopup
+                          />
                         )}
                         {isPatient && (
                           <Link
                             href="/dashboard/patient"
-                            style={{
-                              width: "100%", padding: "10px 12px", textAlign: "center", textDecoration: "none",
-                              background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                              fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)",
-                            }}
+                            onClick={(event) => waitForPage(event, "Opening your schedule…")}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                           >Back to schedule</Link>
                         )}
                       </div>
@@ -5337,7 +11071,7 @@ export default function CameraClient() {
                   session that was disrupted (not ended via the End button). The
                   counter/sets/timer come from the device-local resume snapshot;
                   Resume continues the SAME open session. */}
-              {showResumePrompt && resumeSnap && (() => {
+              {showResumePrompt && resumeSnap && !preSessionSurvey && !videoQuestion && (() => {
                 const snap = resumeSnap;
                 if (!snap) return null;
                 const isIso = snap.kind === "isometric";
@@ -5351,76 +11085,49 @@ export default function CameraClient() {
                 const rightHeldSec = Math.round((snap.sideHoldMs?.right ?? 0) / 1000);
                 const elapsed = formatElapsedTime(Math.round(snap.elapsedMs / 1000));
 
-                const rowStyle: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 14 };
-                const labelStyle: CSSProperties = { color: "oklch(0.45 0.01 240)" };
-                const valStyle: CSSProperties = { fontWeight: 600, color: "oklch(0.18 0.01 240)", fontVariantNumeric: "tabular-nums" };
-
                 return (
-                  <div style={{
-                    position: "absolute", inset: 0, zIndex: 35,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: "oklch(0.18 0.01 240 / 0.55)", padding: 16,
-                  }}>
-                    <div style={{
-                      position: "relative",
-                      background: "white", borderRadius: 14, padding: "22px 24px",
-                      width: "min(380px, 100%)", boxShadow: "0 8px 30px oklch(0 0 0 / 0.25)",
-                    }}>
+                  <div style={MODAL_BACKDROP_STYLE}>
+                    <div style={MODAL_CARD_STYLE}>
                       <button
                         type="button"
                         onClick={() => setResumeDismissed(true)}
                         aria-label="Dismiss"
-                        style={{
-                          position: "absolute", top: 12, right: 12,
-                          width: 28, height: 28, display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                          borderRadius: 6, color: "oklch(0.40 0.01 240)", cursor: "pointer",
-                          fontSize: 15, lineHeight: 1,
-                        }}
+                        style={MODAL_DISMISS_STYLE}
                       >✕</button>
 
-                      <div style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: "oklch(0.48 0.13 75)", fontWeight: 700, marginBottom: 4,
-                      }}>Session in progress</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)", marginBottom: 16, paddingRight: 28 }}>
+                      <div style={{ ...EYEBROW_STYLE, fontSize: 15, color: "oklch(0.45 0.13 70)", marginBottom: 8 }}>
+                        Session in progress
+                      </div>
+                      <div style={{ marginBottom: 22, paddingRight: 36, fontSize: tightLayout ? 26 : 34, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
                         {selectedExerciseObj?.name ?? activeDefinition?.name ?? "Exercise"}
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
-                        <div style={rowStyle}><span style={labelStyle}>Set</span><span style={valStyle}>{snap.completedSets + 1} of {prescription.sets}</span></div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Set</span><span style={MODAL_VALUE_STYLE}>{snap.completedSets + 1} of {prescription.sets}</span></div>
                         {sideSplitIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>L {leftHeldSec}s · R {rightHeldSec}s</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Hold</span><span style={MODAL_VALUE_STYLE}>L {leftHeldSec}s · R {rightHeldSec}s</span></div>
                         ) : isIso ? (
-                          <div style={rowStyle}><span style={labelStyle}>Hold</span><span style={valStyle}>{heldSec}s</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Hold</span><span style={MODAL_VALUE_STYLE}>{heldSec}s</span></div>
                         ) : (
-                          <div style={rowStyle}><span style={labelStyle}>Reps</span><span style={valStyle}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
+                          <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Reps</span><span style={MODAL_VALUE_STYLE}>L {snap.currentSetReps.left} · R {snap.currentSetReps.right}</span></div>
                         )}
-                        <div style={rowStyle}><span style={labelStyle}>Elapsed</span><span style={valStyle}>{elapsed}</span></div>
+                        <div style={MODAL_ROW_STYLE}><span style={MODAL_LABEL_STYLE}>Elapsed</span><span style={MODAL_VALUE_STYLE}>{elapsed}</span></div>
                       </div>
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                         <button
                           type="button"
                           onClick={resumeSession}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, borderRadius: 6,
-                            fontSize: 13, fontWeight: 600, color: "white", cursor: "pointer",
-                          }}
+                          disabled={!modelLoaded || isStarting}
+                          style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
                         >Resume</button>
                         <button
                           type="button"
-                          onClick={() => {
-                            clearResumeSnapshot(snap.patientExerciseId);
-                            handleSessionStart();
-                          }}
-                          style={{
-                            width: "100%", padding: "10px 12px",
-                            background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6,
-                            fontSize: 13, fontWeight: 500, color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                          }}
+                          // The snapshot is cleared only once the survey is
+                          // answered, so Back still leaves Resume available.
+                          onClick={() => void startSessionWithCamera(() => clearResumeSnapshot(snap.patientExerciseId))}
+                          disabled={!modelLoaded}
+                          style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px", opacity: modelLoaded ? 1 : 0.5 }}
                         >Start over</button>
                       </div>
                     </div>
@@ -5428,360 +11135,733 @@ export default function CameraClient() {
                 );
               })()}
 
-              {/* Stat strip — patient-facing distance readouts */}
-              <ClinicalStatStrip
-                score={score}
-                tier={tier}
-                activeDefinition={activeDefinition}
-                repCounts={repCounts}
-                holdState={holdState}
-                timer={timer}
-                prescription={prescription}
-                sessionState={sessionState}
-                currentSetIdx={currentSetIdx}
-                compact={compactLayout}
-              />
-            </div>
+              {/* Before-session pain survey: every new patient session waits
+                  for Save or Skip, and Back returns without starting. */}
+              {preSessionSurvey && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="dialog" aria-modal="true" aria-labelledby="pre-session-pain-title" style={MODAL_CARD_STYLE}>
+                    <div id="pre-session-pain-title" style={{ marginBottom: 4, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Pain before you start
+                    </div>
+                    <p style={{ margin: "0 0 14px", fontSize: 15, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                      How much pain do you feel right now? Choose 0 for no pain. This report
+                      supports your therapist&apos;s review and is not a diagnosis.
+                    </p>
+                    <label htmlFor="pre-session-pain-score" style={{ display: "block", marginBottom: 6, fontSize: 15 }}>
+                      Pain score: <strong>{preSessionSurvey.score}/10</strong>
+                    </label>
+                    <input
+                      id="pre-session-pain-score"
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={1}
+                      value={preSessionSurvey.score}
+                      onChange={(event) => {
+                        const score = Number(event.target.value);
+                        setPreSessionSurvey((survey) => survey && { ...survey, score });
+                      }}
+                      style={{ width: "100%", accentColor: ACCENT.hex }}
+                    />
+                    <label htmlFor="pre-session-pain-area" style={{ display: "block", marginTop: 12, marginBottom: 6, fontSize: 15 }}>
+                      Body area (optional)
+                    </label>
+                    <input
+                      id="pre-session-pain-area"
+                      value={preSessionSurvey.bodyArea}
+                      maxLength={80}
+                      onChange={(event) => {
+                        const bodyArea = event.target.value;
+                        setPreSessionSurvey((survey) => survey && { ...survey, bodyArea });
+                      }}
+                      placeholder="e.g. left shoulder"
+                      style={FIELD_STYLE}
+                    />
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
+                      <p role="status" style={{
+                        margin: "14px 0 0",
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "oklch(0.97 0.03 80)",
+                        border: "1px solid oklch(0.90 0.06 80)",
+                        fontSize: 14,
+                        lineHeight: 1.45,
+                        color: "oklch(0.38 0.08 75)",
+                      }}>
+                        That is a high pain score. Consider checking with your therapist before
+                        exercising today. You can still start if you feel able; press
+                        &ldquo;Stop — I have pain&rdquo; if the pain gets worse.
+                      </p>
+                    )}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
+                      <button
+                        type="button"
+                        onClick={() => answerPreSessionSurvey({
+                          status: "reported",
+                          score: preSessionSurvey.score,
+                          bodyArea: preSessionSurvey.bodyArea.trim() || null,
+                        })}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >{rememberedVideoChoice ? "Save and start" : "Continue"}</button>
+                      <button
+                        type="button"
+                        onClick={() => answerPreSessionSurvey({ status: "declined" })}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Skip</button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => answerPreSessionSurvey(null)}
+                      style={{
+                        marginTop: 10,
+                        padding: "6px 0",
+                        border: "none",
+                        background: "none",
+                        color: "oklch(0.45 0.01 240)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 14,
+                        cursor: "pointer",
+                      }}
+                    >Back</button>
+                  </div>
+                </div>
+              )}
 
-            {/* Set progress strip */}
-            <ClinicalProgressStrip
-              sessionState={sessionState}
-              currentSetIdx={currentSetIdx}
-              prescription={prescription}
-              completedSets={completedSets}
-              progressPct={progressPct}
-              compact={compactLayout}
-            />
+              {waitMessage && <PleaseWait message={waitMessage} />}
+
+              {/* Stop recording: confirmed first. What was recorded is kept, even
+                  mid-set; only the rest of this session goes unrecorded. */}
+              {confirmStopRecording && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="alertdialog" aria-modal="true" aria-labelledby="stop-recording-title" aria-describedby="stop-recording-text" style={MODAL_CARD_STYLE}>
+                    <div id="stop-recording-title" style={{ marginBottom: 8, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Stop recording?
+                    </div>
+                    <p id="stop-recording-text" style={{ margin: "0 0 20px", fontSize: 16, lineHeight: 1.5, color: "oklch(0.35 0.01 240)" }}>
+                      The video recorded so far is saved, even if you are in the middle of a set. The rest of this session will not be recorded. Your exercise continues as normal.
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      <button
+                        type="button"
+                        autoFocus
+                        onClick={() => setConfirmStopRecording(false)}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Keep recording</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmStopRecording(false);
+                          customRecordingStoppedRef.current = true;
+                          stopSessionRecording(true);
+                          setRecordingState("off");
+                        }}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px", background: "oklch(0.55 0.20 25)", borderColor: "oklch(0.55 0.20 25)" }}
+                      >Stop recording</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Session video question: asked before every patient session
+                  unless the patient asked this device to remember the answer. */}
+              {videoQuestion && (
+                <div style={MODAL_BACKDROP_STYLE}>
+                  <div role="dialog" aria-modal="true" aria-labelledby="session-video-title" style={MODAL_CARD_STYLE}>
+                    <div id="session-video-title" style={{ marginBottom: 8, fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                      Record video of this session?
+                    </div>
+                    <p style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                      Recording is optional. Your exercise is measured the same either way.
+                    </p>
+                    <ul style={{ margin: "0 0 16px 20px", padding: 0, fontSize: 14, lineHeight: 1.55, color: "oklch(0.35 0.01 240)" }}>
+                      {SESSION_VIDEO_NOTICE.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => answerVideoChoice({ record: true, remember: videoQuestion.remember })}
+                        style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >Yes, record</button>
+                      <button
+                        type="button"
+                        onClick={() => answerVideoChoice({ record: false, remember: videoQuestion.remember })}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                      >No</button>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, fontSize: 14, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={videoQuestion.remember}
+                        onChange={(event) => {
+                          const remember = event.target.checked;
+                          setVideoQuestion((question) => question && { ...question, remember });
+                        }}
+                        style={{ width: 18, height: 18, accentColor: ACCENT.hex }}
+                      />
+                      Remember my choice on this device (you can change it beside Start session)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => answerVideoChoice(null)}
+                      style={{
+                        marginTop: 10,
+                        padding: "6px 0",
+                        border: "none",
+                        background: "none",
+                        color: "oklch(0.45 0.01 240)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 14,
+                        cursor: "pointer",
+                      }}
+                    >Back</button>
+                  </div>
+                </div>
+              )}
+            </div>
           </main>
 
-          {/* RIGHT RAIL — controls + reference */}
-          <aside style={{
-            background: "white",
-            borderLeft: "1px solid oklch(0.93 0.003 240)",
+          {/* RIGHT COLUMN — exercise and session controls on top, the
+              demonstration below with all the height that is left */}
+          <aside id="cam-tour-column" style={{
+            width: asideWidth,
+            flexShrink: 0,
+            minHeight: 0,
             display: "flex",
             flexDirection: "column",
-            minHeight: 0,
-            overflow: compactLayout ? "visible" : "hidden",
-            order: compactLayout ? 3 : 0,
+            gap: 14,
+            overflowY: compactLayout ? "visible" : "auto",
           }}>
-            {/* Exercise stepper */}
-            <div style={{ padding: "16px 16px 14px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                marginBottom: 10,
-              }}>Session</div>
-
-              {assignedExercises.length === 0 ? (
-                <div style={{
-                  padding: "8px 10px", borderRadius: 6,
-                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
-                  fontSize: 12, color: "oklch(0.40 0.08 75)",
-                }}>
-                  No exercises assigned yet.
+            {sessionState === "reporting" ? (
+              <div id="cam-tour-session" style={{ ...CARD_STYLE, flex: "0 0 auto", padding: 16 }}>
+                <div style={{ marginBottom: 4, fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em" }}>
+                  Pain after this attempt
                 </div>
-              ) : (
-                <div id="cam-tour-exercise" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => goToAdjacentExercise(-1)}
-                    disabled={!hasPrevExercise || sessionBusy}
-                    aria-label="Previous exercise"
-                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasPrevExercise || sessionBusy) ? 0.35 : 1 }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M15 18l-6-6 6-6"/>
-                    </svg>
-                  </button>
-                  <div style={{
-                    flex: 1, padding: "12px 14px", borderRadius: 8,
-                    border: `1px solid ${ACCENT.soft}`, background: "white",
-                  }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      gap: 8, marginBottom: 4,
-                    }}>
-                      <span style={{
-                        fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                        textTransform: "uppercase", color: ACCENT.text, fontWeight: 600,
-                      }}>
-                        {selectedExerciseIndex >= 0
-                          ? `Exercise ${selectedExerciseIndex + 1} / ${assignedExercises.length}`
-                          : `${assignedExercises.length} exercises`}
-                      </span>
-                      {selectedExerciseCompleted ? (
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: 3,
-                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
-                          padding: "2px 7px", borderRadius: 999,
-                          background: "oklch(0.96 0.04 145)", color: "oklch(0.40 0.07 145)",
-                          border: "1px solid oklch(0.88 0.06 145)",
-                        }}>✓ Completed</span>
-                      ) : resumeEligible ? (
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: 4,
-                          flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
-                          padding: "2px 7px", borderRadius: 999,
-                          background: "oklch(0.96 0.05 75)", color: "oklch(0.45 0.13 70)",
-                          border: "1px solid oklch(0.88 0.08 75)",
-                        }}>● In progress</span>
-                      ) : null}
-                    </div>
-                    <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.18 0.01 240)" }}>
-                      {selectedExerciseObj?.name ?? "—"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => goToAdjacentExercise(1)}
-                    disabled={!hasNextExercise || sessionBusy}
-                    aria-label="Next exercise"
-                    style={{ ...clinicalNavBtnStyle(), opacity: (!hasNextExercise || sessionBusy) ? 0.35 : 1 }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M9 18l6-6-6-6"/>
-                    </svg>
-                  </button>
-                </div>
-              )}
-
-              {selectedExerciseObj && (
-                <>
-                  <p style={{ marginTop: 12, marginBottom: 0, fontSize: 12.5, lineHeight: 1.5, color: "oklch(0.40 0.01 240)" }}>
-                    {selectedExerciseObj.description}
+                <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+                  Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
+                </p>
+                <label style={{ display: "block", marginBottom: 6, fontSize: 14 }}>
+                  Pain score: <strong>{painScore}/10</strong>
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={painScore}
+                  onChange={(event) => setPainScore(Number(event.target.value))}
+                  disabled={painReportSaving}
+                  style={{ width: "100%", accentColor: ACCENT.hex }}
+                />
+                <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>
+                  Timing (optional)
+                </label>
+                <select
+                  value={painTiming}
+                  onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
+                  disabled={painReportSaving}
+                  style={FIELD_STYLE}
+                >
+                  <option value="">Not specified</option>
+                  <option value="during">During</option>
+                  <option value="after">After</option>
+                  <option value="both">During and after</option>
+                </select>
+                <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>
+                  Body area (optional)
+                </label>
+                <input
+                  value={painBodyArea}
+                  maxLength={80}
+                  onChange={(event) => setPainBodyArea(event.target.value)}
+                  disabled={painReportSaving}
+                  placeholder="e.g. left shoulder"
+                  style={FIELD_STYLE}
+                />
+                {painReportError && (
+                  <p style={{ margin: "10px 0 0", fontSize: 13, color: "oklch(0.50 0.18 25)" }}>
+                    {painReportError} Please retry while this page remains open.
                   </p>
-                  <div style={{
-                    marginTop: 10, display: "flex", alignItems: "center", gap: 14,
-                    fontFamily: "var(--mono)", fontSize: 11, color: "oklch(0.50 0.01 240)",
-                  }}>
-                    <span>{prescription.sets} sets</span>
-                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
-                    <span>{prescriptionTargetText}</span>
-                    <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
-                    <span>{prescription.restSeconds}s rest</span>
-                  </div>
-                  {activeDefinition?.id === "ex_007" &&
-                    prescription.patientExerciseId !== undefined && (
-                      <div style={{
-                        marginTop: 10,
-                        padding: "8px 10px",
-                        borderRadius: 6,
-                        background: ACCENT.soft,
-                        color: ACCENT.text,
-                        fontSize: 11,
-                        lineHeight: 1.45,
-                      }}>
-                        <strong>Motion trace recording:</strong> raw upper-body
-                        metrics and pose landmarks only. No video is stored.
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => void savePainReport(false)}
+                    disabled={painReportSaving}
+                    style={{ ...PRIMARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}
+                  >
+                    {painReportSaving ? "Saving…" : "Save report"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void savePainReport(true)}
+                    disabled={painReportSaving}
+                    style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            ) : sessionState === "active" || sessionState === "resting" || sessionState === "countdown" ? (
+              <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ ...CARD_STYLE, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div>
+                    <div style={{ ...EYEBROW_STYLE, fontSize: 11, color: ACCENT.text, marginBottom: 2 }}>Session</div>
+                    {selectedExerciseObj && (
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em", lineHeight: 1.2 }}>
+                        {selectedExerciseObj.name}
                       </div>
                     )}
-                </>
-              )}
-            </div>
-
-            {/* Reference guidance */}
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{ marginBottom: 10 }}>
-                <span style={{
-                  fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                  textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                }}>Reference guidance</span>
-              </div>
-              <div style={{ borderRadius: 6, padding: "12px", background: "oklch(0.97 0.003 240)", border: "1px solid oklch(0.92 0.003 240)", color: "oklch(0.42 0.01 240)", fontSize: 11.5, lineHeight: 1.5 }}>
-                No verified demonstration video is published for this exercise yet.
-                Follow the written exercise description and your therapist&apos;s instructions.
-              </div>
-            </div>
-
-            {/* Capture settings */}
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
-              <div style={{
-                fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-                marginBottom: 10,
-              }}>Capture</div>
-
-              <label style={{ display: "block", fontSize: 11, color: "oklch(0.45 0.01 240)", marginBottom: 4 }}>Device</label>
-              <select
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                style={{
-                  width: "100%", padding: "8px 10px",
-                  border: "1px solid oklch(0.90 0.003 240)",
-                  borderRadius: 6, fontSize: 12, color: "oklch(0.25 0.01 240)",
-                  background: "white", marginBottom: 12,
-                }}
-              >
-                {devices.length === 0 ? (
-                  <option value="">(Allow camera access to list devices)</option>
-                ) : (
-                  devices.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Camera ${d.deviceId.slice(0, 6)}…`}
-                    </option>
-                  ))
-                )}
-              </select>
-
-              <ClinicalSettingRow
-                label="Mirror"
-                sub="Front cam feel"
-                on={mirror}
-                onChange={setMirror}
-              />
-              <ClinicalSettingRow
-                label="Prefer front camera"
-                sub="When no device selected"
-                on={useFrontCameraHint}
-                onChange={setUseFrontCameraHint}
-              />
-            </div>
-
-            {/* Session controls */}
-            <div id="cam-tour-session" style={{ padding: 16, marginTop: "auto" }}>
-              {sessionState === "resting" ? (
-                <>
-                  <div style={{
-                    padding: 12, borderRadius: 8,
-                    background: ACCENT.soft,
-                    marginBottom: 10, textAlign: "center",
-                  }}>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-                      textTransform: "uppercase", color: ACCENT.text, fontWeight: 600, marginBottom: 4,
-                    }}>Rest</div>
-                    <div style={{
-                      fontFamily: "var(--mono)", fontSize: 32, fontWeight: 500,
-                      color: ACCENT.text, fontVariantNumeric: "tabular-nums", lineHeight: 1,
-                    }}>{formatElapsedTime(restRemainingSec)}</div>
-                    <div style={{ fontSize: 11, color: ACCENT.text, marginTop: 4, opacity: 0.8 }}>
-                      Next set starts automatically
-                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={skipRest}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                      }}
-                    >Skip rest</button>
-                    <button
-                      type="button"
-                      onClick={handleSessionEnd}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "white", cursor: "pointer",
-                      }}
-                    >End</button>
-                  </div>
-                </>
-              ) : sessionState === "active" && confirmingEnd ? (
-                <div style={{
-                  padding: 12, borderRadius: 8,
-                  background: "oklch(0.97 0.03 80)", border: "1px solid oklch(0.90 0.06 80)",
-                }}>
-                  <p style={{ fontSize: 12, fontWeight: 600, color: "oklch(0.35 0.08 75)", margin: "0 0 4px" }}>
-                    End this exercise early?
-                  </p>
-                  <p style={{ fontSize: 11, color: "oklch(0.42 0.07 75)", margin: "0 0 10px" }}>
-                    The current set won&apos;t count as complete.
-                  </p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => { handleSessionEnd(); setConfirmingEnd(false); }}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        background: "oklch(0.55 0.17 25)", border: "1px solid oklch(0.55 0.17 25)",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "white", cursor: "pointer",
-                      }}
-                    >Yes, end</button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingEnd(false)}
-                      style={{
-                        flex: 1, padding: "8px 12px",
-                        border: "1px solid oklch(0.90 0.003 240)", background: "white",
-                        borderRadius: 6, fontSize: 12, fontWeight: 500,
-                        color: "oklch(0.30 0.01 240)", cursor: "pointer",
-                      }}
-                    >Cancel</button>
-                  </div>
+                  <SessionProgressStrip
+                    phase={finishedSet ? "active" : sessionState}
+                    setNumber={hudSetIdx}
+                    completedSets={completedSets}
+                    sets={prescription.sets}
+                    progressPct={progressPct}
+                    setUnderway={sessionState === "active"}
+                  />
+                  {traceSyncReadout}
                 </div>
-              ) : (
-                <div style={{ display: "flex", gap: 8 }}>
+
+                {sessionState === "active" && (
+                  <FormCheckCard
+                    state={formCheckState}
+                    isometric={activeDefinition?.kind === "isometric"}
+                  />
+                )}
+
+                <div id="cam-tour-session" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+                  {sessionState === "active" && confirmingEnd ? (
+                    <div style={{
+                      padding: 14,
+                      borderRadius: 12,
+                      background: "oklch(0.97 0.03 80)",
+                      border: "1px solid oklch(0.90 0.06 80)",
+                    }}>
+                      <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 650, color: "oklch(0.35 0.08 75)" }}>
+                        End this exercise early?
+                      </p>
+                      <p style={{ margin: "0 0 12px", fontSize: 14, color: "oklch(0.42 0.07 75)" }}>
+                        The current set won&apos;t count as complete.
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => { handleSessionEnd(); setConfirmingEnd(false); }}
+                          style={{ ...DANGER_BUTTON_STYLE, flex: 1 }}
+                        >Yes, end</button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingEnd(false)}
+                          style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "11px 12px", fontSize: 15 }}
+                        >Cancel</button>
+                      </div>
+                    </div>
+                  ) : sessionState === "resting" ? (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={skipRest}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "13px 12px", fontSize: 15, fontWeight: 600 }}
+                      >Skip rest</button>
+                      <button
+                        type="button"
+                        onClick={() => handleSessionEnd()}
+                        style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "13px 12px", fontSize: 15, color: "oklch(0.45 0.01 240)" }}
+                      >End</button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sessionState === "countdown") {
+                          handleSessionEnd();
+                        } else {
+                          setConfirmingEnd(true);
+                        }
+                      }}
+                      style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "13px 12px", fontSize: 15, color: "oklch(0.45 0.01 240)" }}
+                    >
+                      End
+                    </button>
+                  )}
+
                   <button
-                    onClick={handleSessionStart}
-                    disabled={!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown"}
+                    type="button"
+                    onClick={() => handleSessionEnd("pain")}
                     style={{
-                      flex: 1, padding: "10px 12px",
-                      background: (sessionState === "active" || sessionState === "countdown") ? "white" : ACCENT.hex,
-                      color: (sessionState === "active" || sessionState === "countdown") ? "oklch(0.30 0.01 240)" : "white",
-                      border: (sessionState === "active" || sessionState === "countdown") ? "1px solid oklch(0.90 0.003 240)" : `1px solid ${ACCENT.hex}`,
-                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                      opacity: (!activeDefinition || blockedBySchedule || sessionState === "active" || sessionState === "countdown") ? 0.5 : 1,
+                      width: "100%",
+                      padding: "13px 12px",
+                      borderRadius: 10,
+                      border: "1px solid oklch(0.55 0.17 25)",
+                      background: "oklch(0.97 0.025 25)",
+                      color: "oklch(0.42 0.16 25)",
+                      fontFamily: "var(--sans)",
+                      fontSize: 15,
+                      fontWeight: 650,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Stop — I have pain
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div id="cam-tour-exercise" style={{
+                ...CARD_STYLE,
+                flex: "1 1 auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                padding: 16,
+              }}>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>Session</div>
+                {assignedExercises.length === 0 ? (
+                  <div style={{
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "oklch(0.97 0.03 80)",
+                    border: "1px solid oklch(0.90 0.06 80)",
+                    fontSize: 14,
+                    lineHeight: 1.45,
+                    color: "oklch(0.40 0.08 75)",
+                  }}>
+                    No exercises are due today. Return to your schedule to review
+                    completed, upcoming, or historical prescriptions.
+                    {user?.role === "patient" && (
+                      <div style={{ marginTop: 8 }}>
+                        <Link href="/dashboard/patient?tab=session" onClick={(event) => waitForPage(event, "Opening your schedule…")} style={{ color: ACCENT.text, fontWeight: 650 }}>
+                          Return to schedule
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(-1)}
+                      disabled={!hasPrevExercise || sessionBusy}
+                      aria-label="Previous exercise"
+                      style={{ ...ICON_BUTTON_STYLE, opacity: (!hasPrevExercise || sessionBusy) ? 0.35 : 1 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6"/>
+                      </svg>
+                    </button>
+                    <span style={{
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: "center",
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      letterSpacing: ".12em",
+                      textTransform: "uppercase",
+                      color: ACCENT.text,
+                    }}>
+                      {exerciseQueueLabel}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(1)}
+                      disabled={!hasNextExercise || sessionBusy}
+                      aria-label="Next exercise"
+                      style={{ ...ICON_BUTTON_STYLE, opacity: (!hasNextExercise || sessionBusy) ? 0.35 : 1 }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+
+                {selectedExerciseObj && (
+                  <>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
+                          {selectedExerciseObj.name}
+                        </div>
+                        {selectedExerciseCompleted ? (
+                          <span style={{
+                            flexShrink: 0,
+                            marginTop: 4,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: "oklch(0.96 0.04 145)",
+                            border: "1px solid oklch(0.88 0.06 145)",
+                            color: "oklch(0.40 0.07 145)",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: ".04em",
+                          }}>✓ Completed</span>
+                        ) : resumeEligible ? (
+                          <span style={{
+                            flexShrink: 0,
+                            marginTop: 4,
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: "oklch(0.96 0.05 75)",
+                            border: "1px solid oklch(0.88 0.08 75)",
+                            color: "oklch(0.45 0.13 70)",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: ".04em",
+                          }}>● In progress</span>
+                        ) : null}
+                      </div>
+                      <p style={{ margin: "7px 0 0", fontSize: 16, lineHeight: 1.4, color: "oklch(0.40 0.01 240)" }}>
+                        {selectedExerciseObj.description}
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                      <span style={CHIP_STYLE}>{prescription.sets} sets</span>
+                      <span style={CHIP_STYLE}>{prescriptionTargetText}</span>
+                      <span style={CHIP_STYLE}>{prescription.restSeconds}s rest</span>
+                    </div>
+                    <div style={{ fontSize: 13, lineHeight: 1.45, color: "oklch(0.45 0.01 240)" }}>
+                      Prescribed side: <strong>{prescription.prescribedSide}</strong>
+                      {" · "}
+                      {formatResistanceContext(prescription.resistance)}
+                    </div>
+                    {activeDefinition?.id === "ex_007" &&
+                      prescription.patientExerciseId !== undefined && (
+                        <div style={{
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          background: ACCENT.soft,
+                          color: ACCENT.text,
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                        }}>
+                          <strong>Motion trace recording:</strong> raw upper-body
+                          metrics and pose landmarks only. The trace holds no video.
+                        </div>
+                      )}
+                  </>
+                )}
+
+                {/* Session controls */}
+                <div id="cam-tour-session" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+                  {traceSyncReadout}
+                  {selectedExerciseObj?.isCustom ? (
+                    <CustomGuidedSession
+                      key={selectedExerciseObj.occurrenceId ?? selectedExerciseObj.id}
+                      sets={selectedExerciseObj.sets}
+                      restSeconds={selectedExerciseObj.restSeconds}
+                      onComplete={
+                        user?.role === "patient" && selectedExerciseObj.occurrenceId !== undefined
+                          ? () => completeCustomAttempt(selectedExerciseObj.occurrenceId as number)
+                          : undefined
+                      }
+                      onNext={hasNextExercise ? () => goToAdjacentExercise(1) : undefined}
+                      onBackToSchedule={
+                        user?.role === "patient" ? () => { setWaitMessage("Opening your schedule…"); router.push("/dashboard/patient?tab=session"); } : undefined
+                      }
+                      onBeforeStart={() => beginCustomSession(selectedExerciseObj)}
+                      onSetStart={recordCustomSet}
+                      onRestStart={pauseCustomRecording}
+                      onEnd={(reason) => endCustomSession(reason)}
+                      onRestChange={setCustomRest}
+                      onPainStop={user?.role === "patient" ? () => endCustomSession("pain") : undefined}
+                      painReport={user?.role === "patient" ? { pending: customPainReportPending, save: saveCustomPainReport } : undefined}
+                      startNote={videoChoiceNote}
+                    />
+                  ) : (
+                  <button
+                    type="button"
+                    onClick={() => void startSessionWithCamera()}
+                    disabled={!activeDefinition || blockedBySchedule || !modelLoaded}
+                    style={{
+                      ...PRIMARY_BUTTON_STYLE,
+                      width: "100%",
+                      padding: "17px 18px",
+                      fontSize: 20,
+                      cursor: !activeDefinition || blockedBySchedule || !modelLoaded ? "not-allowed" : "pointer",
+                      opacity: !activeDefinition || blockedBySchedule || !modelLoaded ? 0.5 : 1,
                     }}
                   >
                     {sessionState === "ended"
                       ? "Restart"
-                      : sessionState === "countdown"
-                        ? `Starting… (${countdownSec})`
-                        : blockedBySchedule
-                          ? "Not scheduled today"
-                          : "Start session"}
+                      : blockedBySchedule
+                        ? selectedExercisePainStopped
+                          ? "Await therapist rescheduling"
+                          : "Not scheduled today"
+                        : "Start session"}
                   </button>
-                  <button
-                    onClick={() => {
-                      if (sessionState === "countdown") {
-                        handleSessionEnd();
-                      } else {
-                        setConfirmingEnd(true);
-                      }
-                    }}
-                    disabled={sessionState !== "active" && sessionState !== "countdown"}
-                    style={{
-                      flex: 1, padding: "10px 12px",
-                      background: "white", color: "oklch(0.30 0.01 240)",
-                      border: "1px solid oklch(0.90 0.003 240)",
-                      borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                      opacity: (sessionState !== "active" && sessionState !== "countdown") ? 0.4 : 1,
-                    }}
-                  >End</button>
+                  )}
+                  {!selectedExerciseObj?.isCustom && videoChoiceNote}
+
+                  {(blockedBySchedule || scheduleNotice) && (
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.55 0.14 45)" }}>
+                      {scheduleNotice ??
+                        (selectedExercisePainStopped
+                          ? "This occurrence was closed after pain was reported. Do not resume it; your therapist must review and reschedule if appropriate."
+                          : "Not scheduled today — start this exercise from your schedule on its due day.")}
+                    </p>
+                  )}
+
+                  {sessionState === "ended" && hasNextExercise && (
+                    <button
+                      type="button"
+                      onClick={() => goToAdjacentExercise(1)}
+                      style={{
+                        ...SECONDARY_BUTTON_STYLE,
+                        width: "100%",
+                        padding: "12px 14px",
+                        fontSize: 16,
+                        fontWeight: 600,
+                        border: `1px solid ${ACCENT.hex}`,
+                        color: ACCENT.text,
+                      }}
+                    >
+                      Next exercise →
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
+            )}
 
-              {(blockedBySchedule || scheduleNotice) && sessionState !== "active" && sessionState !== "countdown" && (
-                <p style={{ marginTop: 8, fontSize: 12, color: "oklch(0.55 0.14 45)", lineHeight: 1.4 }}>
-                  {scheduleNotice ??
-                    "Not scheduled today — start this exercise from your schedule on its due day."}
-                </p>
-              )}
-
-              {sessionState === "ended" && hasNextExercise && (
-                <button
-                  type="button"
-                  onClick={() => goToAdjacentExercise(1)}
-                  style={{
-                    marginTop: 8, width: "100%", padding: "10px 12px",
-                    background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`,
-                    borderRadius: 6, fontSize: 13, fontWeight: 500,
-                    color: "white", cursor: "pointer",
-                  }}
-                >
-                  Next exercise →
-                </button>
-              )}
-            </div>
+            {/* Demonstration, under the exercise card */}
+            <DemoCard
+              exerciseId={activeDefinition?.id ?? null}
+              compact={compactLayout}
+              custom={selectedExerciseObj?.isCustom
+                ? { id: selectedExerciseObj.id, name: selectedExerciseObj.name, video: selectedExerciseObj.customVideo ?? null }
+                : undefined}
+            />
           </aside>
         </div>
       </div>
+
+      {/* Floating segment remote. The operator stands 2-3 m away, so the
+          boundary has to be clickable without returning to the desk: park
+          the pointer on this control before stepping back and a single
+          LEFT click marks the boundary. Left click is the only pointer
+          input the page reliably receives — thumb buttons are serviced by
+          the browser and never reach it (see the keydown effect above). */}
+      {coachingShadowStaffAllowed && coachingShadowEnabled && !!activeDefinition && (() => {
+        const step = COACHING_SESSION_PLAN[coachingPlanIndex];
+        const recording = coachingShadowActiveSegment !== null &&
+          !coachingShadowActiveSegment.label.startsWith("after:") &&
+          coachingShadowActiveSegment.label !== "idle";
+        return (
+          <div
+            data-testid="coaching-remote"
+            style={{
+              position: "fixed",
+              // Bottom-LEFT on purpose: the session Start/Stop controls live in
+              // the right-hand sidebar, and an earlier bottom-right placement
+              // covered them so the session could not be started at all.
+              left: 18,
+              bottom: 18,
+              zIndex: 60,
+              width: coachingRemoteCollapsed ? 200 : 260,
+              padding: coachingRemoteCollapsed ? "8px 12px" : 14,
+              borderRadius: 10,
+              border: "2px solid oklch(0.30 0.05 250)",
+              background: "oklch(0.99 0.004 250)",
+              boxShadow: "0 10px 30px -12px rgba(0,0,0,.45)",
+              fontFamily: "var(--mono)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.45 0.02 250)" }}>
+                {step
+                  ? `Step ${coachingPlanIndex + 1}/${COACHING_SESSION_PLAN.length} · ${step.captureId}`
+                  : "Plan complete"}
+              </div>
+              <button
+                type="button"
+                aria-label={coachingRemoteCollapsed ? "Expand segment remote" : "Collapse segment remote"}
+                onClick={() => setCoachingRemoteCollapsed((v) => !v)}
+                style={{
+                  border: "1px solid oklch(0.82 0.03 250)",
+                  borderRadius: 4,
+                  background: "white",
+                  color: "oklch(0.30 0.05 250)",
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  lineHeight: 1,
+                  padding: "3px 7px",
+                  cursor: "pointer",
+                }}
+              >
+                {coachingRemoteCollapsed ? "▴" : "▾"}
+              </button>
+            </div>
+            {!coachingRemoteCollapsed && (<>
+            <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: "oklch(0.20 0.03 250)", wordBreak: "break-word" }}>
+              {recording
+                ? coachingShadowActiveSegment.label
+                : step?.label ?? "—"}
+            </div>
+            <div style={{ fontSize: 11, marginTop: 2, color: "oklch(0.45 0.02 250)" }}>
+              {recording ? `recording · ${coachingShadowActiveSegment.intent}` : "not recording"}
+            </div>
+            <button
+              type="button"
+              disabled={!step && !recording}
+              onClick={() => {
+                if (recording) {
+                  endCoachingShadowSegment();
+                  return;
+                }
+                if (!step) return;
+                if (!markCoachingShadowSegment(step.label, step.intent)) return;
+                setCoachingShadowSegmentLabel(step.label);
+                setCoachingShadowSegmentIntent(step.intent);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 10,
+                padding: "20px 8px",
+                borderRadius: 8,
+                border: "none",
+                cursor: !step && !recording ? "default" : "pointer",
+                background: recording ? "oklch(0.52 0.17 25)" : ACCENT.hex,
+                color: "white",
+                fontFamily: "var(--mono)",
+                fontSize: 17,
+                fontWeight: 700,
+                letterSpacing: ".06em",
+              }}
+            >
+              {recording ? "END SEGMENT" : "START SEGMENT"}
+            </button>
+            <button
+              type="button"
+              disabled={!step || coachingShadowAdvanceBlocked}
+              onClick={advanceCoachingShadowPlan}
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 6,
+                padding: "8px",
+                borderRadius: 6,
+                border: "1px solid oklch(0.82 0.03 250)",
+                background: "white",
+                color: "oklch(0.30 0.05 250)",
+                fontFamily: "var(--mono)",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: ".08em",
+                cursor: step && !coachingShadowAdvanceBlocked ? "pointer" : "default",
+              }}
+            >
+              {coachingShadowAdvanceBlocked ? "DOWNLOAD LOG FIRST" : "NEXT STEP →"}
+            </button>
+            <div style={{ fontSize: 9.5, marginTop: 7, lineHeight: 1.4, color: "oklch(0.48 0.02 250)" }}>
+              {coachingShadowAdvanceBlocked
+                ? `This capture has ${coachingShadowCount} unexported decisions.`
+                : step?.hint ?? "Export this capture, then run E3 unrecorded."}
+            </div>
+            </>)}
+          </div>
+        );
+      })()}
 
       {/* ── Spotlight Tour ──────────────────────────────────────────────── */}
       {showTutorial && (
@@ -5803,45 +11883,59 @@ const TOUR_STEPS: {
   targetId: string;
   /** When set, card is positioned relative to this element instead of targetId */
   anchorId?: string;
+  /** Further elements spotlighted alongside targetId */
+  alsoTargetIds?: string[];
+  /** Hold the camera menu open while this step shows, so its tray can be spotlighted */
+  opensCameraMenu?: boolean;
   title: string;
   lines: string[];
   placement: "below" | "above" | "right" | "left";
-  /** Override estimated card height (px) used for "above"/"right"/"left" placement */
-  cardH?: number;
+  /** Illustration beside the text; the card widens to `cardW` to fit it */
+  graphic?: TourGraphicKind;
+  cardW?: number;
   /** Extra gap (px) between card and target for "above" placement (default 16) */
   aboveGap?: number;
 }[] = [
   {
     targetId: "cam-tour-start",
+    alsoTargetIds: ["cam-tour-camera-menu"],
+    opensCameraMenu: true,
     title: "Start Camera",
     placement: "below",
+    graphic: "start",
+    cardW: 640,
     lines: [
       "Click this button to turn on your camera.",
-      "Your browser will ask permission — click Allow when prompted.",
+      "Please click Allow when browser asks for camera permission.",
       "The camera view will appear in the centre of the screen once ready.",
-      "Check that both status dots (AI ready & Capture OK) are green before continuing.",
+      "To switch cameras or turn the camera off, open the Camera menu at the top right.",
     ],
   },
   {
-    targetId: "cam-tour-status",
+    targetId: "cam-tour-ai",
+    alsoTargetIds: ["cam-tour-camera"],
     title: "Status Indicators",
     placement: "below",
+    graphic: "status",
+    cardW: 640,
     lines: [
-      "AI ready (green dot) — the movement detection engine is loaded.",
-      "Capture OK (green dot) — the app can see your body clearly.",
-      "If a dot is orange, adjust your position or lighting until both turn green.",
-      "Never start a session while a dot is still orange.",
+      "AI (top right of the camera view) — a green dot means movement detection is ready.",
+      "An orange dot means it is still loading. Start camera and Start session stay unavailable until it turns green.",
+      "Camera (top right of the page) — a green dot means your camera is on.",
     ],
   },
   {
-    targetId: "cam-tour-exercise",
+    targetId: "cam-tour-column",
     title: "Your Assigned Exercise",
     placement: "left",
+    graphic: "exercise",
+    cardW: 640,
     lines: [
       "This card shows the exercise assigned to you by your therapist.",
       "Use the left ( ‹ ) and right ( › ) arrows to move between exercises.",
       "The exercise name, sets, reps, and rest time are displayed in the card.",
       "Make sure you select the right exercise before starting your session.",
+      "Below the card, the Reference Guide shows an animated example when one is available — press the full-screen button to see it larger. Your therapist's instructions come first.",
     ],
   },
   {
@@ -5849,11 +11943,14 @@ const TOUR_STEPS: {
     anchorId: "cam-tour-metrics",
     title: "Camera View — Position Yourself Here",
     placement: "right",
+    graphic: "position",
+    cardW: 660,
     lines: [
-      "Stand or sit about 1–2 metres (3–6 feet) from the camera.",
-      "Make sure your full upper body — head to hips — is visible on screen.",
+      "Place the camera at about chest height, pointing straight at you. Raise it on books or a shelf if needed.",
+      "Stand or sit about 2–3 metres (7–10 feet) from the camera.",
+      "Stay in the centre of the picture and face the camera fully — chest and hips toward the camera, not turned sideways.",
+      "Make sure your body — head to knees — is visible on screen.",
       "A green skeleton outline appears when the app can track you correctly.",
-      "Good lighting helps. Avoid a bright window directly behind you.",
     ],
   },
   {
@@ -5872,29 +11969,56 @@ const TOUR_STEPS: {
     targetId: "cam-tour-clothing",
     title: "Clothing & Environment Tips",
     placement: "below",
+    graphic: "environment",
+    cardW: 880,
     lines: [
       "Wear light or contrasting colours — dark clothing on a dark background makes it hard for the AI to track your joints.",
+      "Avoid wearing very loose clothing — it can hide your joints from the camera.",
       "Face the light source (window or lamp). A bright light behind you silhouettes your body and reduces tracking accuracy.",
       "Clear the area behind you — plain or lightly patterned walls work best. Busy wallpaper or moving objects confuse the system.",
       "Make sure the room is well lit. Low light causes the camera to produce noise that reduces pose detection quality.",
-      "Keep about 1–2 metres of free space in front of the camera so your full upper body stays in frame as you move.",
     ],
   },
   {
     targetId: "cam-tour-session",
     title: "Start Session & End",
-    placement: "above",
-    cardH: 300,
-    aboveGap: 100,
+    placement: "left",
+    graphic: "session",
+    cardW: 680,
     lines: [
-      "Press Start session when both status dots are green and you are ready.",
-      "A 3-2-1 countdown gives you time to get into position before counting begins.",
+      "Press Start session when you are ready.",
+      "A 5-second countdown gives you time to get into position. Then stand still for 3 seconds, looking straight ahead, while your starting position is measured. Counting begins after that.",
       "Press End at any time to stop the exercise early — your progress is still saved.",
       "After finishing all sets, the session saves automatically and is sent to your therapist.",
       "Not happy with your performance? Press Restart button to redo the exercise — your therapist will see the latest attempt.",
     ],
   },
 ];
+
+/** Keyframes for the spotlight ring and the step illustrations. */
+const TOUR_KEYFRAMES = `
+  @keyframes tour-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px oklch(0.55 0.07 200 / 0.25), 0 0 14px oklch(0.55 0.07 200 / 0.31); }
+    50%      { box-shadow: 0 0 0 6px oklch(0.55 0.07 200 / 0.15), 0 0 24px oklch(0.55 0.07 200 / 0.44); }
+  }
+  @keyframes gfx-rays { 0%, 100% { opacity: .35; } 50% { opacity: .95; } }
+  @keyframes gfx-chev-a { 0%, 46% { background: white; border-color: oklch(0.90 0.003 240); } 50%, 96% { background: oklch(0.95 0.02 200); border-color: oklch(0.55 0.07 200); } }
+  @keyframes gfx-chev-b { 0%, 46% { background: oklch(0.95 0.02 200); border-color: oklch(0.55 0.07 200); } 50%, 96% { background: white; border-color: oklch(0.90 0.003 240); } }
+  @keyframes cd-3 { 0%, 22% { opacity: 1; } 28%, 100% { opacity: 0; } }
+  @keyframes cd-2 { 0%, 28% { opacity: 0; } 34%, 55% { opacity: 1; } 61%, 100% { opacity: 0; } }
+  @keyframes cd-1 { 0%, 61% { opacity: 0; } 67%, 88% { opacity: 1; } 94%, 100% { opacity: 0; } }
+  @keyframes cd-go { 0%, 88% { opacity: 0; } 94%, 100% { opacity: 1; } }
+  @keyframes gfx-pip { 0%, 100% { box-shadow: 0 0 8px oklch(0.82 0.20 195 / 0.7); } 50% { box-shadow: 0 0 14px oklch(0.82 0.20 195 / 0.9); } }
+  @keyframes gfx-btn { 0%, 100% { box-shadow: 0 0 0 0 oklch(0.55 0.07 200 / 0.45); } 50% { box-shadow: 0 0 0 5px oklch(0.55 0.07 200 / 0); } }
+  @keyframes gfx-cursor { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-2px, -2px); } }
+  @keyframes gfx-amber { 0%, 100% { box-shadow: 0 0 0 3px oklch(0.72 0.15 70 / 0.14); } 50% { box-shadow: 0 0 0 6px oklch(0.72 0.15 70 / 0.30); } }
+  @keyframes gfx-joint { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
+  @media (prefers-reduced-motion: reduce) {
+    .cam-tour-ring, .cam-tour-gfx * { animation: none !important; }
+  }
+`;
+
+type TourGraphicKind = "start" | "status" | "exercise" | "position" | "environment" | "session";
 
 function CameraTour({
   step,
@@ -5914,6 +12038,9 @@ function CameraTour({
 
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [extraRects, setExtraRects] = useState<DOMRect[]>([]);
+  // Joined into a string so the effect reruns when the ids change, not on every render.
+  const extraTargetKey = (def.alsoTargetIds ?? []).join(" ");
 
   useEffect(() => {
     const refresh = () => {
@@ -5921,136 +12048,159 @@ function CameraTour({
       setRect(el ? el.getBoundingClientRect() : null);
       const anchor = def.anchorId ? document.getElementById(def.anchorId) : null;
       setAnchorRect(anchor ? anchor.getBoundingClientRect() : null);
+      setExtraRects(
+        extraTargetKey
+          .split(" ")
+          .filter(Boolean)
+          .flatMap((id) => {
+            const extra = document.getElementById(id);
+            return extra ? [extra.getBoundingClientRect()] : [];
+          }),
+      );
     };
     refresh();
     window.addEventListener("resize", refresh);
     return () => window.removeEventListener("resize", refresh);
-  }, [def.targetId, def.anchorId]);
+  }, [def.targetId, def.anchorId, extraTargetKey]);
 
   const PAD = 8; // spotlight padding around target
-  const CARD_W = 360;
+  const EDGE = 8; // smallest gap between the card and the viewport edge
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
 
-  // Spotlight ring — always follows targetId
-  const spot = rect
-    ? {
-        x: rect.left - PAD,
-        y: rect.top - PAD,
-        w: rect.width + PAD * 2,
-        h: rect.height + PAD * 2,
-        cx: rect.left + rect.width / 2,
-        cy: rect.top + rect.height / 2,
-      }
-    : null;
+  const pad = (r: DOMRect | null) =>
+    r
+      ? {
+          x: r.left - PAD,
+          y: r.top - PAD,
+          w: r.width + PAD * 2,
+          h: r.height + PAD * 2,
+          cx: r.left + r.width / 2,
+          cy: r.top + r.height / 2,
+        }
+      : null;
+  // Spotlight rings — targetId, plus any further elements the step points out
+  const spots = [rect, ...extraRects]
+    .map(pad)
+    .filter((s): s is NonNullable<ReturnType<typeof pad>> => s !== null);
+  // Card anchor — anchorId when provided, otherwise targetId, otherwise the first
+  // further element (the Start camera button is absent while the camera is on)
+  const anchor = pad(anchorRect ?? rect ?? extraRects[0] ?? null);
 
-  // Card anchor — anchorId when provided, otherwise targetId
-  const aRect = anchorRect ?? rect;
-  const anchor = aRect
-    ? {
-        x: aRect.left - PAD,
-        y: aRect.top - PAD,
-        w: aRect.width + PAD * 2,
-        h: aRect.height + PAD * 2,
-        cx: aRect.left + aRect.width / 2,
-        cy: aRect.top + aRect.height / 2,
-      }
-    : null;
+  // The illustration sits beside the text. When the screen cannot fit both, it
+  // is left out and the card keeps the original text-only width.
+  const maxW = Math.max(280, vw - EDGE * 2);
+  // On a tablet-sized screen the illustration is drawn smaller and the card
+  // narrower, so the card covers less of the page; the text keeps its size.
+  const graphicScale = vw < 1280 || vh < 860 ? 0.8 : 1;
+  // The clothing and environment illustration uses two columns.
+  const wideGraphic = def.graphic === "environment";
+  const graphicW = Math.round((wideGraphic ? 420 : 250) * graphicScale);
+  const fullCardW = Math.round((def.cardW ?? 640) - (1 - graphicScale) * (wideGraphic ? 420 : 250));
+  const graphic =
+    def.graphic && Math.min(fullCardW, maxW) - 48 - graphicW >= 240 ? def.graphic : undefined;
+  const cardW = Math.min(graphic ? fullCardW : 420, maxW);
+  const clampLeft = (x: number) => Math.max(EDGE, Math.min(x, vw - cardW - EDGE));
 
-  // Card position: default center, then adjust based on placement + anchor
-  let cardStyle: CSSProperties = {
+  // The card sits in a fixed column that owns its vertical span, so flex layout
+  // keeps it inside the viewport however tall it renders. Beside a target, two
+  // weighted spacers slide it along the column in proportion to the anchor's
+  // height on screen; the arrow, placed at the same fraction of the card, then
+  // meets the anchor's centre without measuring the card.
+  const track: CSSProperties = {
     position: "fixed",
     zIndex: 62,
-    width: CARD_W,
-    maxWidth: "calc(100vw - 32px)",
-    background: "white",
-    borderRadius: 14,
-    boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
-    overflow: "hidden",
+    width: cardW,
+    left: clampLeft((vw - cardW) / 2),
+    top: EDGE,
+    bottom: EDGE,
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    pointerEvents: "none",
   };
-
-  // Arrow: which side of the card points toward the target
-  let arrowSide: "top" | "bottom" | "left" | "right" = "top";
-
+  let arrowSide: "top" | "bottom" | "left" | "right" | null = null;
+  let arrowAt = "50%";
+  let spacers: [number, number] | null = null;
   if (anchor) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cardH = def.cardH ?? 260;
-
-    if (def.placement === "below") {
-      const top = anchor.y + anchor.h + 16;
-      let left = anchor.cx - CARD_W / 2;
-      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "top";
-    } else if (def.placement === "above") {
-      const gap = def.aboveGap ?? 16;
-      const top = Math.max(16, anchor.y - cardH - gap);
-      let left = anchor.cx - CARD_W / 2;
-      left = Math.max(16, Math.min(left, vw - CARD_W - 16));
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "bottom";
-    } else if (def.placement === "right") {
-      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
-      const left = Math.min(anchor.x + anchor.w + 16, vw - CARD_W - 16);
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "left";
+    if (def.placement === "below" || def.placement === "above") {
+      const left = clampLeft(anchor.cx - cardW / 2);
+      track.left = left;
+      arrowAt = `${Math.max(22, Math.min(anchor.cx - left, cardW - 22))}px`;
+      // A card that would not fit on its preferred side moves to the roomier
+      // one. The height is an estimate used only for that choice; the track
+      // still scrolls a card that is taller than the space it gets.
+      const estH = graphic ? (wideGraphic ? 540 : 480) : 340;
+      const gapAbove = def.aboveGap ?? 16;
+      const roomBelow = vh - EDGE - (anchor.y + anchor.h + 16);
+      const roomAbove = anchor.y - gapAbove - EDGE;
+      const below =
+        def.placement === "below"
+          ? roomBelow >= estH || roomBelow >= roomAbove
+          : roomAbove < estH && roomBelow > roomAbove;
+      if (below) {
+        const top = Math.min(anchor.y + anchor.h + 16, Math.max(EDGE, vh - 180));
+        track.top = top;
+        track.justifyContent = "flex-start";
+        // No arrow when the card has had to overlap its target.
+        if (top >= anchor.y + anchor.h) arrowSide = "top";
+      } else {
+        track.bottom = Math.max(EDGE, vh - anchor.y + gapAbove);
+        track.justifyContent = "flex-end";
+        arrowSide = "bottom";
+      }
     } else {
-      // left: card sits to the left of anchor
-      const top = Math.max(16, Math.min(anchor.cy - cardH / 2, vh - cardH - 16));
-      const left = Math.max(16, anchor.x - CARD_W - 16);
-      cardStyle = { ...cardStyle, top, left };
-      arrowSide = "right";
+      const left = clampLeft(def.placement === "right" ? anchor.x + anchor.w + 16 : anchor.x - cardW - 16);
+      track.left = left;
+      const t = Math.max(0, Math.min(1, (anchor.cy - EDGE) / Math.max(1, vh - EDGE * 2)));
+      const before = Math.round(t * 1000);
+      spacers = [before, 1000 - before];
+      arrowAt = `clamp(22px, ${(t * 100).toFixed(2)}%, calc(100% - 22px))`;
+      if (def.placement === "right" ? left >= anchor.x + anchor.w : left + cardW <= anchor.x) {
+        arrowSide = def.placement === "right" ? "left" : "right";
+      }
     }
-  } else {
-    // Fallback: center
-    cardStyle = {
-      ...cardStyle,
-      top: "50%",
-      left: "50%",
-      transform: "translate(-50%,-50%)",
-    };
   }
 
-  const arrowSize = 10;
-  const arrowColor = ACCENT.hex;
-
+  const ARROW = 10;
   const arrowEl: Record<"top" | "bottom" | "left" | "right", CSSProperties> = {
     top: {
-      position: "absolute", top: -arrowSize, left: "50%",
+      position: "absolute", top: -ARROW, left: arrowAt,
       transform: "translateX(-50%)",
       width: 0, height: 0,
-      borderLeft: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid ${arrowColor}`,
+      borderLeft: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid ${ACCENT.hex}`,
     },
     bottom: {
-      position: "absolute", bottom: -arrowSize, left: "50%",
+      position: "absolute", bottom: -ARROW, left: arrowAt,
       transform: "translateX(-50%)",
       width: 0, height: 0,
-      borderLeft: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid transparent`,
-      borderTop: `${arrowSize}px solid ${arrowColor}`,
+      borderLeft: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid transparent`,
+      borderTop: `${ARROW}px solid ${ACCENT.hex}`,
     },
     left: {
-      position: "absolute", left: -arrowSize, top: "50%",
+      position: "absolute", left: -ARROW, top: arrowAt,
       transform: "translateY(-50%)",
       width: 0, height: 0,
-      borderTop: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid transparent`,
-      borderRight: `${arrowSize}px solid ${arrowColor}`,
+      borderTop: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid transparent`,
+      borderRight: `${ARROW}px solid ${ACCENT.hex}`,
     },
     right: {
-      position: "absolute", right: -arrowSize, top: "50%",
+      position: "absolute", right: -ARROW, top: arrowAt,
       transform: "translateY(-50%)",
       width: 0, height: 0,
-      borderTop: `${arrowSize}px solid transparent`,
-      borderBottom: `${arrowSize}px solid transparent`,
-      borderLeft: `${arrowSize}px solid ${arrowColor}`,
+      borderTop: `${ARROW}px solid transparent`,
+      borderBottom: `${ARROW}px solid transparent`,
+      borderLeft: `${ARROW}px solid ${ACCENT.hex}`,
     },
   };
 
   return (
     <>
-      {/* Dim overlay — no blur, with transparent cutout via SVG */}
+      {/* Dim overlay with a transparent cutout via SVG */}
       <svg
         style={{ position: "fixed", inset: 0, zIndex: 60, pointerEvents: "none" }}
         width="100%"
@@ -6059,14 +12209,15 @@ function CameraTour({
         <defs>
           <mask id="tour-spotlight-mask">
             <rect width="100%" height="100%" fill="white" />
-            {spot && (
+            {spots.map((s, i) => (
               <rect
-                x={spot.x} y={spot.y}
-                width={spot.w} height={spot.h}
+                key={i}
+                x={s.x} y={s.y}
+                width={s.w} height={s.h}
                 rx={8} ry={8}
                 fill="black"
               />
-            )}
+            ))}
           </mask>
         </defs>
         <rect
@@ -6076,22 +12227,23 @@ function CameraTour({
         />
       </svg>
 
-      {/* Pulsing highlight ring around target */}
-      {spot && (
+      {/* Pulsing highlight ring around each target */}
+      {spots.map((s, i) => (
         <div
+          key={i}
+          className="cam-tour-ring"
           style={{
             position: "fixed",
             zIndex: 61,
-            left: spot.x, top: spot.y,
-            width: spot.w, height: spot.h,
+            left: s.x, top: s.y,
+            width: s.w, height: s.h,
             borderRadius: 8,
             border: `2px solid ${ACCENT.hex}`,
-            boxShadow: `0 0 0 3px ${ACCENT.hex}40, 0 0 16px ${ACCENT.hex}60`,
             pointerEvents: "none",
             animation: "tour-pulse 1.6s ease-in-out infinite",
           }}
         />
-      )}
+      ))}
 
       {/* Backdrop click to close */}
       <div
@@ -6100,143 +12252,653 @@ function CameraTour({
       />
 
       {/* Tooltip card */}
-      <div style={{ ...cardStyle, position: "fixed", zIndex: 62 }}>
-        {/* Arrow */}
-        {spot && <div style={arrowEl[arrowSide]} />}
+      <div style={track}>
+        {spacers && <div style={{ flex: `${spacers[0]} 0 0px` }} />}
+        <div
+          role="dialog"
+          aria-labelledby="camera-tour-title"
+          style={{
+            position: "relative",
+            flex: "0 1 auto",
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            pointerEvents: "auto",
+          }}
+        >
+          {/* Arrow, outside the scrolling card so it is not clipped */}
+          {arrowSide && <div style={arrowEl[arrowSide]} />}
 
-        {/* Header */}
-        <div style={{
-          background: ACCENT.hex,
-          padding: "14px 16px 12px",
-          position: "relative",
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 8,
-        }}>
-          <div>
+          <div style={{
+            flex: "0 1 auto",
+            minHeight: 0,
+            // Only the body scrolls, so the header and Back / Next stay on screen.
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            background: "white",
+            borderRadius: 14,
+            boxShadow: "0 12px 40px oklch(0 0 0 / 0.22)",
+            // Rendered outside the page wrapper, so it sets its own text colour:
+            // the inherited body colour turns near-white under a dark system theme.
+            color: "oklch(0.18 0.01 240)",
+          }}>
+            {/* Header */}
             <div style={{
-              fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
-              textTransform: "uppercase", color: "oklch(0.95 0.02 200)", marginBottom: 3,
+              flexShrink: 0,
+              background: ACCENT.hex,
+              padding: "14px 16px 12px",
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 8,
             }}>
-              Step {step + 1} of {total}
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
-              {def.title}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close tour"
-            style={{
-              flexShrink: 0, width: 24, height: 24,
-              border: "1px solid oklch(0.95 0.02 200 / 0.35)",
-              background: "oklch(0.95 0.02 200 / 0.12)",
-              borderRadius: 6, cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "white",
-            }}
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-
-        {/* Body */}
-        <div style={{ padding: "14px 16px 10px" }}>
-          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
-            {def.lines.map((line, i) => (
-              <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{
-                  flexShrink: 0, marginTop: 4,
-                  width: 6, height: 6, borderRadius: 99,
-                  background: ACCENT.hex, display: "inline-block",
-                }} />
-                <span style={{ fontSize: 12.5, color: "oklch(0.22 0.01 240)", lineHeight: 1.55 }}>{line}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Footer */}
-        <div style={{
-          padding: "10px 16px 14px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          {/* Step dots */}
-          <div style={{ display: "flex", gap: 5 }}>
-            {Array.from({ length: total }).map((_, i) => (
+              <div>
+                <div style={{
+                  fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".1em",
+                  textTransform: "uppercase", color: "oklch(0.97 0.01 200)", marginBottom: 3,
+                }}>
+                  Step {step + 1} of {total}
+                </div>
+                <div id="camera-tour-title" style={{ fontSize: 18, fontWeight: 700, color: "white", lineHeight: 1.25 }}>
+                  {def.title}
+                </div>
+              </div>
               <button
-                key={i}
-                onClick={(e) => { e.stopPropagation(); onGoTo(i); }}
-                aria-label={`Go to step ${i + 1}`}
+                type="button"
+                onClick={onClose}
+                aria-label="Close tour"
                 style={{
-                  width: i === step ? 18 : 7, height: 7,
-                  borderRadius: 99,
-                  background: i === step ? ACCENT.hex : "oklch(0.88 0.003 240)",
-                  border: "none", cursor: "pointer", padding: 0,
-                  transition: "width .18s, background .18s",
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Nav buttons */}
-          <div style={{ display: "flex", gap: 6 }}>
-            {step > 0 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onBack(); }}
-                style={{
-                  padding: "5px 13px",
-                  border: "1px solid oklch(0.90 0.003 240)",
-                  background: "white", borderRadius: 7,
-                  fontSize: 12, fontWeight: 500,
-                  color: "oklch(0.35 0.01 240)", cursor: "pointer",
-                }}
-              >Back</button>
-            )}
-            {step < total - 1 ? (
-              <button
-                onClick={(e) => { e.stopPropagation(); onNext(); }}
-                style={{
-                  padding: "5px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex, borderRadius: 7,
-                  fontSize: 12, fontWeight: 600,
-                  color: "white", cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 5,
+                  flexShrink: 0, width: 30, height: 30,
+                  border: "1px solid oklch(0.95 0.02 200 / 0.35)",
+                  background: "oklch(0.95 0.02 200 / 0.12)",
+                  borderRadius: 6, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "white",
                 }}
               >
-                Next
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8">
-                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
-            ) : (
-              <button
-                onClick={(e) => { e.stopPropagation(); onClose(); }}
-                style={{
-                  padding: "5px 14px",
-                  border: `1px solid ${ACCENT.hex}`,
-                  background: ACCENT.hex, borderRadius: 7,
-                  fontSize: 12, fontWeight: 600,
-                  color: "white", cursor: "pointer",
-                }}
-              >Got it!</button>
-            )}
+            </div>
+
+            {/* Body: the step's lines, with its illustration beside them */}
+            <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "flex-start", gap: 16, flex: "1 1 auto", minHeight: 0, overflowY: "auto" }}>
+              <ul style={{
+                margin: 0, padding: 0, listStyle: "none",
+                display: "flex", flexDirection: "column", gap: 7,
+                flex: "1 1 0", minWidth: 0,
+              }}>
+                {def.lines.map((line, i) => (
+                  <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{
+                      flexShrink: 0, marginTop: 9,
+                      width: 6, height: 6, borderRadius: 99,
+                      background: ACCENT.hex,
+                    }} />
+                    <span style={{ fontSize: 15, color: "oklch(0.2 0.01 240)", lineHeight: 1.55 }}>{line}</span>
+                  </li>
+                ))}
+              </ul>
+              {graphic && (
+                <div style={{ zoom: graphicScale, flexShrink: 0 }}>
+                  <TourGraphic kind={graphic} />
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              flexShrink: 0,
+              padding: "12px 16px 14px",
+              borderTop: "1px solid oklch(0.94 0.003 240)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              {/* Step dots */}
+              <div style={{ display: "flex", gap: 5 }}>
+                {Array.from({ length: total }).map((_, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onGoTo(i); }}
+                    aria-label={`Go to step ${i + 1}`}
+                    style={{
+                      width: i === step ? 18 : 7, height: 7,
+                      borderRadius: 99,
+                      background: i === step ? ACCENT.hex : "oklch(0.88 0.003 240)",
+                      border: "none", cursor: "pointer", padding: 0,
+                      transition: "width .18s, background .18s",
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Nav buttons */}
+              <div style={{ display: "flex", gap: 6 }}>
+                {step > 0 && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onBack(); }}
+                    style={{
+                      padding: "8px 16px",
+                      border: "1px solid oklch(0.85 0.003 240)",
+                      background: "white", borderRadius: 8,
+                      fontSize: 14, fontWeight: 500,
+                      color: "oklch(0.35 0.01 240)", cursor: "pointer",
+                    }}
+                  >Back</button>
+                )}
+                {step < total - 1 ? (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onNext(); }}
+                    style={{
+                      padding: "8px 18px",
+                      border: `1px solid ${ACCENT.hex}`,
+                      background: ACCENT.hex, borderRadius: 8,
+                      fontSize: 14, fontWeight: 600,
+                      color: "white", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 6,
+                    }}
+                  >
+                    Next
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" aria-hidden="true">
+                      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onClose(); }}
+                    style={{
+                      padding: "8px 18px",
+                      border: `1px solid ${ACCENT.hex}`,
+                      background: ACCENT.hex, borderRadius: 8,
+                      fontSize: 14, fontWeight: 600,
+                      color: "white", cursor: "pointer",
+                    }}
+                  >Got it!</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        {spacers && <div style={{ flex: `${spacers[1]} 0 0px` }} />}
+      </div>
+
+      {/* Keyframes for the ring and the illustrations */}
+      <style>{TOUR_KEYFRAMES}</style>
+    </>
+  );
+}
+
+/**
+ * The small illustration beside a tour step: what to click, how to read the
+ * status dots, how to switch exercises, where to put the camera and stand,
+ * clothing and lighting, and what happens after Start session. Decorative
+ * only; each point it shows is also stated in the step's text.
+ */
+function TourGraphic({ kind }: { kind: TourGraphicKind }) {
+  const column: CSSProperties = { flex: "0 0 250px", width: 250, display: "flex", flexDirection: "column", gap: 8 };
+  const label: CSSProperties = {
+    fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
+    textTransform: "uppercase", color: "oklch(0.50 0.01 240)",
+  };
+  const panel: CSSProperties = {
+    border: "1px solid oklch(0.93 0.003 240)", borderRadius: 8,
+    background: "oklch(0.985 0.003 240)", padding: 10,
+  };
+  const verdict = (tone: "ok" | "bad" | "warn", text: string) => {
+    const colors = {
+      ok: { bg: "oklch(0.96 0.04 145)", line: "oklch(0.88 0.06 145)", ink: "oklch(0.40 0.07 145)", mark: "✓" },
+      bad: { bg: "oklch(0.96 0.04 25)", line: "oklch(0.88 0.08 25)", ink: "oklch(0.45 0.14 25)", mark: "✗" },
+      warn: { bg: "oklch(0.96 0.05 80)", line: "oklch(0.86 0.09 70)", ink: "oklch(0.48 0.12 60)", mark: "!" },
+    }[tone];
+    return (
+      <div style={{ flex: "1 1 auto", padding: "5px 8px", display: "flex", alignItems: "center", gap: 5, background: colors.bg, borderTop: `1px solid ${colors.line}` }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: colors.ink }}>{colors.mark}</span>
+        <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: colors.ink, fontWeight: 600 }}>
+          {text}
+        </span>
+      </div>
+    );
+  };
+  const downArrow = (
+    <div style={{ display: "flex", justifyContent: "center", color: "oklch(0.72 0.01 240)" }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+        <line x1="12" y1="4" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/>
+      </svg>
+    </div>
+  );
+  const figure = (head: CSSProperties, body: CSSProperties) => (
+    <div style={{ position: "absolute", left: "50%", top: 16, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <div style={{ width: 15, height: 15, borderRadius: 999, ...head }} />
+      <div style={{ borderRadius: "8px 8px 3px 3px", ...body }} />
+    </div>
+  );
+  const ray = (position: CSSProperties, width: number, deg: number, origin: string, delay: number) => (
+    <div style={{
+      position: "absolute", ...position, width, height: 1.5,
+      background: "oklch(0.80 0.12 90)",
+      transform: `rotate(${deg}deg)`, transformOrigin: origin,
+      animation: `gfx-rays 2.6s ease-in-out ${delay}s infinite`,
+    }} />
+  );
+  const joint: CSSProperties = {
+    position: "absolute", width: 5, height: 5, borderRadius: 999,
+    background: "oklch(0.82 0.20 195)", boxShadow: "0 0 6px oklch(0.82 0.20 195 / 0.8)",
+  };
+  const lostJoint: CSSProperties = {
+    position: "absolute", width: 5, height: 5, borderRadius: 999,
+    border: "1px dashed oklch(0.72 0.15 70)",
+  };
+  const digit: CSSProperties = {
+    position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+    fontFamily: "var(--mono)", fontSize: 20, fontWeight: 700, color: "oklch(0.35 0.06 200)",
+  };
+
+  if (kind === "start") {
+    const cameraGlyph = (size: number) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+        <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+        <path d="M17 10.5l5-3v9l-5-3"/>
+      </svg>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>What to click</div>
+        <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 5 }}>
+          {/* The camera view while the camera is off, with its Start camera button. */}
+          <div style={{ height: 40, borderRadius: 6, background: "oklch(0.22 0.01 240)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 5, background: ACCENT.hex, color: "white", fontSize: 11.5, fontWeight: 600, animation: "gfx-btn 2.2s ease-out infinite" }}>
+              {cameraGlyph(10)}
+              Start camera
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="oklch(0.25 0.01 240)" strokeWidth="1.6" aria-hidden="true" style={{ position: "absolute", right: -7, bottom: -9, animation: "gfx-cursor 2.2s ease-in-out infinite" }}>
+                <path d="M5 3l14 8-6 1.5L10 19z"/>
+              </svg>
+            </span>
+          </div>
+          {downArrow}
+          <div style={{ padding: "6px 8px", background: "white", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 6, boxShadow: "0 2px 6px oklch(0 0 0 / 0.06)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5, color: "oklch(0.35 0.01 240)" }}>
+              {cameraGlyph(10)}
+              <span style={{ fontSize: 12, color: "oklch(0.25 0.01 240)", fontWeight: 500 }}>Use your camera?</span>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: "1px solid oklch(0.90 0.003 240)", borderRadius: 4, fontSize: 11.5, color: "oklch(0.45 0.01 240)" }}>Block</span>
+              <span style={{ flex: 1, textAlign: "center", padding: "3px 0", border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", borderRadius: 4, fontSize: 11.5, color: "oklch(0.30 0.06 200)", fontWeight: 600 }}>Allow</span>
+            </div>
+          </div>
+          {downArrow}
+          {/* The live view that follows. */}
+          <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 6, overflow: "hidden" }}>
+            <div style={{ position: "relative", height: 40, background: "linear-gradient(oklch(0.36 0.01 240), oklch(0.26 0.01 240))" }}>
+              <div style={{ position: "absolute", left: "50%", bottom: 0, transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <div style={{ width: 12, height: 12, borderRadius: 999, background: "oklch(0.70 0.02 240)" }} />
+                <div style={{ width: 30, height: 20, borderRadius: "10px 10px 0 0", background: "oklch(0.70 0.02 240)" }} />
+              </div>
+            </div>
+            {verdict("ok", "Camera view appears")}
           </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Keyframe animation injected once */}
-      <style>{`
-        @keyframes tour-pulse {
-          0%, 100% { box-shadow: 0 0 0 3px ${ACCENT.hex}40, 0 0 14px ${ACCENT.hex}50; }
-          50%       { box-shadow: 0 0 0 6px ${ACCENT.hex}25, 0 0 24px ${ACCENT.hex}70; }
-        }
-      `}</style>
-    </>
+  if (kind === "status") {
+    const aiChip = (ready: boolean) => (
+      <span style={{
+        position: "absolute", top: 6, right: 6,
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "2px 6px", borderRadius: 999,
+        background: "oklch(0.16 0.01 240 / 0.72)", border: "1px solid oklch(1 0 0 / 0.18)",
+        color: "white", fontSize: 11, fontWeight: 700, letterSpacing: ".04em",
+      }}>
+        AI
+        <span style={ready
+          ? { width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: "oklch(0.72 0.17 145)", boxShadow: "0 0 0 2px oklch(0.72 0.17 145 / 0.3)" }
+          : { width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: "oklch(0.78 0.15 75)", animation: "gfx-amber 2s ease-in-out infinite" }}
+        />
+      </span>
+    );
+    const cameraView = (ready: boolean) => (
+      <div style={{ position: "relative", height: 44, background: "oklch(0.22 0.01 240)" }}>
+        {aiChip(ready)}
+      </div>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Reading the dots</div>
+        <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 8, overflow: "hidden" }}>
+          {/* The page header's Camera menu above the camera view's AI indicator. */}
+          <div style={{ display: "flex", justifyContent: "flex-end", padding: "5px 6px", background: "white", borderBottom: "1px solid oklch(0.93 0.003 240)" }}>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              padding: "2px 7px", borderRadius: 999,
+              background: "oklch(0.96 0.04 145)", border: "1px solid oklch(0.88 0.06 145)",
+              color: "oklch(0.38 0.07 145)", fontSize: 11, fontWeight: 600,
+            }}>
+              <span style={{ width: 5, height: 5, borderRadius: 999, background: "oklch(0.62 0.13 145)", boxShadow: "0 0 0 2px oklch(0.62 0.13 145 / 0.22)" }} />
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+                <path d="M17 10.5l5-3v9l-5-3"/>
+              </svg>
+              Camera
+              <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                <path d="M6 9l6 6 6-6"/>
+              </svg>
+            </span>
+          </div>
+          {cameraView(true)}
+          {verdict("ok", "Both green — ready to start")}
+        </div>
+        <div style={{ border: "1px solid oklch(0.86 0.09 70)", borderRadius: 8, overflow: "hidden" }}>
+          {cameraView(false)}
+          {verdict("warn", "Orange — AI still loading")}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "exercise") {
+    const chevron = (d: string, animation: string, active: boolean) => (
+      <div style={{
+        width: 26, flexShrink: 0, borderRadius: 6,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "oklch(0.35 0.06 200)",
+        border: `1px solid ${active ? ACCENT.hex : "oklch(0.90 0.003 240)"}`,
+        background: active ? "oklch(0.95 0.02 200)" : "white",
+        animation,
+      }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+          <path d={d}/>
+        </svg>
+      </div>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Switching exercises</div>
+        <div style={{ ...panel, display: "flex", alignItems: "stretch", gap: 6 }}>
+          {chevron("M15 18l-6-6 6-6", "gfx-chev-a 2.8s ease-in-out infinite", false)}
+          <div style={{ flex: 1, minWidth: 0, padding: "8px 9px", borderRadius: 6, border: "1px solid oklch(0.95 0.02 200)", background: "white" }}>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.35 0.06 200)", fontWeight: 600 }}>
+              Exercise 2 / 4
+            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: "oklch(0.18 0.01 240)", marginTop: 2, lineHeight: 1.2 }}>
+              Shoulder Shrugs
+            </div>
+          </div>
+          {chevron("M9 18l6-6-6-6", "gfx-chev-b 2.8s ease-in-out infinite", true)}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.50 0.01 240)", paddingLeft: 2 }}>
+          <span>3 sets</span>
+          <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+          <span>12 reps</span>
+          <span style={{ color: "oklch(0.85 0.003 240)" }}>·</span>
+          <span>60s rest</span>
+        </div>
+        <div style={{ ...label, marginTop: 4 }}>Watching the guide</div>
+        <div style={{ ...panel, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.40 0.01 240)" }}>
+              Reference Guide
+            </span>
+            <span style={{
+              position: "relative", width: 18, height: 18, flexShrink: 0, borderRadius: 5,
+              border: `1px solid ${ACCENT.hex}`, background: "oklch(0.95 0.02 200)", color: "oklch(0.35 0.06 200)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              animation: "gfx-btn 2.2s ease-out infinite",
+            }}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>
+              </svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="oklch(0.25 0.01 240)" strokeWidth="1.6" aria-hidden="true" style={{ position: "absolute", right: -7, bottom: -9, animation: "gfx-cursor 2.2s ease-in-out infinite" }}>
+                <path d="M5 3l14 8-6 1.5L10 19z"/>
+              </svg>
+            </span>
+          </div>
+          {/* A generic, still figure standing for the guide's picture; it shows no movement. */}
+          <svg viewBox="0 0 184 64" style={{ display: "block", width: "100%", height: 64, borderRadius: 5, background: "linear-gradient(oklch(0.50 0.01 240), oklch(0.38 0.01 240))" }} aria-hidden="true">
+            <g fill="oklch(0.88 0.01 240)">
+              <circle cx="92" cy="13" r="6" />
+              <rect x="85" y="20" width="14" height="22" rx="5" />
+            </g>
+            <g stroke="oklch(0.88 0.01 240)" strokeWidth={4} strokeLinecap="round">
+              <line x1="86" y1="23" x2="81" y2="41" />
+              <line x1="98" y1="23" x2="103" y2="41" />
+              <line x1="89" y1="41" x2="88" y2="60" />
+              <line x1="95" y1="41" x2="96" y2="60" />
+            </g>
+          </svg>
+          <div style={{ fontSize: 10.5, lineHeight: 1.35, color: "oklch(0.50 0.01 240)" }}>
+            {"Animated guide with illustrative timing. Your therapist's instructions come first."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "position") {
+    const person = (x: number, ink: string, opacity: number) => (
+      <g fill={ink} opacity={opacity}>
+        <circle cx={x} cy={24} r={6} />
+        <rect x={x - 5} y={31} width={10} height={22} rx={4} />
+        <rect x={x - 3.5} y={52} width={7} height={30} rx={3} />
+      </g>
+    );
+    // Side view: the camera on its stand at the left, level at chest height, the
+    // wedge it can see, and the person twice over, faint in full and solid where
+    // the camera sees them. With `heightLabel`, a dotted line runs level from the
+    // lens to the chest.
+    const sideView = (clipId: string, personX: number, ink: string, fov: string, textInk: string, distance: string, heightLabel?: string) => (
+      <svg viewBox="0 0 168 92" style={{ display: "block", width: "100%", height: "auto", aspectRatio: "168 / 92", background: "oklch(0.985 0.003 240)" }} aria-hidden="true">
+        <defs>
+          <clipPath id={clipId}>
+            <polygon points="29,37 164,-12 164,86" />
+          </clipPath>
+        </defs>
+        <line x1="0" y1="82.5" x2="168" y2="82.5" stroke="oklch(0.86 0.005 240)" />
+        <polygon points="29,37 164,-12 164,86" fill={fov} fillOpacity={0.13} />
+        <g stroke={fov} strokeWidth={0.9} strokeDasharray="3 3">
+          <line x1="29" y1="37" x2="164" y2="-12" />
+          <line x1="29" y1="37" x2="164" y2="86" />
+        </g>
+        <g stroke="oklch(0.45 0.01 240)" strokeWidth={1.5} strokeLinecap="round">
+          <line x1="18" y1="42" x2="18" y2="82" />
+          <line x1="18" y1="71" x2="12" y2="82" />
+          <line x1="18" y1="71" x2="24" y2="82" />
+        </g>
+        <rect x="9" y="32" width="17" height="10" rx="2" fill="oklch(0.30 0.01 240)" />
+        <circle cx="27" cy="37" r="2.4" fill="oklch(0.82 0.20 195)" />
+        {person(personX, ink, 0.25)}
+        <g clipPath={`url(#${clipId})`}>{person(personX, ink, 1)}</g>
+        {heightLabel && (
+          <>
+            <line x1="31" y1="37" x2={personX - 5} y2="37" stroke={textInk} strokeWidth={0.9} strokeDasharray="1.5 2" />
+            <text x="82" y="34" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600 }}>
+              {heightLabel}
+            </text>
+          </>
+        )}
+        <g stroke={textInk} strokeWidth={0.9}>
+          <line x1="29" y1="88" x2={personX - 7} y2="88" />
+          <line x1="29" y1="85.5" x2="29" y2="90.5" />
+          <line x1={personX - 7} y1="85.5" x2={personX - 7} y2="90.5" />
+        </g>
+        <text x={(22 + personX) / 2} y="79" textAnchor="middle" fill={textInk} style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600 }}>
+          {distance}
+        </text>
+      </svg>
+    );
+    return (
+      <div className="cam-tour-gfx" style={column}>
+        <div style={label}>Side view</div>
+        <div style={{ border: "1px solid oklch(0.88 0.06 145)", borderRadius: 8, overflow: "hidden" }}>
+          {sideView("tour-gfx-fov-good", 128, "oklch(0.45 0.06 200)", "oklch(0.65 0.13 145)", "oklch(0.40 0.07 145)", "2–3 m", "chest height")}
+          {verdict("ok", "2–3 m, head to knees")}
+        </div>
+        <div style={{ border: "1px solid oklch(0.88 0.08 25)", borderRadius: 8, overflow: "hidden" }}>
+          {sideView("tour-gfx-fov-close", 94, "oklch(0.55 0.17 25)", "oklch(0.58 0.17 25)", "oklch(0.45 0.14 25)", "< 2 m")}
+          {verdict("bad", "Too close — knees cut off")}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === "environment") {
+    const tile = (tone: "ok" | "bad", scene: React.ReactNode, text: string) => (
+      <div style={{
+        display: "flex", flexDirection: "column",
+        border: `1px solid ${tone === "ok" ? "oklch(0.88 0.06 145)" : "oklch(0.88 0.08 25)"}`,
+        borderRadius: 8, overflow: "hidden",
+      }}>
+        {scene}
+        {verdict(tone, text)}
+      </div>
+    );
+    // One row per tip, with the good example beside the poor one.
+    const topic = (text: string, first = false) => (
+      <div style={{ ...label, gridColumn: "1 / -1", marginTop: first ? 0 : 4 }}>{text}</div>
+    );
+    const fitScene = (children: React.ReactNode) => (
+      <svg viewBox="0 0 168 92" style={{ display: "block", width: "100%", height: 92, flexShrink: 0, background: "oklch(0.94 0.004 240)" }} aria-hidden="true">
+        {children}
+      </svg>
+    );
+    const trackedJoints: [number, number][] = [[76, 30], [92, 30], [68, 44], [100, 44], [80, 54], [88, 54], [79, 70], [89, 70]];
+    const hiddenJoints: [number, number][] = [[76, 30], [92, 30], [62, 49], [106, 49], [74, 77], [94, 77]];
+    return (
+      <div className="cam-tour-gfx" style={{ flex: "0 0 420px", width: 420, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", alignContent: "start" }}>
+        {topic("Clothing contrast", true)}
+        {tile(
+          "ok",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.34 0.012 250)" }}>
+            {figure({ background: "oklch(0.93 0.015 90)" }, { width: 30, height: 36, background: "oklch(0.93 0.015 90)" })}
+            <div style={{ position: "absolute", left: "50%", top: 36, transform: "translateX(-50%)", width: 30, height: 22 }}>
+              <span style={{ ...joint, left: -1, top: 0 }} />
+              <span style={{ ...joint, right: -1, top: 0 }} />
+              <span style={{ position: "absolute", left: "50%", top: 1, transform: "translateX(-50%)", width: 22, height: 1.5, background: "oklch(0.82 0.20 195)" }} />
+              <span style={{ position: "absolute", left: "50%", top: 3, transform: "translateX(-50%)", width: 1.5, height: 16, background: "oklch(0.82 0.20 195)" }} />
+              <span style={{ ...joint, left: "50%", bottom: 0, transform: "translateX(-50%)" }} />
+            </div>
+          </div>,
+          "Light on dark — joints found",
+        )}
+        {tile(
+          "bad",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.32 0.012 250)" }}>
+            {figure({ background: "oklch(0.27 0.014 255)" }, { width: 30, height: 36, background: "oklch(0.27 0.014 255)" })}
+            <div style={{ position: "absolute", left: "50%", top: 36, transform: "translateX(-50%)", width: 30, height: 22, animation: "gfx-joint 2.6s ease-in-out infinite" }}>
+              <span style={{ ...lostJoint, left: -1, top: 0 }} />
+              <span style={{ ...lostJoint, right: -1, top: 0 }} />
+              <span style={{ ...lostJoint, left: "50%", bottom: 0, transform: "translateX(-50%)" }} />
+            </div>
+          </div>,
+          "Dark on dark — joints lost",
+        )}
+
+        {topic("Clothing fit")}
+        {tile(
+          "ok",
+          fitScene(
+            <>
+              <g stroke="oklch(0.45 0.06 200)" strokeLinecap="round" strokeLinejoin="round" fill="none">
+                <path d="M76 30 L68 44 L64 57" strokeWidth={5} />
+                <path d="M92 30 L100 44 L104 57" strokeWidth={5} />
+                <path d="M80 54 L79 70 L78 86" strokeWidth={6} />
+                <path d="M88 54 L89 70 L90 86" strokeWidth={6} />
+              </g>
+              <rect x="75" y="26" width="18" height="30" rx="6" fill="oklch(0.45 0.06 200)" />
+              <circle cx="84" cy="16" r="7" fill="oklch(0.45 0.06 200)" />
+              <g fill="oklch(0.82 0.20 195)" style={{ filter: "drop-shadow(0 0 2px oklch(0.82 0.20 195 / 0.9))" }}>
+                {trackedJoints.map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={2.3} />)}
+              </g>
+            </>,
+          ),
+          "Fitted — joints visible",
+        )}
+        {tile(
+          "bad",
+          fitScene(
+            <>
+              <path d="M67 63 L101 63 L106 88 L89 88 L84 73 L79 88 L62 88 Z" fill="oklch(0.50 0.03 250)" />
+              <path d="M74 23 Q84 27 94 23 L113 47 L106 58 L99 45 L102 65 L66 65 L69 45 L62 58 L55 47 Z" fill="oklch(0.58 0.03 250)" />
+              <circle cx="84" cy="16" r="7" fill="oklch(0.45 0.02 250)" />
+              <g fill="none" stroke="oklch(0.72 0.15 70)" strokeWidth={1.1} strokeDasharray="2 1.5" style={{ animation: "gfx-joint 2.6s ease-in-out infinite" }}>
+                {hiddenJoints.map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={3.2} />)}
+              </g>
+            </>,
+          ),
+          "Very loose — joints hidden",
+        )}
+
+        {topic("Light & background")}
+        {tile(
+          "ok",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "oklch(0.94 0.004 240)" }}>
+            {figure(
+              { background: "oklch(0.90 0.02 90)", border: "1.5px solid oklch(0.45 0.02 240)" },
+              { width: 28, height: 34, background: "oklch(0.90 0.02 90)", border: "1.5px solid oklch(0.45 0.02 240)" },
+            )}
+            <div style={{ position: "absolute", left: 10, bottom: 8, width: 14, height: 14, borderRadius: 999, background: "oklch(0.85 0.14 90)", boxShadow: "0 0 10px oklch(0.85 0.14 90 / 0.8)" }} />
+            {ray({ left: 26, bottom: 22 }, 46, -24, "left center", 0)}
+            {ray({ left: 26, bottom: 16 }, 52, -12, "left center", 0.3)}
+            {ray({ left: 26, bottom: 11 }, 44, 0, "left center", 0.6)}
+          </div>,
+          "Light in front, plain wall",
+        )}
+        {tile(
+          "bad",
+          <div style={{ position: "relative", height: 92, flexShrink: 0, background: "repeating-linear-gradient(125deg, oklch(0.62 0.02 240) 0 6px, oklch(0.52 0.03 260) 6px 12px)" }}>
+            {figure({ background: "oklch(0.28 0.01 240)" }, { width: 28, height: 34, background: "oklch(0.28 0.01 240)" })}
+            <div style={{ position: "absolute", right: 10, top: 8, width: 14, height: 14, borderRadius: 999, background: "oklch(0.85 0.14 90)", boxShadow: "0 0 12px oklch(0.85 0.14 90 / 0.9)" }} />
+            {ray({ right: 26, top: 22 }, 44, 24, "right center", 0)}
+            {ray({ right: 26, top: 30 }, 50, 12, "right center", 0.3)}
+          </div>,
+          "Backlit, dark on busy wall",
+        )}
+      </div>
+    );
+  }
+
+  // kind === "session"
+  return (
+    <div className="cam-tour-gfx" style={column}>
+      <div style={label}>What happens next</div>
+      <div style={{ ...panel, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ flex: 1, padding: "7px 8px", borderRadius: 5, background: ACCENT.hex, border: `1px solid ${ACCENT.hex}`, color: "white", fontSize: 12.5, fontWeight: 500, textAlign: "center" }}>
+            Start session
+          </div>
+          <div style={{ padding: "7px 12px", borderRadius: 5, background: "white", border: "1px solid oklch(0.90 0.003 240)", color: "oklch(0.30 0.01 240)", fontSize: 12.5, fontWeight: 500, textAlign: "center" }}>
+            End
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ position: "relative", width: 46, height: 46, borderRadius: 999, border: "2px solid oklch(0.90 0.003 240)", background: "white", flexShrink: 0 }}>
+            {/* The later digits start hidden, so without animation only the 3 shows. */}
+            <div style={{ ...digit, animation: "cd-3 3.6s linear infinite" }}>3</div>
+            <div style={{ ...digit, opacity: 0, animation: "cd-2 3.6s linear infinite" }}>2</div>
+            <div style={{ ...digit, opacity: 0, animation: "cd-1 3.6s linear infinite" }}>1</div>
+            <div style={{ ...digit, opacity: 0, fontSize: 13, letterSpacing: ".08em", color: "oklch(0.40 0.07 145)", animation: "cd-go 3.6s linear infinite" }}>GO</div>
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.45, color: "oklch(0.40 0.01 240)" }}>
+            A 5-second countdown to get into position, then 3 seconds standing still, run before counting starts.
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.82 0.20 195)", animation: "gfx-pip 2.4s ease-in-out infinite" }} />
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.90 0.08 195)" }} />
+            <span style={{ flex: 1, height: 8, borderRadius: 4, background: "oklch(0.92 0.003 240)" }} />
+          </div>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "oklch(0.50 0.01 240)" }}>
+            Set 1 of 3 — saved as you go
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -6251,39 +12913,6 @@ function metricWarnLabel(name: MetricName): string {
   }
 }
 
-function ClinicalStatusDot({ ok }: { ok: boolean }) {
-  return (
-    <span style={{
-      display: "inline-block",
-      width: 6, height: 6, borderRadius: 999,
-      background: ok ? "oklch(0.65 0.13 145)" : "oklch(0.70 0.13 60)",
-      boxShadow: ok
-        ? "0 0 0 3px oklch(0.65 0.13 145 / 0.18)"
-        : "0 0 0 3px oklch(0.70 0.13 60 / 0.18)",
-    }} />
-  );
-}
-
-function ClinicalCornerTicks() {
-  const tick = (style: CSSProperties) => (
-    <div style={{
-      position: "absolute",
-      width: 18, height: 18,
-      borderColor: "oklch(0.95 0.005 240 / 0.5)",
-      borderStyle: "solid",
-      ...style,
-    }}/>
-  );
-  return (
-    <>
-      {tick({ top: 18, left: 18, borderWidth: "1px 0 0 1px" })}
-      {tick({ top: 18, right: 18, borderWidth: "1px 1px 0 0" })}
-      {tick({ bottom: 18, left: 18, borderWidth: "0 0 1px 1px" })}
-      {tick({ bottom: 18, right: 18, borderWidth: "0 1px 1px 0" })}
-    </>
-  );
-}
-
 function ClinicalScoreRow({ score, tier }: { score: number | null; tier: ScoreTier }) {
   return (
     <div style={{
@@ -6295,11 +12924,11 @@ function ClinicalScoreRow({ score, tier }: { score: number | null; tier: ScoreTi
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 2, background: tier.hex }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
         <span style={{
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 12.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
         }}>Posture Score</span>
         <span style={{
-          fontFamily: "var(--mono)", fontSize: 9, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 11.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: tier.text, fontWeight: 600,
         }}>{tier.label}</span>
       </div>
@@ -6331,8 +12960,11 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
     card.warningActive === true &&
     card.value !== null;
 
-  const displayValue = card.value === null ? "—" : Math.abs(card.value).toFixed(1);
-  const warnLabel = metricWarnLabel(card.key);
+  const displayValue =
+    card.value === null
+      ? "—"
+      : Math.abs(card.value).toFixed(card.isAngle ? 1 : 3);
+  const warnLabel = metricWarnLabel(card.metric);
   const warningText = compareDirection === "below" ? "Below threshold" : "Above threshold";
 
   return (
@@ -6351,14 +12983,14 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
       <div style={{ minWidth: 0 }}>
         <div style={{
           display: "flex", alignItems: "center", gap: 6,
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
+          fontFamily: "var(--mono)", fontSize: 12.5, letterSpacing: ".14em",
           textTransform: "uppercase", color: "oklch(0.30 0.01 240)",
           marginBottom: 4, fontWeight: 600,
         }}>
           <span>{card.label}</span>
           {isFlag && (
             <span style={{
-              fontFamily: "var(--mono)", fontSize: 8.5, letterSpacing: ".18em",
+              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
               color: "oklch(0.45 0.10 65)", background: "white",
               border: "1px solid oklch(0.70 0.16 65)",
               padding: "1px 5px", borderRadius: 3,
@@ -6366,7 +12998,7 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
           )}
         </div>
         <div style={{
-          display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+          display: "flex", alignItems: "center", gap: 6, fontSize: 13,
           fontFamily: "var(--mono)", letterSpacing: ".04em",
           color: isFlag ? "oklch(0.45 0.10 65)" : "oklch(0.45 0.06 145)",
         }}>
@@ -6387,21 +13019,417 @@ function ClinicalMetricRow({ card }: { card: CardSpec }) {
         fontFamily: "var(--mono)",
       }}>
         {displayValue}
-        {displayValue !== "—" && (
-          <span style={{ fontSize: 14, color: "oklch(0.60 0.01 240)", marginLeft: 1 }}>°</span>
-        )}
       </div>
     </div>
   );
 }
 
-function ClinicalStatStrip({
-  score, tier, activeDefinition, repCounts, holdState,
-  timer, prescription, sessionState, currentSetIdx, compact,
+type CameraStatus = "off" | "starting" | "on";
+
+/** Smallest gap kept between the camera settings tray and the window edge. */
+const TRAY_EDGE = 12;
+
+/**
+ * Keeps the camera settings tray inside the window. It hangs from the Camera
+ * button's right edge; when the button sits too far left for that (a narrow
+ * window, or a phone where the header wraps), the tray slides right until its
+ * left edge clears the window, and it never runs past the right edge either.
+ */
+function keepTrayOnScreen(tray: HTMLDivElement | null) {
+  const anchor = tray?.offsetParent;
+  if (!tray || !anchor) return;
+  const button = anchor.getBoundingClientRect();
+  const width = tray.offsetWidth;
+  const leftOnScreen = Math.max(TRAY_EDGE, Math.min(button.right - width, window.innerWidth - TRAY_EDGE - width));
+  tray.style.right = "auto";
+  tray.style.left = `${leftOnScreen - button.left}px`;
+}
+
+/**
+ * The camera menu in the header. The dot left of the camera icon shows whether
+ * the camera is on; a click opens the camera settings. Whether the pose model
+ * is ready has its own "AI" indicator on the camera view.
+ */
+function CameraStatusButton({
+  status,
+  open,
+  onToggle,
 }: {
-  score: number | null;
-  tier: ScoreTier;
-  activeDefinition: ExerciseDefinition | null;
+  status: CameraStatus;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const tone =
+    status === "on"
+      ? { background: "oklch(0.96 0.04 145)", border: "oklch(0.88 0.06 145)", dot: "oklch(0.62 0.13 145)", halo: "oklch(0.62 0.13 145 / 0.22)", text: "oklch(0.38 0.07 145)" }
+      : status === "starting"
+        ? { background: "oklch(0.97 0.05 75)", border: "oklch(0.86 0.09 70)", dot: "oklch(0.70 0.16 65)", halo: "oklch(0.70 0.16 65 / 0.25)", text: "oklch(0.42 0.11 60)" }
+        : { background: "oklch(0.96 0.004 240)", border: "oklch(0.90 0.004 240)", dot: "oklch(0.72 0.01 240)", halo: "oklch(0.72 0.01 240 / 0.25)", text: "oklch(0.42 0.01 240)" };
+  const cameraState = status === "on" ? "on" : status === "starting" ? "starting" : "off";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label={`Camera settings (camera ${cameraState})`}
+      title={`Camera ${cameraState}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "7px 12px",
+        borderRadius: 999,
+        background: tone.background,
+        border: `1px solid ${tone.border}`,
+        color: tone.text,
+        fontFamily: "var(--sans)",
+        fontSize: 14,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+        cursor: "pointer",
+      }}
+    >
+      <span aria-hidden="true" style={{
+        width: 10,
+        height: 10,
+        flexShrink: 0,
+        borderRadius: 999,
+        background: tone.dot,
+        boxShadow: `0 0 0 3px ${tone.halo}`,
+      }} />
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+        <path d="M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+        <path d="M17 10.5l5-3v9l-5-3"/>
+      </svg>
+      <span>Camera</span>
+      <svg
+        width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"
+        style={{ marginLeft: 2, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}
+      >
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+    </button>
+  );
+}
+
+type FormCheckState = "warning" | "clear" | "setup" | "paused";
+
+const FORM_CHECK_COLLAPSED_KEY = "postural.formCheckCollapsed.v1";
+
+/**
+ * Neutral form-check status beside the camera view. It never names a movement
+ * or says how to correct one — cue wording and the overlay labels still await
+ * physiotherapist review — so the warning state only points at the highlight
+ * the overlay is already drawing. The patient can fold it to one line, which
+ * this device remembers; folded, it still shows the status and turns amber on a
+ * warning.
+ */
+function FormCheckCard({
+  state,
+  isometric,
+}: {
+  state: FormCheckState;
+  isometric: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(FORM_CHECK_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((was) => {
+      try {
+        window.localStorage.setItem(FORM_CHECK_COLLAPSED_KEY, was ? "0" : "1");
+      } catch {
+        /* localStorage unavailable — the choice lasts for this page only */
+      }
+      return !was;
+    });
+  };
+  const warning = state === "warning";
+  const title =
+    state === "warning"
+      ? "Check the highlighted area"
+      : state === "clear"
+        ? "No form warnings"
+        : state === "setup"
+          ? "Setting up"
+          : "Form checks paused";
+  const body =
+    state === "warning"
+      ? `Look at the highlight on your camera view. ${isometric ? "Your hold time still counts." : "Your reps still count."}`
+      : state === "clear"
+        ? "If something needs attention, it will be highlighted on your camera view."
+        : state === "setup"
+          ? "Form checks start once setup finishes."
+          : "Form checks resume when the camera can see you clearly.";
+  const eyebrowColor = warning ? "oklch(0.42 0.11 60)" : "oklch(0.42 0.01 240)";
+  return (
+    <div style={{
+      padding: collapsed ? "12px 20px" : 20,
+      borderRadius: 12,
+      background: warning ? "oklch(0.97 0.05 75)" : "white",
+      border: warning ? "2px solid oklch(0.70 0.16 65)" : "1px solid oklch(0.93 0.003 240)",
+    }}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Show form check" : "Hide form check"}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          marginBottom: collapsed ? 0 : 8,
+          padding: 0,
+          border: "none",
+          background: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          color: eyebrowColor,
+        }}
+      >
+        <span style={{ ...EYEBROW_STYLE, color: eyebrowColor }}>Form check</span>
+        {collapsed && (
+          <span style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 15,
+            fontWeight: 600,
+            color: warning ? "oklch(0.30 0.09 60)" : "oklch(0.30 0.01 240)",
+          }}>
+            {title}
+          </span>
+        )}
+        <svg
+          width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"
+          style={{ marginLeft: "auto", flexShrink: 0, transform: collapsed ? "none" : "rotate(180deg)", transition: "transform .15s" }}
+        >
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+      {!collapsed && <>
+      <div style={{
+        marginBottom: 6,
+        fontSize: 26,
+        fontWeight: 700,
+        letterSpacing: "-0.02em",
+        lineHeight: 1.2,
+        color: warning ? "oklch(0.30 0.09 60)" : "oklch(0.22 0.01 240)",
+      }}>
+        {title}
+      </div>
+      <div style={{ fontSize: 17, lineHeight: 1.45, color: warning ? "oklch(0.38 0.07 60)" : "oklch(0.42 0.01 240)" }}>
+        {body}
+      </div>
+      </>}
+    </div>
+  );
+}
+
+/**
+ * Keyframes for RollingNumber: a digit rolls up into place when its count rises
+ * and back down when it falls, overshooting a touch before it settles, like the
+ * number wheels of a mechanical cash register. With reduced motion the digits
+ * change in place.
+ */
+const ROLLING_NUMBER_CSS = `
+  .cam-wheel-in-up, .cam-wheel-out-up, .cam-wheel-in-down, .cam-wheel-out-down {
+    animation-duration: 520ms;
+    animation-timing-function: cubic-bezier(0.25, 1.45, 0.45, 1);
+    animation-fill-mode: both;
+  }
+  .cam-wheel-in-up { animation-name: cam-wheel-in-up; }
+  .cam-wheel-out-up { animation-name: cam-wheel-out-up; }
+  .cam-wheel-in-down { animation-name: cam-wheel-in-down; }
+  .cam-wheel-out-down { animation-name: cam-wheel-out-down; }
+  @keyframes cam-wheel-in-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes cam-wheel-out-up { from { transform: translateY(0); } to { transform: translateY(-100%); } }
+  @keyframes cam-wheel-in-down { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+  @keyframes cam-wheel-out-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .cam-wheel-in-up, .cam-wheel-in-down { animation: none; }
+    .cam-wheel-out-up, .cam-wheel-out-down { display: none; }
+  }
+`;
+
+/** Keeps text available to screen readers while it is drawn some other way. */
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+/**
+ * A count drawn as cash-register number wheels. When the value changes, each
+ * digit that differs rolls to its new number, up for a rising count and down
+ * for a falling one, and each moving wheel starts a beat after the one to its
+ * right. Digits sit right-aligned in at least `minDigits` wheels, so a count
+ * passing 9 does not shift the layout. A hidden copy of the text sizes the
+ * wheels and carries the text baseline, so the number lines up with the labels
+ * beside it exactly as plain text did.
+ */
+function RollingNumber({ value, minDigits = 1 }: { value: number; minDigits?: number }) {
+  const text = String(value);
+  const [shown, setShown] = useState(text);
+  const [roll, setRoll] = useState<{ from: string; up: boolean; turn: number } | null>(null);
+  if (text !== shown) {
+    // React's pattern for responding to a changed prop: adjust state while rendering.
+    setShown(text);
+    setRoll({ from: shown, up: value > Number(shown), turn: (roll?.turn ?? 0) + 1 });
+  }
+
+  const width = Math.max(minDigits, text.length, roll ? roll.from.length : 0);
+  const to = text.padStart(width, " ");
+  const from = roll ? roll.from.padStart(width, " ") : to;
+  const direction = roll?.up ? "up" : "down";
+  const turn = roll?.turn ?? 0;
+  const moving = Array.from(to, (digit, i) => roll !== null && from[i] !== digit);
+  // Moving wheels start right to left, 70 ms apart.
+  const delays = moving.map((isMoving, i) =>
+    isMoving ? moving.slice(i + 1).filter(Boolean).length * 70 : 0,
+  );
+
+  return (
+    <span style={{ position: "relative", display: "inline-block", whiteSpace: "pre" }}>
+      <span aria-hidden="true" style={{ visibility: "hidden" }}>{to}</span>
+      <span aria-hidden="true" style={{ position: "absolute", inset: 0, display: "flex", overflow: "hidden" }}>
+        {Array.from(to, (digit, i) =>
+          moving[i] ? (
+            <span key={`${turn}-${i}`} style={{ position: "relative", display: "block" }}>
+              <span className={`cam-wheel-in-${direction}`} style={{ display: "block", animationDelay: `${delays[i]}ms` }}>
+                {digit}
+              </span>
+              <span className={`cam-wheel-out-${direction}`} style={{ position: "absolute", left: 0, top: 0, animationDelay: `${delays[i]}ms` }}>
+                {from[i]}
+              </span>
+            </span>
+          ) : (
+            <span key={`wheel-${i}`} style={{ display: "block" }}>{digit}</span>
+          ),
+        )}
+      </span>
+      <span style={VISUALLY_HIDDEN}>{text}</span>
+    </span>
+  );
+}
+
+/**
+ * The page's original set progress strip, now on the session card: where the
+ * patient is in the session, one pip per set, and the whole session as a bar.
+ * The set number rolls like the counts on the camera view.
+ */
+function SessionProgressStrip({
+  phase,
+  setNumber,
+  completedSets,
+  sets,
+  progressPct,
+  setUnderway,
+}: {
+  phase: SessionState;
+  setNumber: number;
+  completedSets: number;
+  sets: number;
+  progressPct: number;
+  /** A set is being counted right now, which lights the current pip. */
+  setUnderway: boolean;
+}) {
+  const prefix =
+    phase === "countdown" ? "Starting set " : phase === "resting" ? "Rest — next: Set " : "Set ";
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      padding: "10px 12px",
+      borderRadius: 10,
+      border: "1px solid oklch(0.92 0.003 240)",
+      background: "oklch(0.985 0.003 240)",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <span style={{
+          fontFamily: "var(--mono)",
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: ".14em",
+          textTransform: "uppercase",
+          color: "oklch(0.40 0.01 240)",
+        }}>
+          {prefix}<RollingNumber value={setNumber} minDigits={String(sets).length} /> of {sets}
+        </span>
+        <span style={{
+          fontFamily: "var(--mono)",
+          fontSize: 13,
+          fontWeight: 600,
+          color: "oklch(0.20 0.01 240)",
+          fontVariantNumeric: "tabular-nums",
+        }}>
+          {progressPct}%
+        </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", gap: 5, flex: "0 1 auto", minWidth: 0 }}>
+          {Array.from({ length: sets }).map((_, i) => {
+            const done = i < completedSets;
+            const current = i === completedSets;
+            const lit = done || (current && setUnderway);
+            return (
+              <span key={i} style={{
+                width: 28,
+                flexShrink: 1,
+                minWidth: 6,
+                height: 10,
+                borderRadius: 5,
+                boxSizing: "border-box",
+                background: done ? NEON.hex : current ? NEON.dim : "oklch(0.92 0.003 240)",
+                boxShadow: lit ? `0 0 8px ${NEON.glow}, 0 0 3px ${NEON.glow}` : "none",
+                outline: current && setUnderway ? `1px solid ${NEON.hex}` : "none",
+                transition: "background .3s, box-shadow .3s",
+              }} />
+            );
+          })}
+        </div>
+        <div style={{ flex: "1 1 60px", height: 10, borderRadius: 5, background: "oklch(0.93 0.003 240)" }}>
+          <div style={{
+            height: "100%",
+            width: `${progressPct}%`,
+            borderRadius: 5,
+            background: NEON.hex,
+            boxShadow: progressPct > 0 ? `0 0 10px ${NEON.glow}, 0 0 4px ${NEON.glow}` : "none",
+            transition: "width .4s, box-shadow .3s",
+          }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rep, set and time readouts drawn over the camera view: a row across the
+ * bottom with its two panels pushed to the corners, so the patient's body and
+ * the overlay stay clear. Painted with a flat translucent fill (no backdrop
+ * blur) to keep compositing cheap while the pose loop runs. The labels keep the
+ * camera page's original stat-strip wording. Rep counts and the set number
+ * roll like cash-register wheels when they change.
+ */
+function CameraSetHud({
+  activeDefinition, repCounts, holdState, timer, prescription, currentSetIdx, compact,
+}: {
+  activeDefinition: ExerciseDefinition;
   repCounts: { left: number; right: number };
   holdState: {
     pairedSec: number;
@@ -6409,260 +13437,685 @@ function ClinicalStatStrip({
     rightSec: number;
     leftInBand: boolean;
     rightInBand: boolean;
+    leftHint?: HoldHint | null;
+    rightHint?: HoldHint | null;
   };
   timer: string;
   prescription: Prescription;
-  sessionState: SessionState;
   currentSetIdx: number;
   compact: boolean;
 }) {
+  const panelSt: CSSProperties = {
+    padding: compact ? "8px 12px" : "12px 18px",
+    borderRadius: 12,
+    background: "oklch(0.16 0.01 240 / 0.78)",
+    border: "1px solid oklch(1 0 0 / 0.10)",
+    color: "white",
+  };
   const labelSt: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: 12, letterSpacing: ".18em",
-    textTransform: "uppercase", color: "oklch(0.40 0.01 240)",
-    marginBottom: 6, fontWeight: 700,
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 6,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 13,
+    fontWeight: 700,
+    letterSpacing: ".18em",
+    textTransform: "uppercase",
+    color: "oklch(0.82 0.01 240)",
+  };
+  const suffixSt: CSSProperties = {
+    fontSize: compact ? 11 : 12,
+    fontWeight: 500,
+    letterSpacing: "normal",
+    textTransform: "none",
+    color: "oklch(0.76 0.01 240)",
   };
   const numSt: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: 44, fontWeight: 600,
-    letterSpacing: "-0.03em", color: "oklch(0.12 0.01 240)",
-    fontVariantNumeric: "tabular-nums", lineHeight: 1,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 34 : "clamp(40px, 6.4vh, 64px)",
+    fontWeight: 600,
+    lineHeight: 1,
+    letterSpacing: "-0.03em",
+    fontVariantNumeric: "tabular-nums",
   };
-  const divider = (
-    <div
-      style={compact
-        ? { height: 1, background: "oklch(0.93 0.003 240)" }
-        : { width: 1, background: "oklch(0.93 0.003 240)" }}
-    />
+  const captionSt: CSSProperties = {
+    marginTop: 6,
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 12,
+    fontWeight: 600,
+    letterSpacing: ".14em",
+    textTransform: "uppercase",
+    color: "oklch(0.80 0.01 240)",
+  };
+  const sideSt: CSSProperties = {
+    fontFamily: "var(--mono)",
+    fontSize: compact ? 11 : 13,
+    fontWeight: 700,
+    letterSpacing: ".18em",
+    textTransform: "uppercase",
+    color: "oklch(0.80 0.01 240)",
+  };
+  const rowSt: CSSProperties = {
+    display: "flex",
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    gap: compact ? 8 : 12,
+  };
+  const separator = (
+    <span style={{ fontSize: compact ? 18 : 24, fontWeight: 300, color: "oklch(0.62 0.01 240)" }}>·</span>
+  );
+  // Sides are shown separately and never merged: the asymmetry between them is
+  // the signal. A side outside the prescription is still shown, marked as
+  // observation only.
+  const sideCell = (label: "L" | "R", value: React.ReactNode, done: boolean, observation: boolean) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+      <span style={sideSt}>{label}{observation ? " · observation" : ""}</span>
+      <span style={{ ...numSt, color: done ? NEON.hex : "white" }}>{value}</span>
+    </div>
+  );
+  const repDigits = String(prescription.reps).length;
+  const seconds = (value: number) => (
+    <>
+      {value}
+      <span style={{ fontSize: compact ? 16 : 22, fontWeight: 500 }}>s</span>
+    </>
   );
 
-  let repsContent: React.ReactNode;
-  if (activeDefinition?.kind === "isometric" && isSideSplitIsometric(activeDefinition)) {
-    // Side-split isometric (ex_004): per-side hold times, split-panel style —
-    // the same L/R convention as bilateral rep counting, never merged into
-    // one number (the asymmetry between sides is the clinical signal).
+  let primary: React.ReactNode;
+  if (activeDefinition.kind === "isometric" && activeDefinition.bilateral && activeDefinition.bilateralMode === "per-limb") {
+    // Per-arm hold: one main number, the credited hold that ends the set, with
+    // each arm's own seconds beneath it, greyed while that arm is out of
+    // position. Two big per-arm numbers drift out of step whenever the arms
+    // reach the band at different moments, which reads as a counting fault.
+    const hold = perArmHoldDisplay(holdState, prescription);
+    const pausedColor = "oklch(0.58 0.01 240)";
+    const armNumSt: CSSProperties = {
+      fontFamily: "var(--mono)",
+      fontSize: compact ? 16 : 22,
+      fontWeight: 600,
+      fontVariantNumeric: "tabular-nums",
+    };
+    const hintColor = "oklch(0.82 0.13 70)";
+    const armCell = (arm: HoldArmDisplay) => (
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span style={{ ...sideSt, color: arm.tone === "paused" ? pausedColor : sideSt.color }}>
+          {arm.label}{arm.observation ? " · observation" : ""}
+          {arm.hint && (
+            <span style={{ color: hintColor }}>{arm.hint === "raise" ? " · raise ↑" : " · lower ↓"}</span>
+          )}
+        </span>
+        <span style={{ ...armNumSt, color: arm.tone === "done" ? NEON.hex : arm.tone === "paused" ? pausedColor : "white" }}>
+          {arm.seconds}s
+        </span>
+      </div>
+    );
+    primary = (
+      <>
+        <div style={labelSt}>
+          <span>Hold</span>
+          <span style={suffixSt}>/ {prescription.holdSeconds}s</span>
+        </div>
+        <div style={{ ...numSt, color: hold.done ? NEON.hex : "white" }}>{seconds(hold.seconds)}</div>
+        <div style={{ ...rowSt, marginTop: 6 }}>
+          {armCell(hold.arms[0])}
+          <span style={{ fontSize: compact ? 14 : 18, fontWeight: 300, color: "oklch(0.62 0.01 240)" }}>·</span>
+          {armCell(hold.arms[1])}
+        </div>
+      </>
+    );
+  } else if (activeDefinition.kind === "isometric" && activeDefinition.bilateral) {
     const leftSec = Math.floor(holdState.leftSec);
     const rightSec = Math.floor(holdState.rightSec);
-    const leftDone = leftSec >= prescription.holdSeconds;
-    const rightDone = rightSec >= prescription.holdSeconds;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Hold</span>
-          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.holdSeconds}s side</span>
+          <span style={suffixSt}>/ {prescription.holdSeconds}s side</span>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>L</span>
-            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {leftSec}
-              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
-            </span>
-          </div>
-          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>R</span>
-            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {rightSec}
-              <span style={{ fontSize: 18, fontWeight: 500 }}>s</span>
-            </span>
-          </div>
+        <div style={rowSt}>
+          {sideCell("L", seconds(leftSec), leftSec >= prescription.holdSeconds, prescription.prescribedSide === "right")}
+          {separator}
+          {sideCell("R", seconds(rightSec), rightSec >= prescription.holdSeconds, prescription.prescribedSide === "left")}
         </div>
-      </div>
+      </>
     );
-  } else if (activeDefinition?.kind === "isometric") {
+  } else if (activeDefinition.kind === "isometric") {
     const holdSec = Math.floor(holdState.pairedSec);
     const done = holdSec >= prescription.holdSeconds;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={labelSt}>Hold</div>
-        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-          {formatElapsedTime(holdSec)}
-        </div>
-        <div style={{
-          marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-          letterSpacing: ".14em", textTransform: "uppercase",
-          color: done ? ACCENT.text : "oklch(0.50 0.01 240)", fontWeight: 600,
-        }}>target {prescription.holdSeconds}s</div>
-      </div>
+    primary = (
+      <>
+        <div style={labelSt}><span>Hold</span></div>
+        <div style={{ ...numSt, color: done ? NEON.hex : "white" }}>{formatElapsedTime(holdSec)}</div>
+        <div style={captionSt}>target {prescription.holdSeconds}s</div>
+      </>
     );
-  } else if (activeDefinition?.bilateral) {
-    const leftDone = repCounts.left >= prescription.reps;
-    const rightDone = repCounts.right >= prescription.reps;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+  } else if (activeDefinition.bilateral) {
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Reps</span>
-          <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
+          <span style={suffixSt}>/ {prescription.reps}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, lineHeight: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>L</span>
-            <span style={{ ...numSt, color: leftDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {repCounts.left}
-            </span>
-          </div>
-          <span style={{ fontSize: 24, color: "oklch(0.85 0.003 240)", fontWeight: 300 }}>·</span>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 11, letterSpacing: ".18em",
-              textTransform: "uppercase", color: "oklch(0.50 0.01 240)", fontWeight: 700,
-            }}>R</span>
-            <span style={{ ...numSt, color: rightDone ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-              {repCounts.right}
-            </span>
-          </div>
+        <div style={rowSt}>
+          {sideCell("L", <RollingNumber value={repCounts.left} minDigits={repDigits} />, repCounts.left >= prescription.reps, prescription.prescribedSide === "right")}
+          {separator}
+          {sideCell("R", <RollingNumber value={repCounts.right} minDigits={repDigits} />, repCounts.right >= prescription.reps, prescription.prescribedSide === "left")}
         </div>
-      </div>
+      </>
     );
   } else {
     const singleReps = repCounts.left + repCounts.right;
-    const done = activeDefinition?.kind === "dynamic" && singleReps >= prescription.reps;
-    repsContent = (
-      <div style={{ padding: "14px 18px", flex: "1.4 1 0", minWidth: 0 }}>
-        <div style={{ ...labelSt, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    primary = (
+      <>
+        <div style={labelSt}>
           <span>Reps</span>
-          {activeDefinition?.kind === "dynamic" && (
-            <span style={{ fontWeight: 500, fontSize: 11, color: "oklch(0.55 0.01 240)" }}>/ {prescription.reps}</span>
-          )}
+          <span style={suffixSt}>/ {prescription.reps}</span>
         </div>
-        <div style={{ ...numSt, color: done ? ACCENT.hex : "oklch(0.12 0.01 240)" }}>
-          {activeDefinition ? singleReps : "—"}
+        <div style={{ ...numSt, color: singleReps >= prescription.reps ? NEON.hex : "white" }}><RollingNumber value={singleReps} minDigits={repDigits} /></div>
+      </>
+    );
+  }
+
+  return (
+    <div style={{
+      alignSelf: "stretch",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "space-between",
+      flexWrap: "wrap",
+      gap: 10,
+      pointerEvents: "none",
+    }}>
+      <div style={panelSt}>{primary}</div>
+      <div style={panelSt}>
+        <div style={labelSt}><span>Time</span></div>
+        <div style={{ ...numSt, whiteSpace: "nowrap" }}>{timer}</div>
+        <div style={captionSt}>Set <RollingNumber value={currentSetIdx} minDigits={String(prescription.sets).length} /> / {prescription.sets}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The rest countdown over the camera view between sets: the time left, which
+ * set starts next and a progress bar. Camera-monitored and custom exercises
+ * show the same overlay.
+ */
+function RestOverlay({ remainingSec, elapsedPct, nextSet, sets, compact, note, zIndex = 20, opaque = false }: {
+  remainingSec: number;
+  elapsedPct: number;
+  nextSet: number;
+  sets: number;
+  compact: boolean;
+  /** A line under the bar, such as why tracking is paused. */
+  note?: string;
+  zIndex?: number;
+  /** Hides what is underneath, such as the camera-off cover a custom exercise may show. */
+  opaque?: boolean;
+}) {
+  return (
+    <div style={{
+      position: "absolute",
+      inset: 0,
+      zIndex,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      padding: 24,
+      textAlign: "center",
+      background: opaque ? "oklch(0.18 0.01 240)" : "oklch(0.18 0.01 240 / 0.72)",
+    }}>
+      <div style={{ fontSize: compact ? 18 : 24, fontWeight: 600, letterSpacing: ".14em", textTransform: "uppercase", color: "oklch(0.80 0.03 200)" }}>
+        Rest period
+      </div>
+      <div style={{
+        fontFamily: "var(--mono)",
+        fontSize: "clamp(88px, 19vh, 170px)",
+        fontWeight: 600,
+        lineHeight: 1,
+        letterSpacing: "-0.03em",
+        color: "white",
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        {formatElapsedTime(remainingSec)}
+      </div>
+      <div style={{ fontSize: compact ? 18 : 26, fontWeight: 500, color: "oklch(0.88 0.01 240)" }}>
+        Set {nextSet} of {sets} starts automatically
+      </div>
+      <div style={{
+        width: "min(460px, 80%)",
+        height: 10,
+        marginTop: 20,
+        borderRadius: 5,
+        overflow: "hidden",
+        background: "oklch(1 0 0 / 0.22)",
+      }}>
+        <div style={{ height: "100%", width: `${elapsedPct}%`, borderRadius: 5, background: NEON.hex }} />
+      </div>
+      {note && (
+        <div style={{ marginTop: 16, fontSize: compact ? 15 : 18, color: "oklch(0.86 0.10 75)" }}>
+          {note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A custom exercise has no camera definition, so its session is a guide with
+ * no tracking: the person presses Set done after each set, the rest countdown
+ * runs between sets, and it ends after the last set. Nothing is counted or
+ * scored. For a patient, finishing the last set marks that day's exercise
+ * complete (`onComplete`); a staff preview saves nothing.
+ */
+type CustomPainReport =
+  | { status: "declined" }
+  | { status: "reported"; score: number; timing: PainTiming | null; bodyArea: string | null };
+
+type CustomStartResult = boolean | Pick<RuntimePrescription, "sets" | "restSeconds">;
+
+function CustomGuidedSession({
+  sets: scheduledSets, restSeconds: scheduledRestSeconds, onComplete, onNext, onBackToSchedule,
+  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote,
+}: {
+  sets: number;
+  restSeconds: number;
+  /** Saves the day as complete; resolves to an error message, or null when saved. */
+  onComplete?: () => Promise<string | null>;
+  onNext?: () => void;
+  onBackToSchedule?: () => void;
+  /** Runs before the first set (pain and video questions); resolving false cancels the start. */
+  onBeforeStart?: () => Promise<CustomStartResult>;
+  /** A set begins: its recording part starts. */
+  onSetStart?: () => void;
+  /** Rest begins: the set's recording part stops. */
+  onRestStart?: () => void;
+  /** The session ends, after the last set or early; any recording stops. An early end resolves to an error, or null once saved. */
+  onEnd?: (reason: "completed" | "user") => void | Promise<string | null>;
+  /** The rest countdown, for the camera view's rest overlay; null when not resting. */
+  onRestChange?: (rest: { remainingSec: number; totalSec: number; nextSet: number; sets: number } | null) => void;
+  /** "Stop — I have pain" (patients): ends the session as stopped for pain; resolves to an error, or null. */
+  onPainStop?: () => Promise<string | null>;
+  /** "Pain after this attempt" (patients), asked once the session has ended. */
+  painReport?: { pending: () => boolean; save: (report: CustomPainReport) => Promise<string | null> };
+  /** Shown under Start session before the session starts, such as a remembered video choice. */
+  startNote?: React.ReactNode;
+}) {
+  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
+  const [runDose, setRunDose] = useState({ sets: scheduledSets, restSeconds: scheduledRestSeconds });
+  const sets = phase === "idle" || phase === "starting" ? scheduledSets : runDose.sets;
+  const restSeconds = phase === "idle" || phase === "starting" ? scheduledRestSeconds : runDose.restSeconds;
+  const [currentSet, setCurrentSet] = useState(1);
+  const [restEndsAt, setRestEndsAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [save, setSave] = useState<{ state: "idle" | "saving" | "saved" } | { state: "error"; message: string }>(
+    { state: "idle" },
+  );
+  // "Pain after this attempt": asked after the last set, an early end and a pain stop.
+  const [asking, setAsking] = useState(false);
+  const [painScore, setPainScore] = useState(0);
+  const [painTiming, setPainTiming] = useState<PainTiming | "">("");
+  const [painBodyArea, setPainBodyArea] = useState("");
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [painStopError, setPainStopError] = useState<string | null>(null);
+  const [painStopping, setPainStopping] = useState(false);
+  // Leaving the exercise mid-session (another exercise, another page) ends
+  // its recording the same way End session does.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
+  const onRestChangeRef = useRef(onRestChange);
+  onRestChangeRef.current = onRestChange;
+  useEffect(() => () => {
+    onRestChangeRef.current?.(null);
+    if (phaseRef.current === "set" || phaseRef.current === "rest") onEndRef.current?.("user");
+  }, []);
+
+  const askPainAfter = () => {
+    if (!painReport?.pending()) return;
+    setPainScore(0);
+    setPainTiming("");
+    setPainBodyArea("");
+    setReportError(null);
+    setAsking(true);
+  };
+
+  const saveCompletion = async () => {
+    if (!onComplete) return;
+    setSave({ state: "saving" });
+    const error = await onComplete().catch(() => "Your session could not be saved.");
+    setSave(error ? { state: "error", message: error } : { state: "saved" });
+    if (!error) askPainAfter();
+  };
+
+  const sendPainReport = async (declined: boolean) => {
+    if (!painReport) return;
+    setReportSaving(true);
+    setReportError(null);
+    const error = await painReport.save(
+      declined
+        ? { status: "declined" }
+        : { status: "reported", score: painScore, timing: painTiming || null, bodyArea: painBodyArea.trim() || null },
+    ).catch(() => "The pain report could not be saved.");
+    setReportSaving(false);
+    if (error) setReportError(error);
+    else setAsking(false);
+  };
+
+  useEffect(() => {
+    if (phase !== "rest") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
+  const restRemaining = restEndsAt === null ? 0 : Math.max(0, Math.ceil((restEndsAt - now) / 1000));
+  useEffect(() => {
+    if (phase === "rest" && restRemaining === 0) {
+      setRestEndsAt(null);
+      setCurrentSet((set) => set + 1);
+      setPhase("set");
+      onSetStart?.();
+    }
+  }, [phase, restRemaining, onSetStart]);
+
+  // The rest overlay on the camera view follows this countdown.
+  useEffect(() => {
+    onRestChangeRef.current?.(
+      phase === "rest" && restRemaining > 0
+        ? { remainingSec: restRemaining, totalSec: restSeconds, nextSet: currentSet + 1, sets }
+        : null,
+    );
+  }, [phase, restRemaining, restSeconds, currentSet, sets]);
+
+  const start = async () => {
+    setPhase("starting");
+    const started = onBeforeStart ? await onBeforeStart().catch(() => false) : true;
+    if (!started) { setPhase("idle"); return; }
+    setRunDose(typeof started === "object" ? started : { sets: scheduledSets, restSeconds: scheduledRestSeconds });
+    setCurrentSet(1);
+    setRestEndsAt(null);
+    setSave({ state: "idle" });
+    setAsking(false);
+    setPainStopError(null);
+    setPhase("set");
+    onSetStart?.();
+  };
+  const finishSet = () => {
+    if (currentSet >= sets) { setPhase("done"); onEnd?.("completed"); void saveCompletion(); return; }
+    // With no rest the set's recording part still closes and the next set's opens.
+    if (restSeconds <= 0) { onRestStart?.(); setCurrentSet((set) => set + 1); onSetStart?.(); return; }
+    onRestStart?.();
+    const startedAt = Date.now();
+    setNow(startedAt);
+    setRestEndsAt(startedAt + restSeconds * 1000);
+    setPhase("rest");
+  };
+  const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
+  const endEarly = async () => {
+    setPhase("idle");
+    setRestEndsAt(null);
+    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    const error = await Promise.resolve(onEnd?.("user")).catch(() => "Your session could not be saved.");
+    if (!error) askPainAfter();
+  };
+  const stopForPain = async () => {
+    if (!onPainStop || painStopping) return;
+    setPhase("pain");
+    setRestEndsAt(null);
+    setPainStopping(true);
+    const error = await onPainStop().catch(() => "The pain stop could not be saved.");
+    setPainStopping(false);
+    setPainStopError(error);
+    if (!error) askPainAfter();
+  };
+
+  const status = phase === "set"
+    ? `Set ${currentSet} of ${sets} — do the set, then press Set done.`
+    : phase === "rest"
+      ? `Resting · set ${currentSet + 1} of ${sets} starts automatically`
+      : phase === "pain"
+        ? painStopping
+          ? "Stopped because of pain. Saving the pain stop…"
+          : painStopError
+            ? "Stopped because of pain. The pain stop has not been saved; please try saving again."
+            : "Stopped because of pain. Your therapist has been notified and will review it before you try again."
+        : phase === "done"
+          ? onComplete
+            ? save.state === "saved"
+              ? `All ${sets} sets done. Today's exercise is marked complete.`
+              : save.state === "error"
+                ? `All ${sets} sets done, but it was not saved.`
+                : `All ${sets} sets done. Saving...`
+            : `All ${sets} sets done.`
+          : null;
+
+  if (asking) {
+    return (
+      <div style={{ ...CARD_STYLE, padding: 16 }}>
+        <div style={{ ...EYEBROW_STYLE, fontSize: 12, color: ACCENT.text, marginBottom: 6 }}>
+          Pain after this attempt
+        </div>
+        <p style={{ margin: "0 0 12px", fontSize: 14, lineHeight: 1.45, color: "oklch(0.42 0.01 240)" }}>
+          Choose 0 for no pain. This report supports your therapist&apos;s review and is not a diagnosis.
+        </p>
+        <label style={{ display: "block", marginBottom: 6, fontSize: 14 }}>
+          Pain score: <strong>{painScore}/10</strong>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={10}
+          step={1}
+          value={painScore}
+          onChange={(event) => setPainScore(Number(event.target.value))}
+          disabled={reportSaving}
+          aria-label="Pain score from 0 to 10"
+          style={{ width: "100%", accentColor: ACCENT.hex }}
+        />
+        <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>Timing (optional)</label>
+        <select
+          value={painTiming}
+          onChange={(event) => setPainTiming(event.target.value as PainTiming | "")}
+          disabled={reportSaving}
+          style={FIELD_STYLE}
+        >
+          <option value="">Not specified</option>
+          <option value="during">During</option>
+          <option value="after">After</option>
+          <option value="both">During and after</option>
+        </select>
+        <label style={{ display: "block", marginTop: 10, marginBottom: 6, fontSize: 14 }}>Body area (optional)</label>
+        <input
+          value={painBodyArea}
+          maxLength={80}
+          onChange={(event) => setPainBodyArea(event.target.value)}
+          disabled={reportSaving}
+          placeholder="e.g. left shoulder"
+          style={FIELD_STYLE}
+        />
+        {reportError && (
+          <p role="alert" style={{ margin: "10px 0 0", fontSize: 13, color: "oklch(0.50 0.18 25)" }}>
+            {reportError} Please retry while this page remains open.
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={() => void sendPainReport(false)} disabled={reportSaving}
+            style={{ ...PRIMARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}>
+            {reportSaving ? "Saving…" : "Save report"}
+          </button>
+          <button type="button" onClick={() => void sendPainReport(true)} disabled={reportSaving}
+            style={{ ...SECONDARY_BUTTON_STYLE, flex: 1, padding: "12px 14px", fontSize: 16 }}>
+            Decline
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ position: "absolute", left: 16, right: 16, bottom: 16, pointerEvents: "none" }}>
-      <div style={{
-        background: "oklch(1 0 0 / 0.96)",
-        backdropFilter: "blur(10px)",
-        border: "1px solid oklch(0.92 0.003 240)",
-        borderRadius: 8,
-        display: "flex",
-        flexDirection: compact ? "column" : "row",
-        pointerEvents: "auto",
-        boxShadow: "0 1px 3px oklch(0 0 0 / 0.06)",
-        overflow: "hidden",
-        width: "100%",
-      }}>
-        <div style={{
-          padding: "14px 18px", minWidth: 0,
-          borderLeft: `4px solid ${tier.hex}`,
-          background: "oklch(0.985 0.003 240)",
-          flex: "1 1 0",
+    <>
+      {status && (
+        <div role="status" style={{
+          padding: "10px 12px", borderRadius: 8,
+          background: phase === "pain" ? "oklch(0.97 0.025 25)" : ACCENT.soft,
+          color: phase === "pain" ? "oklch(0.42 0.16 25)" : ACCENT.text,
+          fontSize: 15, fontWeight: 600, lineHeight: 1.4,
         }}>
-          <div style={labelSt}>Posture</div>
-          <div style={numSt}>{score ?? "—"}</div>
-          <div style={{
-            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-            letterSpacing: ".14em", textTransform: "uppercase",
-            color: tier.text, fontWeight: 700,
-          }}>{tier.label}</div>
+          {status}
         </div>
-        {divider}
-        {repsContent}
-        {divider}
-        <div style={{ padding: "14px 18px", flex: "0.85 1 0", minWidth: 0 }}>
-          <div style={labelSt}>Time</div>
-          <div style={{ ...numSt, whiteSpace: "nowrap" }}>
-            {(sessionState === "idle" || sessionState === "countdown") ? "00:00" : timer}
-          </div>
-          <div style={{
-            marginTop: 6, fontFamily: "var(--mono)", fontSize: 11,
-            letterSpacing: ".14em", textTransform: "uppercase",
-            color: "oklch(0.50 0.01 240)", fontWeight: 600,
-          }}>Set {currentSetIdx} / {prescription.sets}</div>
+      )}
+      {phase === "pain" ? (
+        <>
+          {painStopError && (
+            <>
+              <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+                {painStopError}
+              </p>
+              <button type="button" onClick={() => void stopForPain()} disabled={painStopping}
+                style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+                {painStopping ? "Saving…" : "Try saving again"}
+              </button>
+            </>
+          )}
+          {!painStopError && !painStopping && onBackToSchedule && (
+            <button type="button" onClick={onBackToSchedule}
+              style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600 }}>
+              Back to schedule
+            </button>
+          )}
+        </>
+      ) : phase === "done" && onComplete ? (
+        <>
+          {save.state === "error" && (
+            <>
+              <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+                {save.message}
+              </p>
+              <button type="button" onClick={() => void saveCompletion()}
+                style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+                Try saving again
+              </button>
+            </>
+          )}
+          {save.state === "saved" && onNext && (
+            <button type="button" onClick={onNext}
+              style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+              Next exercise →
+            </button>
+          )}
+          {save.state === "saved" && onBackToSchedule && (
+            <button type="button" onClick={onBackToSchedule}
+              style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600 }}>
+              Back to schedule
+            </button>
+          )}
+        </>
+      ) : phase === "set" ? (
+        <button type="button" onClick={finishSet}
+          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20 }}>
+          {currentSet >= sets ? "Finish" : "Set done"}
+        </button>
+      ) : phase === "rest" ? (
+        <button type="button" onClick={skipRest}
+          style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 16, fontWeight: 600 }}>
+          Skip rest
+        </button>
+      ) : (
+        <button type="button" onClick={() => void start()} disabled={phase === "starting"}
+          style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "17px 18px", fontSize: 20, opacity: phase === "starting" ? 0.6 : 1 }}>
+          {phase === "starting" ? "Starting…" : phase === "done" ? "Restart" : "Start session"}
+        </button>
+      )}
+      {phase === "idle" && startNote}
+      {(phase === "set" || phase === "rest") && (
+        <button type="button" onClick={() => void endEarly()}
+          style={{ ...SECONDARY_BUTTON_STYLE, width: "100%", padding: "10px 14px", fontSize: 14 }}>
+          End session
+        </button>
+      )}
+      {(phase === "set" || phase === "rest") && onPainStop && (
+        <button
+          type="button"
+          onClick={() => void stopForPain()}
+          style={{
+            width: "100%",
+            padding: "13px 12px",
+            borderRadius: 10,
+            border: "1px solid oklch(0.55 0.17 25)",
+            background: "oklch(0.97 0.025 25)",
+            color: "oklch(0.42 0.16 25)",
+            fontFamily: "var(--sans)",
+            fontSize: 15,
+            fontWeight: 650,
+            cursor: "pointer",
+          }}
+        >
+          Stop — I have pain
+        </button>
+      )}
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
+        {onComplete
+          ? "Custom exercise: no machine learning tracks or counts it. Follow the guide video below and press Set done after each set; finishing the last set marks today's exercise complete."
+          : "Custom exercise: the camera does not track or count it. Follow the guide video below; this session is not saved."}
+      </p>
+    </>
+  );
+}
+
+/**
+ * The guide keeps missing-media fallback local to the selected clip. A custom
+ * exercise plays the video attached to it instead of a rendered clip.
+ */
+function DemoCard({ exerciseId, compact, custom }: {
+  exerciseId: string | null;
+  compact: boolean;
+  custom?: { id: string; name: string; video: ExerciseVideo | null };
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const clip = custom ? null : demoClipFor(exerciseId);
+  const shownClip = clip !== null && clip.src !== failedSrc ? clip : null;
+  return (
+    <div id="cam-tour-demo" style={{ ...CARD_STYLE, flex: "0 1 auto", minHeight: 0,
+      display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
+      <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
+      {custom?.video ? (
+        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} />
+      ) : shownClip ? (
+        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
+      ) : (
+        <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,
+          display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
+          background: "oklch(0.24 0.01 240)", color: "oklch(0.90 0.01 240)", fontSize: 13, lineHeight: 1.5 }}>
+          No verified demonstration video is published for this exercise yet.
+          Follow the written exercise description and your therapist&apos;s instructions.
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function ClinicalProgressStrip({
-  sessionState, currentSetIdx, prescription, completedSets, progressPct, compact,
-}: {
-  sessionState: SessionState;
-  currentSetIdx: number;
-  prescription: Prescription;
-  completedSets: number;
-  progressPct: number;
-  compact: boolean;
-}) {
-  const label =
-    sessionState === "ended"
-      ? completedSets >= prescription.sets
-        ? "Session complete"
-        : `Ended at set ${completedSets} / ${prescription.sets}`
-      : sessionState === "countdown"
-        ? `Starting set ${currentSetIdx} of ${prescription.sets}`
-        : sessionState === "active"
-      ? `Set ${currentSetIdx} of ${prescription.sets}`
-      : sessionState === "resting"
-        ? `Rest — next: Set ${currentSetIdx} of ${prescription.sets}`
-        : `Ready — ${prescription.sets} sets`;
-
+function StaffStat({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{
-      marginTop: 12,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      flexWrap: compact ? "wrap" : "nowrap",
-      gap: 16,
-      padding: "10px 14px",
-      background: "white",
-      border: "1px solid oklch(0.93 0.003 240)",
-      borderRadius: 8,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <span style={{
-          fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".14em",
-          textTransform: "uppercase", color: "oklch(0.40 0.01 240)", fontWeight: 600,
-        }}>{label}</span>
-        <div style={{ display: "flex", gap: 5 }}>
-          {Array.from({ length: prescription.sets }).map((_, i) => {
-            const done = i < completedSets;
-            const current =
-              i === completedSets && sessionState !== "idle" && sessionState !== "ended";
-            const lit = done || (current && sessionState === "active");
-            return (
-              <span key={i} style={{
-                width: 32, height: 10, borderRadius: 5, display: "inline-block",
-                background: done ? NEON.hex : current ? NEON.dim : "oklch(0.92 0.003 240)",
-                boxShadow: lit ? `0 0 8px ${NEON.glow}, 0 0 3px ${NEON.glow}` : "none",
-                outline: current && sessionState === "active" ? `1px solid ${NEON.hex}` : "none",
-                boxSizing: "border-box",
-                transition: "background .3s, box-shadow .3s",
-              }}/>
-            );
-          })}
-        </div>
-      </div>
+    <div style={{ minWidth: 0 }}>
       <div style={{
-        flex: 1, height: 10, background: "oklch(0.94 0.003 240)",
-        borderRadius: 5, maxWidth: 360,
+        marginBottom: 2,
+        fontFamily: "var(--mono)",
+        fontSize: 9,
+        letterSpacing: ".14em",
+        textTransform: "uppercase",
+        color: "oklch(0.50 0.01 240)",
       }}>
-        <div style={{
-          height: "100%", width: `${progressPct}%`,
-          background: NEON.hex, borderRadius: 5,
-          boxShadow: progressPct > 0 ? `0 0 10px ${NEON.glow}, 0 0 4px ${NEON.glow}` : "none",
-          transition: "width .4s, box-shadow .3s",
-        }} />
+        {label}
       </div>
-      <span style={{
-        fontFamily: "var(--mono)", fontSize: 12, fontWeight: 500,
-        color: "oklch(0.20 0.01 240)", fontVariantNumeric: "tabular-nums",
-        minWidth: 32, textAlign: "right",
-      }}>{progressPct}%</span>
+      <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "oklch(0.25 0.01 240)", overflowWrap: "anywhere" }}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -6731,7 +14184,20 @@ function metricLabel(name: MetricName): string {
     case "elbowFlexion":           return "ELBOW FLEX";
     case "wristShoulderVertical":  return "OVERHEAD";
     case "shoulderElbowDistance":  return "ELBOW POS";
+    case "hipShift":               return "HIP SHIFT";
+    case "elbowBend":              return "ELBOW BEND";
+    case "overRaise":              return "ARM HEIGHT";
+    case "otherArmDown":           return "ARM DOWN";
+    case "armAboveHold":           return "ARM HEIGHT";
   }
+}
+
+function metricUsesDegrees(name: MetricName): boolean {
+  return (
+    name !== "scapularElevation" &&
+    name !== "wristShoulderVertical" &&
+    name !== "shoulderElbowDistance"
+  );
 }
 
 function CameraHomeIcon() {

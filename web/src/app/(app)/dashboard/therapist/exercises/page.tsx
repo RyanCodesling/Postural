@@ -1,19 +1,38 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../../_components/DashboardKit";
+import ExerciseReferenceVideo from "../../_components/ExerciseReferenceVideo";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
+import ExerciseVideoField, {
+  KEEP_EXERCISE_VIDEO,
+  NO_EXERCISE_VIDEO,
+  exerciseVideoChoiceError,
+  saveCustomExerciseEdit,
+  type ExerciseVideoChoice,
+} from "../../_components/ExerciseVideoField";
+import { useAuth } from "@/lib/AuthContext";
 
 interface Exercise {
   id: string;
   name: string;
   description: string;
   is_custom: boolean;
+  owner_therapist_id?: string | null;
+  archived_at?: string | null;
   monitoring_mode: "camera" | "manual";
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 export default function ManageExercisesPage() {
+  const { user } = useAuth();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState("");
+  // A custom exercise's guide video on the edit form; it starts as "keep".
+  const [editVideo, setEditVideo] = useState<ExerciseVideoChoice>(KEEP_EXERCISE_VIDEO);
+  const [editVideoError, setEditVideoError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -24,11 +43,16 @@ export default function ManageExercisesPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteTargetName, setDeleteTargetName] = useState<string | null>(null);
+  // The therapist's own archived custom exercise being restored. Only an admin
+  // permanently deletes one.
+  const [archivedAction, setArchivedAction] = useState<Exercise | null>(null);
+  const [archivedActionBusy, setArchivedActionBusy] = useState(false);
+  const [notice, setNotice] = useState("");
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/exercises");
+      const res = await fetch("/api/exercises?includeArchived=true");
       if (res.ok) {
         const d = await res.json();
         setExercises(d.exercises ?? []);
@@ -48,6 +72,8 @@ export default function ManageExercisesPage() {
     setActionError("");
     setEditingId(ex.id);
     setEditDesc(ex.description);
+    setEditVideo(exerciseVideoFromRow(ex) ? KEEP_EXERCISE_VIDEO : NO_EXERCISE_VIDEO);
+    setEditVideoError(null);
   };
 
   const cancelEdit = () => {
@@ -59,6 +85,18 @@ export default function ManageExercisesPage() {
     if (!editDesc.trim()) return;
     const original = exercises.find((e) => e.id === id);
     if (!original) return;
+    if (original.is_custom) {
+      const invalid = exerciseVideoChoiceError(editVideo);
+      if (invalid) { setEditVideoError(invalid); return; }
+      setSaving(true);
+      setActionError("");
+      const result = await saveCustomExerciseEdit<Exercise>(id, { name: original.name, description: editDesc.trim() }, editVideo);
+      setSaving(false);
+      if ("error" in result) { setActionError(result.error); return; }
+      setExercises((prev) => prev.map((e) => (e.id === id ? { ...e, ...result.exercise } : e)));
+      cancelEdit();
+      return;
+    }
     setSaving(true);
     setActionError("");
     try {
@@ -97,7 +135,9 @@ export default function ManageExercisesPage() {
         method: "DELETE",
       });
       if (res.ok) {
-        setExercises((prev) => prev.filter((e) => e.id !== deleteTargetId));
+        // It moves to Archived, keeping its details and video for a restore.
+        const archivedAt = new Date().toISOString();
+        setExercises((prev) => prev.map((e) => (e.id === deleteTargetId ? { ...e, archived_at: archivedAt } : e)));
         setShowDeleteModal(false);
       } else {
         const body = await res.json().catch(() => null);
@@ -114,13 +154,43 @@ export default function ManageExercisesPage() {
     }
   };
 
+  const confirmArchivedAction = async () => {
+    if (!archivedAction) return;
+    const exercise = archivedAction;
+    setArchivedActionBusy(true);
+    setActionError("");
+    setNotice("");
+    try {
+      const res = await fetch(`/api/exercises/${encodeURIComponent(exercise.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "restore" }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionError(body.error ?? "Failed to restore the exercise.");
+        return;
+      }
+      setExercises((prev) => prev.map((e) => (e.id === exercise.id ? { ...e, ...body.exercise } : e)));
+      setNotice(`${exercise.name} has been restored to Custom exercises.`);
+    } catch (err) {
+      console.error("Error restoring exercise:", err);
+      setActionError("Failed to restore the exercise.");
+    } finally {
+      setArchivedActionBusy(false);
+      setArchivedAction(null);
+    }
+  };
+
+  const activeExercises = exercises.filter((e) => !e.archived_at);
   const filtered = exercises.filter((e) =>
     e.name.toLowerCase().includes(query.toLowerCase()) ||
     e.description.toLowerCase().includes(query.toLowerCase())
   );
 
-  const systemExercises = filtered.filter((e) => !e.is_custom);
-  const customExercises = filtered.filter((e) => e.is_custom);
+  const systemExercises = filtered.filter((e) => !e.is_custom && !e.archived_at);
+  const customExercises = filtered.filter((e) => e.is_custom && !e.archived_at);
+  const archivedExercises = filtered.filter((e) => e.is_custom && e.archived_at);
 
   if (loading) {
     return (
@@ -131,54 +201,60 @@ export default function ManageExercisesPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Manage Exercises</h1>
-          <p className="text-gray-600 mt-1">View built-in exercises and manage your manual custom tasks.</p>
+    <div className={FIT_SCREEN}>
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+        <PageHeading title="Manage Exercises" subtitle="View built-in exercises and manage your manual custom tasks." />
+        <div className="flex flex-wrap items-center gap-3">
+          <div id="tour-search" className="relative w-64">
+            <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+            </svg>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search exercises"
+              className="w-full rounded-lg border border-green-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+            />
+          </div>
+          <button
+            onClick={loadData}
+            className="flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-800"
+          >
+            <RefreshIcon />
+            Refresh
+          </button>
         </div>
-        <button
-          onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded text-sm font-medium transition"
-        >
-          <RefreshIcon />
-          Refresh
-        </button>
       </div>
 
       {actionError && (
-        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="shrink-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {actionError}
         </div>
       )}
-
-      <div className="mb-6">
-        <div className="relative w-full max-w-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-          </svg>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search exercises"
-            className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
-          />
+      {notice && (
+        <div role="status" className="shrink-0 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {notice}
         </div>
+      )}
+
+      <div id="tour-tiles" className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile label="System exercises" value={activeExercises.filter((e) => !e.is_custom).length} icon={Glyph.dumbbell} tone="green" />
+        <StatTile label="Custom exercises" value={activeExercises.filter((e) => e.is_custom).length} icon={Glyph.list} tone="teal" />
+        <StatTile label="Archived" value={exercises.filter((e) => e.is_custom && e.archived_at).length} icon={Glyph.archive} tone="amber" />
+        <StatTile label="Total" value={activeExercises.length} icon={Glyph.pulse} tone="lime" />
       </div>
 
-      <div className="grid gap-6">
-        {exercises.length === 0 ? (
-          <div className="text-gray-500">No exercises found.</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-gray-500">No exercises found matching your search.</div>
-        ) : (
-          <>
-            {systemExercises.length > 0 && (
-              <section>
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  System Exercises ({systemExercises.length})
-                </h2>
-                <div className="grid gap-4">
+      {exercises.length === 0 ? (
+        <Panel className="flex-1" title="Exercises">
+          <p className="py-8 text-center text-sm text-gray-500">No exercises found.</p>
+        </Panel>
+      ) : (
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_minmax(0,13rem)]">
+          <Panel id="tour-system" className="lg:col-span-6" title={`System exercises (${systemExercises.length})`} scroll>
+            {systemExercises.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-400">No system exercises match your search.</p>
+            ) : (
+              <div className="grid gap-3">
                   {systemExercises.map((ex) => (
                     <ExerciseRow
                       key={ex.id}
@@ -193,44 +269,116 @@ export default function ManageExercisesPage() {
                       onView={() => setViewingExercise(ex)}
                     />
                   ))}
-                </div>
-              </section>
+              </div>
             )}
+          </Panel>
 
-            {customExercises.length > 0 ? (
-              <section className="mt-4">
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  Custom Exercises ({customExercises.length})
-                </h2>
-                <div className="grid gap-4">
-                  {customExercises.map((ex) => (
-                    <ExerciseRow
-                      key={ex.id}
-                      exercise={ex}
-                      isEditing={editingId === ex.id}
-                      editDesc={editDesc}
-                      saving={saving}
-                      onEdit={() => startEdit(ex)}
-                      onCancel={cancelEdit}
-                      onSave={() => saveExercise(ex.id)}
-                      onEditDesc={setEditDesc}
-                      onView={() => setViewingExercise(ex)}
-                      onDelete={() => handleDeleteClick(ex.id, ex.name)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ) : query === "" ? (
-              <section className="mt-4">
-                <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  Custom Exercises (0)
-                </h2>
-                <p className="text-gray-400 text-sm">No custom exercises yet. Add them in Exercise Program.</p>
-              </section>
-            ) : null}
-          </>
-        )}
-      </div>
+          <Panel id="tour-custom" className="lg:col-span-6" title={`Custom exercises (${customExercises.length})`} scroll>
+            {customExercises.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-400">
+                {query === "" ? "No custom exercises yet. Add them in Exercise Program." : "No custom exercises match your search."}
+              </p>
+            ) : (
+              <div className="grid gap-3">
+                  {customExercises.map((ex) => {
+                    // Shared custom exercises are view-only; their owner edits them.
+                    const own = !!user?.id && ex.owner_therapist_id === user.id;
+                    return (
+                      <ExerciseRow
+                        key={ex.id}
+                        exercise={ex}
+                        addedBy={own ? "you" : ex.owner_therapist_id ? "another therapist" : "admin"}
+                        isEditing={editingId === ex.id}
+                        editDesc={editDesc}
+                        saving={saving}
+                        onEdit={own ? () => startEdit(ex) : undefined}
+                        onCancel={cancelEdit}
+                        onSave={() => saveExercise(ex.id)}
+                        onEditDesc={setEditDesc}
+                        onView={() => setViewingExercise(ex)}
+                        onDelete={own ? () => handleDeleteClick(ex.id, ex.name) : undefined}
+                        video={own ? {
+                          value: editVideo,
+                          onChange: setEditVideo,
+                          error: editVideoError,
+                          onError: setEditVideoError,
+                        } : undefined}
+                      />
+                    );
+                  })}
+              </div>
+            )}
+          </Panel>
+
+          {/* Full width under the two lists, with its cards side by side. */}
+          <Panel id="tour-archived" className="lg:col-span-12" title={`Archived (${archivedExercises.length})`} scroll>
+            {archivedExercises.length === 0 ? (
+              <p className="py-4 text-center text-sm text-gray-400">
+                {query === "" ? "No archived exercises." : "No archived exercises match your search."}
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {archivedExercises.map((ex) => {
+                  const video = exerciseVideoFromRow(ex);
+                  return (
+                    <div key={ex.id} className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4">
+                      <p className="text-sm font-semibold text-gray-700">{ex.name}</p>
+                      <p className="mt-1 text-xs text-gray-500">{ex.description}</p>
+                      {video && (
+                        <p className="mt-1 text-[11px] font-medium text-gray-400">
+                          {video.kind === "file" ? "Video file kept" : "YouTube video kept"}
+                        </p>
+                      )}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setArchivedAction(ex)}
+                          className="px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-medium rounded-lg transition"
+                        >
+                          Restore
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-gray-400">Only an admin can permanently delete it.</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+        </div>
+      )}
+
+      {/* Restore Archived Exercise Modal */}
+      {archivedAction && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => { if (!archivedActionBusy) setArchivedAction(null); }} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center">
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Restore Custom Exercise</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                Restore <span className="font-semibold text-gray-900">{archivedAction.name}</span> with its description and video? Prescriptions ended by the archive stay ended.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={archivedActionBusy}
+                  onClick={() => setArchivedAction(null)}
+                  className="flex-1 px-4 py-2 border border-gray-300 bg-white text-sm text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={archivedActionBusy}
+                  onClick={confirmArchivedAction}
+                  className="flex-1 px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-400 text-white text-sm font-medium rounded-lg transition"
+                >
+                  {archivedActionBusy ? "Restoring..." : "Restore"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* View Exercise Details Modal */}
       {viewingExercise && (
@@ -258,12 +406,13 @@ export default function ManageExercisesPage() {
 
             {/* Scrollable content area */}
             <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                <p className="text-sm font-semibold text-gray-700">Reference video unavailable</p>
-                <p className="mt-1 text-xs text-gray-500">
-                  Use the written instructions below. No demonstration video is published for this exercise yet.
-                </p>
-              </div>
+              <ExerciseReferenceVideo
+                key={viewingExercise.id}
+                exerciseId={viewingExercise.id}
+                isCustom={viewingExercise.is_custom}
+                customVideo={exerciseVideoFromRow(viewingExercise)}
+                exerciseName={viewingExercise.name}
+              />
 
               {/* Description */}
               <div>
@@ -291,7 +440,7 @@ export default function ManageExercisesPage() {
               </div>
               <h2 className="text-lg font-bold text-gray-900 mb-1">Archive Custom Exercise</h2>
               <p className="text-sm text-gray-500 mb-5">
-                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? Existing prescriptions and session history will remain, while future pending tasks are ended.
+                Archive <span className="font-semibold text-gray-900">{deleteTargetName}</span>? An exercise still used by a prescription or program cannot be archived. End those prescriptions and remove the program entries first. Existing history is kept.
               </p>
               <div className="flex gap-3">
                 <button
@@ -318,22 +467,31 @@ export default function ManageExercisesPage() {
 }
 
 function ExerciseRow({
-  exercise, isEditing, editDesc, saving,
-  onEdit, onCancel, onSave, onEditDesc, onView, onDelete,
+  exercise, addedBy, isEditing, editDesc, saving,
+  onEdit, onCancel, onSave, onEditDesc, onView, onDelete, video,
 }: {
   exercise: Exercise;
+  /** Who added a custom exercise; only "you" can edit or archive it. */
+  addedBy?: "you" | "admin" | "another therapist";
   isEditing: boolean;
   editDesc: string;
   saving: boolean;
-  onEdit: () => void;
+  onEdit?: () => void;
   onCancel: () => void;
   onSave: () => void;
   onEditDesc: (v: string) => void;
   onView: () => void;
   onDelete?: () => void;
+  /** The guide video choice on a custom exercise's edit form. */
+  video?: {
+    value: ExerciseVideoChoice;
+    onChange: (choice: ExerciseVideoChoice) => void;
+    error: string | null;
+    onError: (message: string | null) => void;
+  };
 }) {
   return (
-    <div className="border border-gray-200 rounded-xl p-4 transition hover:shadow-sm">
+    <div className="rounded-lg border border-green-50 bg-[#fafcfa] p-4 transition hover:bg-green-50/50">
       {isEditing ? (
         <div className="space-y-3">
           <div className="font-semibold text-gray-900 text-sm">{exercise.name}</div>
@@ -344,6 +502,18 @@ function ExerciseRow({
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition"
             rows={3}
           />
+          {exercise.is_custom && video && (
+            <div>
+              <ExerciseVideoField
+                value={video.value}
+                onChange={video.onChange}
+                onError={video.onError}
+                current={exerciseVideoFromRow(exercise)}
+                name={`edit-video-${exercise.id}`}
+              />
+              {video.error && <p role="alert" className="mt-1 text-xs text-red-600">{video.error}</p>}
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               onClick={onSave}
@@ -367,11 +537,20 @@ function ExerciseRow({
               <p className="font-semibold text-gray-900 text-sm">{exercise.name}</p>
               {exercise.is_custom ? (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                  Manual · no camera
+                  Manual · no Machine Learning
                 </span>
               ) : (
                 <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
                   Built-in · view only
+                </span>
+              )}
+              {addedBy === "you" ? (
+                <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700">
+                  Added by you
+                </span>
+              ) : addedBy && (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                  Added by {addedBy} · view only
                 </span>
               )}
             </div>
@@ -384,7 +563,7 @@ function ExerciseRow({
             >
               View
             </button>
-            {exercise.is_custom && (
+            {exercise.is_custom && onEdit && (
               <button
                 onClick={onEdit}
                 className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"

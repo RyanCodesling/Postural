@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { PageHeading } from "../../_components/DashboardKit";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { useToast } from "@/lib/ToastContext";
+import { useDemoClock } from "@/lib/DemoClockContext";
 import { getExerciseDefinition } from "@/lib/exercises/registry";
+import { pastScheduleDate, storedScheduleDates } from "@/lib/exercises/scheduleDates";
 import { prescriptionTargetText } from "@/lib/exercises/prescriptionDisplay";
 import {
   WEEKDAY_SHORT,
@@ -13,6 +16,22 @@ import {
   spanDays,
   type Recurrence,
 } from "@/lib/exercises/occurrences";
+import {
+  formatResistanceContext,
+  parseResistanceContext,
+  type PrescribedSide,
+  type ResistanceContext,
+} from "@/lib/prescriptionContext";
+import { nextExerciseSequenceIndex } from "@/lib/programExerciseInput";
+import {
+  MAX_PRESCRIPTION_REPS,
+  isPrescriptionCount,
+  maxPrescriptionSets,
+  prescriptionCountError,
+} from "@/lib/prescriptionLimits";
+import MovementContextFields, {
+  type MovementContextForm,
+} from "../_components/MovementContextFields";
 
 interface Exercise {
   id: string;
@@ -33,6 +52,12 @@ interface Program {
     reps?: number | null;
     restSeconds?: number | null;
     holdSeconds?: number | null;
+    sequenceIndex?: number | null;
+    prescribedSide?: PrescribedSide;
+    resistanceType?: MovementContextForm["resistanceType"];
+    resistanceValue?: number | null;
+    resistanceUnit?: MovementContextForm["resistanceUnit"] | null;
+    resistanceLabel?: string | null;
   }[];
 }
 
@@ -44,18 +69,30 @@ interface PatientExercise {
   rest_seconds: number;
   assigned_date: string;
   hold_seconds: number;
+  sequence_index: number;
   recurrence: Recurrence | null;
   interval_days: number | null;
   weekdays: number[] | null;
   start_date: string | null;
   end_date: string | null;
+  prescribed_side: PrescribedSide;
+  resistance_type:
+    | "unknown"
+    | "none"
+    | "external_weight"
+    | "resistance_band"
+    | "other";
+  resistance_value: number | string | null;
+  resistance_unit: "kg" | "lb" | null;
+  resistance_label: string | null;
 }
 
-type AssignmentParams = {
+type AssignmentParams = MovementContextForm & {
   sets?: number;
   reps?: number;
   restSeconds?: number;
   holdSeconds?: number;
+  sequenceIndex?: number;
   scheduledDate?: string; // recurrence start date
   recurrence?: Recurrence;
   intervalDays?: number;
@@ -69,11 +106,17 @@ type AssignmentPayload = {
   reps: number;
   restSeconds: number;
   holdSeconds: number;
+  sequenceIndex: number;
   scheduledDate: string;
   recurrence: Recurrence;
   intervalDays: number | null;
   weekdays: number[];
   endDate: string;
+  prescribedSide: PrescribedSide;
+  resistanceType: Exclude<ResistanceContext["type"], "unknown">;
+  resistanceValue: number | null;
+  resistanceUnit: ResistanceContext["unit"];
+  resistanceLabel: string | null;
 };
 
 type PreviewSnapshot = {
@@ -81,11 +124,14 @@ type PreviewSnapshot = {
   reps: number;
   restSeconds: number;
   holdSeconds: number;
+  sequenceIndex: number;
   scheduledDate: string;
   recurrence: Recurrence;
   intervalDays: number | null;
   weekdays: number[];
   endDate: string;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
 };
 
 // Friendly cadence presets shown in the Repeat dropdown. Each maps to either an
@@ -138,15 +184,29 @@ interface PatientData {
   id: string;
   name: string;
   email: string;
+  diagnosis?: string | null;
+  condition?: string | null;
 }
 
-function todayStr(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+interface PatientRosterSummary {
+  id: string;
+  name: string;
+  totalSessions: number;
+  sessionsThisWeek: number;
+  lastSessionAt: string | null;
+  assignedCount: number;
+  dueCount: number;
+  completedCount: number;
+  missedCount: number;
+  painStoppedCount: number;
 }
 
 function fmtDate(d: string) {
   if (!d) return "—";
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+  const value = d.length === 10 ? `${d}T00:00:00` : d;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", {
     month: "short", day: "numeric", year: "numeric",
   });
 }
@@ -168,12 +228,24 @@ function paramsFromExisting(ex: PatientExercise): AssignmentParams {
     reps: ex.reps,
     restSeconds: ex.rest_seconds,
     holdSeconds: ex.hold_seconds,
+    sequenceIndex: ex.sequence_index,
     scheduledDate: ex.start_date ?? ex.assigned_date,
     // Anything that isn't 'weekly' (null, or a legacy 'once') edits as interval.
     recurrence: ex.recurrence === "weekly" ? "weekly" : "interval",
     intervalDays: ex.interval_days ?? 1,
     weekdays: ex.weekdays ?? [],
     endDate: ex.end_date ?? (ex.start_date ?? ex.assigned_date),
+    prescribedSide: ex.prescribed_side ?? "both",
+    resistanceType:
+      ex.resistance_type === "external_weight" ||
+      ex.resistance_type === "resistance_band" ||
+      ex.resistance_type === "other"
+        ? ex.resistance_type
+        : "none",
+    resistanceValue:
+      ex.resistance_value == null ? undefined : Number(ex.resistance_value),
+    resistanceUnit: ex.resistance_unit ?? undefined,
+    resistanceLabel: ex.resistance_label ?? undefined,
   };
 }
 
@@ -194,6 +266,9 @@ function PrescriptionDetails({
         <p>Reps: {snapshot.reps}</p>
       )}
       <p>Rest: {snapshot.restSeconds}s</p>
+      <p>Order: {snapshot.sequenceIndex}</p>
+      <p>Side: {snapshot.prescribedSide}</p>
+      <p>Resistance: {formatResistanceContext(snapshot.resistance)}</p>
       <p>Repeat: {formatCadence({ recurrence: snapshot.recurrence, intervalDays: snapshot.intervalDays, weekdays: snapshot.weekdays })}</p>
       <p>From {fmtDate(snapshot.scheduledDate)} to {fmtDate(snapshot.endDate)}</p>
     </>
@@ -203,21 +278,33 @@ function PrescriptionDetails({
 export default function AssignExercisePage() {
   const { user } = useAuth();
   const { showToast } = useToast();
+  // Today's Manila day, by the demo clock in demo mode.
+  const { todayKey } = useDemoClock();
   const [patients, setPatients]   = useState<PatientData[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [patientRoster, setPatientRoster] = useState<Record<string, PatientRosterSummary>>({});
+  const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
   const [programs, setPrograms] = useState<Program[]>([]);
   const [loading, setLoading]     = useState(true);
 
-  const [assignPatientId,   setAssignPatientId]   = useState("");
+  const [assignPatientIds, setAssignPatientIds] = useState<string[]>([]);
+  const [patientQuery,  setPatientQuery]  = useState("");
+  const [programQuery,  setProgramQuery]  = useState("");
+  const [programResultsOpen, setProgramResultsOpen] = useState(false);
+  // Exercises the loaded program checked, which it unchecks again when it is replaced.
+  const [programAddedIds, setProgramAddedIds] = useState<Set<string>>(new Set());
+  const [exerciseQuery, setExerciseQuery] = useState("");
   const [assignProgramId,   setAssignProgramId]   = useState("");
   const [assignSelected,    setAssignSelected]    = useState<Set<string>>(new Set());
   const [assignParams,      setAssignParams]      = useState<Record<string, AssignmentParams>>({});
   const [assigning,         setAssigning]         = useState(false);
   const [showAssignError,   setShowAssignError]   = useState(false);
   const [assignErrorMsg,    setAssignErrorMsg]    = useState("");
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
 
   // Existing assignments (loaded when patient changes)
   const [existingAssignments, setExistingAssignments] = useState<PatientExercise[]>([]);
+  const assignmentRequest = useRef<AbortController | null>(null);
 
   // Delete state
   const [deleteSelected,  setDeleteSelected]  = useState<Set<string>>(new Set());
@@ -239,32 +326,52 @@ export default function AssignExercisePage() {
     if (!user?.id) return;
     Promise.all([
       fetch(`/api/users?role=patient&therapistId=${user.id}`).then((r) => r.json()),
+      fetch("/api/therapist/overview").then((r) => r.json()),
       fetch("/api/exercises").then((r) => r.json()),
       fetch("/api/programs").then((r) => r.json()),
     ])
-      .then(([patientsData, exercisesData, programsData]) => {
-        setPatients(patientsData.users ?? []);
-        setExercises(exercisesData.exercises ?? []);
-        setPrograms(programsData.programs ?? []);
+      .then(([patientsData, overviewData, exercisesData, programsData]) => {
+        const loadedPatients: PatientData[] = Array.isArray(patientsData?.users)
+          ? patientsData.users
+          : [];
+        setPatients(loadedPatients);
+        const requestedPatientId = new URLSearchParams(window.location.search).get("patientId");
+        if (requestedPatientId && loadedPatients.some((patient) => patient.id === requestedPatientId)) {
+          setAssignPatientIds([requestedPatientId]);
+          setExpandedPatientId(requestedPatientId);
+        }
+        const rosterMap = Object.fromEntries(
+          Array.isArray(overviewData?.patients)
+            ? overviewData.patients.map((patient: PatientRosterSummary) => [patient.id, patient])
+            : [],
+        );
+        setPatientRoster(rosterMap);
+        setExercises(Array.isArray(exercisesData?.exercises) ? exercisesData.exercises : []);
+        setPrograms(Array.isArray(programsData?.programs) ? programsData.programs : []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [user?.id]);
 
-  // ── Load existing assignments when patient changes ───────────────────────
+  // ── Load existing assignments for a single selected patient ──────────────
   useEffect(() => {
-    if (!assignPatientId) {
-      setAssignSelected(new Set());
-      setAssignParams({});
-      setAssignProgramId("");
+    assignmentRequest.current?.abort();
+    assignmentRequest.current = null;
+    if (assignPatientIds.length !== 1) {
       setExistingAssignments([]);
       setDeleteSelected(new Set());
       setEditingExercises(new Set());
       return;
     }
-    fetch(`/api/patient-exercises?patientId=${assignPatientId}`)
+    const patientId = assignPatientIds[0];
+    const controller = new AbortController();
+    assignmentRequest.current = controller;
+    fetch(`/api/patient-exercises?patientId=${patientId}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((d) => {
+        // A response can finish after selection changes, even when its fetch
+        // transport ignores abort. Only the current selection may fill the form.
+        if (controller.signal.aborted || assignmentRequest.current !== controller) return;
         const existing: PatientExercise[] = d.exercises ?? [];
         setExistingAssignments(existing);
         if (existing.length === 0) return;
@@ -279,22 +386,37 @@ export default function AssignExercisePage() {
         setEditingExercises(new Set());
       })
       .catch(() => {});
-  }, [assignPatientId]);
+    return () => {
+      controller.abort();
+      if (assignmentRequest.current === controller) assignmentRequest.current = null;
+    };
+  }, [assignPatientIds]);
 
   // ── Program merge ─────────────────────────────────────────────────────────
+  // A program merges into the selection; switching programs or choosing None
+  // unchecks the exercises the previous program added, and keeps the ones the
+  // therapist had checked before it.
   const handleProgramSelect = (programId: string) => {
     setAssignProgramId(programId);
-    if (!programId) return;
-    const tmpl = programs.find((t) => t.id === programId);
-    if (!tmpl) return;
-    setAssignSelected((prev) => {
-      const next = new Set(prev);
-      tmpl.exercises.forEach((ex) => { if (ex.exerciseId) next.add(ex.exerciseId); });
-      return next;
-    });
+    const tmpl = programId ? programs.find((t) => t.id === programId) : undefined;
+    const programIds = new Set(
+      (tmpl?.exercises ?? []).flatMap((ex) => (ex.exerciseId ? [ex.exerciseId] : [])),
+    );
+    const removed = Array.from(programAddedIds).filter((id) => !programIds.has(id));
+    const keptSelection = new Set(Array.from(assignSelected).filter((id) => !removed.includes(id)));
+    setProgramAddedIds(new Set(Array.from(programIds).filter((id) => !keptSelection.has(id) || programAddedIds.has(id))));
+    setAssignSelected(new Set([...keptSelection, ...programIds]));
     setAssignParams((prev) => {
       const next = { ...prev };
-      tmpl.exercises.forEach((ex) => {
+      for (const id of removed) {
+        if (!existingAssignments.some((e) => e.exercise_id === id)) delete next[id];
+      }
+      return next;
+    });
+    if (!tmpl) return;
+    setAssignParams((prev) => {
+      const next = { ...prev };
+      tmpl.exercises.forEach((ex, index) => {
         if (ex.exerciseId) {
           next[ex.exerciseId] = {
             ...next[ex.exerciseId],
@@ -302,6 +424,14 @@ export default function AssignExercisePage() {
             reps: ex.reps ?? undefined,
             restSeconds: ex.restSeconds ?? next[ex.exerciseId]?.restSeconds,
             holdSeconds: ex.holdSeconds ?? next[ex.exerciseId]?.holdSeconds,
+            sequenceIndex:
+              ex.sequenceIndex ?? next[ex.exerciseId]?.sequenceIndex ?? index + 1,
+            prescribedSide:
+              ex.prescribedSide ?? next[ex.exerciseId]?.prescribedSide ?? "both",
+            resistanceType: ex.resistanceType ?? "none",
+            resistanceValue: ex.resistanceValue ?? undefined,
+            resistanceUnit: ex.resistanceUnit ?? undefined,
+            resistanceLabel: ex.resistanceLabel ?? undefined,
           };
         }
       });
@@ -309,7 +439,26 @@ export default function AssignExercisePage() {
     });
   };
 
+  const togglePatientSelection = (patientId: string) => {
+    // Invalidate immediately, before the next render/effect cleanup.
+    assignmentRequest.current?.abort();
+    const nextPatientIds = assignPatientIds.includes(patientId)
+      ? assignPatientIds.filter((id) => id !== patientId)
+      : [...assignPatientIds, patientId];
+    setAssignPatientIds(nextPatientIds);
+    setExpandedPatientId(nextPatientIds.length === 1 ? nextPatientIds[0] : null);
+    setShowValidationErrors(false);
+    setAssignSelected(new Set());
+    setAssignParams({});
+    setAssignProgramId("");
+    setProgramAddedIds(new Set());
+    setExistingAssignments([]);
+    setDeleteSelected(new Set());
+    setEditingExercises(new Set());
+  };
+
   const toggleAssign = (exerciseId: string) => {
+    setShowValidationErrors(false);
     setAssignSelected((prev) => {
       const next = new Set(prev);
       if (next.has(exerciseId)) {
@@ -322,6 +471,21 @@ export default function AssignExercisePage() {
         }
       } else {
         next.add(exerciseId);
+        setAssignParams((params) => ({
+          ...params,
+          [exerciseId]: {
+            ...params[exerciseId],
+            sequenceIndex:
+              params[exerciseId]?.sequenceIndex ??
+              nextExerciseSequenceIndex(
+                Array.from(next, (selectedId) =>
+                  selectedId === exerciseId
+                    ? undefined
+                    : params[selectedId]?.sequenceIndex,
+                ),
+              ),
+          },
+        }));
       }
       return next;
     });
@@ -329,7 +493,8 @@ export default function AssignExercisePage() {
 
   // ── Assign: validate → build preview → show modal ───────────────────────
   const handleAssign = () => {
-    if (!assignPatientId) { setAssignErrorMsg("Please select a patient."); setShowAssignError(true); return; }
+    setShowValidationErrors(true);
+    if (assignPatientIds.length === 0) { setAssignErrorMsg("Please select at least one patient."); setShowAssignError(true); return; }
     if (assignSelected.size === 0) { setAssignErrorMsg("Please select at least one exercise."); setShowAssignError(true); return; }
 
     const payload: AssignmentPayload[] = [];
@@ -337,13 +502,16 @@ export default function AssignExercisePage() {
       const p = assignParams[exId] ?? {};
       const ex = exercises.find((e) => e.id === exId);
       const isIsometric = getExerciseDefinition(exId)?.kind === "isometric";
-      if (!p.sets || p.sets < 1) {
-        setAssignErrorMsg(`Please enter valid sets for "${ex?.name ?? exId}".`);
+      if (!Number.isInteger(p.sequenceIndex) || (p.sequenceIndex ?? 0) < 1) {
+        setAssignErrorMsg(`Please enter a valid order for "${ex?.name ?? exId}".`);
         setShowAssignError(true);
         return;
       }
-      if (!isIsometric && (!p.reps || p.reps < 1)) {
-        setAssignErrorMsg(`Please enter valid sets and reps for "${ex?.name ?? exId}".`);
+      const countError = prescriptionCountError(p.sets, isIsometric ? 1 : p.reps, {
+        maxSets: maxPrescriptionSets(exId),
+      });
+      if (countError) {
+        setAssignErrorMsg(`${ex?.name ?? exId}: ${countError}`);
         setShowAssignError(true);
         return;
       }
@@ -375,6 +543,18 @@ export default function AssignExercisePage() {
         setShowAssignError(true);
         return;
       }
+      // A new or changed date may not be in the past; a running prescription keeps its start.
+      const existingSchedule = existingAssignments.find((item) => item.exercise_id === exId);
+      const pastDate = pastScheduleDate(
+        { startDate: p.scheduledDate, endDate: p.endDate },
+        existingSchedule ? storedScheduleDates(existingSchedule) : null,
+        todayKey,
+      );
+      if (pastDate) {
+        setAssignErrorMsg(`The ${pastDate} date for "${ex?.name ?? exId}" must be today or later.`);
+        setShowAssignError(true);
+        return;
+      }
       const span = spanDays(p.scheduledDate, p.endDate);
       if (span === null) {
         setAssignErrorMsg(`The end date for "${ex?.name ?? exId}" must be on or after the start date.`);
@@ -399,19 +579,50 @@ export default function AssignExercisePage() {
           : p.holdSeconds;
       // Isometric exercises carry a placeholder rep value to satisfy the NOT
       // NULL column; the camera page uses holdSeconds, not reps, for them.
-      const reps = isIsometric ? p.reps ?? 1 : p.reps!;
+      const reps = isIsometric ? 1 : p.reps!;
+      let resistance: ResistanceContext;
+      try {
+        resistance = parseResistanceContext(p);
+      } catch (error) {
+        setAssignErrorMsg(
+          `${ex?.name ?? exId}: ${
+            error instanceof Error ? error.message : "Invalid resistance."
+          }`,
+        );
+        setShowAssignError(true);
+        return;
+      }
       payload.push({
         exerciseId: exId,
-        sets: p.sets,
+        sets: p.sets!,
         reps,
         restSeconds,
         holdSeconds,
+        sequenceIndex: p.sequenceIndex as number,
         scheduledDate: p.scheduledDate,
         recurrence,
         intervalDays,
         weekdays,
         endDate,
+        prescribedSide: p.prescribedSide ?? "both",
+        resistanceType: resistance.type as Exclude<
+          ResistanceContext["type"],
+          "unknown"
+        >,
+        resistanceValue: resistance.value,
+        resistanceUnit: resistance.unit,
+        resistanceLabel: resistance.label,
       });
+    }
+
+    const sequenceIndexes = payload.map((exercise) => exercise.sequenceIndex);
+    if (
+      sequenceIndexes.some((value) => !Number.isInteger(value) || value < 1) ||
+      new Set(sequenceIndexes).size !== sequenceIndexes.length
+    ) {
+      setAssignErrorMsg("Each selected exercise needs a unique positive whole-number order.");
+      setShowAssignError(true);
+      return;
     }
 
     // Build diff for preview
@@ -421,29 +632,51 @@ export default function AssignExercisePage() {
       const existing = existingAssignments.find((e) => e.exercise_id === item.exerciseId);
       const after: PreviewSnapshot = {
         sets: item.sets, reps: item.reps, restSeconds: item.restSeconds, holdSeconds: item.holdSeconds,
+        sequenceIndex: item.sequenceIndex,
         scheduledDate: item.scheduledDate, recurrence: item.recurrence, intervalDays: item.intervalDays,
         weekdays: item.weekdays, endDate: item.endDate,
+        prescribedSide: item.prescribedSide,
+        resistance: {
+          type: item.resistanceType,
+          value: item.resistanceValue,
+          unit: item.resistanceUnit,
+          label: item.resistanceLabel,
+        },
       };
       if (!existing) {
         return { exerciseId: item.exerciseId, name, type: "new", after };
       }
       const before: PreviewSnapshot = {
         sets: existing.sets, reps: existing.reps, restSeconds: existing.rest_seconds, holdSeconds: existing.hold_seconds,
+        sequenceIndex: existing.sequence_index,
         scheduledDate: existing.start_date ?? existing.assigned_date,
         recurrence: existing.recurrence ?? "interval",
         intervalDays: existing.interval_days ?? null,
         weekdays: existing.weekdays ?? [],
         endDate: existing.end_date ?? existing.assigned_date,
+        prescribedSide: existing.prescribed_side ?? "both",
+        resistance: {
+          type: existing.resistance_type ?? "unknown",
+          value:
+            existing.resistance_value == null
+              ? null
+              : Number(existing.resistance_value),
+          unit: existing.resistance_unit ?? null,
+          label: existing.resistance_label ?? null,
+        },
       };
       const changed =
         after.sets !== before.sets ||
         after.reps !== before.reps ||
         after.restSeconds !== before.restSeconds ||
         after.holdSeconds !== before.holdSeconds ||
+        after.sequenceIndex !== before.sequenceIndex ||
         after.scheduledDate !== before.scheduledDate ||
         after.recurrence !== before.recurrence ||
         after.intervalDays !== before.intervalDays ||
         after.endDate !== before.endDate ||
+        after.prescribedSide !== before.prescribedSide ||
+        JSON.stringify(after.resistance) !== JSON.stringify(before.resistance) ||
         !sameWeekdays(after.weekdays, before.weekdays);
       return {
         exerciseId: item.exerciseId,
@@ -462,21 +695,44 @@ export default function AssignExercisePage() {
   const handleConfirmAssign = async () => {
     setAssigning(true);
     try {
-      const res = await fetch("/api/patient-exercises", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId: assignPatientId, exercises: pendingPayload }),
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        setAssignErrorMsg(d.error ?? "Failed to assign.");
+      const results = await Promise.all(
+        assignPatientIds.map(async (patientId) => {
+          try {
+            const res = await fetch("/api/patient-exercises", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ patientId, exercises: pendingPayload }),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { patientId, ok: res.ok, error: data.error as string | undefined };
+          } catch {
+            return { patientId, ok: false, error: "Network request failed." };
+          }
+        }),
+      );
+      const failedPatients = results.filter((result) => !result.ok);
+      if (failedPatients.length > 0) {
+        const successfulCount = results.length - failedPatients.length;
+        const failedNames = failedPatients
+          .map((result) => patients.find((patient) => patient.id === result.patientId)?.name ?? result.patientId)
+          .join(", ");
+        setAssignErrorMsg(
+          successfulCount > 0
+            ? `Assigned to ${successfulCount} patient(s), but failed for: ${failedNames}. ${failedPatients[0].error ?? "Please try again."}`
+            : `${failedPatients[0].error ?? "Failed to assign exercises."} (${failedNames})`,
+        );
         setShowAssignError(true);
         setShowAssignPreview(false);
         return;
       }
       setShowAssignPreview(false);
-      showToast({ variant: "success", message: "Exercises assigned and synced." });
-      setAssignPatientId(""); setAssignProgramId("");
+      showToast({
+        variant: "success",
+        message: `Exercises assigned to ${assignPatientIds.length} patient${assignPatientIds.length === 1 ? "" : "s"} and synced.`,
+      });
+      setShowValidationErrors(false);
+      assignmentRequest.current?.abort();
+      setAssignPatientIds([]); setAssignProgramId(""); setProgramAddedIds(new Set());
       setAssignSelected(new Set()); setAssignParams({});
       setExistingAssignments([]); setDeleteSelected(new Set());
     } catch {
@@ -505,7 +761,7 @@ export default function AssignExercisePage() {
       const res = await fetch("/api/patient-exercises", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId: assignPatientId, exerciseIds: [...deleteSelected] }),
+        body: JSON.stringify({ patientId: assignPatientIds[0], exerciseIds: [...deleteSelected] }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -539,10 +795,32 @@ export default function AssignExercisePage() {
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
-  const systemExercises = exercises.filter((e) => !e.is_custom);
-  const customExercises = exercises.filter((e) => e.is_custom);
-  const selectedPatient = patients.find((p) => p.id === assignPatientId);
-  const minDate = todayStr();
+  // Search boxes: patients by name or email, programs by name, exercises by
+  // name or description. A selected program or exercise stays listed while
+  // filtered, so a search never hides what is about to be assigned.
+  const matches = (query: string, ...fields: (string | undefined)[]) => {
+    const q = query.trim().toLowerCase();
+    return q === "" || fields.some((field) => field?.toLowerCase().includes(q));
+  };
+  const visiblePatients = patients.filter((p) => matches(patientQuery, p.name, p.email));
+  const visiblePrograms = programs.filter((p) => p.id === assignProgramId || matches(programQuery, p.name));
+  const visibleExercises = (Array.isArray(exercises) ? exercises : []).filter(
+    (e) => assignSelected.has(e.id) || matches(exerciseQuery, e.name, e.description),
+  );
+  const systemExercises = visibleExercises.filter((e) => !e.is_custom);
+  const customExercises = visibleExercises.filter((e) => e.is_custom);
+  const selectedPatient = assignPatientIds.length === 1
+    ? patients.find((patient) => patient.id === assignPatientIds[0])
+    : undefined;
+  const selectedPatientNames = assignPatientIds
+    .map((patientId) => patients.find((patient) => patient.id === patientId)?.name ?? patientId);
+  const selectedPatients = assignPatientIds
+    .map((patientId) => patients.find((patient) => patient.id === patientId))
+    .filter((patient): patient is PatientData => Boolean(patient));
+  const minDate = todayKey;
+  // Steps 2 and 3 open once step 1 has a patient: programs and exercises are
+  // always chosen for someone.
+  const needsPatient = assignPatientIds.length === 0;
 
   // True when at least one selected exercise is new or has been edited and differs from existing
   const hasAssignChanges = (() => {
@@ -556,15 +834,34 @@ export default function AssignExercisePage() {
       const holdSeconds = p.holdSeconds === undefined || p.holdSeconds < 1 ? DEFAULT_HOLD_SECONDS : p.holdSeconds;
       const recurrence = p.recurrence ?? "interval";
       const intervalDays = recurrence === "interval" ? (p.intervalDays ?? 1) : null;
+      let resistance: ResistanceContext;
+      try {
+        resistance = parseResistanceContext(p);
+      } catch {
+        return true;
+      }
+      const existingResistance: ResistanceContext = {
+        type: existing.resistance_type ?? "unknown",
+        value:
+          existing.resistance_value == null
+            ? null
+            : Number(existing.resistance_value),
+        unit: existing.resistance_unit ?? null,
+        label: existing.resistance_label ?? null,
+      };
       if (
         p.sets !== existing.sets ||
         p.reps !== existing.reps ||
         restSeconds !== existing.rest_seconds ||
         holdSeconds !== existing.hold_seconds ||
+        (p.sequenceIndex ?? existing.sequence_index) !== existing.sequence_index ||
         p.scheduledDate !== (existing.start_date ?? existing.assigned_date) ||
         recurrence !== (existing.recurrence ?? "interval") ||
         intervalDays !== (existing.interval_days ?? (recurrence === "interval" ? 1 : null)) ||
         (p.endDate ?? "") !== (existing.end_date ?? existing.assigned_date) ||
+        (p.prescribedSide ?? "both") !==
+          (existing.prescribed_side ?? "both") ||
+        JSON.stringify(resistance) !== JSON.stringify(existingResistance) ||
         !sameWeekdays(p.weekdays ?? [], existing.weekdays ?? [])
       ) return true;
     }
@@ -577,230 +874,414 @@ export default function AssignExercisePage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Assign Exercise</h1>
-      <p className="text-gray-500 mb-6">Assign exercises or a program to one of your patients.</p>
+      <div className="mb-4">
+        <PageHeading title="Assign Exercise" subtitle="Assign exercises or a program to one of your patients." />
+      </div>
 
+      <div className={`grid items-start gap-4 ${selectedPatients.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
+        <div className="min-w-0 bg-white rounded-xl shadow-sm p-4 sm:p-6 space-y-6">
 
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-6 max-w-2xl">
-
-        {/* Step 1 — Select Patient */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            1. Select Patient <span className="text-red-500">*</span>
-          </label>
-          {patients.length === 0 ? (
-            <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
-          ) : (
-            <select
-              value={assignPatientId}
-              onChange={(e) => setAssignPatientId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
-            >
-              <option value="">— Select a patient —</option>
-              {patients.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {/* Existing Assignments (shown when patient has assigned exercises) */}
-        {assignPatientId && existingAssignments.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
+          {/* Step 1 — Select Patients */}
+          <div id="tour-assign-patients">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-gray-700">
-                Currently Assigned to{" "}
-                <span className="text-green-700">{selectedPatient?.name}</span>
+                1. Select Patients <span className="text-red-500">*</span>
               </p>
-              {deleteSelected.size > 0 && (
-                <button
-                  onClick={() => { setDeleteError(""); setShowDeleteModal(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
-                >
-                  <TrashIcon />
-                  End Selected ({deleteSelected.size})
-                </button>
+              {patients.length > 0 && (
+                <SearchBox value={patientQuery} onChange={setPatientQuery} placeholder="Search patient" className="w-full sm:w-60" />
               )}
             </div>
-            <div className="rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
-              {existingAssignments.map((ex) => (
-                <label
-                  key={ex.exercise_id}
-                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition ${
-                    deleteSelected.has(ex.exercise_id) ? "bg-red-50" : "hover:bg-gray-50"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={deleteSelected.has(ex.exercise_id)}
-                    onChange={() => toggleDelete(ex.exercise_id)}
-                    className="w-4 h-4 accent-red-600 shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-900">{ex.name}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500 shrink-0">
-                    <span>
-                      {ex.sets} sets ×{" "}
-                      {getExerciseDefinition(ex.exercise_id)?.kind === "isometric"
-                        ? `${ex.hold_seconds}s hold`
-                        : `${ex.reps} reps`}
-                    </span>
-                    <span>{ex.rest_seconds}s rest</span>
-                    <span className="text-green-700 font-medium">
-                      {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}
-                    </span>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5">
-              Select prescriptions to end. Historical occurrences and sessions will be preserved.
-            </p>
-          </div>
-        )}
-
-        {/* Step 2 — Load from Program */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            2. Load from Program{" "}
-            <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
-          </label>
-          {programs.length === 0 ? (
-            <p className="text-gray-400 text-sm">No programs yet.</p>
-          ) : (
-            <>
-              <select
-                value={assignProgramId}
-                onChange={(e) => handleProgramSelect(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
-              >
-                <option value="">— None —</option>
-                {programs.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-
-              {assignProgramId && (() => {
-                const tmpl = programs.find((t) => t.id === assignProgramId);
-                if (!tmpl || tmpl.exercises.length === 0) return null;
-                return (
-                  <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3">
-                    <p className="text-xs font-medium text-green-700 mb-2">
-                      {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this program:
-                    </p>
-                    <ul className="space-y-1">
-                      {tmpl.exercises.map((ex, i) => (
-                        <li key={i} className="flex items-center justify-between text-xs text-gray-700">
-                          <span>{ex.name}</span>
-                          {(ex.sets || ex.reps || ex.holdSeconds) && (
-                            <span className="text-gray-400 font-mono ml-4 shrink-0">
-                              {ex.sets ?? "?"}×
-                              {prescriptionTargetText({
-                                exerciseId: ex.exerciseId,
-                                reps: ex.reps,
-                                holdSeconds: ex.holdSeconds,
-                              })}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-        </div>
-
-        {/* Step 3 — Select & Configure Exercises */}
-        <div>
-          <p className="text-sm font-semibold text-gray-700 mb-3">
-            3. Select Exercises <span className="text-red-500">*</span>
-          </p>
-
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-            System Exercises
-          </p>
-          <div className="space-y-2 mb-5">
-            {systemExercises.map((ex) => (
-              <AssignRow
-                key={ex.id}
-                exercise={ex}
-                checked={assignSelected.has(ex.id)}
-                params={assignParams[ex.id] ?? {}}
-                minDate={minDate}
-                isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
-                isEditing={editingExercises.has(ex.id)}
-                onToggle={() => toggleAssign(ex.id)}
-                onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
-                onCancelEdit={() => {
-                  setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
-                  const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                  if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
-                }}
-                onParam={(f, v) =>
-                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
-                }
-                onSchedule={(patch) =>
-                  setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
-                }
-              />
-            ))}
+            {patients.length === 0 ? (
+              <p className="text-gray-400 text-sm">No patients assigned to you yet.</p>
+            ) : (
+              <>
+              <div className={`rounded-lg border ${assignPatientIds.length === 0 && showValidationErrors ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}>
+                <div className="max-h-52 overflow-y-auto divide-y divide-gray-100">
+                  {visiblePatients.length === 0 && (
+                    <p className="px-3 py-4 text-center text-sm text-gray-400">No patients match your search.</p>
+                  )}
+                  {visiblePatients.map((patient) => (
+                    <label key={patient.id} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={assignPatientIds.includes(patient.id)}
+                        onChange={() => togglePatientSelection(patient.id)}
+                        className="w-4 h-4 accent-green-700 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{patient.name}</span>
+                      <span className="text-xs text-gray-400">{patient.email}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="border-t border-gray-100 px-3 py-2 text-xs text-gray-500">
+                  {assignPatientIds.length} selected
+                </div>
+              </div>
+              </>
+            )}
           </div>
 
-          {customExercises.length > 0 && (
-            <>
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                Custom Exercises
-              </p>
-              <div className="space-y-2">
-                {customExercises.map((ex) => (
-                  <AssignRow
-                    key={ex.id}
-                    exercise={ex}
-                    checked={assignSelected.has(ex.id)}
-                    params={assignParams[ex.id] ?? {}}
-                    minDate={minDate}
-                    isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
-                    isEditing={editingExercises.has(ex.id)}
-                    onToggle={() => toggleAssign(ex.id)}
-                    onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
-                    onCancelEdit={() => {
-                      setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
-                      const original = existingAssignments.find((e) => e.exercise_id === ex.id);
-                      if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
-                    }}
-                    onParam={(f, v) =>
-                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
-                    }
-                    onSchedule={(patch) =>
-                      setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
-                    }
-                  />
+          {/* Existing Assignments (shown when patient has assigned exercises) */}
+          {assignPatientIds.length === 1 && existingAssignments.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-gray-700">
+                  Currently Assigned to{" "}
+                  <span className="text-green-700">{selectedPatient?.name}</span>
+                </p>
+                {deleteSelected.size > 0 && (
+                  <button
+                    onClick={() => { setDeleteError(""); setShowDeleteModal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition"
+                  >
+                    <TrashIcon />
+                    End Selected ({deleteSelected.size})
+                  </button>
+                )}
+              </div>
+              <div className="rounded-xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+                {existingAssignments.map((ex) => (
+                  <label
+                    key={ex.exercise_id}
+                    className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition ${
+                      deleteSelected.has(ex.exercise_id) ? "bg-red-50" : "hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={deleteSelected.has(ex.exercise_id)}
+                      onChange={() => toggleDelete(ex.exercise_id)}
+                      className="w-4 h-4 accent-red-600 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-gray-900">{ex.name}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-gray-500 shrink-0">
+                      <span>
+                        {ex.sets} sets ×{" "}
+                        {getExerciseDefinition(ex.exercise_id)?.kind === "isometric"
+                          ? `${ex.hold_seconds}s hold`
+                          : `${ex.reps} reps`}
+                      </span>
+                      <span>{ex.rest_seconds}s rest</span>
+                      <span className="text-green-700 font-medium">
+                        {formatCadence({ recurrence: ex.recurrence, intervalDays: ex.interval_days, weekdays: ex.weekdays ?? [] })}
+                      </span>
+                    </div>
+                  </label>
                 ))}
               </div>
-            </>
+              <p className="text-xs text-gray-400 mt-1.5">
+                Select prescriptions to end. Historical occurrences and sessions will be preserved.
+              </p>
+            </div>
           )}
-        </div>
 
-        {existingAssignments.length === 0 ? (
-          <button
-            onClick={handleAssign}
-            disabled={assigning}
-            className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+          {needsPatient && (
+            <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Select a patient in step 1 first. Steps 2 and 3 open once a patient is selected.
+            </p>
+          )}
+
+          {/* Step 2 — Load from Program */}
+          <div
+            id="tour-assign-program"
+            inert={needsPatient}
+            aria-disabled={needsPatient}
+            className={needsPatient ? "pointer-events-none select-none opacity-50" : undefined}
           >
-            {assigning ? "Saving..." : "Assign Exercises"}
-          </button>
-        ) : hasAssignChanges ? (
-          <button
-            onClick={handleAssign}
-            disabled={assigning}
-            className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor="assign-program-select" className="text-sm font-semibold text-gray-700">
+                2. Load from Program{" "}
+                <span className="text-gray-400 font-normal">(optional — merges with existing selection)</span>
+              </label>
+              {programs.length > 0 && (
+                <div
+                  className="relative w-full sm:w-60"
+                  onFocus={() => setProgramResultsOpen(true)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setProgramResultsOpen(false);
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Escape") setProgramResultsOpen(false); }}
+                >
+                  <SearchBox
+                    value={programQuery}
+                    onChange={(value) => { setProgramQuery(value); setProgramResultsOpen(true); }}
+                    placeholder="Search program"
+                  />
+                  {programResultsOpen && programQuery.trim() !== "" && (
+                    <ul
+                      role="listbox"
+                      aria-label="Matching programs"
+                      className="absolute right-0 z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-green-200 bg-white py-1 shadow-lg"
+                    >
+                      {visiblePrograms.filter((p) => matches(programQuery, p.name)).length === 0 ? (
+                        <li className="px-3 py-2 text-sm text-gray-400">No programs match your search.</li>
+                      ) : (
+                        visiblePrograms.filter((p) => matches(programQuery, p.name)).map((p) => (
+                          <li key={p.id}>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={p.id === assignProgramId}
+                              onClick={() => {
+                                handleProgramSelect(p.id);
+                                setProgramQuery("");
+                                setProgramResultsOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-green-50 ${
+                                p.id === assignProgramId ? "font-semibold text-green-800" : "text-gray-700"
+                              }`}
+                            >
+                              <span className="truncate">{p.name}</span>
+                              <span className="shrink-0 text-xs text-gray-400">
+                                {p.exercises.length} exercise{p.exercises.length === 1 ? "" : "s"}
+                              </span>
+                            </button>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+            {programs.length === 0 ? (
+              <p className="text-gray-400 text-sm">No programs yet.</p>
+            ) : (
+              <>
+                <select
+                  id="assign-program-select"
+                  value={assignProgramId}
+                  onChange={(e) => handleProgramSelect(e.target.value)}
+                  className="w-full border border-green-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+                >
+                  <option value="">
+                    {visiblePrograms.length === 0 ? "— No programs match your search —" : "— None —"}
+                  </option>
+                  {visiblePrograms.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+
+                {assignProgramId && (() => {
+                  const tmpl = programs.find((t) => t.id === assignProgramId);
+                  if (!tmpl || tmpl.exercises.length === 0) return null;
+                  return (
+                    <div className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3">
+                      <p className="text-xs font-medium text-green-700 mb-2">
+                        {tmpl.exercises.length} exercise{tmpl.exercises.length !== 1 ? "s" : ""} in this program:
+                      </p>
+                      <ul className="space-y-1">
+                        {tmpl.exercises.map((ex, i) => (
+                          <li key={i} className="flex items-center justify-between text-xs text-gray-700">
+                            <span>#{ex.sequenceIndex ?? i + 1} · {ex.name}</span>
+                            {(ex.sets || ex.reps || ex.holdSeconds) && (
+                              <span className="text-gray-400 font-mono ml-4 shrink-0">
+                                {ex.sets ?? "?"}×
+                                {prescriptionTargetText({
+                                  exerciseId: ex.exerciseId,
+                                  reps: ex.reps,
+                                  holdSeconds: ex.holdSeconds,
+                                })}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+
+          {/* Step 3 — Select & Configure Exercises */}
+          <div
+            id="tour-assign-exercises"
+            inert={needsPatient}
+            aria-disabled={needsPatient}
+            className={needsPatient ? "pointer-events-none select-none opacity-50" : undefined}
           >
-            {assigning ? "Saving..." : "Update Changes"}
-          </button>
-        ) : null}
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-700">
+                3. Select Exercises <span className="text-red-500">*</span>
+              </p>
+              <SearchBox value={exerciseQuery} onChange={setExerciseQuery} placeholder="Search exercise" className="w-full sm:w-60" />
+            </div>
+
+            {systemExercises.length === 0 && customExercises.length === 0 && (
+              <p className="mb-5 rounded-lg border border-dashed border-gray-200 py-4 text-center text-sm text-gray-400">
+                No exercises match your search.
+              </p>
+            )}
+            {systemExercises.length > 0 && (
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+              System Exercises
+            </p>
+            )}
+            <div className="space-y-2 mb-5">
+              {systemExercises.map((ex) => (
+                <AssignRow
+                  key={ex.id}
+                  exercise={ex}
+                  checked={assignSelected.has(ex.id)}
+                  params={assignParams[ex.id] ?? {}}
+                  minDate={minDate}
+                  showValidationErrors={showValidationErrors}
+                  isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
+                  isEditing={editingExercises.has(ex.id)}
+                  onToggle={() => toggleAssign(ex.id)}
+                  onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
+                  onCancelEdit={() => {
+                    setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
+                    const original = existingAssignments.find((e) => e.exercise_id === ex.id);
+                    if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
+                  }}
+                  onParam={(f, v) =>
+                    setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
+                  }
+                  onSchedule={(patch) =>
+                    setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
+                  }
+                />
+              ))}
+            </div>
+
+            {customExercises.length > 0 && (
+              <>
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Custom Exercises
+                </p>
+                <div className="space-y-2">
+                  {customExercises.map((ex) => (
+                    <AssignRow
+                      key={ex.id}
+                      exercise={ex}
+                      checked={assignSelected.has(ex.id)}
+                      params={assignParams[ex.id] ?? {}}
+                      minDate={minDate}
+                      showValidationErrors={showValidationErrors}
+                      isExisting={existingAssignments.some((e) => e.exercise_id === ex.id)}
+                      isEditing={editingExercises.has(ex.id)}
+                      onToggle={() => toggleAssign(ex.id)}
+                      onEdit={() => setEditingExercises((prev) => { const next = new Set(prev); next.add(ex.id); return next; })}
+                      onCancelEdit={() => {
+                        setEditingExercises((prev) => { const next = new Set(prev); next.delete(ex.id); return next; });
+                        const original = existingAssignments.find((e) => e.exercise_id === ex.id);
+                        if (original) setAssignParams((prev) => ({ ...prev, [ex.id]: paramsFromExisting(original) }));
+                      }}
+                      onParam={(f, v) =>
+                        setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], [f]: v } }))
+                      }
+                      onSchedule={(patch) =>
+                        setAssignParams((prev) => ({ ...prev, [ex.id]: { ...prev[ex.id], ...patch } }))
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {existingAssignments.length === 0 ? (
+            <button
+              id="tour-assign-submit"
+              onClick={handleAssign}
+              disabled={assigning}
+              className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+            >
+              {assigning ? "Saving..." : "Assign Exercises"}
+            </button>
+          ) : hasAssignChanges ? (
+            <button
+              id="tour-assign-submit"
+              onClick={handleAssign}
+              disabled={assigning}
+              className="px-6 py-2.5 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg transition"
+            >
+              {assigning ? "Saving..." : "Update Changes"}
+            </button>
+          ) : null}
+        </div>
+        {selectedPatients.length > 0 && (
+          <aside id="tour-assign-aside" className="sticky top-4 max-h-[calc(100vh-7rem)] overflow-y-auto rounded-xl bg-white shadow-sm">
+            <div className="border-b border-green-100 bg-[#f3f8f4] px-4 py-3">
+              <h2 className="text-sm font-semibold text-gray-800">
+                Selected patients <span className="font-normal text-gray-400">({selectedPatients.length})</span>
+              </h2>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {selectedPatients.map((patient) => {
+                const isExpanded = expandedPatientId === patient.id;
+                const roster = patientRoster[patient.id];
+                const currentAssignments = assignPatientIds.length === 1
+                  ? existingAssignments
+                  : [];
+                const assignedCount = roster?.assignedCount ?? currentAssignments.length;
+                const progress = roster
+                  ? roster.dueCount > 0
+                    ? `${roster.completedCount}/${roster.dueCount} completed`
+                    : roster.assignedCount > 0
+                      ? "No due occurrences"
+                      : "No active prescriptions"
+                  : currentAssignments.length > 0
+                    ? "Active plan"
+                    : "No activity recorded";
+
+                return (
+                  <div key={patient.id}>
+                    <button
+                      type="button"
+                      aria-expanded={isExpanded}
+                      onClick={() => setExpandedPatientId(isExpanded ? null : patient.id)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 transition"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-gray-900">{patient.name}</span>
+                        <span className="block truncate text-xs text-gray-500">{patient.email || "No email on file"}</span>
+                      </span>
+                      <span className="shrink-0 text-xs font-medium text-green-700">
+                        {isExpanded ? "Hide details" : "View details"}
+                      </span>
+                    </button>
+                    <div
+                      aria-hidden={!isExpanded}
+                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out motion-reduce:transition-none ${isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-gray-100 bg-white px-4 py-4 text-sm">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Last visit</p>
+                            <p className="text-gray-700">{roster?.lastSessionAt ? fmtDate(roster.lastSessionAt) : "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Last session</p>
+                            <p className="text-gray-700">{roster?.lastSessionAt ? fmtDate(roster.lastSessionAt) : "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Progress</p>
+                            <p className="text-gray-700">{progress}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Prescriptions</p>
+                            <p className="text-gray-700">{assignedCount} active</p>
+                          </div>
+                          <div className="col-span-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Diagnosis</p>
+                            <p className="text-gray-700 leading-relaxed">
+                              {patient.diagnosis ?? patient.condition ?? "No diagnosis recorded in system"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* ── Delete Confirmation Modal ──────────────────────────────────────── */}
@@ -808,14 +1289,15 @@ export default function AssignExercisePage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowDeleteModal(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            {/* Title and buttons stay in view; a long list scrolls between them. */}
+            <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="text-lg font-bold text-gray-900 mb-1">End Prescriptions</h2>
               <p className="text-sm text-gray-500 mb-4">
                 The following prescriptions will stop future scheduling for{" "}
                 <span className="font-semibold text-gray-700">{selectedPatient?.name}</span>:
               </p>
 
-              <div className="rounded-xl border border-red-200 bg-red-50 divide-y divide-red-100 mb-4 overflow-hidden">
+              <div className="mb-4 min-h-0 flex-1 divide-y divide-red-100 overflow-y-auto rounded-xl border border-red-200 bg-red-50">
                 {existingAssignments
                   .filter((e) => deleteSelected.has(e.exercise_id))
                   .map((ex) => (
@@ -844,10 +1326,10 @@ export default function AssignExercisePage() {
                 <p className="text-xs text-red-600 mb-3">{deleteError}</p>
               )}
 
-              <div className="flex gap-3 justify-end">
+              <div className="flex shrink-0 gap-3 justify-end">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
+                  className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
                 >
                   Cancel
                 </button>
@@ -893,13 +1375,20 @@ export default function AssignExercisePage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setShowAssignPreview(false)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            {/* Title and buttons stay in view; the list of changes scrolls between them. */}
+            <div className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="text-lg font-bold text-gray-900 mb-1">Review Changes</h2>
               <p className="text-sm text-gray-500 mb-4">
                 Assigning to{" "}
-                <span className="font-semibold text-gray-700">{selectedPatient?.name}</span>
+                <span className="font-semibold text-gray-700">{selectedPatientNames.join(", ")}</span>
               </p>
+              {assignPatientIds.length > 1 && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+                  Matching active prescriptions will be updated for each selected patient.
+                </p>
+              )}
 
+              <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2">
               {/* New */}
               {previewItems.filter((i) => i.type === "new").length > 0 && (
                 <div className="mb-4">
@@ -968,10 +1457,12 @@ export default function AssignExercisePage() {
                 </div>
               )}
 
-              <div className="flex gap-3 justify-end pt-2">
+              </div>
+
+              <div className="flex shrink-0 gap-3 justify-end border-t border-gray-100 pt-3">
                 <button
                   onClick={() => setShowAssignPreview(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
+                  className="px-4 py-2 border border-green-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition"
                 >
                   Back
                 </button>
@@ -994,28 +1485,40 @@ export default function AssignExercisePage() {
 // ── AssignRow ─────────────────────────────────────────────────────────────────
 
 function AssignRow({
-  exercise, checked, params, minDate, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onSchedule,
+  exercise, checked, params, minDate, showValidationErrors, isExisting, isEditing, onToggle, onEdit, onCancelEdit, onParam, onSchedule,
 }: {
   exercise: Exercise;
   checked: boolean;
   params: AssignmentParams;
   minDate: string;
+  showValidationErrors: boolean;
   isExisting: boolean;
   isEditing: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onCancelEdit: () => void;
-  onParam: (field: "sets" | "reps" | "restSeconds" | "holdSeconds", val: number | undefined) => void;
+  onParam: (
+    field: "sequenceIndex" | "sets" | "reps" | "restSeconds" | "holdSeconds",
+    val: number | undefined,
+  ) => void;
   onSchedule: (patch: Partial<AssignmentParams>) => void;
 }) {
   const locked = isExisting && !isEditing;
   // Isometric exercises (e.g. ex_006 T-pose) are timed holds, not rep-counted —
   // show a per-side "Hold (sec)" input instead of Reps.
   const isIsometric = getExerciseDefinition(exercise.id)?.kind === "isometric";
+  // A hold takes up to 10 sets (one hold each), a repetition exercise up to 4.
+  const maxSets = maxPrescriptionSets(exercise.id);
   const recurrence: Recurrence = params.recurrence ?? "interval";
   const weekdays = params.weekdays ?? [];
   const presetId = presetIdFor(params);
   const showWeekdayPicker = recurrence === "weekly";
+  const orderInvalid = showValidationErrors && checked && params.sequenceIndex == null;
+  const setsInvalid = showValidationErrors && checked && !isPrescriptionCount(params.sets, maxSets);
+  const repsInvalid = showValidationErrors && checked && !isIsometric && !isPrescriptionCount(params.reps, MAX_PRESCRIPTION_REPS);
+  const startDateInvalid = showValidationErrors && checked && !params.scheduledDate;
+  const endDateInvalid = showValidationErrors && checked && !params.endDate;
+  const repeatInvalid = showValidationErrors && checked && recurrence === "interval" && params.intervalDays == null;
   const applyPreset = (id: string) => {
     const preset = CADENCE_PRESETS.find((c) => c.id === id);
     if (!preset) return;
@@ -1039,14 +1542,19 @@ function AssignRow({
   return (
     <div className={`rounded-xl border p-3 transition ${checked ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
       <label className="flex items-start gap-3 cursor-pointer">
-        <input type="checkbox" checked={checked} onChange={onToggle} className="mt-1 w-4 h-4 accent-green-600" />
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          className="mt-1 w-4 h-4 accent-green-600"
+        />
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-900 text-sm">{exercise.name}</span>
             <span className="text-xs text-gray-400 font-mono">{exercise.id}</span>
             {exercise.is_custom && (
               <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full">
-                manual · no camera
+                Manual · no Machine Learning
               </span>
             )}
             {isExisting && (
@@ -1085,15 +1593,29 @@ function AssignRow({
       </label>
       {checked && (
         <div className="mt-3 pl-7 space-y-3">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Sets <span className="text-red-500">*</span></label>
+              <label className="block text-xs text-gray-500 mb-1">
+                Order <span className="text-red-500">*</span>
+              </label>
               <input
-                type="number" min={1} value={params.sets ?? ""}
+                type="number" min={1} value={params.sequenceIndex ?? ""}
+                onChange={(e) => onParam("sequenceIndex", e.target.value ? Number(e.target.value) : undefined)}
+                placeholder="1"
+                disabled={locked}
+                aria-invalid={orderInvalid}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : orderInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Sets (1–{maxSets}) <span className="text-red-500">*</span></label>
+              <input
+                type="number" min={1} max={maxSets} step={1} title={`1–${maxSets} sets`} value={params.sets ?? ""}
                 onChange={(e) => onParam("sets", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="e.g. 3"
                 disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                aria-invalid={setsInvalid}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : setsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
               />
             </div>
             {isIsometric ? (
@@ -1104,18 +1626,19 @@ function AssignRow({
                   onChange={(e) => onParam("holdSeconds", e.target.value ? Number(e.target.value) : undefined)}
                   placeholder={`${DEFAULT_HOLD_SECONDS}`}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-green-200"}`}
                 />
               </div>
             ) : (
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Reps <span className="text-red-500">*</span></label>
+                <label className="block text-xs text-gray-500 mb-1">Reps (1–{MAX_PRESCRIPTION_REPS}) <span className="text-red-500">*</span></label>
                 <input
-                  type="number" min={1} value={params.reps ?? ""}
+                  type="number" min={1} max={MAX_PRESCRIPTION_REPS} step={1} title={`1–${MAX_PRESCRIPTION_REPS} reps`} value={params.reps ?? ""}
                   onChange={(e) => onParam("reps", e.target.value ? Number(e.target.value) : undefined)}
                   placeholder="e.g. 12"
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={repsInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repsInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
             )}
@@ -1126,10 +1649,15 @@ function AssignRow({
                 onChange={(e) => onParam("restSeconds", e.target.value ? Number(e.target.value) : undefined)}
                 placeholder="60"
                 disabled={locked}
-                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                className={`w-full border rounded-lg px-2 py-1.5 text-sm ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-green-200"}`}
               />
             </div>
           </div>
+          <MovementContextFields
+            value={params}
+            disabled={locked}
+            onChange={onSchedule}
+          />
           {/* Schedule: a repeat cadence over a start–end date range */}
           <div>
             <label className="block text-xs text-gray-500 mb-1">
@@ -1139,7 +1667,8 @@ function AssignRow({
               value={presetId}
               onChange={(e) => applyPreset(e.target.value)}
               disabled={locked}
-              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+              aria-invalid={repeatInvalid}
+              className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repeatInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
             >
               {CADENCE_PRESETS.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
@@ -1147,7 +1676,7 @@ function AssignRow({
             </select>
 
             {showWeekdayPicker && (
-              <div className="flex flex-wrap gap-1 mb-2">
+              <div className={`flex flex-wrap gap-1 mb-2 rounded-md ${showValidationErrors && checked && weekdays.length === 0 ? "ring-1 ring-red-400 p-1" : ""}`}>
                 {WEEKDAY_SHORT.map((lbl, d) => {
                   const on = weekdays.includes(d);
                   return (
@@ -1160,7 +1689,7 @@ function AssignRow({
                       className={`w-9 h-8 rounded-md text-xs font-medium transition ${
                         on
                           ? "bg-green-700 text-white"
-                          : "border border-gray-300 text-gray-600 hover:bg-gray-50"
+                          : "border border-green-200 text-gray-600 hover:bg-gray-50"
                       } ${locked ? "cursor-not-allowed opacity-60" : ""}`}
                     >
                       {lbl.slice(0, 2)}
@@ -1181,7 +1710,8 @@ function AssignRow({
                   value={params.scheduledDate ?? ""}
                   onChange={(e) => onSchedule({ scheduledDate: e.target.value })}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={startDateInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : startDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
               <div>
@@ -1190,11 +1720,12 @@ function AssignRow({
                 </label>
                 <input
                   type="date"
-                  min={params.scheduledDate || minDate}
+                    min={params.scheduledDate && params.scheduledDate > minDate ? params.scheduledDate : minDate}
                   value={params.endDate ?? ""}
                   onChange={(e) => onSchedule({ endDate: e.target.value })}
                   disabled={locked}
-                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : "border-gray-300"}`}
+                  aria-invalid={endDateInvalid}
+                  className={`w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : endDateInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
                 />
               </div>
             </div>
@@ -1220,5 +1751,28 @@ function TrashIcon() {
     <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
       <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
     </svg>
+  );
+}
+
+function SearchBox({ value, onChange, placeholder, className = "" }: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="w-full rounded-lg border border-green-200 bg-white py-2 pl-9 pr-3 text-sm text-black outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-100"
+      />
+    </div>
   );
 }

@@ -11,6 +11,9 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
   trunkLean:         [11, 12, 23, 24], // shoulders + hips
   scapularElevation: [7, 11, 8, 12], // ear-to-shoulder both sides
   elbowFlexion:      [13, 14],       // elbow joints only (most focused)
+  hipShift:          [23, 24],       // both hips (display-only side-bend check)
+  elbowBend:         [13, 14],       // elbow joints (display-only arm-raise and arm-hold check)
+  overRaise:         [15, 16],       // both wrists, only when no arm is named (display-only arm-raise check: an arm past shoulder height; otherwise boxed around that arm)
 };
 
 /**
@@ -19,12 +22,49 @@ const METRIC_LANDMARKS: Partial<Record<MetricName, number[]>> = {
  * directional path instead of these; the values here are the fallbacks used
  * when the generic single-box path runs (no direction available).
  */
-const METRIC_LABEL: Partial<Record<MetricName, string>> = {
+export const OVERLAY_LABELS: Partial<Record<MetricName, string>> = {
   neckTilt:          "Neck tilted",
   shoulderSymmetry:  "Asymmetric shoulders",
   trunkLean:         "Trunk lean",
-  scapularElevation: "Shoulder elevated",
+  // Deliberately names the REGION and not the movement. `scapularElevation` is
+  // an ear-to-shoulder vector over trunk length, so a shoulder rising toward
+  // the ear and a head descending toward the shoulder produce the SAME
+  // reading. The metric cannot tell them apart, so a label asserting either
+  // one claims more than the measurement supports.
+  //
+  // This previously read "Shoulder elevated". A recorded session showed it on
+  // screen while the subject was slouching, where the head coming forward and
+  // down is at least as likely an explanation as any shoulder movement — and
+  // nothing in the pipeline can say which. Naming the region the box already
+  // encloses (indices 7, 11, 8, 12 — both ears and both shoulders) is the most
+  // the reading justifies.
+  //
+  // Do not "improve" this back into a directional instruction without a metric
+  // that can distinguish the two movements. Under-specifying is the honest
+  // failure here; misdirecting a patient is not.
+  scapularElevation: "Shoulder / head position",
   elbowFlexion:      "Straighten arms",
+  // Names the movement the check measures: the hip midpoint moved sideways,
+  // away from the bend, from the stance before the bend (hipShiftWarning.ts).
+  hipShift:          "Hips shifted",
+  // The same instruction as the shoulder press elbow cue: the display-only
+  // check on lateral arm raises and the arm hold (elbowBendWarning.ts).
+  elbowBend:         "Straighten arms",
+  // The prescribed height, not a direction word: "LOWER" already names the
+  // shoulder cue (overRaiseWarning.ts).
+  overRaise:         "Stop at shoulder height",
+  // Drawn at the lowered arm only, with an upward arrow: the arm hold's other
+  // arm left down while one is held (otherArmDownWarning.ts).
+  otherArmDown:      "Raise this arm",
+  armAboveHold:      "Lower to shoulder height",
+};
+
+export const OVERLAY_DIRECTION_LABELS = { shoulderSymmetry: "LOWER", straighten: "STRAIGHTEN" } as const;
+export type RenderedCompensationCue = {
+  metric: MetricName;
+  text: string;
+  /** Anatomical side for shoulder/neck; image-space direction for trunk. */
+  direction: string | null;
 };
 
 function isWarning(spec: CompensationMetricSpec, value: number): boolean {
@@ -88,6 +128,48 @@ export function higherShoulderLandmarkIndex(landmarks: { y: number }[]): 11 | 12
   const y11 = landmarks[11]?.y ?? Infinity;
   const y12 = landmarks[12]?.y ?? Infinity;
   return y11 <= y12 ? 11 : 12;
+}
+
+/**
+ * Landmark index of the shoulder `computeShoulderSymmetry` reports as elevated
+ * after camera-tilt correction. Its line runs from landmark 12 to landmark 11
+ * and a positive angle means 11 sits lower, so its "right" is landmark 12 and
+ * its "left" landmark 11. Null when it reports the shoulders level.
+ */
+export function elevatedShoulderLandmarkIndex(elevatedSide: "left" | "right" | "level"): 11 | 12 | null {
+  return elevatedSide === "left" ? 11 : elevatedSide === "right" ? 12 : null;
+}
+
+/**
+ * The shoulder the LOWER arrow is drawn on this frame. The arrow keeps the
+ * shoulder it was first drawn on (`locked`), so it does not jump between
+ * shoulders while they are near level. It moves only when the tilt-corrected
+ * reading reports the other shoulder higher by more than `switchAbove`, the
+ * cue's switch-off level. In alternating neck side bends the tilt can reverse
+ * while the warning stays on, and the arrow would otherwise stay on the lower
+ * shoulder.
+ */
+export function lowerArrowShoulder(
+  locked: 11 | 12 | null,
+  landmarks: { y: number }[],
+  symmetry: { angleDeg: number; elevatedSide: "left" | "right" | "level" } | null,
+  switchAbove: number,
+): 11 | 12 {
+  const current = locked ?? higherShoulderLandmarkIndex(landmarks);
+  if (symmetry === null || !(symmetry.angleDeg > switchAbove)) return current;
+  return elevatedShoulderLandmarkIndex(symmetry.elevatedSide) ?? current;
+}
+
+/**
+ * Whether a per-limb warning's side ("which arm") may become its overlay
+ * direction. Trunk lean and neck tilt draw their arrow from their own lean
+ * direction, which the camera sets first. A whole-body metric reads the same on
+ * both limbs, so its limb side says nothing about the lean; using it turned the
+ * trunk-lean arrow toward the lean, instead of away from it, for leans to the
+ * image's right on two-arm exercises.
+ */
+export function limbSideIsOverlayDirection(metric: MetricName): boolean {
+  return metric !== "trunkLean" && metric !== "neckTilt";
 }
 
 /** Draws a rounded rect path (stroke or fill by the caller). */
@@ -162,16 +244,18 @@ function drawArrow(
 function drawLabelPill(
   ctx: CanvasRenderingContext2D,
   canvasW: number, centerX: number, boxMinY: number, boxMaxY: number,
-  label: string, color: string,
+  label: string, color: string, mirroredDisplay = true,
 ): void {
   ctx.save();
-  ctx.transform(-1, 0, 0, 1, canvasW, 0);
+  // The live canvas is shown mirrored by CSS, so its text is pre-flipped to
+  // read correctly; an unmirrored display (video playback) draws it as is.
+  if (mirroredDisplay) ctx.transform(-1, 0, 0, 1, canvasW, 0);
 
   ctx.font = `bold ${FONT_SIZE}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
 
-  const textX = canvasW - centerX;
+  const textX = mirroredDisplay ? canvasW - centerX : centerX;
   const labelH = FONT_SIZE + 8;
   // Place above the box; fall back to below if too close to the top edge.
   const textY = boxMinY > labelH + 4 ? boxMinY - 4 : boxMaxY + labelH + 4;
@@ -224,12 +308,17 @@ function drawShoulderAsymmetry(
   ctx: CanvasRenderingContext2D,
   landmarks: NormalizedLandmark[],
   canvasW: number, canvasH: number,
-): void {
-  const elevatedIdx = higherShoulderLandmarkIndex(landmarks);
+  mirroredDisplay = true,
+  lockedIdx?: 11 | 12,
+): boolean {
+  // A locked index keeps the cue on the shoulder it first appeared on; picking
+  // the higher shoulder afresh every frame made it jump sides when the
+  // shoulders were close to level.
+  const elevatedIdx = lockedIdx ?? higherShoulderLandmarkIndex(landmarks);
   const otherIdx = elevatedIdx === 11 ? 12 : 11;
   const elevated = landmarks[elevatedIdx];
   const other = landmarks[otherIdx];
-  if (!elevated || !other) return;
+  if (!elevated || !other) return false;
 
   const ex = elevated.x * canvasW, ey = elevated.y * canvasH;
   const ox = other.x * canvasW,    oy = other.y * canvasH;
@@ -248,7 +337,8 @@ function drawShoulderAsymmetry(
   );
 
   // "LOWER" label above the elevated shoulder box.
-  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, "LOWER", WARN);
+  drawLabelPill(ctx, canvasW, ex, ey - h, ey + h, OVERLAY_DIRECTION_LABELS.shoulderSymmetry, WARN, mirroredDisplay);
+  return true;
 }
 
 /**
@@ -259,11 +349,14 @@ function drawShoulderAsymmetry(
  *    elevated side (see `drawShoulderAsymmetry`).
  *  - `trunkLean` / `neckTilt`: the landmark box + a horizontal "straighten"
  *    arrow pointing the way to correct.
+ *  - `otherArmDown` / `armAboveHold` / `overRaise`: a box around the cued arm
+ *    + its static label, with a raise or lower arrow for the two hold cues.
  *  - everything else: the box + a static text label.
  *
  * `metricDirections` carries the tilt-corrected directional qualifiers used by
  * the directional paths: `shoulderSymmetry` → elevated side (anatomical),
- * `neckTilt` → tilt side (anatomical), `trunkLean` → lean side (image-space).
+ * `neckTilt` → tilt side (anatomical), `trunkLean` → lean side (image-space),
+ * the arm cues → the cued arm (anatomical).
  * The strings come from the caller, which has access to the full direction-rich
  * computation results not surfaced in `metricValues`.
  *
@@ -273,6 +366,12 @@ function drawShoulderAsymmetry(
  * the caller has already applied any display-layer hysteresis/debounce and this
  * function should trust that latched warning state instead of rechecking the
  * raw threshold every frame.
+ *
+ * `options.mirroredDisplay` (default true, the live camera) pre-flips label
+ * text for a canvas shown mirrored; video playback passes false. Geometry is
+ * drawn in raw image space either way. `options.shoulderElevatedIndex` keeps
+ * the shoulder-asymmetry cue on one shoulder (landmark 11 or 12) for a whole
+ * display; without it the higher shoulder is picked every frame.
  */
 export function drawCompensationOverlay(
   ctx: CanvasRenderingContext2D,
@@ -283,7 +382,10 @@ export function drawCompensationOverlay(
   metricValues: Partial<Record<MetricName, number | null>>,
   metricDirections?: Partial<Record<MetricName, string>>,
   activeWarningNames?: ReadonlySet<MetricName>,
-): void {
+  options: { mirroredDisplay?: boolean; shoulderElevatedIndex?: 11 | 12 } = {},
+): RenderedCompensationCue[] {
+  const mirroredDisplay = options.mirroredDisplay ?? true;
+  const rendered: RenderedCompensationCue[] = [];
   for (const spec of compensationMetrics) {
     const value = metricValues[spec.name];
     if (typeof value !== "number") continue;
@@ -294,9 +396,39 @@ export function drawCompensationOverlay(
 
     // ── Shoulder asymmetry: per-shoulder boxes + down-arrow on the high side ──
     // The warning has already fired (isWarning above); place the cue on the
-    // higher shoulder by raw y inside drawShoulderAsymmetry.
+    // caller's locked shoulder, else the higher shoulder by raw y.
     if (spec.name === "shoulderSymmetry") {
-      drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH);
+      const elevatedIdx = options.shoulderElevatedIndex ?? higherShoulderLandmarkIndex(landmarks);
+      if (drawShoulderAsymmetry(ctx, landmarks, canvasW, canvasH, mirroredDisplay, elevatedIdx)) {
+        rendered.push({ metric: spec.name, text: OVERLAY_DIRECTION_LABELS.shoulderSymmetry,
+          direction: elevatedIdx === 11 ? "right" : "left" });
+      }
+      continue;
+    }
+
+    // ── Arm height: a box around the cued arm ───────────────────────────────
+    // The side is the patient's own (MediaPipe's left landmarks are the left
+    // arm), and the box is drawn in raw space so the mirror carries it with
+    // the body. The hold cues add the matching raise/lower arrow; a vertical
+    // arrow reads the same mirrored. The past-shoulder-height cue has no
+    // arrow, and with no side (a saved track that recorded none) it keeps the
+    // box around both wrists, drawn below.
+    const side = metricDirections?.[spec.name];
+    if (
+      spec.name === "otherArmDown" || spec.name === "armAboveHold" ||
+      (spec.name === "overRaise" && (side === "left" || side === "right"))
+    ) {
+      if (side !== "left" && side !== "right") continue;
+      const arm = boundingBox(landmarks, side === "left" ? [11, 13, 15] : [12, 14, 16], canvasW, canvasH);
+      if (!arm) continue;
+      const minX = arm.minX - BOX_PAD, minY = arm.minY - BOX_PAD, maxX = arm.maxX + BOX_PAD, maxY = arm.maxY + BOX_PAD;
+      const centerX = (minX + maxX) / 2;
+      strokeBox(ctx, minX, minY, maxX, maxY, WARN);
+      if (spec.name === "otherArmDown") drawArrow(ctx, centerX, maxY, centerX, maxY - ARROW_LEN, WARN);
+      else if (spec.name === "armAboveHold") drawArrow(ctx, centerX, minY, centerX, minY + ARROW_LEN, WARN);
+      const label = OVERLAY_LABELS[spec.name]!;
+      drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN, mirroredDisplay);
+      rendered.push({ metric: spec.name, text: label, direction: side });
       continue;
     }
 
@@ -316,7 +448,7 @@ export function drawCompensationOverlay(
     strokeBox(ctx, minX, minY, maxX, maxY, WARN);
 
     // ── Directional correction arrow for trunk lean / neck tilt ──────────────
-    let label = METRIC_LABEL[spec.name] ?? spec.name;
+    let label = OVERLAY_LABELS[spec.name] ?? spec.name;
     if (spec.name === "trunkLean") {
       const d = metricDirections?.trunkLean; // image-space: "left" | "right"
       if (d === "left" || d === "right") {
@@ -324,7 +456,7 @@ export function drawCompensationOverlay(
         // opposite side. "right" leans toward larger raw-x, so point −x.
         const dx = d === "right" ? -1 : 1;
         drawArrow(ctx, centerX, centerY, centerX + dx * ARROW_LEN, centerY, WARN);
-        label = "STRAIGHTEN";
+        label = OVERLAY_DIRECTION_LABELS.straighten;
       }
     } else if (spec.name === "neckTilt") {
       const d = metricDirections?.neckTilt; // anatomical: "left" | "right"
@@ -332,10 +464,12 @@ export function drawCompensationOverlay(
         const correctionSide = d === "left" ? "right" : "left";
         const dx = anatomicalSideScreenDirX(correctionSide, landmarks);
         drawArrow(ctx, centerX, centerY, centerX + dx * ARROW_LEN, centerY, WARN);
-        label = "STRAIGHTEN";
+        label = OVERLAY_DIRECTION_LABELS.straighten;
       }
     }
 
-    drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN);
+    drawLabelPill(ctx, canvasW, centerX, minY, maxY, label, WARN, mirroredDisplay);
+    rendered.push({ metric: spec.name, text: label, direction: metricDirections?.[spec.name] ?? null });
   }
+  return rendered;
 }

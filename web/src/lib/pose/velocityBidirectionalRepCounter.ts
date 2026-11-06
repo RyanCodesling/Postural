@@ -189,6 +189,9 @@ export class VelocityBidirectionalRepCounter {
     return event;
   }
 
+  /** No rest-gap rule here (D-50 changes RepCounter's); nothing to note. */
+  noteMissing(): void {}
+
   reset(): void {
     this.phase = "WAITING_FOR_LAUNCH";
     this.armedForStroke = false;
@@ -202,6 +205,15 @@ export class VelocityBidirectionalRepCounter {
 
   getRepCount(): number {
     return this.repIndex;
+  }
+
+  getMovementSnapshot() {
+    return Object.freeze({ state: this.phase, awaitingRestSettle: false,
+      activeSide: this.strokeSign === 0 ? null : this.strokeSign > 0 ? "left" as const : "right" as const,
+      restObserved: this.armedForStroke, lastUpdateMs: this.lastUpdateTimeMs,
+      repStartMs: this.phase === "WAITING_FOR_LAUNCH" ? null : this.repStartTimeMs,
+      runningPeak: this.phase === "WAITING_FOR_LAUNCH" ? null : this.peakAbs,
+    });
   }
 
   getDebugSnapshot(

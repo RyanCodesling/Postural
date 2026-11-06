@@ -3,20 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "build:trend-worker": "node scripts/build-trend-worker.mjs",
+    "predev": "npm run build:trend-worker",
     "dev": "next dev",
+    "prebuild": "npm run build:trend-worker",
     "build": "next build",
     "start": "next start",
+    "dev:demo": "node scripts/demo-server.mjs dev",
+    "start:demo": "node scripts/demo-server.mjs start",
     "lint": "eslint",
+    "verify:coaching": "tsx scripts/verify-coaching.ts",
+    "verify:coaching:db": "tsx scripts/verify-coaching-readers.ts",
+    "verify:exercises:db": "tsx scripts/verify-exercise-lifecycle.ts",
+    "verify:session-dates": "tsx src/lib/sessionDateCorrection.test.tsx --db",
+    "verify:manual:db": "tsx scripts/verify-manual-sessions.ts",
+    "replay:coaching": "tsx scripts/replay-coaching.ts",
+    "backup:local": "tsx scripts/backup-local.ts",
     "profile:filter": "tsx scripts/profileOneEuroFilter.ts",
     "profile:sweep": "tsx scripts/sweepOneEuroFilter.ts",
-    "seed:demo": "tsx scripts/seedDemo.ts"
+    "seed:demo": "tsx scripts/seedDemo.ts",
+    "seed:demo:accounts": "tsx scripts/seedDemo.ts --accounts-only",
+    "remove:demo:accounts": "tsx scripts/seedDemo.ts --remove-accounts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.34",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.3",
-    "next": "^16.1.6",
-    "nodemailer": "^8.0.10",
+    "next": "^16.4.3",
+    "nodemailer": "^10.1.1",
     "pg": "^8.13.3",
     "react": "19.2.1",
     "react-dom": "19.2.1"
@@ -29,10 +43,16 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
-    "eslint-config-next": "16.0.10",
+    "eslint-config-next": "^16.4.3",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.27.2": true,
+    "unrs-resolver@1.11.1": true
   }
 }

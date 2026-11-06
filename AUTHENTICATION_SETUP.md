@@ -209,15 +209,28 @@ The `password_reset_otps` table includes:
 To bring an existing PostgreSQL database up to the current application schema, run these scripts as the database owner/superuser (for example, `postgres`):
 
 1. `scripts/user_credentials_pg.sql`
-2. `scripts/exercises_pg.sql`
-3. `scripts/patient_exercises_pg.sql`
-4. `scripts/sessions_pg.sql`
-5. `scripts/exercise_occurrences_pg.sql`
-6. `scripts/email_features.sql`
-7. `scripts/reset_token_migration.sql`
-8. `scripts/notifications_pg.sql`
+2. `scripts/demo_clock_settings_pg.sql` (optional [demo clock](web/docs/demo-clock.md), local or deployed; off until enabled by an admin; rerun to add the dashboard switch)
+3. `scripts/patient_image_attachments_pg.sql` (rerun to upgrade existing image-only attachments to documents)
+4. `scripts/exercises_pg.sql`
+5. `scripts/patient_exercises_pg.sql`
+6. `scripts/exercise_programs_pg.sql`
+7. `scripts/sessions_pg.sql`
+8. `scripts/exercise_occurrences_pg.sql`
+9. `scripts/email_features.sql`
+10. `scripts/reset_token_migration.sql`
+11. `scripts/notifications_pg.sql`
+12. `scripts/user_presence_pg.sql` (the admin dashboard's User status panel; until it runs, the panel asks for it and everything else works)
+13. `scripts/deleted_items_pg.sql` (the admin's Recently Deleted; until it runs, session videos and attached files cannot be deleted, so nothing is lost)
 
-Keep the exercise-preservation scripts in the order shown. Exercises must exist before prescriptions, sessions depend on prescriptions, and the occurrence script adds the occurrence link to the existing sessions table. Run notifications last because its optional occurrence foreign key depends on `exercise_occurrences`.
+On a database created before 2026-11-01, also run `scripts/drop_therapist_id_num_pg.sql` once (after a backup) to remove the unused therapist ID column. New databases never get it.
+
+Optional recorded-date corrections: after step 8, run
+`scripts/session_date_corrections_pg.sql` as the database owner. It adds append-only
+correction history without changing existing sessions. The administrator's
+date/scheduled-day correction control requires **Enable demo tools** in the dashboard; see the
+[demo-clock guide](web/docs/demo-clock.md#correct-a-session-recorded-on-the-wrong-day).
+
+Keep the exercise and clinical-context scripts in the order shown. Exercises must exist before prescriptions and reusable programs, sessions depend on prescriptions, and the occurrence script adds the occurrence link to the existing sessions table. Rerun all five scripts when deploying prescribed side/load, immutable session context, pain-stop reporting, and clinician-review support. Run notifications last because its optional occurrence foreign key depends on `exercise_occurrences`.
 
 ---
 
@@ -245,6 +258,12 @@ When admin creates a new user, the password is auto-generated as:
 6. Copy the **16-character password** (format: `xxxx xxxx xxxx xxxx`)
 7. Paste it as `SMTP_PASS` in `web/.env.local` (remove the spaces)
 
+For the evaluation server, use the hidden app-password prompt in
+[`deploy/server/05_email.sh`](deploy/server/05_email.sh) instead of a local `.env.local`
+file. After a backup, existing databases can update only the administrator email with
+[`scripts/replace_system_email_pg.sql`](scripts/replace_system_email_pg.sql); the same
+account and password are preserved. Do not rerun the full user seed for this change.
+
 ### Environment Variables for Email
 Add these to `web/.env.local`:
 ```
@@ -255,7 +274,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
 ### ‼️ Run the Email and Reset-Token Migrations
-After the user, exercise, prescription, session, and occurrence schemas above are current, run `scripts/email_features.sql`, then `scripts/reset_token_migration.sql`, followed by `scripts/notifications_pg.sql`. The reset-token migration is required because password reset accepts only a token issued after successful OTP verification.
+After the user, exercise, prescription/program, session, and occurrence schemas above are current, run `scripts/email_features.sql`, then `scripts/reset_token_migration.sql`, followed by `scripts/notifications_pg.sql`. The reset-token migration is required because password reset accepts only a token issued after successful OTP verification.
 
 ### New API Routes
 - **POST `/api/auth/change-password`** — Changes the authenticated user's password (requires currentPassword and newPassword; a mismatched userId is rejected)

@@ -1,30 +1,53 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import NotificationBell from "../_components/NotificationBell";
+import { useDemoClock } from "@/lib/DemoClockContext";
+import AppShell from "../_components/AppShell";
+import { PATIENT_TOURS } from "../_components/tours";
+import ProfileLayout, { ProfileField } from "../_components/ProfileLayout";
+import { FIT_SCREEN, Glyph, PageHeading, Panel, StatTile } from "../_components/DashboardKit";
 import {
   prescriptionMetricLabel,
   prescriptionMetricValue,
   prescriptionTargetText,
 } from "@/lib/exercises/prescriptionDisplay";
+import {
+  dayCountsText,
+  type OccurrenceCounts,
+  type PrescriptionState,
+} from "@/lib/exercises/prescriptionStatus";
 import ConsistencyCalendar from "./ConsistencyCalendar";
+import PatientProgramView from "./PatientProgramView";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
+import ReportButton from "../_components/ReportButton";
+import SessionVideo from "../_components/SessionVideo";
+import CustomExerciseVideo from "../_components/CustomExerciseVideo";
+import { exerciseVideoFromRow } from "@/lib/exercises/customVideo";
 import ChangePasswordModal from "../_components/ChangePasswordModal";
+import PatientFileViewer, { type PatientFile } from "../_components/PatientFileViewer";
+import { NEW_NOTIFICATIONS_EVENT } from "../_components/NotificationBell";
 import {
   classifyScheduleOccurrence,
   isOccurrenceActionable,
   type OccurrenceStatus,
 } from "@/lib/exercises/occurrences";
 import {
+  completedSessionDoseText,
   groupSessionsByOccurrence,
   selectCompletedOccurrenceResult,
   type CompletedOccurrenceResult,
   type ScheduleSessionRecord,
 } from "@/lib/exercises/scheduleSessionSummary";
+import type {
+  PainReportStatus,
+  PainTiming,
+  PrescribedSide,
+  ResistanceContext,
+  SessionContextSnapshot,
+} from "@/lib/prescriptionContext";
 
 interface PatientProfile {
   id: string;
@@ -48,13 +71,23 @@ interface AssignedExercise {
   exercise_id: string;
   name: string;
   description: string;
-  status: string;
+  prescription_state: PrescriptionState;
+  occurrence_summary: OccurrenceCounts;
   sets: number;
   reps: number;
   rest_seconds: number;
   hold_seconds: number;
   assigned_date: string;
 }
+
+// Lifecycle only, worded as on the therapist's PT Program tab; how the days
+// went is the dayCountsText line under the exercise.
+const PRESCRIPTION_PILLS: Record<PrescriptionState, { label: string; classes: string }> = {
+  upcoming: { label: "Upcoming", classes: "bg-sky-100 text-sky-700" },
+  active: { label: "Active", classes: "bg-teal-100 text-teal-700" },
+  ended: { label: "Ended", classes: "bg-gray-100 text-gray-700" },
+  archived: { label: "Ended early", classes: "bg-gray-100 text-gray-700" },
+};
 
 // One scheduled day for an assigned exercise (a row of exercise_occurrences
 // joined to its prescription). Drives the Session schedule tab and the calendar.
@@ -70,7 +103,10 @@ interface PatientOccurrence {
   reps: number;
   rest_seconds: number;
   hold_seconds: number;
+  sequence_index: number;
   monitoring_mode: "camera" | "manual";
+  video_mime_type?: string | null;
+  youtube_video_id?: string | null;
 }
 
 // Per-session summary from /api/sessions. Carries the fields the calendar, the
@@ -80,13 +116,76 @@ interface SessionLite extends ScheduleSessionRecord {
   exerciseId: string;
   exerciseName: string;
   avgPeakValue: number | null;
+  prescribedSide: PrescribedSide;
+  resistance: ResistanceContext;
+  comparableContextKey: string;
+  exerciseConfigVersion: string | null;
+  // Read by the progress report.
+  context: SessionContextSnapshot | null;
+  hasRecording?: boolean;
+  /** A custom exercise's session: its video has one part per set. */
+  customExercise?: boolean;
+  painReport: {
+    status: PainReportStatus;
+    score: number | null;
+    timing: PainTiming | null;
+    bodyArea: string | null;
+  };
 }
 
 type ActiveTab = "dashboard" | "my-progress" | "view-profile" | "session";
 
+/** The patient's recorded sessions, newest first, each opening its player. */
+function SessionVideoList({
+  sessions,
+  onDeleted,
+}: {
+  sessions: SessionLite[];
+  onDeleted: (sessionId: number) => void;
+}) {
+  const [openId, setOpenId] = useState<number | null>(null);
+  if (sessions.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-semibold text-green-800">Session videos</h2>
+      <p className="text-xs text-gray-500 mt-1 mb-3">
+        In the app, only you and your therapist can watch these. They are kept on the project&apos;s server, and you can delete them.
+      </p>
+      <div className="space-y-2">
+        {sessions.map((s) => (
+          <div key={s.id} className="bg-white border border-green-100 rounded-xl p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm">
+                <p className="font-medium text-gray-800">{s.exerciseName}</p>
+                <p className="text-xs text-gray-500">
+                  {new Date(s.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpenId(openId === s.id ? null : s.id)}
+                className="px-3 py-1.5 text-sm rounded-lg border border-green-700 text-green-700 hover:bg-green-50"
+              >
+                {openId === s.id ? "Hide" : "Watch"}
+              </button>
+            </div>
+            {openId === s.id && (
+              <div className="mt-3">
+                <SessionVideo sessionId={s.id} onDeleted={() => onDeleted(s.id)} partLabel={s.customExercise ? "Set" : "Part"} />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function PatientDashboardPage() {
   const { user, loading, logout } = useAuth();
+  const { todayKey } = useDemoClock();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [pageLoading, setPageLoading] = useState(true);
@@ -94,9 +193,12 @@ export default function PatientDashboardPage() {
   const [exercises, setExercises] = useState<AssignedExercise[]>([]);
   const [occurrences, setOccurrences] = useState<PatientOccurrence[]>([]);
   const [sessions, setSessions] = useState<SessionLite[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [scheduleActionError, setScheduleActionError] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("tab") === "session") setActiveTab("session");
+  }, [searchParams]);
 
   useEffect(() => {
     if (loading) return;
@@ -135,26 +237,34 @@ export default function PatientDashboardPage() {
     }
   }, [user?.id]);
 
+  // Every exercise starts on the camera page; a custom one runs a guided set-by-set
+  // session there, whose last set marks the day complete.
   const handleOccurrenceStart = async (occurrence: PatientOccurrence) => {
     setScheduleActionError("");
-    if (occurrence.monitoring_mode === "camera") {
-      router.push(`/camera?exerciseId=${occurrence.exercise_id}`);
-      return;
-    }
-
-    const response = await fetch(`/api/exercise-occurrences/${occurrence.id}`, {
-      method: "PATCH",
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setScheduleActionError(body?.error ?? "Could not complete the manual exercise.");
-      return;
-    }
-    await loadData();
+    router.push(
+      `/camera?occurrenceId=${occurrence.id}&exerciseId=${encodeURIComponent(occurrence.exercise_id)}`,
+    );
   };
 
   useEffect(() => {
     if (!loading && user?.id) void loadData();
+  }, [user?.id, loading, loadData]);
+
+  // A therapist's change (assigned, edited or removed exercises) arrives as a
+  // notification; reload then, and when the patient returns to this tab, so the
+  // dashboard never needs a page reload to catch up.
+  useEffect(() => {
+    if (loading || !user?.id) return;
+    const reload = () => void loadData();
+    const reloadIfVisible = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    window.addEventListener(NEW_NOTIFICATIONS_EVENT, reload);
+    document.addEventListener("visibilitychange", reloadIfVisible);
+    return () => {
+      window.removeEventListener(NEW_NOTIFICATIONS_EVENT, reload);
+      document.removeEventListener("visibilitychange", reloadIfVisible);
+    };
   }, [user?.id, loading, loadData]);
 
   const NAV_TABS: { key: ActiveTab; label: string; Icon: () => React.ReactElement }[] = [
@@ -191,208 +301,98 @@ export default function PatientDashboardPage() {
   }
   const sessionsByOccurrenceId = groupSessionsByOccurrence(sessions);
 
-  const today = sessionTodayPH();
-  const actionableOccurrences = occurrences.filter((occurrence) =>
-    isOccurrenceActionable(
-      {
-        dueDate: occurrence.due_date,
-        makeupUntil: occurrence.makeup_until,
-        status: occurrence.status,
-      },
-      today
-    )
-  );
+  // Today's Manila day (YYYY-MM-DD), by the demo clock in demo mode.
+  const today = todayKey;
 
   return (
-    <div
-      className="min-h-screen flex bg-green-50 text-gray-900"
-      style={{ colorScheme: "light" }}
+    <AppShell
+      items={[
+        ...NAV_TABS.map(({ key, label, Icon }) => ({
+          key,
+          label,
+          icon: <Icon />,
+          active: activeTab === key,
+          onSelect: () => setActiveTab(key),
+        })),
+        { key: "session", label: "Session", icon: <PatClockIcon />, active: activeTab === "session", onSelect: () => setActiveTab("session") },
+        { key: "camera", label: "Camera", icon: <PatCameraIcon />, active: false, href: "/camera" },
+      ]}
+      userName={user?.name}
+      roleLabel="Patient"
+      tour={PATIENT_TOURS[activeTab]}
+      onLogout={async () => { await logout(); router.push("/"); }}
     >
-
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-green-900 text-white p-6 flex flex-col transform transition-transform duration-200
-        ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
-        md:static md:translate-x-0 md:flex md:flex-col md:flex-shrink-0`}>
-        <div className="mb-8">
-          <div className="text-lg font-semibold text-white">{user?.name || "Patient"}</div>
-        </div>
-
-        <nav>
-          <ul className="space-y-1">
-            {NAV_TABS.map(({ key, label, Icon }) => (
-              <li key={key}>
-                <button
-                  onClick={() => { setActiveTab(key); setSidebarOpen(false); }}
-                  className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                    activeTab === key
-                      ? "bg-green-700 text-white font-medium"
-                      : "text-green-200 hover:bg-green-800"
-                  }`}
-                >
-                  <Icon />
-                  {label}
-                </button>
-              </li>
-            ))}
-            <li>
-              <button
-                onClick={() => { setActiveTab("session"); setSidebarOpen(false); }}
-                className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded text-sm transition ${
-                  activeTab === "session"
-                    ? "bg-green-700 text-white font-medium"
-                    : "text-green-200 hover:bg-green-800"
-                }`}
-              >
-                <PatClockIcon />
-                Session
-              </button>
-            </li>
-            <li>
-              <Link
-                href="/camera"
-                className="flex items-center gap-2 px-3 py-2 rounded text-sm text-green-200 hover:bg-green-800"
-                onClick={() => setSidebarOpen(false)}
-              >
-                <PatCameraIcon />
-                Camera
-              </Link>
-            </li>
-          </ul>
-        </nav>
-
-        <div className="mt-auto pt-6 mb-4">
-          <button
-            onClick={async () => { await logout(); router.push("/"); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition"
-          >
-            <PatLogoutIcon />
-            Log Out
-          </button>
-        </div>
-      </aside>
-
-      {/* Main */}
-      <main className="flex-1 p-4 sm:p-6 overflow-y-auto min-w-0">
-        <div className="flex justify-between items-center mb-6">
-          <button
-            className="md:hidden flex items-center gap-2 px-3 py-2 bg-green-700 hover:bg-green-800 text-white text-sm font-medium rounded transition"
-            onClick={() => setSidebarOpen(true)}
-          >
-            ☰ Menu
-          </button>
-          <div className="md:hidden flex-1" />
-          <div className="ml-auto">
-            <NotificationBell />
-          </div>
-        </div>
-
         {/* ── Dashboard ── */}
         {activeTab === "dashboard" && (
-          <div className="max-w-5xl">
-            <h1 className="text-2xl font-bold text-green-800">Dashboard</h1>
-            <p className="text-gray-500 mt-1 mb-6">
-              Welcome to your postural monitoring dashboard, {user?.name}.
-            </p>
-
-            {/* Consistency + Your Exercises, side by side on wide screens. */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-              {/* Consistency calendar */}
-              <ConsistencyCalendar sessions={sessions} occurrences={occurrences} />
-
-              {/* Your Exercises — status-at-a-glance list (the Session tab is the
-                  date-scheduled, actionable view). Start Session lives here. */}
-              <div className="bg-white border border-green-200 rounded-2xl p-6">
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <h2 className="text-base font-semibold text-green-700">Your Exercises</h2>
-                  {actionableOccurrences.length > 0 ? (
-                    <Link
-                      href={`/camera?exerciseId=${encodeURIComponent(actionableOccurrences[0].exercise_id)}`}
-                      className="shrink-0 px-4 py-2 bg-green-700 hover:bg-green-800 text-white rounded-lg text-sm font-medium transition"
-                    >
-                      Start Session
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("session")}
-                      className="shrink-0 px-4 py-2 border border-green-200 text-green-700 hover:bg-green-50 rounded-lg text-sm font-medium transition"
-                    >
-                      View Schedule
-                    </button>
-                  )}
-                </div>
-                {actionableOccurrences.length === 0 ? (
-                  <div className="text-center py-6">
-                    <p className="text-gray-600 text-sm font-medium">
-                      No exercises scheduled for today.
-                    </p>
-                    <p className="text-gray-400 text-xs mt-1">
-                      View your schedule for upcoming or previous prescriptions.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {actionableOccurrences.map((occurrence) => {
-                      const latest = latestSessionByExercise.get(occurrence.exercise_id);
-                      const tag = dashboardOccurrenceStatusTag(
-                        occurrence,
-                        today,
-                        latest?.endReason === "user"
-                      );
-                      return (
-                        <div
-                          key={occurrence.id}
-                          className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-green-700">{occurrence.name}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              {occurrence.sets} sets ×{" "}
-                              {prescriptionTargetText({
-                                exerciseId: occurrence.exercise_id,
-                                reps: occurrence.reps,
-                                holdSeconds: occurrence.hold_seconds,
-                              })}
-                            </p>
-                          </div>
-                          <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${tag.classes}`}>
-                            {tag.label}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <PatientProgramView
+            patientName={patientProfile?.name ?? user?.name ?? "Your"}
+            occurrences={occurrences}
+            sessions={sessions}
+            today={today}
+            tagFor={(occurrence) =>
+              dashboardOccurrenceStatusTag(
+                occurrence,
+                today,
+                latestSessionByExercise.get(occurrence.exercise_id)?.endReason === "user",
+              )
+            }
+            isActionable={(occurrence) =>
+              isOccurrenceActionable(
+                { dueDate: occurrence.due_date, makeupUntil: occurrence.makeup_until, status: occurrence.status },
+                today,
+              )
+            }
+            calendar={<ConsistencyCalendar sessions={sessions} occurrences={occurrences} compact />}
+            onShowProgress={() => setActiveTab("my-progress")}
+          />
         )}
 
         {/* ── My Progress ── */}
         {activeTab === "my-progress" && (() => {
           const trendGroups = groupSessionsByExercise(sessions);
+          const recorded = trendGroups.flatMap((group) => group.sessions);
+          const lastSession = recorded.reduce<string | null>((latest, x) => (!latest || x.startedAt > latest ? x.startedAt : latest), null);
           return (
-            <div className="max-w-4xl">
-              <h1 className="text-2xl font-bold text-green-800">My Progress</h1>
-              <p className="text-gray-500 mt-1">Your session-over-session trends per exercise.</p>
-              <p className="text-xs text-gray-400 mt-1 mb-6">Descriptive trends — not a diagnosis.</p>
+            <div className="mx-auto flex max-w-6xl flex-col gap-4">
+              <div id="tour-progress-header" className="flex flex-wrap items-start justify-between gap-3">
+                <PageHeading title="My Progress" subtitle="Your session-over-session trends per exercise. Descriptive trends, not a diagnosis." />
+                {trendGroups.length > 0 && (
+                  <ReportButton
+                    label="Download progress report (PDF)"
+                    onDownload={async () => {
+                      const { downloadProgressReport } = await import("../_components/progressReport");
+                      await downloadProgressReport({}, patientProfile?.name ?? user?.name ?? "Patient");
+                    }}
+                    className="px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition disabled:opacity-60"
+                  />
+                )}
+              </div>
+
+              <div id="tour-progress-tiles" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatTile label="Exercises tracked" value={trendGroups.length} icon={Glyph.dumbbell} tone="green" />
+                <StatTile label="Sessions in trends" value={recorded.length} icon={Glyph.pulse} tone="teal" />
+                <StatTile
+                  label="Last session"
+                  value={lastSession ? new Date(lastSession).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "Asia/Manila" }) : "None"}
+                  icon={Glyph.calendar}
+                  tone="lime"
+                />
+                <StatTile label="Saved videos" value={sessions.filter((x) => x.hasRecording).length} icon={Glyph.list} tone="green" />
+              </div>
+
+              <SessionVideoList
+                sessions={sessions.filter((x) => x.hasRecording)}
+                onDeleted={(id) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, hasRecording: false } : x)))}
+              />
 
               {trendGroups.length === 0 ? (
-                <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">
+                <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">
                   Finish a few sessions to see your progress here.
                 </div>
               ) : (
-                <div className="space-y-5">
+                <div id="tour-progress-trends" className="grid grid-cols-1 items-start gap-4">
                   {trendGroups.map((g) => (
-                    <ExerciseTrendCard key={g.exerciseId} group={g} />
+                    <ExerciseTrendCard key={g.contextKey} group={g} />
                   ))}
                 </div>
               )}
@@ -439,144 +439,137 @@ export default function PatientDashboardPage() {
           const scheduleHasEnded = scheduleEndKey !== null && scheduleEndKey < today;
           const laterCount = laterGroups.reduce((sum, group) => sum + group.items.length, 0);
 
+          const startable = startableNow.length;
           return (
-            <div className="max-w-5xl">
-              <h1 className="text-2xl font-bold text-green-800 mb-1">Session Schedule</h1>
-              <p className="text-gray-500 mb-6">
-                See what is due now, what comes next, and when the prescription ends.
-              </p>
+            <div className={FIT_SCREEN}>
+              <PageHeading title="Session Schedule" subtitle="See what is due now, what comes next, and when the prescription ends." />
 
               {scheduleActionError && (
-                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <div className="shrink-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {scheduleActionError}
                 </div>
               )}
 
               {occurrences.length === 0 ? (
-                <div className="bg-white border border-green-200 rounded-2xl p-8 text-center text-gray-500 text-sm">
+                <div className="rounded-xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">
                   No exercises assigned yet. Your therapist will assign exercises to you.
                 </div>
               ) : (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <ScheduleSummaryCard
+                <>
+                  <div id="tour-session-tiles" className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+                    <StatTile
                       label="Today"
-                      value={
-                        startableNow.length > 0
-                          ? `${startableNow.length} ready`
-                          : current.length > 0
-                            ? "All done"
-                            : "Nothing due"
-                      }
-                      detail={
-                        startableNow.some((occurrence) => occurrence.due_date < today)
-                          ? "Includes available make-up work"
-                          : "Only current work appears below"
-                      }
+                      value={startable > 0 ? `${startable} ready` : current.length > 0 ? "All done" : "Nothing due"}
+                      icon={Glyph.dumbbell}
+                      tone="green"
                     />
-                    <ScheduleSummaryCard
+                    <StatTile
                       label="Next session"
                       value={nextGroup ? nextGroup.label : "None scheduled"}
-                      detail={
-                        nextGroup
-                          ? `${nextGroup.items.length} exercise${nextGroup.items.length === 1 ? "" : "s"}`
-                          : "No future prescription dates"
-                      }
+                      unit={nextGroup ? `${nextGroup.items.length} exercise${nextGroup.items.length === 1 ? "" : "s"}` : undefined}
+                      icon={Glyph.calendar}
+                      tone="teal"
                     />
-                    <ScheduleSummaryCard
+                    <StatTile
                       label={scheduleHasEnded ? "Schedule ended" : "Schedule ends"}
                       value={scheduleEndKey ? formatScheduleDate(scheduleEndKey) : "No schedule"}
-                      detail={
-                        dueToDate.length > 0
-                          ? `${completedToDate} of ${dueToDate.length} completed to date`
-                          : "No sessions due yet"
-                      }
+                      unit={dueToDate.length > 0 ? `${completedToDate}/${dueToDate.length} done` : undefined}
+                      icon={Glyph.clock}
+                      tone="lime"
                     />
                   </div>
 
-                  <section aria-labelledby="current-schedule-heading">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <h2 id="current-schedule-heading" className="text-base font-semibold text-green-800">
-                        Today & available make-ups
-                      </h2>
-                      <span className="text-xs text-gray-500">
-                        {current.length} item{current.length === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    {currentGroups.length > 0 ? (
-                      <ScheduleDateGroups
-                        groups={currentGroups}
-                        today={today}
-                        initiallyOpen
-                        sessionsByOccurrenceId={sessionsByOccurrenceId}
-                        onStart={handleOccurrenceStart}
-                      />
-                    ) : (
-                      <div className="bg-white border border-green-200 rounded-2xl px-5 py-6">
-                        <p className="text-sm font-semibold text-gray-800">Nothing is due today.</p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {nextGroup
-                            ? `Your next scheduled date is ${nextGroup.label}.`
-                            : scheduleHasEnded
-                              ? `This prescription ended on ${formatScheduleDate(scheduleEndKey)}.`
-                              : "No future sessions have been assigned."}
-                        </p>
-                      </div>
-                    )}
-                  </section>
-
-                  {nextGroup && (
-                    <section aria-labelledby="next-schedule-heading">
-                      <h2 id="next-schedule-heading" className="text-base font-semibold text-green-800 mb-3">
-                        Next scheduled date
-                      </h2>
-                      <ScheduleDateGroups
-                        groups={[nextGroup]}
-                        today={today}
-                        sessionsByOccurrenceId={sessionsByOccurrenceId}
-                        onStart={handleOccurrenceStart}
-                      />
-                    </section>
-                  )}
-
-                  {laterGroups.length > 0 && (
-                    <details className="bg-white border border-green-200 rounded-2xl overflow-hidden">
-                      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-green-800 hover:bg-green-50">
-                        Later schedule
-                        <span className="ml-2 text-xs font-normal text-gray-500">
-                          {laterCount} exercise entries across {laterGroups.length} dates
-                        </span>
-                      </summary>
-                      <div className="border-t border-green-100 p-5">
+                  <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+                    <Panel
+                      id="tour-session-current"
+                      className="lg:col-span-7"
+                      title="Today & available make-ups"
+                      right={<span className="text-xs text-gray-500">{current.length} item{current.length === 1 ? "" : "s"}</span>}
+                      scroll
+                    >
+                      {currentGroups.length > 0 ? (
                         <ScheduleDateGroups
-                          groups={laterGroups}
+                          groups={currentGroups}
                           today={today}
+                          initiallyOpen
                           sessionsByOccurrenceId={sessionsByOccurrenceId}
                           onStart={handleOccurrenceStart}
                         />
-                      </div>
-                    </details>
-                  )}
+                      ) : (
+                        <div className="rounded-lg bg-green-50 px-5 py-6">
+                          <p className="text-sm font-semibold text-gray-800">Nothing is due today.</p>
+                          <p className="mt-1 text-xs text-gray-600">
+                            {nextGroup
+                              ? `Your next scheduled date is ${nextGroup.label}.`
+                              : scheduleHasEnded
+                                ? `This prescription ended on ${formatScheduleDate(scheduleEndKey)}.`
+                                : "No future sessions have been assigned."}
+                          </p>
+                        </div>
+                      )}
+                    </Panel>
 
-                  {historyGroups.length > 0 && (
-                    <details className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-                      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-gray-800 hover:bg-gray-50">
-                        Past schedule
-                        <span className="ml-2 text-xs font-normal text-gray-500">
-                          {history.length} exercise entries across {historyGroups.length} dates · {completedHistory} completed
-                        </span>
-                      </summary>
-                      <div className="border-t border-gray-100 p-5">
-                        <ScheduleDateGroups
-                          groups={historyGroups}
-                          today={today}
-                          sessionsByOccurrenceId={sessionsByOccurrenceId}
-                          onStart={handleOccurrenceStart}
-                        />
+                    <Panel id="tour-session-upcoming" className="lg:col-span-5" title="Upcoming & past" scroll>
+                      <div className="space-y-4">
+                        {nextGroup && (
+                          <section aria-labelledby="next-schedule-heading">
+                            <h3 id="next-schedule-heading" className="mb-2 text-sm font-semibold text-green-800">
+                              Next scheduled date
+                            </h3>
+                            <ScheduleDateGroups
+                              groups={[nextGroup]}
+                              today={today}
+                              sessionsByOccurrenceId={sessionsByOccurrenceId}
+                              onStart={handleOccurrenceStart}
+                            />
+                          </section>
+                        )}
+
+                        {laterGroups.length > 0 && (
+                          <details className="overflow-hidden rounded-lg border border-green-100">
+                            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-green-800 hover:bg-green-50">
+                              Later schedule
+                              <span className="ml-2 text-xs font-normal text-gray-500">
+                                {laterCount} entries across {laterGroups.length} dates
+                              </span>
+                            </summary>
+                            <div className="border-t border-green-100 p-4">
+                              <ScheduleDateGroups
+                                groups={laterGroups}
+                                today={today}
+                                sessionsByOccurrenceId={sessionsByOccurrenceId}
+                                onStart={handleOccurrenceStart}
+                              />
+                            </div>
+                          </details>
+                        )}
+
+                        {historyGroups.length > 0 && (
+                          <details className="overflow-hidden rounded-lg border border-gray-100">
+                            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50">
+                              Past schedule
+                              <span className="ml-2 text-xs font-normal text-gray-500">
+                                {history.length} entries across {historyGroups.length} dates · {completedHistory} completed
+                              </span>
+                            </summary>
+                            <div className="border-t border-gray-100 p-4">
+                              <ScheduleDateGroups
+                                groups={historyGroups}
+                                today={today}
+                                sessionsByOccurrenceId={sessionsByOccurrenceId}
+                                onStart={handleOccurrenceStart}
+                              />
+                            </div>
+                          </details>
+                        )}
+
+                        {!nextGroup && laterGroups.length === 0 && historyGroups.length === 0 && (
+                          <p className="py-6 text-center text-sm text-gray-400">Nothing else is scheduled.</p>
+                        )}
                       </div>
-                    </details>
-                  )}
-                </div>
+                    </Panel>
+                  </div>
+                </>
               )}
             </div>
           );
@@ -584,135 +577,66 @@ export default function PatientDashboardPage() {
 
         {/* ── View Profile ── */}
         {activeTab === "view-profile" && (
-          <div>
-            <h1 className="text-2xl font-bold text-green-800 mb-1">My Profile</h1>
-            <p className="text-gray-500 mb-6">Manage your personal and account information</p>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-              {/* Left column */}
-              <div className="lg:col-span-2 flex flex-col gap-4">
-
-                {/* Personal Information */}
-                <div className="bg-white border border-green-200 rounded-2xl p-6">
-                  <h2 className="text-base font-semibold text-green-700 mb-5">
-                    Personal Information
-                  </h2>
-                  {!patientProfile ? (
-                    <p className="text-sm text-gray-400">
-                      Unable to load profile. Please contact your therapist.
-                    </p>
-                  ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
-                      <PatInfoField icon={<PersonIcon />} label="Full Name"
-                        value={patientProfile.name} />
-                      <PatInfoField icon={<PersonIcon />} label="Age"
-                        value={patientProfile.age != null ? `${patientProfile.age} years old` : null} />
-                      <PatInfoField icon={<EmailIcon />} label="Email"
-                        value={patientProfile.email} />
-                      <PatInfoField icon={<PulseIcon />} label="Assigned Specialist"
-                        value={patientProfile.therapistName} />
-                    </div>
-                  )}
+          <ProfileLayout
+            name={patientProfile?.name ?? user?.name}
+            email={patientProfile?.email}
+            roleLabel="Patient"
+            onChangePassword={() => setShowChangePassword(true)}
+            leftTitle="Personal Information"
+            left={
+              !patientProfile ? (
+                <p className="text-sm text-gray-400">Unable to load profile. Please contact your therapist.</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
+                  <ProfileField icon={<PersonIcon />} label="Full Name" value={patientProfile.name} />
+                  <ProfileField icon={<PersonIcon />} label="Age" value={patientProfile.age != null ? `${patientProfile.age} years old` : null} />
+                  <ProfileField icon={<EmailIcon />} label="Email" value={patientProfile.email} />
+                  <ProfileField icon={<PulseIcon />} label="Assigned Therapist" value={patientProfile.therapistName} />
                 </div>
-
-                {/* Assigned Exercises */}
-                <div className="bg-white border border-green-200 rounded-2xl p-6">
-                  <h2 className="text-base font-semibold text-green-700 mb-4">
-                    Assigned Exercises
-                  </h2>
-                  {exercises.length === 0 ? (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
-                      <p className="font-semibold mb-1">No assigned exercises</p>
-                      <p>You currently have no exercises assigned. Please contact your therapist.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {exercises.map((ex) => (
-                        <div
-                          key={ex.exercise_id}
-                          className="flex items-center justify-between gap-4 border border-gray-100 rounded-xl px-4 py-3"
-                        >
-                          <div>
-                            <p className="text-sm font-semibold text-green-700">{ex.name}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              {ex.sets} sets ×{" "}
-                              {prescriptionTargetText({
-                                exerciseId: ex.exercise_id,
-                                reps: ex.reps,
-                                holdSeconds: ex.hold_seconds,
-                              })}
-                            </p>
-                          </div>
-                          <span className={`shrink-0 text-xs px-3 py-1 rounded-full font-medium ${
-                            ex.status === "completed"
-                              ? "bg-green-100 text-green-700"
-                              : ex.status === "in_progress"
-                              ? "bg-blue-100 text-blue-700"
-                              : "bg-red-100 text-red-700"
-                          }`}>
-                            {ex.status === "completed"
-                              ? "Completed"
-                              : ex.status === "in_progress"
-                              ? "In Progress"
-                              : "Not Started"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
+              )
+            }
+            rightTitle="Account Information"
+            right={
+              <div className="space-y-5">
+                <ProfileField label="Username" value={patientProfile?.email?.split("@")[0] ?? "—"} />
+                <ProfileField label="Account Type" value="Patient" />
+                <ProfileField label="Member Since" value={formatMemberSince(patientProfile?.createdAt ?? null)} />
+                {user?.id && <MyAttachedFiles patientId={user.id} />}
               </div>
-
-              {/* Right column */}
-              <div className="flex flex-col gap-4">
-
-                {/* Account Information */}
-                <div className="bg-white border border-green-200 rounded-2xl p-6">
-                  <h2 className="text-base font-semibold text-green-700 mb-4">
-                    Account Information
-                  </h2>
-                  <div className="space-y-4">
-                    <PatAccountField label="Username"
-                      value={patientProfile?.email?.split("@")[0] ?? "—"} />
-                    <PatAccountField label="Account Type" value="Patient" />
-                    <PatAccountField label="Member Since"
-                      value={formatMemberSince(patientProfile?.createdAt ?? null)} />
-                  </div>
+            }
+            bottomTitle="Assigned Exercises"
+            bottom={
+              exercises.length === 0 ? (
+                <div className="rounded-lg bg-green-50 p-4 text-sm text-green-900">
+                  <p className="mb-1 font-semibold">No assigned exercises</p>
+                  <p>You currently have no exercises assigned. Please contact your therapist.</p>
                 </div>
-
-                {/* Account Actions */}
-                <div className="bg-white border border-green-200 rounded-2xl p-6">
-                  <h2 className="text-base font-semibold text-green-700 mb-4">
-                    Account Actions
-                  </h2>
-                  <div className="space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowChangePassword(true)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-700 hover:bg-green-800 text-white text-sm font-medium transition"
-                    >
-                      <KeyIcon />
-                      Change Password
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => { await logout(); router.push("/"); }}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-red-500 text-red-600 text-sm font-medium hover:bg-red-50 transition"
-                    >
-                      <LogoutIcon />
-                      Log Out
-                    </button>
-                  </div>
+              ) : (
+                <div className="space-y-2">
+                  {exercises.map((ex) => (
+                    <div key={ex.exercise_id} className="flex items-center justify-between gap-4 rounded-lg border border-green-50 bg-[#fafcfa] px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-green-800">{ex.name}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          {ex.sets} sets ×{" "}
+                          {prescriptionTargetText({ exerciseId: ex.exercise_id, reps: ex.reps, holdSeconds: ex.hold_seconds })}
+                        </p>
+                        <p className="mt-0.5 text-xs text-gray-500">{dayCountsText(ex.occurrence_summary)}</p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
+                          PRESCRIPTION_PILLS[ex.prescription_state].classes
+                        }`}
+                      >
+                        {PRESCRIPTION_PILLS[ex.prescription_state].label}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-
-              </div>
-            </div>
-          </div>
+              )
+            }
+          />
         )}
-
-      </main>
 
       {showChangePassword && patientProfile?.email && (
         <ChangePasswordModal
@@ -720,20 +644,74 @@ export default function PatientDashboardPage() {
           onClose={() => setShowChangePassword(false)}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
-function sessionTodayPH(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }); // YYYY-MM-DD
-}
-
 interface ScheduleDateGroup {
   date: string;
   label: string;
   items: PatientOccurrence[];
+}
+
+/**
+ * The files the clinic or the patient's therapist attached to the patient's
+ * record. The patient can open them, after re-entering their password, but
+ * cannot add, replace or delete them; the server refuses those for patients.
+ */
+function MyAttachedFiles({ patientId }: { patientId: string }) {
+  const [files, setFiles] = useState<PatientFile[] | null>(null);
+  const [error, setError] = useState(false);
+  const [viewing, setViewing] = useState<PatientFile | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/users/${encodeURIComponent(patientId)}/attachments`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const data = await response.json();
+        if (!cancelled) setFiles(Array.isArray(data.attachments) ? data.attachments : []);
+      })
+      .catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, [patientId]);
+
+  return (
+    <div id="tour-profile-files" className="border-t border-gray-100 pt-4">
+      <p className="text-xs text-gray-500">Attached Files</p>
+      {error ? (
+        <p className="mt-1 text-sm text-red-600">Unable to load your attached files.</p>
+      ) : files === null ? (
+        <p className="mt-1 text-sm text-gray-400">Loading…</p>
+      ) : files.length === 0 ? (
+        <p className="mt-1 text-sm text-gray-400">No files attached.</p>
+      ) : (
+        <>
+          <ul className="mt-2 space-y-2">
+            {files.map((file) => (
+              <li key={file.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-[#fafcfa] px-3 py-2">
+                <span className="min-w-0 break-all text-sm font-medium text-gray-800">{file.fileName}</span>
+                <button
+                  type="button"
+                  onClick={() => setViewing(file)}
+                  className="shrink-0 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800"
+                  aria-label={`View ${file.fileName}`}
+                >
+                  View
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-gray-500">
+            Added by your therapist or the clinic. You can view them; ask your therapist to add or remove a file.
+          </p>
+        </>
+      )}
+      {viewing && <PatientFileViewer patientId={patientId} file={viewing} onClose={() => setViewing(null)} />}
+    </div>
+  );
 }
 
 function formatScheduleDate(dateKey: string | null): string {
@@ -765,24 +743,6 @@ function groupScheduleOccurrences(
     }
   }
   return groups;
-}
-
-function ScheduleSummaryCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="bg-white border border-green-200 rounded-xl px-4 py-3 min-w-0">
-      <p className="text-xs font-medium text-gray-500">{label}</p>
-      <p className="text-base font-bold text-green-800 mt-1 truncate" title={value}>{value}</p>
-      <p className="text-xs text-gray-500 mt-1">{detail}</p>
-    </div>
-  );
 }
 
 function ScheduleDateGroups({
@@ -865,6 +825,10 @@ function ScheduleOccurrenceCard({
   sessionsByOccurrenceId: Map<number, ScheduleSessionRecord[]>;
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
+  // Camera exercises show their guide on the camera page; a manual one shows
+  // the video its custom exercise carries, here where the patient does it.
+  const guideVideo = occurrence.monitoring_mode === "manual" ? exerciseVideoFromRow(occurrence) : null;
   const style = occurrenceCardStyle(
     occurrence.status,
     occurrence.due_date,
@@ -882,7 +846,7 @@ function ScheduleOccurrenceCard({
           <h4 className="text-sm font-semibold text-gray-900 min-w-0">{occurrence.name}</h4>
           {occurrence.monitoring_mode === "manual" && (
             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-              Manual · no camera
+              Manual · no Machine Learning
             </span>
           )}
         </div>
@@ -908,9 +872,23 @@ function ScheduleOccurrenceCard({
         <p className="text-xs text-gray-500">
           Rest <strong className="ml-1 text-gray-900">{occurrence.rest_seconds}s</strong>
         </p>
+        {guideVideo && (
+          <button
+            type="button"
+            onClick={() => setShowVideo((shown) => !shown)}
+            aria-expanded={showVideo}
+            className="text-xs font-semibold text-green-700 hover:text-green-800 underline-offset-2 hover:underline"
+          >
+            {showVideo ? "Hide video" : "▶ Watch video"}
+          </button>
+        )}
 
         {style.action === "done" ? (
           <span className="ml-auto text-xs font-semibold text-green-700">✓ Done</span>
+        ) : style.action === "pain" ? (
+          <span className="ml-auto text-xs font-semibold text-red-700">
+            Contact your therapist
+          </span>
         ) : style.action === "start" ? (
           <button
             type="button"
@@ -925,11 +903,7 @@ function ScheduleOccurrenceCard({
             }}
             className="ml-auto px-4 py-2 bg-green-700 hover:bg-green-800 disabled:bg-gray-300 text-white rounded-lg text-sm font-medium transition"
           >
-            {submitting
-              ? "Saving..."
-              : occurrence.monitoring_mode === "manual"
-                ? "Mark Complete"
-                : "Start Session"}
+            {submitting ? "Opening..." : "Start Session"}
           </button>
         ) : style.action === "upcoming" ? (
           <span className="ml-auto text-xs font-medium text-gray-500">
@@ -939,6 +913,12 @@ function ScheduleOccurrenceCard({
           <span className="ml-auto text-xs font-medium text-red-600">Window closed</span>
         )}
       </div>
+
+      {guideVideo && showVideo && (
+        <div className="mt-3">
+          <CustomExerciseVideo exerciseId={occurrence.exercise_id} exerciseName={occurrence.name} video={guideVideo} />
+        </div>
+      )}
 
       {completedResult && (
         <CompletedSessionSummary
@@ -979,18 +959,6 @@ function CompletedSessionSummary({
       </div>
     </div>
   );
-}
-
-function completedSessionDoseText(session: ScheduleSessionRecord): string | null {
-  if (session.exerciseKind === "isometric" && (session.totalPairedHoldMs ?? 0) > 0) {
-    return `${formatSessionDuration(session.totalPairedHoldMs)} paired hold`;
-  }
-  if (session.completeLeftReps > 0 || session.completeRightReps > 0) {
-    return `L ${session.completeLeftReps} / R ${session.completeRightReps} complete`;
-  }
-  if (session.completeReps > 0) return `${session.completeReps} complete reps`;
-  if (session.totalReps > 0) return `${session.totalReps} recorded reps`;
-  return null;
 }
 
 function formatSessionTime(timestamp: string): string {
@@ -1041,9 +1009,22 @@ function occurrenceCardStyle(
   dueDate: string,
   makeupUntil: string,
   today: string
-): { label: string; card: string; badge: string; action: "done" | "start" | "upcoming" | "missed" } {
+): {
+  label: string;
+  card: string;
+  badge: string;
+  action: "done" | "pain" | "start" | "upcoming" | "missed";
+} {
   if (status === "completed") {
     return { label: "Completed", card: "bg-green-50 border-green-200", badge: "bg-green-100 text-green-700", action: "done" };
+  }
+  if (status === "pain_stopped") {
+    return {
+      label: "Stopped for pain",
+      card: "bg-red-50 border-red-200",
+      badge: "bg-red-100 text-red-700",
+      action: "pain",
+    };
   }
   if (dueDate === today) {
     return {
@@ -1072,35 +1053,6 @@ function formatMemberSince(dateStr: string | null): string {
   return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 }
 
-function PatInfoField({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | null | undefined;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="mt-0.5 shrink-0 text-green-600">{icon}</div>
-      <div>
-        <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-        <p className="text-sm font-semibold text-gray-900">{value ?? "—"}</p>
-      </div>
-    </div>
-  );
-}
-
-function PatAccountField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-      <p className="text-sm font-semibold text-gray-900">{value}</p>
-    </div>
-  );
-}
-
 // ── Icons ──────────────────────────────────────────────────────────────────
 
 function PersonIcon() {
@@ -1123,22 +1075,6 @@ function PulseIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
       <path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99l1.5 1.5z"/>
-    </svg>
-  );
-}
-
-function KeyIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
-    </svg>
-  );
-}
-
-function LogoutIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
     </svg>
   );
 }
@@ -1185,10 +1121,3 @@ function PatCameraIcon() {
   );
 }
 
-function PatLogoutIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4C2.9 3 2 3.9 2 5v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
-    </svg>
-  );
-}

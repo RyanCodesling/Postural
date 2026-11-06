@@ -201,6 +201,11 @@ export class BidirectionalRepCounter {
     };
   }
 
+  /** A processed frame with no reading, for the wrapped counter's continuity gate (D-50). */
+  noteMissing(): void {
+    this.counter.noteMissing();
+  }
+
   reset(): void {
     this.counter.reset();
     this.clearPeakTracking();
@@ -213,6 +218,13 @@ export class BidirectionalRepCounter {
 
   getRepCount(): number {
     return this.counter.getRepCount();
+  }
+
+  getMovementSnapshot() {
+    return Object.freeze({ ...this.counter.getMovementSnapshot(),
+      activeSide: this.peakSign === 0 ? null : this.peakSign > 0 ? "left" as const : "right" as const,
+      awaitingRestSettle: this.awaitingRestSettle,
+    });
   }
 
   getDebugSnapshot(

@@ -14,6 +14,7 @@ import { strict as assert } from "node:assert";
 import {
   computeTiltReference,
   hasMissingTiltReferenceLine,
+  NO_ASPECT_CORRECTION,
 } from "./poseMetrics";
 
 type TestLandmark = { x: number; y: number; visibility: number };
@@ -58,7 +59,7 @@ function test(name: string, fn: () => void): void {
 }
 
 test("single visible reference line shows patient missing-reference warning", () => {
-  const ref = computeTiltReference(makeLandmarks({ hideEars: true }));
+  const ref = computeTiltReference(makeLandmarks({ hideEars: true }), NO_ASPECT_CORRECTION);
 
   assert.equal(ref.confidence, "low");
   assert.equal(ref.divergenceDeg, null);
@@ -66,7 +67,7 @@ test("single visible reference line shows patient missing-reference warning", ()
 });
 
 test("visible hip-ear divergence stays low confidence without patient framing warning", () => {
-  const ref = computeTiltReference(makeLandmarks({ divergentEars: true }));
+  const ref = computeTiltReference(makeLandmarks({ divergentEars: true }), NO_ASPECT_CORRECTION);
 
   assert.equal(ref.confidence, "low");
   assert.ok(ref.divergenceDeg !== null);
@@ -75,14 +76,14 @@ test("visible hip-ear divergence stays low confidence without patient framing wa
 });
 
 test("matching visible references are high confidence", () => {
-  const ref = computeTiltReference(makeLandmarks());
+  const ref = computeTiltReference(makeLandmarks(), NO_ASPECT_CORRECTION);
 
   assert.equal(ref.confidence, "high");
   assert.equal(hasMissingTiltReferenceLine(ref), false);
 });
 
 test("missing both references is insufficient, not low-confidence warning", () => {
-  const ref = computeTiltReference(makeLandmarks({ hideHips: true, hideEars: true }));
+  const ref = computeTiltReference(makeLandmarks({ hideHips: true, hideEars: true }), NO_ASPECT_CORRECTION);
 
   assert.equal(ref.confidence, "insufficient");
   assert.equal(ref.divergenceDeg, null);

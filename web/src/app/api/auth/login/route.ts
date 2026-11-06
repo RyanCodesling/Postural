@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserByEmailWithArchived, createAdminNotification } from "@/lib/db";
+import { getUserByEmailWithArchived, recordUserSeen } from "@/lib/db";
 import { comparePassword } from "@/lib/crypto";
 import {
   AUTH_COOKIE_NAME,
@@ -58,17 +58,11 @@ export async function POST(request: NextRequest) {
       mustChangePassword,
     });
 
-    // Log admin notification on login (for therapists and patients)
-    if (user.role !== "admin") {
-      try {
-        await createAdminNotification(
-          "User Logged In",
-          `${user.name} has logged in.`,
-          "user_login"
-        );
-      } catch (err) {
-        console.error("Failed to create user login notification:", err);
-      }
+    // Signing in shows the user online on the admin dashboard straight away.
+    try {
+      await recordUserSeen(user.id, { always: true });
+    } catch (err) {
+      console.error("Failed to record sign-in for user status:", err);
     }
 
     const response = NextResponse.json(

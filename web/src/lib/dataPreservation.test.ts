@@ -34,7 +34,24 @@ console.log("\ndataPreservation - archive and ownership contracts\n");
 test("application code contains no hard delete for prescriptions or exercises", () => {
   const db = source("./db.ts");
   assert(!/DELETE\s+FROM\s+patient_exercises/i.test(db), "patient exercises must archive, not delete");
-  assert(!/DELETE\s+FROM\s+exercises\b/i.test(db), "exercises must archive, not delete");
+  // Hard deletes are limited to history-free archived rows and recent unused
+  // drafts. Both operations check history under the catalog row's lock.
+  const exerciseDeletes = db.match(/DELETE\s+FROM\s+exercises\b/gi) ?? [];
+  assert(exerciseDeletes.length === 2, "only the two guarded cleanup functions may delete exercises");
+  for (const name of ["deleteArchivedExercise", "discardNewExercise"]) {
+    const start = db.indexOf(`export async function ${name}`);
+    const end = db.indexOf("\nexport ", start + 1);
+    const body = start >= 0 ? db.slice(start, end) : "";
+    assert(/DELETE\s+FROM\s+exercises\b/i.test(body), `${name} must contain its guarded delete`);
+    assert(body.includes("FOR UPDATE"), "deletion must serialize with assignment and upload writers");
+    assert(body.includes(name === "discardNewExercise" ? "is_custom = TRUE AND archived_at IS NULL" : "is_custom = TRUE AND archived_at IS NOT NULL"), "only the expected custom exercise state may be deleted");
+    assert(/FROM patient_exercises WHERE exercise_id/.test(body), "a prescribed exercise must not be deleted");
+    assert(/FROM sessions WHERE exercise_id/.test(body), "an exercise with sessions must not be deleted");
+    if (name === "discardNewExercise") {
+      assert(body.includes("INTERVAL '10 minutes'"), "draft cleanup must stay time-limited");
+      assert(/FROM program_exercises WHERE exercise_id/.test(body), "a draft used in a program must be kept");
+    }
+  }
   assert(db.includes("export async function archivePatientExercises"), "archivePatientExercises is required");
   assert(db.includes("export async function archiveExercise"), "archiveExercise is required");
 });

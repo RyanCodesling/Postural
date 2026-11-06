@@ -17,8 +17,12 @@ CREATE TABLE IF NOT EXISTS exercise_occurrences (
   patient_exercise_id INTEGER      NOT NULL REFERENCES patient_exercises(id) ON DELETE RESTRICT,
   due_date            DATE         NOT NULL,
   status              VARCHAR(20)  NOT NULL DEFAULT 'pending'
-                                   CHECK (status IN ('pending', 'in_progress', 'completed')),
+                                   CHECK (status IN ('pending', 'in_progress', 'completed', 'pain_stopped')),
   completed_at        TIMESTAMPTZ,
+  pain_stopped_at     TIMESTAMPTZ,
+  prescription_snapshot         JSONB,
+  prescription_snapshot_version INT,
+  prescription_captured_at      TIMESTAMPTZ,
   cancelled_at        TIMESTAMPTZ,
   cancelled_by        VARCHAR(50)  REFERENCES users(id) ON DELETE SET NULL,
   created_at          TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
@@ -34,9 +38,18 @@ CREATE INDEX IF NOT EXISTS idx_occ_due ON exercise_occurrences (due_date);
 -- equals due_date (no make-up). Legacy single occurrences get due_date (no window).
 ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS makeup_until DATE;
 ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS pain_stopped_at TIMESTAMPTZ;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS prescription_snapshot JSONB;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS prescription_snapshot_version INT;
+ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS prescription_captured_at TIMESTAMPTZ;
 ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
 ALTER TABLE exercise_occurrences ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(50)
   REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE exercise_occurrences DROP CONSTRAINT IF EXISTS exercise_occurrences_status_check;
+ALTER TABLE exercise_occurrences
+  ADD CONSTRAINT exercise_occurrences_status_check
+  CHECK (status IN ('pending', 'in_progress', 'completed', 'pain_stopped'));
 
 -- Defense in depth: prescriptions with schedule/session history cannot be
 -- hard-deleted accidentally. Application removal uses archive/cancel fields.
@@ -65,6 +78,60 @@ ON CONFLICT (patient_exercise_id, due_date) DO UPDATE
 -- Defensive fill for any row created by an older copy of this script before
 -- makeup_until was included in the legacy backfill insert.
 UPDATE exercise_occurrences SET makeup_until = due_date WHERE makeup_until IS NULL;
+
+-- Snapshot only still-actionable legacy occurrences. Completed/past evidence
+-- remains explicitly context-unknown rather than receiving a fabricated
+-- historical prescription.
+UPDATE exercise_occurrences eo
+SET prescription_snapshot = jsonb_build_object(
+      'version', 2,
+      'capturedAt', NOW(),
+      'patientExerciseId', pe.id,
+      'exerciseId', pe.exercise_id,
+      'sets', pe.sets,
+      'reps', pe.reps,
+      'restSeconds', pe.rest_seconds,
+      'holdSeconds', pe.hold_seconds,
+      'sequenceIndex', pe.sequence_index,
+      'prescribedSide', pe.prescribed_side,
+      'resistance', jsonb_build_object(
+        'type', pe.resistance_type,
+        'value', pe.resistance_value,
+        'unit', pe.resistance_unit,
+        'label', pe.resistance_label
+      ),
+      'schedule', jsonb_build_object(
+        'dueDate', eo.due_date,
+        'makeupUntil', COALESCE(eo.makeup_until, eo.due_date)
+      )
+    ),
+    prescription_snapshot_version = 2,
+    prescription_captured_at = NOW()
+FROM patient_exercises pe
+WHERE pe.id = eo.patient_exercise_id
+  AND eo.prescription_snapshot IS NULL
+  AND eo.status = 'pending'
+  AND eo.cancelled_at IS NULL
+  AND COALESCE(eo.makeup_until, eo.due_date) >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date;
+
+-- V1 snapshots predate explicit therapist sequencing. Only unstarted,
+-- currently actionable rows may be upgraded; started and terminal snapshots
+-- remain immutable historical evidence.
+UPDATE exercise_occurrences eo
+SET prescription_snapshot = eo.prescription_snapshot
+      || jsonb_build_object(
+           'version', 2,
+           'capturedAt', NOW(),
+           'sequenceIndex', pe.sequence_index
+         ),
+    prescription_snapshot_version = 2,
+    prescription_captured_at = NOW()
+FROM patient_exercises pe
+WHERE pe.id = eo.patient_exercise_id
+  AND eo.prescription_snapshot_version = 1
+  AND eo.status = 'pending'
+  AND eo.cancelled_at IS NULL
+  AND COALESCE(eo.makeup_until, eo.due_date) >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date;
 
 -- Link legacy sessions to their assignment's occurrence. Restricted to
 -- assignments that have exactly one occurrence so the match is unambiguous;

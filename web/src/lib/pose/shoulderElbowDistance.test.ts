@@ -23,7 +23,7 @@
  *     y=0.55   hips                            (trunk-length denominator)
  */
 
-import { computeShoulderElbowDistance } from "./poseMetrics";
+import { computeShoulderElbowDistance, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,8 +120,8 @@ test("W-position against wall (elbow at shoulder height, lateral) → ratio ~0.5
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left"),  0.5, 0.02, "LEFT W-pos");
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right"), 0.5, 0.02, "RIGHT W-pos");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0.5, 0.02, "LEFT W-pos");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.5, 0.02, "RIGHT W-pos");
 });
 
 test("Elbow drop INCREASES the ratio ABOVE baseline (does NOT trigger the below-threshold warning — accepted scope limitation)", () => {
@@ -152,7 +152,7 @@ test("Elbow drop INCREASES the ratio ABOVE baseline (does NOT trigger the below-
   // Numerical confirmation: ratio = 0.6 (> baseline 0.5, > threshold 0.4).
   // The warning would NOT fire for this pose despite the elbow being
   // visibly off the wall in y — that's the documented limitation.
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left"), 0.6, 0.02, "elbow-drop LEFT");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION), 0.6, 0.02, "elbow-drop LEFT");
 });
 
 test("Severe foreshortening (elbow 'collapsed' close to shoulder in 2D) → ratio drops well below 0.4", () => {
@@ -169,8 +169,8 @@ test("Severe foreshortening (elbow 'collapsed' close to shoulder in 2D) → rati
     rightHip:      { x: 0.42, y: 0.55 },
   });
   // Distance LEFT: sqrt(0.04^2 + 0.02^2) ≈ 0.045. Ratio ≈ 0.045/0.25 = 0.18.
-  assertLessThan(computeShoulderElbowDistance(lms, TILT_REF, "left"),  0.4, "LEFT severe foreshorten");
-  assertLessThan(computeShoulderElbowDistance(lms, TILT_REF, "right"), 0.4, "RIGHT severe foreshorten");
+  assertLessThan(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0.4, "LEFT severe foreshorten");
+  assertLessThan(computeShoulderElbowDistance(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.4, "RIGHT severe foreshorten");
 });
 
 test("Scale invariance: 2× scaled pose → same ratio", () => {
@@ -187,8 +187,8 @@ test("Scale invariance: 2× scaled pose → same ratio", () => {
   });
   // Trunk len 0.50. Upper-arm 0.25. Ratio 0.5. Same as the W-position test
   // above despite all linear dimensions doubling.
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left"),  0.5, 0.02, "LEFT 2x scale");
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right"), 0.5, 0.02, "RIGHT 2x scale");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  0.5, 0.02, "LEFT 2x scale");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.5, 0.02, "RIGHT 2x scale");
 });
 
 test("Hip degeneracy (trunk-mid points coincide) → null", () => {
@@ -200,7 +200,7 @@ test("Hip degeneracy (trunk-mid points coincide) → null", () => {
     leftHip:       { x: 0.58, y: 0.51 },  // trunk len ~0.01 < epsilon 0.05
     rightHip:      { x: 0.42, y: 0.51 },
   });
-  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left"),  "trunk too short");
+  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "trunk too short");
 });
 
 test("Missing elbow → null on that side; other side still computes", () => {
@@ -212,8 +212,8 @@ test("Missing elbow → null on that side; other side still computes", () => {
     leftHip:       { x: 0.58, y: 0.55 },
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left"),  "LEFT low-vis elbow");
-  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right"), 0.5, 0.02, "RIGHT unaffected");
+  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "LEFT low-vis elbow");
+  assertCloseTo(computeShoulderElbowDistance(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), 0.5, 0.02, "RIGHT unaffected");
 });
 
 test("Missing one hip → null on BOTH sides (shared trunk reference)", () => {
@@ -225,8 +225,8 @@ test("Missing one hip → null on BOTH sides (shared trunk reference)", () => {
     leftHip:       { x: 0.58, y: 0.55, visibility: 0.1 },  // below MIN_VIS
     rightHip:      { x: 0.42, y: 0.55 },
   });
-  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left"),  "LEFT lost trunk");
-  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "right"), "RIGHT lost trunk");
+  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "left", NO_ASPECT_CORRECTION),  "LEFT lost trunk");
+  assertNull(computeShoulderElbowDistance(lms, TILT_REF, "right", NO_ASPECT_CORRECTION), "RIGHT lost trunk");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

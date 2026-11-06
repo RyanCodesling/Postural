@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import { updateProgram, deleteProgram, ProgramExerciseNotAllowedError } from "@/lib/db";
+import { parseProgramExerciseInputs } from "@/lib/programExerciseInput";
 
 export async function PUT(
   request: NextRequest,
@@ -22,7 +23,19 @@ export async function PUT(
       return NextResponse.json({ error: "At least one exercise is required" }, { status: 400 });
     }
 
-    await updateProgram(id, user.id, { name, exercises });
+    let normalizedExercises;
+    try {
+      normalizedExercises = parseProgramExerciseInputs(exercises);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid program exercises." },
+        { status: 400 },
+      );
+    }
+    await updateProgram(id, user.id, {
+      name: name.trim(),
+      exercises: normalizedExercises,
+    });
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ProgramExerciseNotAllowedError) {

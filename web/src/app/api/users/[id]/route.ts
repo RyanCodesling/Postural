@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUserById, updateUser, archiveUser, restoreUser, deleteUser, isEmailTaken, createNotification } from "@/lib/db";
+import {
+  PermanentUserDeletionError,
+  UserClinicalFieldsUnavailableError,
+  archiveUser,
+  createNotification,
+  deleteUser,
+  getUserById,
+  isEmailTaken,
+  restoreUser,
+  updateUser,
+} from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 import {
   sendEmailChangedToOldAddress,
@@ -11,6 +21,8 @@ import {
   sendAccountRestoredAdminEmail,
   sendAccountDeletedUserEmail,
   sendAccountDeletedAdminEmail,
+  sendAssignedTherapistEmail,
+  sendAssignedPatientEmail,
 } from "@/lib/email";
 
 export async function GET(
@@ -93,14 +105,36 @@ export async function PUT(
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Check if therapist assignment changed and notify
-    if ("therapistId" in body && body.therapistId && body.therapistId !== oldUser?.therapistId) {
+    // Check if therapist assignment changed and notify the patient, the new
+    // therapist, and the therapist the patient leaves, each by name.
+    const newTherapistId = ("therapistId" in body && body.therapistId) || null;
+    const oldTherapistId = (oldUser?.therapistId as string | null | undefined) ?? null;
+    if ("therapistId" in body && newTherapistId !== oldTherapistId) {
       try {
-        const therapist = await getUserById(body.therapistId);
+        const therapist = newTherapistId ? await getUserById(newTherapistId) : null;
+        const previous = oldTherapistId ? await getUserById(oldTherapistId) : null;
+        if (previous) {
+          await createNotification(
+            oldTherapistId as string,
+            therapist ? "Patient Moved" : "Patient Unassigned",
+            therapist
+              ? `Patient ${updated.name} was moved to therapist ${therapist.name}.`
+              : `Patient ${updated.name} is no longer assigned to you.`,
+            "patient_moved_from_therapist",
+          );
+          if (!therapist) {
+            await createNotification(
+              id,
+              "Therapist Unassigned",
+              `${previous.name} is no longer your assigned therapist.`,
+              "therapist_unassigned",
+            );
+          }
+        }
         if (therapist) {
           // Notify therapist
           await createNotification(
-            body.therapistId,
+            newTherapistId as string,
             "Patient Assigned",
             `Admin assigned patient ${updated.name} to you.`,
             "patient_assigned_to_therapist"
@@ -108,10 +142,20 @@ export async function PUT(
           // Notify patient
           await createNotification(
             id,
-            "Therapist Assigned",
-            `${therapist.name} is now your assigned therapist.`,
+            previous ? "Therapist Changed" : "Therapist Assigned",
+            previous
+              ? `${therapist.name} is now your assigned therapist, replacing ${previous.name}.`
+              : `${therapist.name} is now your assigned therapist.`,
             "assigned_therapist"
           );
+          if (therapist.email) {
+            sendAssignedPatientEmail(therapist.email as string, therapist.name as string, updated.name as string)
+              .catch(console.error);
+          }
+          if (updated.email) {
+            sendAssignedTherapistEmail(updated.email as string, updated.name as string, therapist.name as string)
+              .catch(console.error);
+          }
         }
       } catch (err) {
         console.error("Failed to create therapist assignment notifications:", err);
@@ -135,6 +179,9 @@ export async function PUT(
     return NextResponse.json({ user: updated });
   } catch (error) {
     console.error("PUT /api/users/[id] error:", error);
+    if (error instanceof UserClinicalFieldsUnavailableError) {
+      return NextResponse.json({ error: error.message, code: "clinical_fields_unavailable" }, { status: 409 });
+    }
     return NextResponse.json({ error: "Failed to update user" }, { status: 500 });
   }
 }
@@ -213,14 +260,11 @@ export async function DELETE(
     const { searchParams } = request.nextUrl;
     const isPermanent = searchParams.get("permanent") === "true";
 
-    // Capture user data before deleting/archiving for email notifications
-    const userToProcess = await getUserById(id);
-    if (!userToProcess) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
     if (isPermanent) {
-      await deleteUser(id);
+      // The transactional helper returns the locked target row only after the
+      // archived/history-free eligibility checks and DELETE have succeeded.
+      // That keeps failure responses from triggering deletion emails.
+      const userToProcess = await deleteUser(id, String(authenticatedUser.id));
 
       // Send delete notifications fire-and-forget
       if (userToProcess.email) {
@@ -244,6 +288,11 @@ export async function DELETE(
 
       return NextResponse.json({ success: true, message: "User permanently deleted." });
     } else {
+      // Capture user data before archiving for email notifications.
+      const userToProcess = await getUserById(id);
+      if (!userToProcess) {
+        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      }
       await archiveUser(id);
 
       // Send archive notifications fire-and-forget
@@ -269,6 +318,16 @@ export async function DELETE(
       return NextResponse.json({ success: true, message: "User archived." });
     }
   } catch (error) {
+    if (error instanceof PermanentUserDeletionError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: error.code,
+          blockers: error.blockers,
+        },
+        { status: error.code === "not_found" ? 404 : 409 },
+      );
+    }
     console.error("DELETE /api/users/[id] error:", error);
     return NextResponse.json({ error: "Failed to process delete/archive request" }, { status: 500 });
   }

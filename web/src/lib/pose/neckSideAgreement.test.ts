@@ -21,6 +21,7 @@ import {
   computeLateralNeckTilt,
   computeNeckLateralFlexionSigned,
   computeTiltReference,
+  NO_ASPECT_CORRECTION,
 } from "./poseMetrics";
 
 let testsPassed = 0;
@@ -86,10 +87,10 @@ test("LM8 dropped vs LM7 → display direction and rep-tag direction match", () 
     leftEar:  { x: 0.58, y: 0.18 },   // LM7 higher in frame
     rightEar: { x: 0.42, y: 0.22 },   // LM8 lower in frame
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const display = computeLateralNeckTilt(lms, tiltRef);
-  const signed  = computeNeckLateralFlexionSigned(lms, tiltRef, "left");
+  const display = computeLateralNeckTilt(lms, tiltRef, NO_ASPECT_CORRECTION);
+  const signed  = computeNeckLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
   if (display === null || signed === null) {
     throw new Error("metric returned null on a valid pose");
   }
@@ -118,10 +119,10 @@ test("LM7 dropped vs LM8 → display direction and rep-tag direction match", () 
     leftEar:  { x: 0.58, y: 0.22 },   // LM7 lower in frame
     rightEar: { x: 0.42, y: 0.18 },   // LM8 higher in frame
   });
-  const tiltRef = computeTiltReference(lms);
+  const tiltRef = computeTiltReference(lms, NO_ASPECT_CORRECTION);
 
-  const display = computeLateralNeckTilt(lms, tiltRef);
-  const signed  = computeNeckLateralFlexionSigned(lms, tiltRef, "left");
+  const display = computeLateralNeckTilt(lms, tiltRef, NO_ASPECT_CORRECTION);
+  const signed  = computeNeckLateralFlexionSigned(lms, tiltRef, "left", NO_ASPECT_CORRECTION);
   if (display === null || signed === null) {
     throw new Error("metric returned null on a valid pose");
   }

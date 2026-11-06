@@ -25,7 +25,7 @@
  * subject-perspective labelling convention.
  */
 
-import { computeShoulderAbduction } from "./poseMetrics";
+import { computeShoulderAbduction, NO_ASPECT_CORRECTION } from "./poseMetrics";
 import type { TiltReference } from "./poseMetrics";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,8 +122,8 @@ console.log("\ncomputeShoulderAbduction — synthetic data tests\n");
 
 test("arms hanging at sides → abduction near 0° on both sides", () => {
   const lms = neutralPose();
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(left,  0, 1, "left abduction at rest");
   assertCloseTo(right, 0, 1, "right abduction at rest");
 });
@@ -135,8 +135,8 @@ test("LEFT arm raised horizontally → ~90° on left, unchanged right", () => {
   // Patient's left arm horizontal: elbow at the same y as shoulder, x further
   // out to the patient's left (image-right, larger x).
   lms[13] = { x: 0.75, y: 0.30, visibility: 1 };
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(left,  90, 2, "left abduction at horizontal");
   assertCloseTo(right, 0,  1, "right unaffected by left arm motion");
 });
@@ -146,8 +146,8 @@ test("RIGHT arm raised horizontally → ~90° on right, unchanged left", () => {
   // Patient's right arm horizontal: elbow same y as shoulder, x further out
   // to the patient's right (image-left, smaller x).
   lms[14] = { x: 0.25, y: 0.30, visibility: 1 };
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertCloseTo(left,  0,  1, "left unaffected by right arm motion");
   assertCloseTo(right, 90, 2, "right abduction at horizontal");
 });
@@ -160,7 +160,7 @@ test("LEFT arm at 45° abduction → ~45°", () => {
   // At 45°: dx and dy from shoulder are equal in magnitude. Going 0.10 to the
   // left side and 0.10 down from shoulder (0.60, 0.30) puts elbow at (0.70, 0.40).
   lms[13] = { x: 0.70, y: 0.40, visibility: 1 };
-  const left = computeShoulderAbduction(lms, TILT_REF, "left");
+  const left = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(left, 45, 2, "left abduction at 45°");
 });
 
@@ -169,7 +169,7 @@ test("LEFT arm slightly abducted (~20°) → just above start threshold", () => 
   // Elbow 20° out from vertical: dx = 0.10*sin20° ≈ 0.034, dy = 0.10*cos20° ≈ 0.094
   // From shoulder (0.60, 0.30): elbow at (0.634, 0.394).
   lms[13] = { x: 0.634, y: 0.394, visibility: 1 };
-  const left = computeShoulderAbduction(lms, TILT_REF, "left");
+  const left = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertCloseTo(left, 20, 2, "left abduction at 20°");
 });
 
@@ -188,7 +188,7 @@ test("LEFT arm crossed horizontally INWARD (cross-body) → null, not 90°", () 
   // elbow ends at same y as shoulder but on image-LEFT (smaller x) — the
   // opposite side of the trunk from where lateral abduction would place it.
   lms[13] = { x: 0.45, y: 0.30, visibility: 1 };
-  const left = computeShoulderAbduction(lms, TILT_REF, "left");
+  const left = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNull(left, "left cross-body horizontal must not register as abduction");
 });
 
@@ -196,7 +196,7 @@ test("RIGHT arm crossed horizontally INWARD (cross-body) → null, not 90°", ()
   const lms = neutralPose();
   // Mirror of the previous case: patient's right arm crossed to image-RIGHT.
   lms[14] = { x: 0.55, y: 0.30, visibility: 1 };
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(right, "right cross-body horizontal must not register as abduction");
 });
 
@@ -204,14 +204,14 @@ test("LEFT arm 45° cross-body (mid-trajectory) → null", () => {
   const lms = neutralPose();
   // 45° inward from vertical on the wrong side of the trunk: dx negative.
   lms[13] = { x: 0.50, y: 0.40, visibility: 1 };
-  const left = computeShoulderAbduction(lms, TILT_REF, "left");
+  const left = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   assertNull(left, "left 45° cross-body must not register as abduction");
 });
 
 test("RIGHT arm 45° cross-body (mid-trajectory) → null", () => {
   const lms = neutralPose();
   lms[14] = { x: 0.50, y: 0.40, visibility: 1 };
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(right, "right 45° cross-body must not register as abduction");
 });
 
@@ -221,7 +221,7 @@ test("LEFT arm cross-body past head → null (full bogus-rep trajectory peak)", 
   // Without the fix, the magnitude here is well past minimumPeakThreshold (60°)
   // and the descent back through the side would close out a false rep.
   lms[13] = { x: 0.45, y: 0.15, visibility: 1 };
-  const left = computeShoulderAbduction(lms, TILT_REF, "left");
+  const left = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
   // Cross-body past head: arm vector still on the wrong side of the trunk axis,
   // so the signed angle stays on the wrong side — function returns null.
   assertNull(left, "left arm-over-head via cross-body must not register");
@@ -236,7 +236,7 @@ test("camera-roll invariance: rotating all landmarks by 10° doesn't change resu
   const lms = neutralPose();
   lms[13] = { x: 0.70, y: 0.40, visibility: 1 };
 
-  const beforeLeft = computeShoulderAbduction(lms, TILT_REF, "left")!;
+  const beforeLeft = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION)!;
 
   const theta = (10 * Math.PI) / 180;
   const cos = Math.cos(theta);
@@ -252,7 +252,7 @@ test("camera-roll invariance: rotating all landmarks by 10° doesn't change resu
   // Tilt ref still says cameraTiltDeg=0, deliberately — we want to prove that
   // even WITHOUT tilt correction, this metric is roll-invariant. (That's the
   // whole reason the function ignores tiltRef.)
-  const afterLeft = computeShoulderAbduction(rotatedLms, TILT_REF, "left")!;
+  const afterLeft = computeShoulderAbduction(rotatedLms, TILT_REF, "left", NO_ASPECT_CORRECTION)!;
 
   assertCloseTo(afterLeft, beforeLeft, 0.5, "abduction unchanged under camera roll");
 });
@@ -262,8 +262,8 @@ test("camera-roll invariance: rotating all landmarks by 10° doesn't change resu
 test("missing left elbow → null for left side, right still reports", () => {
   const lms = neutralPose();
   lms[13] = { x: 0.60, y: 0.45, visibility: 0.2 }; // below MIN_VIS=0.5
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left, "left abduction with low-vis elbow");
   assertCloseTo(right, 0, 1, "right still computable");
 });
@@ -271,8 +271,8 @@ test("missing left elbow → null for left side, right still reports", () => {
 test("off-frame elbow with good visibility → null", () => {
   const lms = neutralPose();
   lms[13] = { x: 0.70, y: -0.05, visibility: 1 }; // extrapolated above frame
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left, "left abduction with off-frame elbow");
   assertCloseTo(right, 0, 1, "right still computable");
 });
@@ -280,8 +280,8 @@ test("off-frame elbow with good visibility → null", () => {
 test("missing one hip → null for both sides (trunk reference is shared)", () => {
   const lms = neutralPose();
   lms[24] = { x: 0.42, y: 0.55, visibility: 0.2 };
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left,  "left null when hip missing");
   assertNull(right, "right null when hip missing");
 });
@@ -289,8 +289,8 @@ test("missing one hip → null for both sides (trunk reference is shared)", () =
 test("missing one shoulder → null for both sides (shoulder midpoint shared)", () => {
   const lms = neutralPose();
   lms[12] = { x: 0.40, y: 0.30, visibility: 0.2 };
-  const left  = computeShoulderAbduction(lms, TILT_REF, "left");
-  const right = computeShoulderAbduction(lms, TILT_REF, "right");
+  const left  = computeShoulderAbduction(lms, TILT_REF, "left", NO_ASPECT_CORRECTION);
+  const right = computeShoulderAbduction(lms, TILT_REF, "right", NO_ASPECT_CORRECTION);
   assertNull(left,  "left null when other shoulder missing");
   assertNull(right, "right null when own shoulder missing");
 });

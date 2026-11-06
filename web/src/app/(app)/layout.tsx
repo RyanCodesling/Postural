@@ -3,6 +3,8 @@
 import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { DemoClockProvider } from "@/lib/DemoClockContext";
+import { usePresenceHeartbeat } from "@/lib/usePresenceHeartbeat";
 
 const DASHBOARD_BY_ROLE = {
   admin: "/dashboard/admin",
@@ -35,6 +37,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const wrongDashboard = Boolean(
     user && expectedRole && user.role !== expectedRole,
   );
+  // Every signed-in page, the camera included, keeps the admin's User status current.
+  usePresenceHeartbeat(protectedPath ? user?.id : null);
 
   useEffect(() => {
     if (!protectedPath || loading) return;
@@ -66,5 +70,5 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  return children;
+  return <DemoClockProvider>{children}</DemoClockProvider>;
 }

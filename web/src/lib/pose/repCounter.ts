@@ -62,7 +62,9 @@
  *   - A RepEvent on the frame a rep completes
  *   - null on every other frame
  * The caller is responsible for skipping frames where the angle is null
- * (e.g. landmarks not visible). Don't pass null in here.
+ * (e.g. landmarks not visible). Don't pass null in here; call `noteMissing()`
+ * on such a frame instead, so the continuity gate knows the limb was lost
+ * rather than merely unobserved (D-50).
  *
  * ── INTENTIONALLY OUT OF SCOPE ───────────────────────────────────────────────
  * - Bilateral coordination: handled by running two RepCounter instances.
@@ -70,8 +72,10 @@
  * - Visibility gating: caller decides whether to call update at all.
  * - Sign convention: the state machine assumes the metric increases during
  *   ascent and decreases during descent. For bidirectional exercises like
- *   neck flexion (left tilts negative, right tilts positive), use two
- *   counters fed with the absolute value of one side's range each.
+ *   neck flexion (positive = patient's left, pinned by
+ *   neckSideAgreement.test.ts), use two counters fed with the magnitude of
+ *   one side's range each — ex_004 does this via `splitSignedBySide` in
+ *   poseMetrics.ts.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +147,16 @@ export type RepCounterOptions = {
 // STATE MACHINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-type State = "WAITING_FOR_REP_START" | "ASCENDING" | "DESCENDING";
+export type RepMovementState = "WAITING_FOR_REP_START" | "ASCENDING" | "DESCENDING";
+type State = RepMovementState;
+export type RepMovementSnapshot = Readonly<{
+  state: RepMovementState;
+  restObserved: boolean;
+  lastUpdateMs: number | null;
+  repStartMs: number | null;
+  runningPeak: number | null;
+  runningPeakAtMs: number | null;
+}>;
 
 export class RepCounter {
   private state: State = "WAITING_FOR_REP_START";
@@ -166,12 +179,17 @@ export class RepCounter {
   // ── CONTINUITY GATE ────────────────────────────────────────────────────
   // Tracks whether the arm has been observed at rest recently. Required for
   // the WAITING → ASCENDING transition to fire. Cleared when a long gap
-  // between update() calls indicates we lost track of the arm (the caller
-  // skips update() when the metric returns null, so cross-body excursions
-  // and visibility dropouts both produce gaps).
+  // between update() calls indicates we lost track of the arm: more than
+  // 300 ms during which the caller processed frames without a reading
+  // (`noteMissing`: cross-body excursions, visibility dropouts, rejected
+  // capture), or more than 1 s with no frame processed at all. A shorter
+  // camera-loop stall keeps the evidence (D-50): on a slow computer a pause
+  // of 0.3-0.6 s just as a movement began lost that repetition.
   private lastUpdateTimeMs = 0;
   private armAtRest = false;
+  private missedSinceUpdate = false;
   private static readonly REST_GAP_THRESHOLD_MS = 300;
+  private static readonly STALL_GAP_THRESHOLD_MS = 1000;
 
   constructor(thresholds: RepCounterThresholds, options: RepCounterOptions = {}) {
     // Defensive validation — the registry validates this too, but instances
@@ -205,16 +223,22 @@ export class RepCounter {
    */
   update(angle: number, tMs: number): RepEvent | null {
     // Continuity check. A long gap since the last update means the caller
-    // stopped feeding us — either the metric returned null (cross-body region,
-    // landmark below visibility threshold) or the camera loop hiccuped. In
-    // either case, we no longer know the arm's position, so any prior "at rest"
-    // observation is stale.
+    // stopped feeding us. If it processed frames without a reading in the gap
+    // (cross-body region, landmark below visibility threshold, rejected
+    // capture), we lost the arm after 300 ms and any prior "at rest"
+    // observation is stale. If no frame was processed at all, the camera loop
+    // stalled; the arm was only unobserved, so the observation stands for up
+    // to 1 s (D-50).
+    const gapLimitMs = this.missedSinceUpdate
+      ? RepCounter.REST_GAP_THRESHOLD_MS
+      : RepCounter.STALL_GAP_THRESHOLD_MS;
     if (
       this.lastUpdateTimeMs !== 0 &&
-      tMs - this.lastUpdateTimeMs > RepCounter.REST_GAP_THRESHOLD_MS
+      tMs - this.lastUpdateTimeMs > gapLimitMs
     ) {
       this.armAtRest = false;
     }
+    this.missedSinceUpdate = false;
     this.lastUpdateTimeMs = tMs;
 
     // Refresh the "arm at rest" flag whenever we see a low value. This is the
@@ -234,6 +258,16 @@ export class RepCounter {
   }
 
   /**
+   * The caller processed a camera frame that gave this counter no reading:
+   * the metric returned null, the capture check failed, or no person was
+   * found. A gap holding such a frame is lost tracking, so the 300 ms rule
+   * applies to it rather than the 1 s camera-stall allowance (D-50).
+   */
+  noteMissing(): void {
+    this.missedSinceUpdate = true;
+  }
+
+  /**
    * Force the state machine back to WAITING_FOR_REP_START, discarding any
    * in-progress rep. Use this when capture readiness drops or the patient
    * switches exercise. Does NOT reset repIndex — that's lifetime-of-instance.
@@ -249,6 +283,7 @@ export class RepCounter {
     // seen fresh rest evidence.
     this.lastUpdateTimeMs = 0;
     this.armAtRest = false;
+    this.missedSinceUpdate = false;
   }
 
   /** Total reps emitted by this instance (complete + partial). */
@@ -259,6 +294,18 @@ export class RepCounter {
   /** Current internal state — useful for debugging and tests. */
   getState(): State {
     return this.state;
+  }
+
+  /** Observation only. ASCENDING also includes a plateau; no peak phase is inferred. */
+  getMovementSnapshot(): RepMovementSnapshot {
+    const inRep = this.state !== "WAITING_FOR_REP_START";
+    return Object.freeze({
+      state: this.state, restObserved: this.armAtRest,
+      lastUpdateMs: this.lastUpdateTimeMs === 0 ? null : this.lastUpdateTimeMs,
+      repStartMs: inRep ? this.repStartTimeMs : null,
+      runningPeak: inRep ? this.peakValue : null,
+      runningPeakAtMs: inRep ? this.peakTimeMs : null,
+    });
   }
 
   // ── Per-state handlers ──────────────────────────────────────────────────

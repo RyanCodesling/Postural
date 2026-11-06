@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import AppShell from "../_components/AppShell";
 import { ADMIN_TOURS } from "../_components/tours";
@@ -77,12 +77,24 @@ async function uploadPatientAttachments(patientId: string, files: File[]) {
 }
 
 export default function AdminDashboard() {
+  return <Suspense><AdminDashboardContent /></Suspense>;
+}
+
+function AdminDashboardContent() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const demoClockFromUrl = searchParams.get("demoClock") === "1";
+  const showDemoClock = DEMO_CLOCK_UI_VISIBLE || demoClockFromUrl;
   // Keep the effective Manila day even when production hides the demo controls.
   const { todayKey, enabled: demoClockOn } = useDemoClock();
 
-  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [activeTab, setActiveTab] = useState<Tab>(demoClockFromUrl ? "demo-clock" : "dashboard");
+
+  useEffect(() => {
+    if (demoClockFromUrl) setActiveTab("demo-clock");
+    else if (!DEMO_CLOCK_UI_VISIBLE) setActiveTab((tab) => tab === "demo-clock" ? "dashboard" : tab);
+  }, [demoClockFromUrl]);
 
   // Dashboard states
   const [dashboardData, setDashboardData] = useState<{
@@ -778,7 +790,7 @@ export default function AdminDashboard() {
         { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
         { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
         { key: "deleted", label: "Recently Deleted", icon: <AdminBinIcon />, active: activeTab === "deleted", onSelect: () => setActiveTab("deleted") },
-        ...(DEMO_CLOCK_UI_VISIBLE ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }] : []),
+        ...(showDemoClock ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }] : []),
         { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
       ]}
       userName={user?.name}
@@ -787,7 +799,7 @@ export default function AdminDashboard() {
       onLogout={async () => { await logout(); router.push("/"); }}
     >
         {activeTab === "deleted" && <RecentlyDeletedPanel />}
-        {DEMO_CLOCK_UI_VISIBLE && activeTab === "demo-clock" && (
+        {showDemoClock && activeTab === "demo-clock" && (
           <>
             <DemoClockPanel />
             {demoClockOn && <SessionDateCorrectionPanel />}

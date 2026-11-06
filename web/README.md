@@ -21,8 +21,10 @@ Open [http://localhost:3000](http://localhost:3000). The seeded credentials in t
 
 The [demo clock](docs/demo-clock.md) is shown during local development through
 **Admin → Demo Clock → Enable demo tools**, after one-time database setup.
-Production builds hide the tab, its controls and the floating badge while
-preserving the authenticated APIs and saved settings. It stays off by default.
+Production builds hide the tab, its controls and the floating badge by default.
+An administrator can open `/dashboard/admin?demoClock=1` to reveal the controls;
+the production badge stays hidden. The authenticated APIs and saved settings are
+preserved. It stays off by default.
 Enable/disable needs no server restart; disabling restores real time and clears
 the offset. The guide covers installation, recorded-date corrections, shared scope
 and timestamp limits.

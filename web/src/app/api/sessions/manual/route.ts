@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-server";
-import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
+import {
+  HIGH_PAIN_START_ERROR,
+  parsePreSessionPain,
+  PRE_SESSION_PAIN_BLOCK_SCORE,
+  SESSION_VIDEO_NOTICE_VERSION,
+} from "@/lib/prescriptionContext";
 import { createCustomExerciseSession, SessionNotScheduledError } from "@/lib/db";
 
 // POST /api/sessions/manual — a patient starts today's custom exercise. The
@@ -29,6 +34,9 @@ export async function POST(request: NextRequest) {
     }
     const preSessionPain = parsePreSessionPain(body?.preSessionPain);
     if (!preSessionPain.ok) return NextResponse.json({ error: preSessionPain.error }, { status: 400 });
+    if (preSessionPain.value?.status === "reported" && preSessionPain.value.score >= PRE_SESSION_PAIN_BLOCK_SCORE) {
+      return NextResponse.json({ error: HIGH_PAIN_START_ERROR }, { status: 409 });
+    }
     // Recording is opt-in per session; only an explicit true records consent.
     if (body?.videoConsent !== undefined && typeof body.videoConsent !== "boolean") {
       return NextResponse.json({ error: "videoConsent must be true or false" }, { status: 400 });

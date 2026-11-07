@@ -1,5 +1,102 @@
 # Sprint Updates 
 
+## 📌 Update-11-08-26 | *Enah*
+
+- Stopped exercises from starting when the pain score before starting is 9 or 10: the patient sees a warning with Okay and Cancel, and Okay marks the exercise "Did not proceed – high pain score" and notifies the assigned therapist in the app and by email
+- Told the assigned therapist in the app and by email, for each exercise, when a patient completes it after a pain score of 1 to 8 before starting; a score of 0 is left out
+- Played a custom exercise's guide video on a loop from Start session until the session ends, for uploaded video files and YouTube videos, on the patient, therapist, and admin camera pages
+- Accepted only dates of birth for ages 13 to 100 when an admin adds a user, and when an admin changes a user's date of birth
+- Combined the patient's in-app "due tomorrow" reminders into one notification, sent from 6:00 PM Manila time like the email
+- Removed the "Log In Now" button from the welcome, new email address, and account restored emails
+- Removed the blinking dot from unread notifications for admins, therapists, and patients; an unread notification's title is bold instead
+- Wrote the role badges in Manage Users and on the admin dashboard's User Status in capital letters
+- Kept the Archived Users table's header above its rows when the table is scrolled
+- Enlarged the camera page's L, R, REPS, TIME, rep target, and SET labels so they can be read from a distance
+- Updated the reports test to the progress report's "(36 years old)" age wording
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Replaced Continue and Skip with Okay and Cancel in "Pain before you start" when the pain score is 9 or 10, and hid Back, which Cancel replaces
+- Showed a warning that the pain is too high to start, saying that Okay notifies the assigned therapist and marks the exercise as "Did not proceed because of a high pain score" on the patient's dashboard and as a pain follow-up on the therapist's dashboard, and that Cancel goes back without recording anything
+- Sent Okay to the new high-pain route, then removed the exercise from today's list and opened the patient's schedule; a failed save shows its message and Okay can be pressed again
+- Kept the "consider checking with your therapist" note for scores of 7 and 8
+- Told the guide video when a custom exercise's session is running, from the first set through its rests until the session ends
+- Enlarged the labels on the reps and time panels over the camera view so they can be read from a few steps back: L and R from 13px to 22px; REPS, TIME, and HOLD from 13px to 20px; the "/ 12" rep target and "SET 1 / 3" from 12px to 20px; 15px to 16px on small screens, up from 11px; the labels are bolder with tighter letter spacing, and the big numbers are unchanged
+
+### *web\src\app\api\sessions\high-pain\route.ts*, *web\src\app\api\sessions\route.ts*, and *web\src\app\api\sessions\manual\route.ts*
+
+- Added POST /api/sessions/high-pain, which accepts only a patient's pain score of 9 or 10 for an exercise due today or still in its make-up window
+- Refused to start a camera or custom exercise session with a pain score of 9 or 10 before starting: "Your pain score is too high to start this exercise. Your therapist needs to review it first."
+
+### *web\src\lib\db.ts*
+
+- Added recordHighPainNoStart: it saves a session that opens and ends at once, ended for pain, holding the pain score and body area and marked as not started, and marks the exercise stopped for pain, so the therapist's dashboard shows Pain follow-up and the exercise waits for the therapist's review before rescheduling
+- Sent the therapist "Exercise not started because of high pain" in the app, the patient a matching notification, and the therapist an email; the email does not hold up the response
+- Added high_pain_no_start to the patient's scheduled exercises, true for an exercise not started because of a high pain score
+- Titled the therapist's completion notification "Exercise Completed with Pain" and added "Note: pain before starting was 5/10 (left shoulder)." when the patient reported a pain score of 1 or more before starting, and emailed the therapist for that exercise; a score of 0 or a skipped question leaves the notification as before, with no email
+- Combined the patient's "Exercise Starting Tomorrow" notifications, one per exercise, into one "Exercises Due Tomorrow" notification naming every exercise due tomorrow, created from 6:00 PM Manila time; a day already reminded the earlier way is not reminded again
+
+### *web\src\lib\email.ts*
+
+- Added the therapist emails "Exercise not started because of high pain", with the pain score, body area, and scheduled date, and "Exercise Completed with Pain – exercise name", with the pain score and body area
+- Removed the "Log In Now" button from the welcome, new email address, and account restored emails, and the address it linked to
+
+### *web\src\lib\prescriptionContext.ts*
+
+- Added PRE_SESSION_PAIN_BLOCK_SCORE, set to 9, the refusal message, and the highPainNoStart mark on a session's start record
+
+### *web\src\app\(app)\dashboard\patient\page.tsx* and *web\src\app\(app)\dashboard\patient\PatientProgramView.tsx*
+
+- Labelled an exercise not started because of a high pain score "Did not proceed – high pain score" in the schedule cards and the program view; other pain stops still say "Stopped for pain"
+
+### *web\src\app\(app)\dashboard\_components\CustomExerciseVideo.tsx* and *web\src\lib\exercises\customVideo.ts*
+
+- Played an uploaded guide video on a loop while the session runs, with sound when the browser allows it and muted otherwise, and paused it when the session ends
+- Switched a YouTube guide video to YouTube's autoplay and loop settings while the session runs; browsers let a YouTube video autoplay only muted, so it starts muted and the page then asks the player to turn the sound on
+- Left the patient dashboard's guide videos as before, playing only when pressed
+
+### *web\src\lib\userAge.ts*, *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\api\users\route.ts*, and *web\src\app\api\users\[id]\route.ts*
+
+- Added the age rule, 13 to 100 years old by date of birth on the Manila calendar day, shared by the form and the server
+- Limited the Add User and Edit User date pickers to the allowed dates and showed "Age must be 13 to 100 years old." under them, or in red "The user must be at least 13 years old." or "The user must be 100 years old or younger.", which stops the form going to its preview
+- Refused a date of birth outside the rule when adding a user, and when editing a user only if the date of birth was changed, so a user who has since turned 101 can still be edited
+
+### *web\src\app\(app)\dashboard\_components\NotificationBell.tsx*
+
+- Removed the blinking blue dot beside unread notifications, keeping the check beside read ones; an unread title is bold dark green and a read one is regular
+- Kept the bell's pulsing unread count
+
+### *web\src\app\(app)\dashboard\admin\page.tsx* and *web\src\app\(app)\dashboard\admin\UserStatusPanel.tsx*
+
+- Wrote the THERAPIST and PATIENT role badges in capital letters in Manage Users' Active Users and Archived Users tables and on the admin dashboard's User Status
+- Raised the Archived Users table's header above its rows, whose fading had painted them over the header when scrolled
+
+### *web\src\lib\notificationEmails.test.ts*, *web\src\lib\pose\cameraPreSessionSurvey.test.ts*, *web\src\app\(app)\dashboard\patient\PatientProgramView.test.tsx*, *web\src\lib\exercises\customVideo.test.ts*, *web\src\lib\userAge.test.ts*, and *web\src\lib\userClinicalFields.test.ts*
+
+- Tested the completion notification and email after a pain score of 5, and that a score of 0 or a skipped question says nothing about pain
+- Gave the camera test the exercise the pain question is for, and tested the "Did not proceed – high pain score" label, the YouTube autoplay and loop address, and the age rule, including ages 13 and 100 and a February 29 birthday
+- Gave the users routes test a date of birth and the age check, which the routes now call
+
+### *web\src\lib\reports\reportPatient.ts* and *web\src\lib\reports\reports.test.ts*
+
+- Kept the progress report's patient age as "(36 years old)" instead of "(36 years)", and changed the reports test to expect it
+
+### *Validation*
+
+- Type check passes, and lint passes on every changed file
+- All 102 TypeScript test suites pass
+- Tried in the browser as admin: the Archived Users header while scrolling, the capital-letter role badges, the unread notification title, the custom exercise's uploaded guide video playing on a loop and stopping at End session, the YouTube player switching to autoplay and back, and the Add User and Edit User date of birth messages, without saving anything
+
+### *Remaining boundaries*
+
+- The pain score 9 and 10 warning, Okay, the completed-with-pain notifications, and the combined due-tomorrow reminder have not been tried in the running app
+- The larger camera labels have not been seen in a live session, since the app's built-in browser has no camera
+- Whether a YouTube guide video turns its sound on has not been heard: the app's built-in browser does not load YouTube; Safari on iPhone may keep it muted, and the player's speaker turns it on
+- Delivery to Microsoft 365 addresses such as @bacoor.sti.edu.ph may still be held by their filtering; allow-listing the sender is the fix on their side
+- Not deployed; deploying it needs no SQL
+
+---
+
 ## 📌 Update-11-07-26-GuideAssets | *RyanCodesling*
 
 - Added the six accepted Reference Guide MP4s and their editable Blender scenes, including the base figure and source scenes used for the final look and poses

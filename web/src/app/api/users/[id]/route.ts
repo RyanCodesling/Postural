@@ -6,12 +6,15 @@ import {
   archiveUser,
   createNotification,
   deleteUser,
+  getEffectiveNow,
   getUserById,
   isEmailTaken,
   restoreUser,
   updateUser,
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
+import { manilaDayKey } from "@/lib/demoClock";
+import { birthDateError } from "@/lib/userAge";
 import {
   sendEmailChangedToOldAddress,
   sendEmailChangedToNewAddress,
@@ -104,6 +107,17 @@ export async function PUT(
 
     // Capture old user data before update to detect email change
     const oldUser = await getUserById(id);
+
+    // A changed date of birth must give an age from 13 to 100. An unchanged
+    // one is not checked again, so an older account stays editable.
+    const newBirth = typeof body.dateOfBirth === "string" ? body.dateOfBirth.slice(0, 10) : "";
+    const oldBirth = typeof oldUser?.dateOfBirth === "string" ? oldUser.dateOfBirth.slice(0, 10) : "";
+    if (newBirth !== "" && newBirth !== oldBirth) {
+      const dateOfBirthError = birthDateError(newBirth, manilaDayKey((await getEffectiveNow()).getTime()));
+      if (dateOfBirthError) {
+        return NextResponse.json({ error: dateOfBirthError }, { status: 400 });
+      }
+    }
 
     const updated = await updateUser(id, body);
 

@@ -7,6 +7,8 @@ import vm from "node:vm";
 import ts from "typescript";
 import { Client } from "pg";
 import { nameFieldWithDigits } from "./personName";
+import { manilaDayKey } from "./demoClock";
+import { birthDateError } from "./userAge";
 
 const clinicalKeys = ["diagnosis", "prescription", "condition"];
 function extract(file: URL, names: string[]) {
@@ -88,6 +90,7 @@ async function unitChecks() {
       UserClinicalFieldsUnavailableError: db.UserClinicalFieldsUnavailableError,
       NextResponse: { json: (body: unknown, options?: { status: number }) => ({ body, status: options?.status ?? 200 }) },
       getAuthenticatedUser: async () => auth, nameFieldWithDigits,
+      getEffectiveNow: async () => new Date("2026-11-07T04:00:00Z"), manilaDayKey, birthDateError,
       isEmailTaken: async () => false, getNextUserId: async () => person.id,
       getUserById: async () => person,
       createUser: async () => { throw new db.UserClinicalFieldsUnavailableError(); },
@@ -97,7 +100,7 @@ async function unitChecks() {
       sendEmailChangedToOldAddress: sideEffect, sendEmailChangedToNewAddress: sideEffect, sendEmailChangedAdminNotification: sideEffect,
     });
     vm.runInContext(extract(new URL(file, import.meta.url), [name]), context);
-    const call = () => context.subject[name]({ json: async () => ({ ...person, diagnosis: "Fictional entry", therapistId: "fixture-therapist" }) }, { params: Promise.resolve({ id: person.id }) });
+    const call = () => context.subject[name]({ json: async () => ({ ...person, dateOfBirth: "1990-03-04", diagnosis: "Fictional entry", therapistId: "fixture-therapist" }) }, { params: Promise.resolve({ id: person.id }) });
     const response = await call();
     assert.equal(response.status, 409);
     assert.equal(response.body.code, "clinical_fields_unavailable");

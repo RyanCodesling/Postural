@@ -55,8 +55,16 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const timeout = (ms: number) => new Promise((resolve) => setTimeout(() => resolve("timed out"), ms));
 
 /** endSession with an in-memory database; `mail` stands in for each pain-pause email. */
-function endSessionHarness(mail: (role: string) => Promise<boolean>, lookupFails = false, holdExercise = false) {
-  const state = { committed: false, notifications: [] as string[], mails: [] as string[], errors: [] as string[], details: [] as any[] };
+function endSessionHarness(
+  mail: (role: string) => Promise<boolean>,
+  lookupFails = false,
+  holdExercise = false,
+  prePain: unknown = null,
+) {
+  const state = {
+    committed: false, notifications: [] as string[], messages: [] as string[], mails: [] as string[],
+    errors: [] as string[], details: [] as any[],
+  };
   const transaction = {
     query: async (sql: string) => {
       if (sql === "COMMIT") state.committed = true;
@@ -68,7 +76,7 @@ function endSessionHarness(mail: (role: string) => Promise<boolean>, lookupFails
     connect: async () => transaction,
     query: async (sql: string, values: any[] = []) => {
       if (sql.includes("SELECT s.patient_id")) {
-        return { rows: [{ patient_id: "p", patient_name: "Fixture patient", therapist_id: "t", exercise_name: "Raise", occurrence_id: 1 }] };
+        return { rows: [{ patient_id: "p", patient_name: "Fixture patient", therapist_id: "t", exercise_name: "Raise", occurrence_id: 1, pre_session_pain: prePain }] };
       }
       if (sql.includes("prescription_snapshot")) {
         return { rows: [holdExercise ? { sets: 3, reps: 10, hold_seconds: 30, exercise_id: "ex_006" } : { sets: 3, reps: 10 }] };
@@ -87,15 +95,25 @@ function endSessionHarness(mail: (role: string) => Promise<boolean>, lookupFails
     console: { error: (message: unknown) => state.errors.push(String(message)), warn() {}, log() {} },
     getEffectiveNow: async () => new Date("2026-10-15T12:00:00Z"),
     isIsometricExercise, prescriptionTargetText,
-    createNotification: async (_to: string, title: string) => { state.notifications.push(title); },
+    createNotification: async (_to: string, title: string, message: string) => {
+      state.notifications.push(title);
+      state.messages.push(message);
+    },
     describePausedProgress: () => "paused in set 2 of 3 after 4 of 10 reps",
     sendExercisePausedEmail: (_email: string, _name: string, details: unknown, role: string) => {
       state.mails.push(role);
       state.details.push(details);
       return mail(role);
     },
+    sendCompletedWithPainEmail: (_email: string, _name: string, details: unknown) => {
+      state.mails.push("completed-with-pain");
+      state.details.push(details);
+      return mail("therapist");
+    },
   });
-  vm.runInContext(production(["endSession", "getPausedProgress", "emailPainPause"]), context);
+  vm.runInContext(production([
+    "endSession", "getPausedProgress", "emailPainPause", "completedWithPain", "emailCompletedWithPain",
+  ]), context);
   return { endSession: context.exports.endSession as (id: number, data: any) => Promise<boolean>, state };
 }
 
@@ -281,6 +299,34 @@ async function run() {
     assert.deepEqual(state.notifications, ["Exercise Completed", "Session Completed"]);
     assert.deepEqual(state.mails, []);
   });
+
+  await test("a completion after pain 1–8 before starting tells the therapist in the app and by email", async () => {
+    const { endSession, state } = endSessionHarness(
+      async () => true, false, false, { status: "reported", score: 5, bodyArea: "left shoulder" },
+    );
+    assert.equal(await endSession(1, { completed: true }), true);
+    await settle();
+    assert.deepEqual(state.notifications, ["Exercise Completed with Pain", "Session Completed"]);
+    assert.equal(
+      state.messages[0],
+      "Fixture patient completed exercise Raise. Note: pain before starting was 5/10 (left shoulder).",
+    );
+    assert.deepEqual(state.mails, ["completed-with-pain"]);
+    assert.deepEqual(JSON.parse(JSON.stringify(state.details[0])), {
+      patientName: "Fixture patient", exerciseName: "Raise", score: 5, bodyArea: "left shoulder",
+    });
+  });
+
+  for (const prePain of [{ status: "reported", score: 0, bodyArea: null }, { status: "declined" }]) {
+    await test(`a completion with ${prePain.status === "declined" ? "the survey skipped" : "pain 0"} says nothing about pain`, async () => {
+      const { endSession, state } = endSessionHarness(async () => true, false, false, prePain);
+      assert.equal(await endSession(1, { completed: true }), true);
+      await settle();
+      assert.deepEqual(state.notifications, ["Exercise Completed", "Session Completed"]);
+      assert.equal(state.messages[0], "Fixture patient completed exercise Raise.");
+      assert.deepEqual(state.mails, []);
+    });
+  }
 
   await test("a completion after an evening check is in the summary sent after midnight (the review's case)", async () => {
     const digest = digestHarness();

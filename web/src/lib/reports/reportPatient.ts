@@ -44,7 +44,7 @@ export function ageOn(dateOfBirth: string, on: Date, timeZone?: string): number 
 function birthText(patient: ReportPatient, on: Date, timeZone?: string): string {
   if (patient.dateOfBirth) {
     const age = ageOn(patient.dateOfBirth, on, timeZone);
-    return `${formatDateKey(patient.dateOfBirth)}${age === null ? "" : ` (${age} years)`}`;
+    return `${formatDateKey(patient.dateOfBirth)}${age === null ? "" : ` (${age} years old)`}`;
   }
   return patient.age !== null ? `not recorded (age ${patient.age} as entered)` : "not recorded";
 }

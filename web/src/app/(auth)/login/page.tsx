@@ -63,7 +63,7 @@ function LoginContent() {
     <AuthFrame>
     <form onSubmit={handleLogin} method="post" className="flex w-full flex-col gap-5">
       <div>
-        <h2 className="text-2xl font-bold text-gray-900">Welcome back</h2>
+        <h2 className="text-2xl font-bold text-gray-900">Welcome!</h2>
         <p className="text-sm text-gray-600">Log in to access your dashboard</p>
       </div>
 

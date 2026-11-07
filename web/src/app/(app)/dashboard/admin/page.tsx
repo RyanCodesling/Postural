@@ -10,6 +10,7 @@ import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { adminEditBody } from "@/lib/adminUserEdit";
 import { stripNameDigits } from "@/lib/personName";
+import { birthDateBounds, birthDateError, MAX_USER_AGE, MIN_USER_AGE } from "@/lib/userAge";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
@@ -250,6 +251,7 @@ export default function AdminDashboard() {
     } else if (newUser.role === "therapist") {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
+    if (birthDateError(newUser.dateOfBirth, todayKey)) return;
 
     setShowAddPreview(true);
   };
@@ -452,6 +454,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
     if (editEmailError) return;
+    if (editUserBirthError) return;
     setShowEditPreview(true);
   };
 
@@ -728,6 +731,15 @@ export default function AdminDashboard() {
       setArchivedAction(null);
     }
   };
+
+  // Add User accepts ages 13 to 100 only; the server checks the same rule.
+  const newUserBirthBounds = birthDateBounds(todayKey);
+  const newUserBirthError = newUser.dateOfBirth ? birthDateError(newUser.dateOfBirth, todayKey) : null;
+  // Edit checks the date only once it is changed, as the server does.
+  const editUserBirthError =
+    editingUser?.dateOfBirth && editingUser.dateOfBirth !== (editingLoaded?.dateOfBirth ?? "")
+      ? birthDateError(editingUser.dateOfBirth, todayKey)
+      : null;
 
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
@@ -1063,11 +1075,18 @@ export default function AdminDashboard() {
                               const dob = e.target.value;
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
-                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
-                            max={todayKey}
-                            min="1900-01-01"
+                            className={`w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
+                              newUserBirthError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-green-200 focus:border-green-500 focus:ring-green-100"
+                            }`}
+                            max={newUserBirthBounds.max}
+                            min={newUserBirthBounds.min}
+                            aria-invalid={newUserBirthError ? true : undefined}
+                            aria-describedby="new-user-dob-hint"
                             required
                           />
+                          <p id="new-user-dob-hint" className={`mt-1 text-xs ${newUserBirthError ? "text-red-600" : "text-gray-500"}`}>
+                            {newUserBirthError ?? `Age must be ${MIN_USER_AGE} to ${MAX_USER_AGE} years old.`}
+                          </p>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1270,10 +1289,17 @@ export default function AdminDashboard() {
                           const dob = e.target.value;
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
-                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
-                        max={todayKey}
-                        min="1900-01-01"
+                        className={`w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
+                          editUserBirthError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-green-200 focus:border-green-500 focus:ring-green-100"
+                        }`}
+                        max={newUserBirthBounds.max}
+                        min={newUserBirthBounds.min}
+                        aria-invalid={editUserBirthError ? true : undefined}
+                        aria-describedby="edit-user-dob-hint"
                       />
+                      <p id="edit-user-dob-hint" className={`mt-1 text-xs ${editUserBirthError ? "text-red-600" : "text-gray-500"}`}>
+                        {editUserBirthError ?? `Age must be ${MIN_USER_AGE} to ${MAX_USER_AGE} years old.`}
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1819,13 +1845,13 @@ export default function AdminDashboard() {
                           <td className="px-5 py-3 text-sm text-gray-600">
                             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                               <span>{u.email}</span>
-                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                                 {u.role}
                               </span>
                             </span>
                           </td>
                           <td className="stack-hide px-5 py-3 text-sm">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                               {u.role}
                             </span>
                           </td>
@@ -1868,7 +1894,8 @@ export default function AdminDashboard() {
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="stack-table w-full min-w-[600px]">
-                  <thead className="sticky top-0 border-b border-gray-100 bg-white">
+                  {/* z-10: the archived rows' opacity gives each row its own layer, which would otherwise paint over this sticky header. */}
+                  <thead className="sticky top-0 z-10 border-b border-gray-100 bg-white">
                     <tr>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Email</th>
@@ -1891,13 +1918,13 @@ export default function AdminDashboard() {
                           <td className="px-5 py-3 text-sm text-gray-500">
                             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                               <span>{u.email}</span>
-                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium opacity-70 ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium uppercase opacity-70 ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
                                 {u.role}
                               </span>
                             </span>
                           </td>
                           <td className="stack-hide px-5 py-3 text-sm">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
                               {u.role}
                             </span>
                           </td>

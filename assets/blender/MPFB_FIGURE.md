@@ -1,5 +1,11 @@
 # Patient-facing lateral arm raise figure
 
+Current publication, 2026-11-07: the accepted scenes, CC0 inputs and six
+guide videos are versioned. See [GUIDE_ASSETS.md](GUIDE_ASSETS.md) and
+[the asset manifest](reference/guide_assets.json) for the authoritative
+accepted mapping. The dated sections below also describe earlier review
+stages and candidates; unselected previews remain local generated files.
+
 The active presentation source is `ex_001_figure_mpfb.blend`. Its preview is
 `previews/ex_001_mpfb/ex_001_figure_motion.mp4`. This is an authored exercise
 demonstration, not a clinical measurement model. Source provenance is recorded

@@ -4,9 +4,10 @@
  *
  * ── WHAT A CLIP IS ──────────────────────────────────────────────────────────
  * An unmodified render of the MPFB figure, built by the scripts under
- * `tools/blender/` and served from `web/public/demos/`. That folder is
- * gitignored, so a checkout without the media shows the guide's "no video"
- * state rather than a broken player. Renders carry a baked-in title and
+ * `tools/blender/` and served from `web/public/demos/`. The six accepted
+ * clips and their editable sources are versioned; the asset manifest lives
+ * in `assets/blender/reference/guide_assets.json`. A missing media file still
+ * uses the guide's existing "no video" state. Renders carry a baked-in title and
  * caption above the figure, which the crop cuts away. The player supplies
  * phase labels separately; earlier renders also bake them into that band.
  *

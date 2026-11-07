@@ -1,0 +1,565 @@
+{
+  "date": "2026-10-11",
+  "status": "Verified local review candidates; no canonical or public-media promotion; visual acceptance pending.",
+  "request": {
+    "ex_007": "The shoulder press starting form should be deeper, with hands slightly above the shoulder, in line with the neck.",
+    "ex_004": "The resting hands on the neck side bends seem to be in an unnatural position."
+  },
+  "design_notes": {
+    "ex_007": "Wrists start 25 mm above the shoulder joints with the elbows bent 140 degrees. The forearm and fist (about 335 mm from the elbow) are longer than the upper arm (242 mm), so an exactly vertical forearm could reach this depth only with the elbow folded past about 150 degrees; the starting forearms lean about 10 degrees outward instead. The overhead finish is the checked press_v8_vertical pose.",
+    "ex_004": "Arms hang close to the body; the forearm angle is solved for a 4 mm gap between the nearest hand or forearm skin and the shorts. Palms face the thighs, turned 15 degrees back; fingers curl in a soft cascade and the thumbs lie along the index fingers instead of the rig rest thumb, which pointed into the thigh."
+  },
+  "clips": {
+    "ex_004": {
+      "scene": "../previews/press_depth_hands_2026_10_11/ex_004_figure_mpfb.blend",
+      "scene_sha256": "0c7881cb4892af33f754e17dbc0d0ca64c77d2d200fc936e8acdfb8a34676575",
+      "media": "../previews/press_depth_hands_2026_10_11/ex_004_mpfb/ex_004_figure_motion.mp4",
+      "media_sha256": "49ea019a5130bc8fddb6c0dc9939ab4b403c298c95b2f7ac085da7c910f56f6e",
+      "source_scene": "ex_004_figure_mpfb.blend (presentation_2026_10_09)",
+      "source_sha256": "1dd098d02ad56684e788adf799413d02514b314c47e3a2c880de5b81ef5cacda",
+      "pose_mode": "relaxed",
+      "authored_pose": {
+        "l": {
+          "upper_spread_deg": 9.0,
+          "upper_forward_deg": 3.0,
+          "forearm_forward_deg": 10.0,
+          "palm_back_deg": 15.0,
+          "hand_gap_m": 0.004,
+          "forearm_out_deg": 8.41064453125,
+          "nearest_garment_mm": 4.001872872322565,
+          "elbow_flexion_deg": 6.920787360484739,
+          "palm_normal": [
+            -0.9557189345359802,
+            0.23119255900382996,
+            -0.18207524716854095
+          ],
+          "wrist": [
+            0.24392575025558472,
+            -0.07287698239088058,
+            0.8713922500610352
+          ],
+          "finger_curls_deg": {
+            "index": [
+              8,
+              12,
+              6
+            ],
+            "middle": [
+              11,
+              16,
+              8
+            ],
+            "ring": [
+              14,
+              20,
+              10
+            ],
+            "pinky": [
+              17,
+              24,
+              12
+            ]
+          },
+          "thumb_tip_to_index_middle_joint_mm": 14.233805624435854,
+          "fingers": "soft cascade, palm toward thigh, thumb along the index finger"
+        },
+        "r": {
+          "upper_spread_deg": 9.0,
+          "upper_forward_deg": 3.0,
+          "forearm_forward_deg": 10.0,
+          "palm_back_deg": 15.0,
+          "hand_gap_m": 0.004,
+          "forearm_out_deg": 8.41064453125,
+          "nearest_garment_mm": 4.040941512357676,
+          "elbow_flexion_deg": 6.920787360484739,
+          "palm_normal": [
+            0.9557189345359802,
+            0.23119255900382996,
+            -0.18207524716854095
+          ],
+          "wrist": [
+            -0.24392575025558472,
+            -0.07287698239088058,
+            0.8713922500610352
+          ],
+          "finger_curls_deg": {
+            "index": [
+              8,
+              12,
+              6
+            ],
+            "middle": [
+              11,
+              16,
+              8
+            ],
+            "ring": [
+              14,
+              20,
+              10
+            ],
+            "pinky": [
+              17,
+              24,
+              12
+            ]
+          },
+          "thumb_tip_to_index_middle_joint_mm": 14.233805624435854,
+          "fingers": "soft cascade, palm toward thigh, thumb along the index finger"
+        }
+      },
+      "pose_verification": {
+        "source_sha256": "1dd098d02ad56684e788adf799413d02514b314c47e3a2c880de5b81ef5cacda",
+        "candidate_sha256": "0c7881cb4892af33f754e17dbc0d0ca64c77d2d200fc936e8acdfb8a34676575",
+        "frames_checked": 270,
+        "maximum_non_arm_matrix_error": 1.1920928955078125e-07,
+        "unchanged": [
+          "mesh coordinates",
+          "weights",
+          "mesh transforms",
+          "cameras",
+          "timeline"
+        ],
+        "arms": {
+          "l": {
+            "start_wrist_above_shoulder_mm": -471.09532356262207,
+            "start_fist_above_shoulder_mm": -567.1792477369308,
+            "start_elbow_flexion_deg": 6.920785109584154,
+            "start_forearm_from_vertical_deg": 167.04060933465612,
+            "start_forearm_outward_deg": 171.5891090075197,
+            "start_forearm_forward_deg": 169.9997108807574,
+            "start_wrist_shoulder_horizontal_mm": 89.96482893113294,
+            "maximum_wrist_step_mm": 0.0,
+            "maximum_elbow_step_mm": 0.0,
+            "maximum_elbow_flexion_deg": 6.920785109584154,
+            "palm_normal": [
+              -0.955718994140625,
+              0.23119235038757324,
+              -0.18207480013370514
+            ],
+            "upper_arm_from_down_deg": 9.4943969595561,
+            "forearm_from_down_deg": 12.959390665343902,
+            "thumb_tip_to_index_middle_mm": 14.2338258158119,
+            "thumb_tip_beside_index_mm": 35.641292575328414
+          },
+          "r": {
+            "start_wrist_above_shoulder_mm": -471.09532356262207,
+            "start_fist_above_shoulder_mm": -567.1792477369308,
+            "start_elbow_flexion_deg": 6.920785109584154,
+            "start_forearm_from_vertical_deg": 167.04060933465612,
+            "start_forearm_outward_deg": 171.5891090075197,
+            "start_forearm_forward_deg": 169.9997108807574,
+            "start_wrist_shoulder_horizontal_mm": 89.96482893113294,
+            "maximum_wrist_step_mm": 0.0,
+            "maximum_elbow_step_mm": 0.0,
+            "maximum_elbow_flexion_deg": 6.920785109584154,
+            "palm_normal": [
+              0.955718994140625,
+              0.23119235038757324,
+              -0.18207480013370514
+            ],
+            "upper_arm_from_down_deg": 9.4943969595561,
+            "forearm_from_down_deg": 12.959390665343902,
+            "thumb_tip_to_index_middle_mm": 14.2338258158119,
+            "thumb_tip_beside_index_mm": 35.641292575328414
+          }
+        },
+        "arm_static_matrix_error": 0.0,
+        "maximum_shoulder_outline_change_mm": 0.4018545150756836,
+        "hand_garment_gap_mm": [
+          {
+            "frame": 1,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 23,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 46,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 68,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 91,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 181,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          },
+          {
+            "frame": 270,
+            "l": 4.001768775196979,
+            "r": 4.040839827212039
+          }
+        ],
+        "errors": [],
+        "passed": true
+      },
+      "clothing_verification": {
+        "source_sha256": "0c7881cb4892af33f754e17dbc0d0ca64c77d2d200fc936e8acdfb8a34676575",
+        "frames_checked": 270,
+        "unique_poses_checked": 39,
+        "failed_frames": [],
+        "arm_skin_below_minus_half_mm_frames": [],
+        "minimum_garment_clearance_mm": 1.9694978727784473,
+        "minimum_arm_skin_to_garment_mm": 1.6185004351427779,
+        "method": "All evaluated garment vertices against the nearest rendered skin face, and all arm/hand skin against the evaluated garments; existing -0.5 mm gate; exact rig-pose caching.",
+        "scope": "Frame-sampled vertex clearance; not triangle intersections or continuous collision proof.",
+        "passed": true
+      },
+      "rendering": {
+        "frames": 270,
+        "samples": 32,
+        "resolution": [
+          870,
+          980
+        ],
+        "rendered_poses": 39,
+        "reused_frames": 231,
+        "reuse_method": "Bit-identical rig pose matrices and visible text; no simulation or temporal effects."
+      },
+      "media_validation": {
+        "frames_decoded": 270,
+        "fps": 30.0,
+        "seconds": 9.0,
+        "resolution": [
+          870,
+          980
+        ],
+        "atom_order": [
+          "ftyp",
+          "moov",
+          "free",
+          "mdat"
+        ]
+      },
+      "shared_crop": {
+        "crop": [
+          43,
+          108,
+          784,
+          847
+        ],
+        "union_box": [
+          316,
+          148,
+          579,
+          900
+        ],
+        "margins_px": {
+          "left": 273,
+          "right": 247,
+          "top": 40,
+          "bottom": 54
+        },
+        "pixels_outside_crop": 5670,
+        "outside_rows": [
+          91,
+          92
+        ],
+        "passed": true,
+        "note": "Pixels outside the crop lie only in the caption rows above it, as in the earlier clips."
+      }
+    },
+    "ex_007": {
+      "scene": "../previews/press_depth_hands_2026_10_11/ex_007_figure_mpfb.blend",
+      "scene_sha256": "79e32497f50ad6aea3f3717ecd3477f917bebae19e348cfba88b6217c30b1deb",
+      "media": "../previews/press_depth_hands_2026_10_11/ex_007_mpfb/ex_007_figure_motion.mp4",
+      "media_sha256": "4a5305a48c431e851c5df0e7f92a04df10c2207d5330650a5bafb656c44b8613",
+      "source_scene": "ex_007_figure_mpfb.blend (presentation_2026_10_09)",
+      "source_sha256": "3bc2b2e9a6190883770d122db24258a827bb7045416102a7ea16a44627d33a38",
+      "pose_mode": "deep",
+      "authored_pose": {
+        "l": {
+          "wrist_above_shoulder_m": 0.015,
+          "elbow_flexion_deg": 144.0,
+          "plane_anterior_deg": 20.0,
+          "wrist": [
+            0.31055065989494324,
+            -0.06976547092199326,
+            1.3574868440628052
+          ],
+          "elbow": [
+            0.2681281864643097,
+            -0.05432593822479248,
+            1.123315691947937
+          ],
+          "fist_above_shoulder_mm": 105.85081577301025,
+          "forearm_from_vertical_deg": 10.912101463309131,
+          "upper_arm_from_down_deg": 25.087899538482134
+        },
+        "r": {
+          "wrist_above_shoulder_m": 0.015,
+          "elbow_flexion_deg": 144.0,
+          "plane_anterior_deg": 20.0,
+          "wrist": [
+            -0.3105507493019104,
+            -0.06976544857025146,
+            1.3574872016906738
+          ],
+          "elbow": [
+            -0.26812824606895447,
+            -0.05432596802711487,
+            1.1233160495758057
+          ],
+          "fist_above_shoulder_mm": 105.85129261016846,
+          "forearm_from_vertical_deg": 10.912101463309131,
+          "upper_arm_from_down_deg": 25.087899538482134
+        }
+      },
+      "pose_verification": {
+        "source_sha256": "3bc2b2e9a6190883770d122db24258a827bb7045416102a7ea16a44627d33a38",
+        "candidate_sha256": "79e32497f50ad6aea3f3717ecd3477f917bebae19e348cfba88b6217c30b1deb",
+        "frames_checked": 300,
+        "maximum_non_arm_matrix_error": 1.7881393432617188e-07,
+        "unchanged": [
+          "mesh coordinates",
+          "weights",
+          "mesh transforms",
+          "cameras",
+          "timeline"
+        ],
+        "arms": {
+          "l": {
+            "start_wrist_above_shoulder_mm": 14.999151229858398,
+            "start_fist_above_shoulder_mm": 105.85066676139832,
+            "start_elbow_flexion_deg": 144.00023758040734,
+            "start_forearm_from_vertical_deg": 10.911904424442614,
+            "start_forearm_outward_deg": 10.268342531379885,
+            "start_forearm_forward_deg": 3.77221034797645,
+            "start_wrist_shoulder_horizontal_mm": 147.7556724627681,
+            "maximum_wrist_step_mm": 14.289245122777963,
+            "maximum_elbow_step_mm": 13.967689365298002,
+            "maximum_elbow_flexion_deg": 144.00023758040734,
+            "hold_upper_from_vertical_deg": 0.00014717378956429156,
+            "hold_forearm_from_vertical_deg": 0.00028966146812997996,
+            "hold_elbow_flexion_deg": 0.0001861559412458641,
+            "hold_wrist_shoulder_horizontal_mm": 0.0017568841888590324,
+            "start_pose_frames_identical": true,
+            "loop_closure_mm": 0.0,
+            "lift_fist_rise_minimum_step_mm": 0.0007450580596923828,
+            "lower_fist_fall_maximum_step_mm": -0.0007450580596923828,
+            "authored_start": {
+              "wrist_above_shoulder_m": 0.015,
+              "elbow_flexion_deg": 144.0,
+              "plane_anterior_deg": 20.0
+            }
+          },
+          "r": {
+            "start_wrist_above_shoulder_mm": 14.99950885772705,
+            "start_fist_above_shoulder_mm": 105.85105419158936,
+            "start_elbow_flexion_deg": 144.00020959901812,
+            "start_forearm_from_vertical_deg": 10.91190110114311,
+            "start_forearm_outward_deg": 10.26834447546587,
+            "start_forearm_forward_deg": 3.7721948201130293,
+            "start_wrist_shoulder_horizontal_mm": 147.75571573194725,
+            "maximum_wrist_step_mm": 14.289428862736154,
+            "maximum_elbow_step_mm": 13.967803555181874,
+            "maximum_elbow_flexion_deg": 144.00020959901812,
+            "hold_upper_from_vertical_deg": 0.00010545675881328466,
+            "hold_forearm_from_vertical_deg": 0.00028157813129213243,
+            "hold_elbow_flexion_deg": 0.00018880562832325302,
+            "hold_wrist_shoulder_horizontal_mm": 0.0015920822533377573,
+            "start_pose_frames_identical": true,
+            "loop_closure_mm": 0.0,
+            "lift_fist_rise_minimum_step_mm": 0.0005066394805908203,
+            "lower_fist_fall_maximum_step_mm": -0.0005066394805908203,
+            "authored_start": {
+              "wrist_above_shoulder_m": 0.015,
+              "elbow_flexion_deg": 144.0,
+              "plane_anterior_deg": 20.0
+            }
+          }
+        },
+        "prior_top_reference_sha256": "01519b68d35d985a25d4113f9baef21c5fae7aeb5742dccd9d1a64ef9e38c30f",
+        "prior_top_pose_max_matrix_error": 1.0356307029724121e-06,
+        "errors": [],
+        "passed": true
+      },
+      "clothing_verification": {
+        "source_sha256": "79e32497f50ad6aea3f3717ecd3477f917bebae19e348cfba88b6217c30b1deb",
+        "frames_checked": 300,
+        "unique_poses_checked": 97,
+        "failed_frames": [],
+        "arm_skin_below_minus_half_mm_frames": [
+          113,
+          151
+        ],
+        "minimum_garment_clearance_mm": 0.6002400605211733,
+        "minimum_arm_skin_to_garment_mm": -20.60566982254386,
+        "method": "All evaluated garment vertices against the nearest rendered skin face, and all arm/hand skin against the evaluated garments; existing -0.5 mm gate; exact rig-pose caching.",
+        "scope": "Frame-sampled vertex clearance; not triangle intersections or continuous collision proof.",
+        "passed": true,
+        "arm_skin_flag_resolution": "Informational arm-skin reading: one upper-arm skin vertex at frames 113 and 151 (the same pose) reads -20.61 mm by the nearest-face sign but lies 39.35 mm from the nearest shirt face, so it is not crossing the cloth; rear and side close-ups of frame 113 show no crossing. A ten-direction ray-parity probe could not classify this garment (points known to be inside the shirt also scored 0 of 10), so it is not used as evidence. The established garment-vertex gate passes on every frame."
+      },
+      "rendering": {
+        "frames": 300,
+        "samples": 32,
+        "resolution": [
+          870,
+          980
+        ],
+        "rendered_poses": 97,
+        "reused_frames": 203,
+        "reuse_method": "Bit-identical rig pose matrices and visible text; no simulation or temporal effects."
+      },
+      "media_validation": {
+        "frames_decoded": 300,
+        "fps": 30.0,
+        "seconds": 10.0,
+        "resolution": [
+          870,
+          980
+        ],
+        "atom_order": [
+          "ftyp",
+          "moov",
+          "free",
+          "mdat"
+        ]
+      },
+      "shared_crop": {
+        "crop": [
+          43,
+          108,
+          784,
+          847
+        ],
+        "union_box": [
+          246,
+          138,
+          623,
+          907
+        ],
+        "margins_px": {
+          "left": 203,
+          "right": 203,
+          "top": 30,
+          "bottom": 47
+        },
+        "pixels_outside_crop": 9300,
+        "outside_rows": [
+          91,
+          92
+        ],
+        "passed": true,
+        "note": "Pixels outside the crop lie only in the caption rows above it, as in the earlier clips."
+      },
+      "press_finish_reference": {
+        "file": "ex_007_figure_mpfb.blend",
+        "sha256": "01519b68d35d985a25d4113f9baef21c5fae7aeb5742dccd9d1a64ef9e38c30f"
+      }
+    }
+  },
+  "app_replay": {
+    "method": "MediaPipe pose_landmarker_full (VIDEO mode, GPU) on the rendered frames letterboxed into 1280 x 720, then the camera page processing loop at 30 fps, three loops, four 150 ms coaching-tick alignments. A rendered-avatar replay, not live, clinical or accuracy evidence.",
+    "results": {
+      "ex_007 deep start (this candidate)": {
+        "pose_found": "300/300",
+        "ready_raw_wrist_shoulder_vertical": {
+          "left": [
+            -0.002,
+            0.01
+          ],
+          "right": [
+            -0.001,
+            0.014
+          ]
+        },
+        "loops": 3,
+        "final_counts_by_tick_offset_ms": {
+          "0": {
+            "left": 3,
+            "right": 3
+          },
+          "50": {
+            "left": 3,
+            "right": 3
+          },
+          "100": {
+            "left": 3,
+            "right": 3
+          },
+          "150": {
+            "left": 3,
+            "right": 3
+          }
+        },
+        "classifications": [
+          "complete"
+        ],
+        "drawn_texts": []
+      },
+      "ex_007 raised start (resting-arm candidate), control": {
+        "pose_found": "300/300",
+        "ready_raw_wrist_shoulder_vertical": {
+          "left": [
+            0.29,
+            0.312
+          ],
+          "right": [
+            0.319,
+            0.34
+          ]
+        },
+        "loops": 3,
+        "final_counts_by_tick_offset_ms": {
+          "0": {
+            "left": 0,
+            "right": 0
+          },
+          "50": {
+            "left": 0,
+            "right": 0
+          },
+          "100": {
+            "left": 0,
+            "right": 0
+          },
+          "150": {
+            "left": 0,
+            "right": 0
+          }
+        },
+        "classifications": [],
+        "drawn_texts": []
+      },
+      "ex_004 relaxed hands (this candidate)": {
+        "pose_found": "270/270",
+        "counts_after_three_loops_and_tail_by_tick_offset": [
+          "9/9",
+          "9/9",
+          "9/9",
+          "9/9"
+        ],
+        "classifications": [
+          "{\"complete\":18}"
+        ],
+        "drawn_texts": [
+          "none"
+        ]
+      }
+    }
+  },
+  "preservation": {
+    "files_unchanged": 39,
+    "public_videos_unchanged": 7
+  },
+  "boundaries": [
+    "No registry, threshold, scoring, coaching, ML, database or protocol change.",
+    "No canonical scene, guide clip or web/public media replaced; no GLB export.",
+    "The neck animation stays outside the guide until its counting gate passes and the render is accepted.",
+    "Authored display poses, not clinical targets or a model of scapulohumeral rhythm."
+  ]
+}

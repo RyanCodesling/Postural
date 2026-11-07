@@ -147,12 +147,41 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# 3D exercise demonstration assets
-# Editable Blender sources and rendered outputs are large and are regenerable
-# from the pinned build scripts under tools/blender/. Those scripts, the asset
-# README, the third-party attribution file, and the pinned kinematics reference
-# JSON stay tracked so a build can be reproduced.
+# Exercise guide source files and accepted clips are versioned explicitly.
+# Generated frames, superseded renders, editor backups and legacy demos stay local.
 assets/blender/*.blend
 assets/blender/*.blend[0-9]
-assets/blender/previews/
-web/public/demos/
+assets/blender/previews/**
+!assets/blender/previews/
+!assets/blender/previews/form_2026_10_10/
+!assets/blender/previews/neck_side_bends_2026_10_07/
+!assets/blender/previews/presentation_2026_10_09/
+!assets/blender/previews/press_depth_hands_2026_10_11/
+!assets/blender/previews/side_bend_one_side_2026_09_25/
+!assets/blender/previews/slate_2026_09_25/
+!assets/blender/previews/form_2026_10_10/press_v8_vertical/
+!assets/blender/previews/neck_side_bends_2026_10_07/swing_40bpm_v2/
+!assets/blender/ex_001_figure_mpfb.blend
+!assets/blender/ex_005_figure_mpfb.blend
+!assets/blender/ex_006_figure_mpfb.blend
+!assets/blender/ex_007_figure_mpfb.blend
+!assets/blender/ex_008_figure_mpfb.blend
+!assets/blender/previews/slate_2026_09_25/ex_001_figure_mpfb.blend
+!assets/blender/previews/slate_2026_09_25/ex_005_figure_mpfb.blend
+!assets/blender/previews/slate_2026_09_25/ex_006_figure_mpfb.blend
+!assets/blender/previews/slate_2026_09_25/ex_007_figure_mpfb.blend
+!assets/blender/previews/slate_2026_09_25/ex_008_figure_mpfb.blend
+!assets/blender/previews/side_bend_one_side_2026_09_25/ex_005_figure_mpfb.blend
+!assets/blender/previews/neck_side_bends_2026_10_07/swing_40bpm_v2/ex_004_figure_mpfb.blend
+!assets/blender/previews/presentation_2026_10_09/ex_004_figure_mpfb.blend
+!assets/blender/previews/presentation_2026_10_09/ex_007_figure_mpfb.blend
+!assets/blender/previews/form_2026_10_10/press_v8_vertical/ex_007_figure_mpfb.blend
+!assets/blender/previews/press_depth_hands_2026_10_11/ex_004_figure_mpfb.blend
+!assets/blender/previews/press_depth_hands_2026_10_11/ex_007_figure_mpfb.blend
+web/public/demos/*
+!web/public/demos/ex_001-figure-motion.mp4
+!web/public/demos/ex_004-figure-motion.mp4
+!web/public/demos/ex_005-figure-motion.mp4
+!web/public/demos/ex_006-figure-motion.mp4
+!web/public/demos/ex_007-figure-motion.mp4
+!web/public/demos/ex_008-figure-motion.mp4

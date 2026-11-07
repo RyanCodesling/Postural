@@ -1,5 +1,15 @@
 # Sprint Updates 
 
+## 📌 Update-11-07-26-GuideAssets | *RyanCodesling*
+
+- Added the six accepted Reference Guide MP4s and their editable Blender scenes, including the base figure and source scenes used for the final look and poses
+- Added the original CC0 hair and eye inputs, with exact file hashes and render instructions in [assets/blender/GUIDE_ASSETS.md](assets/blender/GUIDE_ASSETS.md)
+- Included the current deep-start shoulder-press and relaxed-hand neck rendering tools and their dated review reports
+- Removed the abandoned ecorche, anatomy and muscle-atlas tool chain and unused reference data; retained its historical license notices
+- Kept generated frame sequences, editor backups and rejected previews out of Git; accepted video bytes, exercise motion and app behavior are unchanged
+
+---
+
 ## 📌 Update-11-04-26-Fixes | *Clarence*
 
 - Names can no longer contain numbers when an admin creates an account or edits a user

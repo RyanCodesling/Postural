@@ -107,6 +107,53 @@
 
 ---
 
+## 📌 Update-11-05-26 | *Enah*
+
+- Gave the app a Postural icon in the browser tab, bookmarks, and home screen, replacing the old favicon
+- Redesigned the landing page in a lighter clinical style: deep green text, the clinic logo's green, and its orange cross as a second accent
+- Added a looping hero video beside the landing page's introduction, with a still poster for people who turn off motion
+- Made the landing page fit phones, tablets, and computers, with the hero stacking its text above the video on smaller screens
+
+### *web\src\app\favicon.ico*, *web\src\app\icon.png*, and *web\src\app\apple-icon.png*
+
+- Replaced favicon.ico with the Postural icon, and added icon.png and apple-icon.png, which Next.js serves as the site's icon and the Apple home-screen icon
+- Kept the source images in web\media: postural-favicon.ico, postural-icon-512.png, and postural-icon-512.jpg
+
+### *web\public\landing\\*
+
+- Added the hero video as postural-hero-1080p.mp4, postural-hero-1080p.webm, and postural-hero-720p.mp4, with postural-hero-poster.jpg as its first frame
+
+### *web\src\app\page.tsx*
+
+- Replaced the dark green header and its clinic photo with a light header holding the clinic logo and name
+- Put the introduction on the left and the hero video on the right on computers, over a light green fade; on phones and tablets the video sits below the text
+- Played the 720p video on phones and the 1080p WebM or MP4 on larger screens, muted and looping, with feathered edges instead of a box
+- Zoomed the video slightly on phones and tablets so the app screens in it read larger
+- Showed the poster image instead of the video when the device asks for reduced motion
+- Turned the three hero facts into a row of small boxes, and added an arrow to the Log In buttons
+- Gave each of the four "What it does" cards a small drawing of what the patient sees: the rep counter, the hold timer, a posture tip, and a session report
+- Numbered the therapist and patient points in matching cards
+- Removed the "How it works" section
+- Put "What it does" and "What it doesn't do" side by side in one table, with the support-tool note below it
+- Turned the closing Log In section into a green panel with the clinic's orange cross
+- Padded every section and the footer for phone, tablet, and computer widths
+
+### *web\AGENTS.md*
+
+- Added the Next.js notes file that `next dev` writes, so it no longer shows as an uncommitted change
+
+### *Validation*
+
+- Lint passes on the landing page
+
+### *Remaining boundaries*
+
+- The landing page has not been checked in every browser at phone, tablet, and computer widths after this README update
+- The hero videos add about 23 MB to the repository; phones load only the 720p file
+- The landing page no longer uses the clinic photo, web\media\acc_bacoor_landing_page.png; the login pages still show it
+
+---
+
 ## 📌 Update-11-04-26-Fixes | *Clarence*
 
 - Names can no longer contain numbers when an admin creates an account or edits a user

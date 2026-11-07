@@ -68,7 +68,7 @@ export default function FirstTimePasswordPage() {
           </button>
           <button
             type="button"
-            onClick={() => router.push("/login")}
+            onClick={() => router.push("/?view=login")}
             className={`${AUTH_LINK} self-start`}
           >
             ‹ Cancel
@@ -79,7 +79,7 @@ export default function FirstTimePasswordPage() {
           <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
             Password updated successfully.
           </p>
-          <Link href="/login" className={`${AUTH_BUTTON} block text-center`}>
+          <Link href="/?view=login" className={`${AUTH_BUTTON} block text-center`}>
             Go to Login
           </Link>
         </div>

@@ -12,7 +12,7 @@ export default function DashboardPage() {
     if (loading) return;
 
     if (!user) {
-      router.push('/login');
+      router.push('/?view=login');
       return;
     }
 
@@ -27,7 +27,7 @@ export default function DashboardPage() {
         router.replace('/dashboard/patient');
         break;
       default:
-        router.replace('/login');
+        router.replace('/?view=login');
     }
   }, [router, user, loading]);
 

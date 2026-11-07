@@ -19,7 +19,7 @@ export async function proxy(request: NextRequest) {
     const session = await verifySessionToken(authToken?.value);
 
     if (!session) {
-      const response = NextResponse.redirect(new URL("/login", request.url));
+      const response = NextResponse.redirect(new URL("/?view=login", request.url));
       if (authToken) {
         response.cookies.set(
           AUTH_COOKIE_NAME,

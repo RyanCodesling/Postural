@@ -13,6 +13,39 @@
 - Kept the Archived Users table's header above its rows when the table is scrolled
 - Enlarged the camera page's L, R, REPS, TIME, rep target, and SET labels so they can be read from a distance
 - Updated the reports test to the progress report's "(36 years old)" age wording
+- Moved Log In and Forgot Password onto the landing page: they open in the hero in place of the video, and /login and /forgot-password now lead there
+- Removed the clinic photo from the change-password and first-time password pages, and deleted the photo file, which nothing else used
+- Kept only the 720p landing video and deleted the 1080p MP4 and WebM
+
+### *web\src\app\_auth\LoginForm.tsx*, *web\src\app\_auth\ForgotPasswordForm.tsx*, and *web\src\app\_auth\HeroPanel.tsx*
+
+- Moved the log in form and the three-step password reset (email, code, new password) out of their pages into forms the landing page shows, unchanged in what they ask and send
+- Added HeroPanel, the hero's right side: the video, or in its place the log in form at /?view=login or the password reset at /?view=forgot, in a white card, with ‹ Back returning to the video and ‹ Back to Login returning to the log in form
+- Brought the form into view and put the cursor in its first field when it opens, including from the closing Log In button lower down and on phones, where it sits below the text
+- Showed "Password reset successful! Please log in with your new password." after a reset, from /?view=login&reset=success
+- Let the code boxes in the reset's second step shrink to fit a phone, which they were too wide for
+
+### *web\src\app\page.tsx*
+
+- Pointed both Log In buttons at /?view=login without jumping the page, and put HeroPanel where the video was
+- Played the one 720p video on every screen
+
+### *web\src\app\(auth)\login\page.tsx*, *web\src\app\(auth)\forgot-password\page.tsx*, *web\src\proxy.ts*, *web\src\app\(app)\layout.tsx*, *web\src\app\(app)\dashboard\page.tsx*, and *web\src\app\(auth)\first-time-password\page.tsx*
+
+- Turned /login and /forgot-password into redirects to /?view=login and /?view=forgot, keeping ?reset=success, so bookmarks and older links still work
+- Sent a signed-out visitor, the app's sign-in checks, and the first-time password page's links straight to /?view=login
+
+### *web\src\app\(auth)\AuthFrame.tsx* and *web\media\acc_bacoor_landing_page.png*
+
+- Replaced the clinic photo behind the green panel of the change-password and first-time password pages with the same green gradient alone, and deleted the photo file
+
+### *web\public\landing\\*
+
+- Deleted postural-hero-1080p.mp4 and postural-hero-1080p.webm; postural-hero-720p.mp4 is unchanged
+
+### *web\src\lib\session-token.test.ts*
+
+- Changed the signed-out redirect the test expects from /login to /?view=login
 
 ### *web\src\app\(app)\camera\CameraClient.tsx*
 
@@ -86,11 +119,14 @@
 - Type check passes, and lint passes on every changed file
 - All 102 TypeScript test suites pass
 - Tried in the browser as admin: the Archived Users header while scrolling, the capital-letter role badges, the unread notification title, the custom exercise's uploaded guide video playing on a loop and stopping at End session, the YouTube player switching to autoplay and back, and the Add User and Edit User date of birth messages, without saving anything
+- Tried in the browser on the landing page: both Log In buttons, Forgot Password, both Back buttons, the /login?reset=success and /forgot-password redirects, and the phone layout with no sideways scrolling; patient and therapist accounts signed in through the new form
+- Seen on the camera page with a stand-in camera feed and every save answered in the page, so nothing was stored: the larger labels, the pain score 9 warning with Okay and Cancel, and the rep counting
 
 ### *Remaining boundaries*
 
-- The pain score 9 and 10 warning, Okay, the completed-with-pain notifications, and the combined due-tomorrow reminder have not been tried in the running app
-- The larger camera labels have not been seen in a live session, since the app's built-in browser has no camera
+- Okay on the pain score 9 and 10 warning, the completed-with-pain notifications, and the combined due-tomorrow reminder have not been tried in the running app
+- A full password reset through the landing page has not been tried, since it emails a code to a real account
+- The larger camera labels have not been seen with a person in front of a real camera
 - Whether a YouTube guide video turns its sound on has not been heard: the app's built-in browser does not load YouTube; Safari on iPhone may keep it muted, and the player's speaker turns it on
 - Delivery to Microsoft 365 addresses such as @bacoor.sti.edu.ph may still be held by their filtering; allow-listing the sender is the fix on their side
 - Not deployed; deploying it needs no SQL

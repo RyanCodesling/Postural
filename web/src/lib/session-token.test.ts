@@ -231,7 +231,7 @@ async function main(): Promise<void> {
 
       const missing = await proxy(new NextRequest("http://localhost/dashboard"));
       assertEqual(missing.status, 307, "missing-cookie status");
-      assertEqual(missing.headers.get("location"), "http://localhost/login", "missing-cookie redirect");
+      assertEqual(missing.headers.get("location"), "http://localhost/?view=login", "missing-cookie redirect");
 
       const invalid = await proxy(
         new NextRequest("http://localhost/camera", {

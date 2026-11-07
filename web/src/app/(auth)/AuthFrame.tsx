@@ -1,6 +1,5 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
-import bgImage from "../../../media/acc_bacoor_landing_page.png";
 import logo from "../../../media/acc_bacoor_logo.png";
 
 export const AUTH_INPUT =
@@ -30,16 +29,16 @@ function Check() {
 }
 
 /**
- * The shared frame for the signed-out pages: a green brand panel (clinic photo
- * under a green wash, with the clinic details as live text) beside a clean
- * white form panel. On small screens only the form panel shows.
+ * The frame for the change-password and first-time password pages: a green
+ * brand panel, with the clinic details as live text, beside a clean white form
+ * panel. On small screens only the form panel shows. Log in and the password
+ * reset open on the landing page instead.
  */
 export default function AuthFrame({ children }: { children: ReactNode }) {
   return (
     <main className="grid min-h-screen bg-white text-gray-900 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" style={{ colorScheme: "light" }}>
       <aside className="relative hidden overflow-hidden text-white lg:flex lg:flex-col lg:justify-between lg:p-12 xl:p-16">
-        <Image src={bgImage} alt="" fill unoptimized priority className="object-cover object-right" />
-        <div className="absolute inset-0 bg-gradient-to-br from-green-950/95 via-green-900/85 to-green-700/55" />
+        <div className="absolute inset-0 bg-gradient-to-br from-green-950 via-green-900 to-green-700" />
 
         <div className="relative flex items-center gap-4">
           <Image src={logo} alt="ACC Bacoor" width={112} height={112} className="h-14 w-14 shrink-0 rounded-full ring-2 ring-white/40" />

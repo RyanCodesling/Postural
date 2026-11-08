@@ -9132,7 +9132,7 @@ export default function CameraClient() {
   // tracking is interrupted ("Hold still and ensure good lighting") and while
   // the "Tracking was interrupted" recalibration offer is up, until answered.
   const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale;
-  // The voice speaks a few loops per set, then only subtitles continue. Every
+  // The voice speaks 3 repetitions per set, then only subtitles continue. Every
   // start passes through the countdown, so a new session re-arms it even when
   // it begins on the same set number as the last one.
   const guideVoiceRound = sessionState === "countdown" ? "start" : `set-${currentSetIdx}`;

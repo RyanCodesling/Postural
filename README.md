@@ -18,7 +18,7 @@
 - Kept only the 720p landing video and deleted the 1080p MP4 and WebM
 - Added spoken instructions to the six Reference Guide videos in a recorded female voice, with a Voice on/off button and a subtitle of each line on the camera view
 - Played the voice and subtitles only during a set after the baseline is captured, and paused them while tracking is paused or the "Tracking was interrupted" card is up
-- Spoke the guide's lines for 3 loops per set, after which only the subtitles continue; in full screen the voice and subtitles loop with no limit
+- Spoke the guide's lines for 3 repetitions of the movement per set, after which only the subtitles continue; in full screen the voice and subtitles loop with no limit
 - Started the Neck Side Bends guide at 0.5× speed so its "Tilt right" and "Tilt left" lines are not back to back
 
 ### *web\src\app\_auth\LoginForm.tsx*, *web\src\app\_auth\ForgotPasswordForm.tsx*, and *web\src\app\_auth\HeroPanel.tsx*
@@ -62,21 +62,21 @@
 
 - Showed the Reference Guide's current voice line as a large subtitle at the bottom of the camera view, over the camera-off cover when the camera is off, below the set numbers when it is on
 - Allowed the guide's voice and subtitles only while a set is running, after the baseline is captured, with tracking not paused and no "Tracking was interrupted" card showing; before Start session, during positioning, baseline capture, recalibration, rest, and after the session they stay off
-- Told the guide when a new set or session begins, so each set gets its 3 voiced loops again
+- Told the guide when a new set or session begins, so each set gets its 3 spoken repetitions again
 
 ### *web\src\app\(app)\camera\DemoClipPlayer.tsx*
 
 - Added a Voice off / Voice on button beside the speed menu; it starts off and the browser remembers the choice
 - Played a recorded line on each cue's frame, taken from the video's own frames, so the voice follows loops, pausing, and 0.5× speed; a line never starts partway through after turning the voice on, resuming, or a pause in tracking
 - Kept a subtitle up from the start of a line until 0.35 s after its last word
-- Stopped speaking after 3 loops of the guide in a set and kept showing the subtitles in time with the movement
+- Spoke 3 whole repetitions of the movement per set, starting on a repetition's first line, and showed only the subtitles before and after, in time with the movement; Neck Side Bends and Wall Angels count a right/left or up/down pair as a repetition, since their videos hold more than one per loop
 - Played the voice and showed the subtitle inside the full-screen view whenever the voice is on, with no loop limit and whatever the session is doing
 - Started each guide at its own default speed, 0.5× for Neck Side Bends
 
 ### *web\src\lib\exercises\demoClips.ts*
 
 - Added each guide's voice cues: the frame a line starts on, a little before the movement it names, the words, the recording, and how long the words last
-- Added the 15 recorded lines and the defaultSpeed setting, 0.5 for Neck Side Bends
+- Added the 15 recorded lines, the defaultSpeed setting, 0.5 for Neck Side Bends, and repCues, the lines in one repetition (2 for Neck Side Bends and Wall Angels)
 - Lateral Arm Raise: "Raise your arms to shoulder level." / "Lower your arms." / "Relax your arms, shoulders straight."
 - Neck Side Bends: "Tilt right." / "Tilt left.", alternating on each swing, the figure's own sides
 - Standing Side Bend: "Slowly bend to the side." / "Come back up." / "Stand tall, hand on your hip."
@@ -162,7 +162,7 @@
 - Tried in the browser as admin: the Archived Users header while scrolling, the capital-letter role badges, the unread notification title, the custom exercise's uploaded guide video playing on a loop and stopping at End session, the YouTube player switching to autoplay and back, and the Add User and Edit User date of birth messages, without saving anything
 - Tried in the browser on the landing page: both Log In buttons, Forgot Password, both Back buttons, the /login?reset=success and /forgot-password redirects, and the phone layout with no sideways scrolling; patient and therapist accounts signed in through the new form
 - Seen on the camera page with a stand-in camera feed and every save answered in the page, so nothing was stored: the larger labels, the pain score 9 warning with Okay and Cancel, and the rep counting
-- Voice cues: type check and lint pass on the changed files, all 19 Reference Guide clip tests pass, and all 15 recordings load in the browser; the Lateral Arm Raise video was checked frame by frame against its cue frames
+- Voice cues: type check and lint pass on the changed files, all 21 Reference Guide clip tests pass, including a simulated set for each guide started from every line, and all 15 recordings load in the browser; the Lateral Arm Raise video was checked frame by frame against its cue frames
 
 ### *Remaining boundaries*
 

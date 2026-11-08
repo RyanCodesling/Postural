@@ -52,6 +52,12 @@ export type DemoClip = {
    */
   cues: readonly VoiceCue[];
   /**
+   * Lines in one repetition, when the video loop holds more than one (the
+   * neck's three right/left swings, the wall angels' front and side). The
+   * cues list must start with a repetition. Absent: one repetition per loop.
+   */
+  repCues?: number;
+  /**
    * Playback speed the guide starts at; 1 when absent. One of the player's
    * speed options. Cues follow media time, so they stay on their frames.
    */
@@ -164,6 +170,8 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
       cue(22, "tilt-right"), cue(67, "tilt-left"), cue(112, "tilt-right"),
       cue(157, "tilt-left"), cue(202, "tilt-right"), cue(247, "tilt-left"),
     ],
+    // One repetition is a right and a left swing; the loop holds three.
+    repCues: 2,
     // At 1× a new side every 1.5 s makes the voice nonstop; at 0.5× each side
     // gets 3 s, and every line still leads its swing by 6 frames (0.4 s).
     defaultSpeed: 0.5,
@@ -227,6 +235,8 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
       cue(8, "slide-arms-up-w-position"), cue(112, "slide-them-down"),
       cue(240, "slide-arms-up-w-position"), cue(346, "slide-them-down"),
     ],
+    // One repetition is up and down; the loop holds the front and the side one.
+    repCues: 2,
     detail: { label: "Shoulders", crop: { x: 210, y: 140, w: 450, h: 480 } },
   },
 };
@@ -263,6 +273,22 @@ export function demoCueIndexAtTime(clip: DemoClip, seconds: number): number {
     index = i;
   }
   return index;
+}
+
+/** Lines in one repetition of a clip's movement. */
+export function demoRepCues(clip: DemoClip): number {
+  return clip.repCues ?? clip.cues.length;
+}
+
+/**
+ * Whether a session speaks cue `index` aloud, given how many lines it has
+ * already spoken this set. Speaking starts on a repetition's first line and
+ * stops after `reps` whole repetitions; the other lines are subtitles only.
+ */
+export function demoCueSpoken(clip: DemoClip, index: number, spokenSoFar: number, reps: number): boolean {
+  const rep = demoRepCues(clip);
+  const begun = spokenSoFar > 0 || index % rep === 0;
+  return begun && spokenSoFar < rep * reps;
 }
 
 /** The clip for an exercise, or null when none is published. */

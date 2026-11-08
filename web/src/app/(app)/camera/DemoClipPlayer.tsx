@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { demoCueIndexAtTime, demoStatusAtTime, type DemoClip } from "@/lib/exercises/demoClips";
+import { demoCueIndexAtTime, demoCueSpoken, demoStatusAtTime, type DemoClip } from "@/lib/exercises/demoClips";
 
 const buttonStyle: CSSProperties = {
   minHeight: 36, padding: "6px 10px", border: "1px solid #c7d4d8", borderRadius: 7,
@@ -15,10 +15,11 @@ const VOICE_KEY = "postural.demoVoice";
 const SUBTITLE_LINGER_SECONDS = 0.35;
 
 /**
- * During a session the voice speaks the guide's loop this many times per set;
- * after that only the subtitles carry on. Full screen loops the voice freely.
+ * During a session the voice speaks this many repetitions of the movement per
+ * set, starting on a repetition's first line; before and after, only the
+ * subtitles show. Full screen loops the voice freely.
  */
-const SESSION_VOICE_LOOPS = 3;
+const SESSION_VOICE_REPS = 3;
 
 /** The refs the voice cues share between the frame loop and the controls. */
 type VoiceState = {
@@ -80,7 +81,7 @@ export default function DemoClipPlayer({ clip, compact, onError, onCue, voiceAll
   voiceAllowed?: boolean;
   /**
    * Set by the camera page; each new value (a new set or session) lets the
-   * voice speak again for SESSION_VOICE_LOOPS loops. Without it the voice is
+   * voice speak again for SESSION_VOICE_REPS repetitions. Without it the voice is
    * not limited.
    */
   voiceRound?: string;
@@ -159,7 +160,7 @@ export default function DemoClipPlayer({ clip, compact, onError, onCue, voiceAll
         cueRef.current = cue;
         if (!joined && voiceRef.current && allowedRef.current && !video.paused) {
           const free = fullScreenRef.current || !limitedRef.current;
-          const withAudio = free || spokenRef.current < clip.cues.length * SESSION_VOICE_LOOPS;
+          const withAudio = free || demoCueSpoken(clip, cue, spokenRef.current, SESSION_VOICE_REPS);
           if (!free && withAudio) spokenRef.current += 1;
           playCue(state, cue, withAudio);
         }

@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { DEMO_CLIPS, demoClipFor, demoCueIndexAtTime, demoStatusAtTime } from "./demoClips";
+import { DEMO_CLIPS, demoClipFor, demoCueIndexAtTime, demoCueSpoken, demoRepCues, demoStatusAtTime } from "./demoClips";
 import { EXERCISE_REGISTRY } from "./registry";
 
 let testsPassed = 0;
@@ -207,6 +207,44 @@ test("neck lines alternate sides, one per 45-frame beat, ahead of each swing", (
   });
   assert(clip.cues[demoCueIndexAtTime(clip, 0)].text === "Tilt left.", "frame 1 swings toward the figure's left");
   assert(clip.defaultSpeed === 0.5, "the neck guide starts at half speed so its lines are not back to back");
+});
+
+/** The lines a set speaks aloud when the voice is first allowed on cue `from`. */
+function spokenInSet(id: string, from: number): string[] {
+  const clip = DEMO_CLIPS[id];
+  const spoken: string[] = [];
+  for (let step = 0; step < clip.cues.length * 6; step++) {
+    const index = (from + step) % clip.cues.length;
+    if (demoCueSpoken(clip, index, spoken.length, 3)) spoken.push(clip.cues[index].text);
+  }
+  return spoken;
+}
+
+test("a set speaks exactly three whole repetitions, from any starting line", () => {
+  const expected: Record<string, string[]> = {
+    ex_001: ["Raise your arms to shoulder level.", "Lower your arms.", "Relax your arms, shoulders straight."],
+    ex_004: ["Tilt right.", "Tilt left."],
+    ex_005: ["Slowly bend to the side.", "Come back up.", "Stand tall, hand on your hip."],
+    ex_006: ["Raise your arms to shoulder level.", "Hold.", "Lower your arms.", "Relax your arms."],
+    ex_007: ["Press your arms overhead.", "Lower your hands to your shoulders.", "Hands at shoulder height."],
+    ex_008: ["Slide your arms up in W-position.", "Slide them down."],
+  };
+  assert(Object.keys(expected).length === Object.keys(DEMO_CLIPS).length, "every clip has an expected repetition");
+  for (const [id, rep] of Object.entries(expected)) {
+    const want = [...rep, ...rep, ...rep].join(" | ");
+    for (let from = 0; from < DEMO_CLIPS[id].cues.length; from++) {
+      const got = spokenInSet(id, from).join(" | ");
+      assert(got === want, `${id} from cue ${from}: spoke "${got}"`);
+    }
+  }
+});
+
+test("repetition sizes divide each loop", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    const rep = demoRepCues(clip);
+    assert(rep >= 1 && clip.cues.length % rep === 0, `${id}: ${rep} lines per repetition does not divide ${clip.cues.length}`);
+  }
+  assert(demoRepCues(DEMO_CLIPS.ex_004) === 2 && demoRepCues(DEMO_CLIPS.ex_008) === 2, "neck and wall angels hold several repetitions per loop");
 });
 
 test("only the neck guide starts slowed down", () => {

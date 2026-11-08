@@ -3108,6 +3108,8 @@ export default function CameraClient() {
   const [highPainError, setHighPainError] = useState<string | null>(null);
   // A custom exercise's session is running: its guide video plays on a loop.
   const [customVideoPlaying, setCustomVideoPlaying] = useState(false);
+  /** The Reference Guide's spoken line, subtitled on the camera view. */
+  const [guideCue, setGuideCue] = useState<string | null>(null);
   // Optional session video: a question after the pain survey, answered each
   // time unless the patient asked this device to remember the answer.
   const [videoQuestion, setVideoQuestion] = useState<{ remember: boolean } | null>(null);
@@ -9124,6 +9126,16 @@ export default function CameraClient() {
   // readiness state still describes the previous stream.
   const cameraFramesFlowing = cameraOn && videoResolution !== null;
   const trackingPaused = cameraFramesFlowing && !captureOk;
+  // The guide's voice and subtitles wait for Start session and the baseline:
+  // only during a set, never while positioning, capturing a baseline
+  // (including a mid-session recalibration) or resting, and they pause while
+  // tracking is interrupted ("Hold still and ensure good lighting") and while
+  // the "Tracking was interrupted" recalibration offer is up, until answered.
+  const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale;
+  // The voice speaks a few loops per set, then only subtitles continue. Every
+  // start passes through the countdown, so a new session re-arms it even when
+  // it begins on the same set number as the last one.
+  const guideVoiceRound = sessionState === "countdown" ? "start" : `set-${currentSetIdx}`;
   const cameraStatus: CameraStatus =
     isStarting || (cameraOn && videoResolution === null)
       ? "starting"
@@ -10711,7 +10723,25 @@ export default function CameraClient() {
                     compact={tightLayout}
                   />
                 )}
+                {cameraOn && guideVoiceAllowed && guideCue && <GuideCueSubtitle text={guideCue} compact={tightLayout} />}
               </div>
+
+              {/* With the camera off its cover hides the column above, so the
+                  guide's subtitle sits over the cover instead. */}
+              {!cameraOn && guideVoiceAllowed && guideCue && (
+                <div style={{
+                  position: "absolute",
+                  left: tightLayout ? 10 : 16,
+                  right: tightLayout ? 10 : 16,
+                  bottom: tightLayout ? 10 : 16,
+                  zIndex: 26,
+                  display: "flex",
+                  justifyContent: "center",
+                  pointerEvents: "none",
+                }}>
+                  <GuideCueSubtitle text={guideCue} compact={tightLayout} />
+                </div>
+              )}
 
               {/* Rest */}
               {sessionState === "resting" && (
@@ -11856,6 +11886,9 @@ export default function CameraClient() {
             <DemoCard
               exerciseId={activeDefinition?.id ?? null}
               compact={compactLayout}
+              onCue={setGuideCue}
+              voiceAllowed={guideVoiceAllowed}
+              voiceRound={guideVoiceRound}
               custom={selectedExerciseObj?.isCustom
                 ? {
                     id: selectedExerciseObj.id,
@@ -14240,13 +14273,39 @@ function CustomGuidedSession({
   );
 }
 
+/** Subtitle for the Reference Guide's spoken line, on the camera view. */
+function GuideCueSubtitle({ text, compact }: { text: string; compact: boolean }) {
+  return (
+    <div role="status" aria-live="polite" style={{
+      maxWidth: 760,
+      padding: compact ? "8px 14px" : "10px 20px",
+      borderRadius: 10,
+      background: "oklch(0.12 0.005 240 / 0.82)",
+      color: "#fff",
+      fontSize: compact ? 18 : 24,
+      fontWeight: 600,
+      lineHeight: 1.3,
+      textAlign: "center",
+      textShadow: "0 1px 2px oklch(0 0 0 / 0.6)",
+    }}>
+      {text}
+    </div>
+  );
+}
+
 /**
  * The guide keeps missing-media fallback local to the selected clip. A custom
  * exercise plays the video attached to it instead of a rendered clip.
  */
-function DemoCard({ exerciseId, compact, custom }: {
+function DemoCard({ exerciseId, compact, custom, onCue, voiceAllowed, voiceRound }: {
   exerciseId: string | null;
   compact: boolean;
+  /** The guide's spoken line, shown as a subtitle on the camera view. */
+  onCue?: (text: string | null) => void;
+  /** Whether the guide may speak now (session running, baseline captured). */
+  voiceAllowed: boolean;
+  /** Changes with each set and session, re-arming the guide's limited voice. */
+  voiceRound: string;
   /** `playing`: a custom session is running, so its video plays on a loop. */
   custom?: { id: string; name: string; video: ExerciseVideo | null; playing?: boolean };
 }) {
@@ -14260,7 +14319,7 @@ function DemoCard({ exerciseId, compact, custom }: {
       {custom?.video ? (
         <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} playing={custom.playing} />
       ) : shownClip ? (
-        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
+        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onCue={onCue} voiceAllowed={voiceAllowed} voiceRound={voiceRound} onError={() => setFailedSrc(shownClip.src)} />
       ) : (
         <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,
           display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",

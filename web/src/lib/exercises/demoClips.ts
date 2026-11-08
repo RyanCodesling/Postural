@@ -44,6 +44,18 @@ export type DemoClip = {
   frames: number;
   phases: readonly { start: number; label: string }[];
   views?: readonly { start: number; label: string }[];
+  /**
+   * Recorded coaching lines. A line starts playing on its frame, placed a
+   * little before the movement it names, and holds until the next cue; the
+   * list wraps around the loop, so frames before the first cue belong to the
+   * last. Every line's words end before the next line starts at 1×.
+   */
+  cues: readonly VoiceCue[];
+  /**
+   * Playback speed the guide starts at; 1 when absent. One of the player's
+   * speed options. Cues follow media time, so they stay on their frames.
+   */
+  defaultSpeed?: 1 | 0.5;
   /** Optional detail framing; the default full-body crop stays shared. */
   detail: { label: string; crop: DemoClip["crop"] };
 };
@@ -69,6 +81,48 @@ function sharedCrop(width: number, height: number): DemoClip["crop"] {
   };
 }
 
+export type VoiceCue = {
+  /** Frame the recording starts on. */
+  start: number;
+  /** The spoken words, also shown as the subtitle. */
+  text: string;
+  /** Public URL of the recording. */
+  audio: string;
+  /** Seconds from the start of the file to the end of the last word. */
+  speech: number;
+};
+
+/**
+ * Recorded lines under `web/public/demos/voice/`, generated with Microsoft's
+ * "Ava" neural voice (en-US-AvaMultilingualNeural). `speech` is the end of the
+ * last word, from the voice service's word timings; the files carry a short
+ * silent tail after it.
+ */
+const VOICE_LINES = {
+  "raise-arms-shoulder-level": { text: "Raise your arms to shoulder level.", speech: 1.9 },
+  "lower-arms": { text: "Lower your arms.", speech: 1.3 },
+  "relax-arms-shoulders-straight": { text: "Relax your arms, shoulders straight.", speech: 2.05 },
+  "tilt-right": { text: "Tilt right.", speech: 0.69 },
+  "tilt-left": { text: "Tilt left.", speech: 0.84 },
+  "bend-to-side": { text: "Slowly bend to the side.", speech: 1.59 },
+  "come-back-up": { text: "Come back up.", speech: 0.85 },
+  "stand-tall-hand-on-hip": { text: "Stand tall, hand on your hip.", speech: 1.77 },
+  "hold": { text: "Hold.", speech: 0.51 },
+  "relax-arms": { text: "Relax your arms.", speech: 1.23 },
+  "press-overhead": { text: "Press your arms overhead.", speech: 1.69 },
+  "lower-hands-to-shoulders": { text: "Lower your hands to your shoulders.", speech: 2.03 },
+  "hands-at-shoulder-height": { text: "Hands at shoulder height.", speech: 1.6 },
+  // Recorded from "Slide your arms up in W position." so the voice says the letter.
+  "slide-arms-up-w-position": { text: "Slide your arms up in W-position.", speech: 2.22 },
+  "slide-them-down": { text: "Slide them down.", speech: 1.13 },
+} as const;
+
+export type VoiceLine = keyof typeof VOICE_LINES;
+
+function cue(start: number, line: VoiceLine): VoiceCue {
+  return { start, ...VOICE_LINES[line], audio: `/demos/voice/${line}.mp3` };
+}
+
 export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
   ex_001: {
     src: "/demos/ex_001-figure-motion.mp4",
@@ -79,6 +133,9 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
     fps: 30,
     frames: 210,
     phases: [{ start: 1, label: "Ready" }, { start: 25, label: "Raise" }, { start: 96, label: "Pause" }, { start: 121, label: "Lower" }, { start: 192, label: "Ready" }],
+    // Raise at 25, lower at 121; the relax line starts as the arms come down
+    // and ends just before the next raise line.
+    cues: [cue(16, "raise-arms-shoulder-level"), cue(112, "lower-arms"), cue(158, "relax-arms-shoulders-straight")],
     detail: { label: "Shoulders", crop: { x: 210, y: 108, w: 450, h: 450 } },
   },
   // Full-size 870 x 980 renders like ex_001, so they use the reference crop
@@ -99,6 +156,17 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
     fps: 30,
     frames: 270,
     phases: [{ start: 1, label: "Swing" }],
+    // Frame 1 is the centre on the way to the figure's left, and each swing
+    // starts 45 frames after the last, at 28, 73, 118 ... (build_mpfb_exercise_drafts.py).
+    // Each line leads its swing by 6 frames. Sides are the figure's own, so the
+    // patient tilts toward the side named.
+    cues: [
+      cue(22, "tilt-right"), cue(67, "tilt-left"), cue(112, "tilt-right"),
+      cue(157, "tilt-left"), cue(202, "tilt-right"), cue(247, "tilt-left"),
+    ],
+    // At 1× a new side every 1.5 s makes the voice nonstop; at 0.5× each side
+    // gets 3 s, and every line still leads its swing by 6 frames (0.4 s).
+    defaultSpeed: 0.5,
     detail: { label: "Head and shoulders", crop: { x: 285, y: 116, w: 300, h: 324 } },
   },
   // The side bend is shown to one side only, so it does not suggest
@@ -112,6 +180,7 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
     fps: 30,
     frames: 180,
     phases: [{ start: 1, label: "Ready" }, { start: 21, label: "Bend" }, { start: 80, label: "Pause" }, { start: 101, label: "Return" }, { start: 160, label: "Ready" }],
+    cues: [cue(14, "bend-to-side"), cue(92, "come-back-up"), cue(135, "stand-tall-hand-on-hip")],
     detail: { label: "Upper body", crop: { x: 215, y: 140, w: 500, h: 535 } },
   },
   ex_006: {
@@ -123,6 +192,7 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
     fps: 30,
     frames: 300,
     phases: [{ start: 1, label: "Ready" }, { start: 25, label: "Raise" }, { start: 96, label: "Hold" }, { start: 205, label: "Lower" }, { start: 276, label: "Ready" }],
+    cues: [cue(16, "raise-arms-shoulder-level"), cue(93, "hold"), cue(194, "lower-arms"), cue(238, "relax-arms")],
     detail: { label: "Shoulders", crop: { x: 210, y: 125, w: 450, h: 450 } },
   },
   ex_007: {
@@ -134,6 +204,7 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
     fps: 30,
     frames: 300,
     phases: [{ start: 1, label: "Ready" }, { start: 25, label: "Press" }, { start: 120, label: "Pause" }, { start: 145, label: "Lower" }, { start: 240, label: "Ready" }],
+    cues: [cue(16, "press-overhead"), cue(136, "lower-hands-to-shoulders"), cue(228, "hands-at-shoulder-height")],
     detail: { label: "Upper body", crop: { x: 170, y: 108, w: 530, h: 620 } },
   },
   // One repetition seen from the front, then one from the side so the back
@@ -151,14 +222,24 @@ export const DEMO_CLIPS: Readonly<Record<string, DemoClip>> = {
       { start: 235, label: "Ready" }, { start: 247, label: "Slide up" }, { start: 342, label: "Pause" }, { start: 354, label: "Slide down" }, { start: 449, label: "Ready" },
     ],
     views: [{ start: 1, label: "Front view" }, { start: 235, label: "Side view" }],
+    // The same two lines for the front and the side repetition.
+    cues: [
+      cue(8, "slide-arms-up-w-position"), cue(112, "slide-them-down"),
+      cue(240, "slide-arms-up-w-position"), cue(346, "slide-them-down"),
+    ],
     detail: { label: "Shoulders", crop: { x: 210, y: 140, w: 450, h: 480 } },
   },
 };
 
+/** The 1-based clip frame shown at a media time, clamped to the clip. */
+function frameAtTime(clip: DemoClip, seconds: number): number {
+  const time = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  return Math.min(clip.frames, Math.floor(time * clip.fps + 1e-6) + 1);
+}
+
 /** Resolve labels from media time, including seeks, speed changes and loops. */
 export function demoStatusAtTime(clip: DemoClip, seconds: number): { phase: string; view: string } {
-  const time = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const frame = Math.min(clip.frames, Math.floor(time * clip.fps + 1e-6) + 1);
+  const frame = frameAtTime(clip, seconds);
   const at = (items: readonly { start: number; label: string }[]) => {
     let label = items[0].label;
     for (const item of items) {
@@ -168,6 +249,20 @@ export function demoStatusAtTime(clip: DemoClip, seconds: number): { phase: stri
     return label;
   };
   return { phase: at(clip.phases), view: clip.views ? at(clip.views) : "Front view" };
+}
+
+/**
+ * Index of the spoken cue whose window holds a media time. Frames before the
+ * first cue wrap to the last, so a loop back to zero does not repeat a line.
+ */
+export function demoCueIndexAtTime(clip: DemoClip, seconds: number): number {
+  const frame = frameAtTime(clip, seconds);
+  let index = clip.cues.length - 1;
+  for (let i = 0; i < clip.cues.length; i++) {
+    if (clip.cues[i].start > frame) break;
+    index = i;
+  }
+  return index;
 }
 
 /** The clip for an exercise, or null when none is published. */

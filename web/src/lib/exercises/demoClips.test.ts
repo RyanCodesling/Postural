@@ -4,9 +4,9 @@
  *   npx tsx src/lib/exercises/demoClips.test.ts
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { DEMO_CLIPS, demoClipFor, demoStatusAtTime } from "./demoClips";
+import { DEMO_CLIPS, demoClipFor, demoCueIndexAtTime, demoStatusAtTime } from "./demoClips";
 import { EXERCISE_REGISTRY } from "./registry";
 
 let testsPassed = 0;
@@ -152,6 +152,66 @@ test("detail crops stay within the source and timelines remain ordered", () => {
         assert(item.start <= clip.frames && (i === 0 || item.start > list[i - 1].start), `${id}: ordered label boundaries`);
       });
     }
+  }
+});
+
+test("every clip has ordered spoken cues inside its timeline", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    assert(clip.cues.length >= 2, `${id}: needs at least two spoken cues`);
+    clip.cues.forEach((cue, i) => {
+      assert(cue.text.trim().length > 0, `${id}: empty cue text`);
+      assert(Number.isInteger(cue.start) && cue.start >= 1 && cue.start <= clip.frames, `${id}: cue ${i} outside the clip`);
+      assert(i === 0 || cue.start > clip.cues[i - 1].start, `${id}: cues out of order`);
+    });
+  }
+});
+
+test("every recorded line ends before the next one starts at 1×, across the loop", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    const loop = clip.frames / clip.fps;
+    clip.cues.forEach((cue, i) => {
+      const next = clip.cues[(i + 1) % clip.cues.length];
+      const nextStart = (next.start - 1) / clip.fps + (i + 1 === clip.cues.length ? loop : 0);
+      const end = (cue.start - 1) / clip.fps + cue.speech;
+      assert(end <= nextStart, `${id}: "${cue.text}" runs ${(end - nextStart).toFixed(2)} s into "${next.text}"`);
+    });
+  }
+});
+
+test("every recorded line is published next to the clips", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    for (const cue of clip.cues) {
+      assert(/^\/demos\/voice\/[a-z-]+\.mp3$/.test(cue.audio), `${id}: unexpected audio path ${cue.audio}`);
+      assert(existsSync(fileURLToPath(new URL(`../../../public${cue.audio}`, import.meta.url))), `${id}: ${cue.audio} is missing`);
+      assert(cue.speech > 0 && cue.speech < 3, `${id}: implausible speech length for "${cue.text}"`);
+    }
+  }
+});
+
+test("lateral raise lines lead their movements and wrap across the loop", () => {
+  const clip = DEMO_CLIPS.ex_001;
+  const text = (frame: number) => clip.cues[demoCueIndexAtTime(clip, (frame - 1) / 30)].text;
+  assert(text(1).startsWith("Relax"), "loop start is still the relax line");
+  assert(demoCueIndexAtTime(clip, 0) === demoCueIndexAtTime(clip, 209 / 30), "no repeat across the loop seam");
+  assert(text(16).startsWith("Raise") && 16 < 25, "the raise line starts before the raise");
+  assert(text(112) === "Lower your arms." && 112 < 121, "the lower line starts before lowering");
+  assert(text(NaN as unknown as number).startsWith("Relax"), "metadata not yet loaded");
+});
+
+test("neck lines alternate sides, one per 45-frame beat, ahead of each swing", () => {
+  const clip = DEMO_CLIPS.ex_004;
+  clip.cues.forEach((cue, i) => {
+    if (i > 0) assert(cue.start - clip.cues[i - 1].start === 45, "one cue per beat");
+    assert(cue.text === (i % 2 === 0 ? "Tilt right." : "Tilt left."), "sides alternate");
+    assert((28 + 45 * i) - cue.start === 6, "each line leads its swing by 6 frames");
+  });
+  assert(clip.cues[demoCueIndexAtTime(clip, 0)].text === "Tilt left.", "frame 1 swings toward the figure's left");
+  assert(clip.defaultSpeed === 0.5, "the neck guide starts at half speed so its lines are not back to back");
+});
+
+test("only the neck guide starts slowed down", () => {
+  for (const [id, clip] of Object.entries(DEMO_CLIPS)) {
+    if (id !== "ex_004") assert(clip.defaultSpeed === undefined, `${id}: unexpected default speed`);
   }
 });
 

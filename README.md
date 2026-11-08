@@ -16,6 +16,10 @@
 - Moved Log In and Forgot Password onto the landing page: they open in the hero in place of the video, and /login and /forgot-password now lead there
 - Removed the clinic photo from the change-password and first-time password pages, and deleted the photo file, which nothing else used
 - Kept only the 720p landing video and deleted the 1080p MP4 and WebM
+- Added spoken instructions to the six Reference Guide videos in a recorded female voice, with a Voice on/off button and a subtitle of each line on the camera view
+- Played the voice and subtitles only during a set after the baseline is captured, and paused them while tracking is paused or the "Tracking was interrupted" card is up
+- Spoke the guide's lines for 3 loops per set, after which only the subtitles continue; in full screen the voice and subtitles loop with no limit
+- Started the Neck Side Bends guide at 0.5× speed so its "Tilt right" and "Tilt left" lines are not back to back
 
 ### *web\src\app\_auth\LoginForm.tsx*, *web\src\app\_auth\ForgotPasswordForm.tsx*, and *web\src\app\_auth\HeroPanel.tsx*
 
@@ -55,6 +59,43 @@
 - Kept the "consider checking with your therapist" note for scores of 7 and 8
 - Told the guide video when a custom exercise's session is running, from the first set through its rests until the session ends
 - Enlarged the labels on the reps and time panels over the camera view so they can be read from a few steps back: L and R from 13px to 22px; REPS, TIME, and HOLD from 13px to 20px; the "/ 12" rep target and "SET 1 / 3" from 12px to 20px; 15px to 16px on small screens, up from 11px; the labels are bolder with tighter letter spacing, and the big numbers are unchanged
+
+- Showed the Reference Guide's current voice line as a large subtitle at the bottom of the camera view, over the camera-off cover when the camera is off, below the set numbers when it is on
+- Allowed the guide's voice and subtitles only while a set is running, after the baseline is captured, with tracking not paused and no "Tracking was interrupted" card showing; before Start session, during positioning, baseline capture, recalibration, rest, and after the session they stay off
+- Told the guide when a new set or session begins, so each set gets its 3 voiced loops again
+
+### *web\src\app\(app)\camera\DemoClipPlayer.tsx*
+
+- Added a Voice off / Voice on button beside the speed menu; it starts off and the browser remembers the choice
+- Played a recorded line on each cue's frame, taken from the video's own frames, so the voice follows loops, pausing, and 0.5× speed; a line never starts partway through after turning the voice on, resuming, or a pause in tracking
+- Kept a subtitle up from the start of a line until 0.35 s after its last word
+- Stopped speaking after 3 loops of the guide in a set and kept showing the subtitles in time with the movement
+- Played the voice and showed the subtitle inside the full-screen view whenever the voice is on, with no loop limit and whatever the session is doing
+- Started each guide at its own default speed, 0.5× for Neck Side Bends
+
+### *web\src\lib\exercises\demoClips.ts*
+
+- Added each guide's voice cues: the frame a line starts on, a little before the movement it names, the words, the recording, and how long the words last
+- Added the 15 recorded lines and the defaultSpeed setting, 0.5 for Neck Side Bends
+- Lateral Arm Raise: "Raise your arms to shoulder level." / "Lower your arms." / "Relax your arms, shoulders straight."
+- Neck Side Bends: "Tilt right." / "Tilt left.", alternating on each swing, the figure's own sides
+- Standing Side Bend: "Slowly bend to the side." / "Come back up." / "Stand tall, hand on your hip."
+- Arm Hold: "Raise your arms to shoulder level." / "Hold." / "Lower your arms." / "Relax your arms."
+- Overhead Press: "Press your arms overhead." / "Lower your hands to your shoulders." / "Hands at shoulder height."
+- Wall Angels: "Slide your arms up in W-position." / "Slide them down.", for the front and the side repetition
+
+### *web\public\demos\voice\\*
+
+- Added 15 MP3 recordings, about 400 KB in all, generated with Microsoft's "Ava" neural voice (en-US-AvaMultilingualNeural) through the Edge Read Aloud service; how long each line's words last comes from the service's word timings
+
+### *.gitignore* and *.gitattributes*
+
+- Let git track web/public/demos/voice/, which the demos rule ignored, so the recordings are deployed with the code
+- Marked the recordings as binary so git never changes their bytes
+
+### *web\src\lib\exercises\demoClips.test.ts*
+
+- Tested that every line ends before the next one starts at 1×, including across the loop, that every recording exists, that the Lateral Arm Raise and neck lines lead their movements, and that only Neck Side Bends starts at 0.5×
 
 ### *web\src\app\api\sessions\high-pain\route.ts*, *web\src\app\api\sessions\route.ts*, and *web\src\app\api\sessions\manual\route.ts*
 
@@ -121,6 +162,7 @@
 - Tried in the browser as admin: the Archived Users header while scrolling, the capital-letter role badges, the unread notification title, the custom exercise's uploaded guide video playing on a loop and stopping at End session, the YouTube player switching to autoplay and back, and the Add User and Edit User date of birth messages, without saving anything
 - Tried in the browser on the landing page: both Log In buttons, Forgot Password, both Back buttons, the /login?reset=success and /forgot-password redirects, and the phone layout with no sideways scrolling; patient and therapist accounts signed in through the new form
 - Seen on the camera page with a stand-in camera feed and every save answered in the page, so nothing was stored: the larger labels, the pain score 9 warning with Okay and Cancel, and the rep counting
+- Voice cues: type check and lint pass on the changed files, all 19 Reference Guide clip tests pass, and all 15 recordings load in the browser; the Lateral Arm Raise video was checked frame by frame against its cue frames
 
 ### *Remaining boundaries*
 
@@ -129,6 +171,8 @@
 - The larger camera labels have not been seen with a person in front of a real camera
 - Whether a YouTube guide video turns its sound on has not been heard: the app's built-in browser does not load YouTube; Safari on iPhone may keep it muted, and the player's speaker turns it on
 - Delivery to Microsoft 365 addresses such as @bacoor.sti.edu.ph may still be held by their filtering; allow-listing the sender is the fix on their side
+- The voice cues, their subtitles, the 3-loop limit, the full-screen voice, and the pauses for tracking have not been heard or seen in a running session
+- Safari and iPhone may keep the voice silent, since they allow sound only from a click; the subtitles still show
 - Not deployed; deploying it needs no SQL
 
 ---

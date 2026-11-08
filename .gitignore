@@ -185,3 +185,5 @@ web/public/demos/*
 !web/public/demos/ex_006-figure-motion.mp4
 !web/public/demos/ex_007-figure-motion.mp4
 !web/public/demos/ex_008-figure-motion.mp4
+# Reference Guide voice cues (see web/src/lib/exercises/demoClips.ts).
+!web/public/demos/voice/

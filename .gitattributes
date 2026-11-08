@@ -7,3 +7,4 @@ assets/blender/reference/resting_arms_2026_10_11_validation.json -text whitespac
 assets/blender/reference/vertical_press_2026_10_10_validation.json -text whitespace=cr-at-eol
 assets/blender/reference/guide_assets.json text eol=lf
 web/public/demos/*-figure-motion.mp4 binary
+web/public/demos/voice/*.mp3 binary

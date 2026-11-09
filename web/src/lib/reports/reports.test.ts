@@ -200,7 +200,7 @@ async function run() {
     const text = drawnText(bytes);
     for (const expected of [
       "Session report", "Lateral Arm Raises · report generated Sep 26, 2026, 9:00 AM",
-      "PATIENT NAME Test Patient PATIENT ID patient_007 DATE OF BIRTH (AGE) Mar 4, 1990 (36 years)",
+      "PATIENT NAME Test Patient PATIENT ID patient_007 DATE OF BIRTH (AGE) Mar 4, 1990 (36 years old)",
       "GENDER Female ASSIGNED THERAPIST Sarah Therapist",
       "DIAGNOSIS (ENTERED BY THE CLINIC) Left shoulder impingement (sample entry)",
       "CONDITION (ENTERED BY THE CLINIC) Sample condition text",

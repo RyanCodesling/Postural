@@ -68,8 +68,24 @@ export function parseYouTubeVideoId(input: string): string | null {
   return YOUTUBE_URL.exec(text.replace(/&amp;/g, "&"))?.[1] ?? null;
 }
 
-export function youTubeEmbedUrl(videoId: string): string {
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?rel=0`;
+/**
+ * The player address for a YouTube video. `autoplayLoop` starts it at once and
+ * repeats it (YouTube loops one video only when it is also its own playlist).
+ * Browsers allow autoplay in a frame only muted, so it starts muted and
+ * accepts player commands (`enablejsapi`): the page then turns the sound on.
+ * `origin` is the page's own origin, which YouTube needs for those commands.
+ */
+export function youTubeEmbedUrl(videoId: string, options: { autoplayLoop?: boolean; origin?: string } = {}): string {
+  const id = encodeURIComponent(videoId);
+  const base = `https://www.youtube-nocookie.com/embed/${id}?rel=0`;
+  if (!options.autoplayLoop) return base;
+  const origin = options.origin ? `&origin=${encodeURIComponent(options.origin)}` : "";
+  return `${base}&autoplay=1&mute=1&loop=1&playlist=${id}&playsinline=1&enablejsapi=1${origin}`;
+}
+
+/** A YouTube player command, sent to the embedded player with postMessage. */
+export function youTubeCommand(func: "unMute" | "playVideo" | "setVolume", args: unknown[] = []): string {
+  return JSON.stringify({ event: "command", func, args });
 }
 
 /** The video stored on an exercise row, or null when it has none. */

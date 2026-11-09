@@ -6,6 +6,9 @@ import {
   sendExerciseDigestEmail,
   sendExercisePausedEmail,
   sendExerciseReminderEmail,
+  sendHighPainNoStartEmail,
+  sendCompletedWithPainEmail,
+  type CompletedWithPainDetails,
   sendPartialDayEmail,
   type ExerciseDigestItem,
   type ExercisePausedDetails,
@@ -44,6 +47,7 @@ import {
   summarizeDeviceInfo,
 } from "@/lib/sessionReadModels";
 import {
+  PRE_SESSION_PAIN_BLOCK_SCORE,
   PRESCRIPTION_SNAPSHOT_VERSION,
   REP_QUALITY_VERSION,
   SESSION_CONTEXT_VERSION,
@@ -1624,6 +1628,10 @@ export async function getPatientOccurrences(patientId: string) {
     `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
             COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
             eo.pain_stopped_at, eo.prescription_snapshot,
+            -- Stopped for pain before starting: the pain score was too high.
+            EXISTS (SELECT 1 FROM sessions s
+                     WHERE s.occurrence_id = eo.id AND s.end_reason = 'pain'
+                       AND s.context_snapshot ->> 'highPainNoStart' = 'true') AS high_pain_no_start,
             pe.exercise_id,
             COALESCE((eo.prescription_snapshot ->> 'sets')::int, pe.sets) AS sets,
             COALESCE((eo.prescription_snapshot ->> 'reps')::int, pe.reps) AS reps,
@@ -2112,6 +2120,147 @@ export async function createCustomExerciseSession(data: {
   }
 }
 
+/**
+ * The patient's pain score before starting reached PRE_SESSION_PAIN_BLOCK_SCORE
+ * and they confirmed the warning, so the exercise does not start. A session
+ * opens and ends at once, ended for pain, to keep the score with the attempt;
+ * the occurrence is stopped for pain, so it awaits the therapist's review
+ * before rescheduling. The therapist is told in the app and by email.
+ */
+export async function recordHighPainNoStart(data: {
+  patientId: string;
+  patientExerciseId: number;
+  occurrenceId: number;
+  exerciseId: string;
+  pain: { score: number; bodyArea: string | null };
+  deviceInfo?: unknown;
+}): Promise<{ sessionId: number }> {
+  if (!Number.isInteger(data.pain.score) || data.pain.score < PRE_SESSION_PAIN_BLOCK_SCORE || data.pain.score > 10) {
+    throw new Error(`The pain score must be from ${PRE_SESSION_PAIN_BLOCK_SCORE} to 10.`);
+  }
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const capturedAt = effectiveAt.toISOString();
+  const client = await pool.connect();
+  let sessionId: number;
+  let row: Record<string, unknown>;
+  try {
+    await client.query("BEGIN");
+    const occ = await client.query(
+      `SELECT eo.id, eo.due_date, COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
+              eo.prescription_snapshot, e.name, e.monitoring_mode, u.name AS patient_name, u.therapist_id
+         FROM exercise_occurrences eo
+         JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+         JOIN exercises e ON e.id = pe.exercise_id
+         JOIN users u ON u.id = pe.patient_id
+        WHERE eo.id = $1
+          AND eo.patient_exercise_id = $2
+          AND pe.patient_id = $3
+          AND pe.exercise_id = $4
+          AND pe.archived_at IS NULL
+          AND e.archived_at IS NULL
+          AND eo.cancelled_at IS NULL
+          AND eo.status IN ('pending', 'in_progress')
+          AND eo.due_date <= $5::date
+          AND COALESCE(eo.makeup_until, eo.due_date) >= $5::date
+        LIMIT 1
+        FOR UPDATE OF eo`,
+      [data.occurrenceId, data.patientExerciseId, data.patientId, data.exerciseId, today],
+    );
+    if (occ.rows.length === 0) throw new SessionNotScheduledError();
+    row = occ.rows[0] as Record<string, unknown>;
+    const schedule = { dueDate: String(row.due_date), makeupUntil: String(row.makeup_until) };
+    const context = {
+      version: SESSION_CONTEXT_VERSION,
+      capturedAt,
+      prescription: row.prescription_snapshot ?? null,
+      schedule: { ...schedule, startedDuringMakeupWindow: today > schedule.dueDate },
+      exercise: {
+        id: data.exerciseId,
+        name: String(row.name),
+        kind: row.monitoring_mode === "manual" ? "manual" : "not_started",
+        bilateralMode: null,
+        definition: null,
+      },
+      versions: { appRevision: getAppRevision() },
+      preSessionPain: { status: "reported", score: data.pain.score, bodyArea: data.pain.bodyArea },
+      highPainNoStart: true,
+    };
+    // An attempt left open by a closed tab ends here too.
+    await client.query(
+      `UPDATE sessions SET ended_at = $2, end_reason = 'superseded'
+        WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
+      [data.patientExerciseId, capturedAt],
+    );
+    const inserted = await client.query(
+      `INSERT INTO sessions
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id, started_at, ended_at,
+          end_reason, context_snapshot, context_snapshot_version, context_captured_at, app_revision)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'pain', $7, $8, $6, $9)
+       RETURNING id`,
+      [
+        data.patientId, data.patientExerciseId, data.exerciseId,
+        data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+        Number(row.id), capturedAt, JSON.stringify(context), SESSION_CONTEXT_VERSION,
+        context.versions.appRevision,
+      ],
+    );
+    sessionId = Number(inserted.rows[0].id);
+    await client.query(
+      `UPDATE exercise_occurrences SET status = 'pain_stopped', pain_stopped_at = $2 WHERE id = $1`,
+      [Number(row.id), capturedAt],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  try {
+    const exerciseName = String(row.name);
+    const patientName = String(row.patient_name);
+    const therapistId = (row.therapist_id as string | null) ?? null;
+    const area = data.pain.bodyArea ? ` (${data.pain.bodyArea})` : "";
+    if (therapistId) {
+      await createNotification(
+        therapistId,
+        "Exercise not started because of high pain",
+        `${patientName} did not start ${exerciseName} because of a pain score of ${data.pain.score}/10${area}. Review before rescheduling.`,
+        "patient_pain_stopped",
+        data.occurrenceId,
+      );
+    }
+    await createNotification(
+      data.patientId,
+      "Exercise not started because of high pain",
+      `You did not start ${exerciseName} because your pain score was ${data.pain.score}/10. ${therapistId ? "Your therapist has been notified and will review it before rescheduling." : "Please contact your therapist before trying it again."}`,
+      "patient_pain_stopped",
+      data.occurrenceId,
+    );
+    // Not awaited, like the pain-pause email: mail must not hold the response.
+    if (therapistId) {
+      void (async () => {
+        try {
+          const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [therapistId]);
+          if (therapist.rows[0]?.email) {
+            await sendHighPainNoStartEmail(therapist.rows[0].email, therapist.rows[0].name, {
+              patientName, exerciseName, score: data.pain.score, bodyArea: data.pain.bodyArea,
+              dueDateLabel: longDateLabel(String(row.due_date)),
+            });
+          }
+        } catch (err) {
+          console.error("Failed to email high pain no-start to therapist:", err);
+        }
+      })();
+    }
+  } catch (err) {
+    console.error("Failed to notify high pain no-start:", err);
+  }
+  return { sessionId };
+}
+
 export async function createSession(data: {
   patientId: string;
   patientExerciseId: number;
@@ -2498,7 +2647,8 @@ export async function endSession(
   // Trigger completion notifications for therapist
   try {
     const sessionResult = await pool.query(
-      `SELECT s.patient_id, s.exercise_id, s.occurrence_id, u.name AS patient_name, u.therapist_id, e.name AS exercise_name
+      `SELECT s.patient_id, s.exercise_id, s.occurrence_id, u.name AS patient_name, u.therapist_id, e.name AS exercise_name,
+              s.context_snapshot -> 'preSessionPain' AS pre_session_pain
        FROM sessions s
        JOIN users u ON u.id = s.patient_id
        JOIN exercises e ON e.id = s.exercise_id
@@ -2512,15 +2662,27 @@ export async function endSession(
       const pausedDetails = paused
         ? { ...paused, patientName: row.patient_name as string, exerciseName: row.exercise_name as string }
         : null;
+      // Pain reported before starting (1 or more; 0 is no pain and is left out).
+      const prePain = data.completed ? completedWithPain(row.pre_session_pain) : null;
       if (row.therapist_id) {
         if (data.completed) {
           await createNotification(
             row.therapist_id,
-            "Exercise Completed",
-            `${row.patient_name} completed exercise ${row.exercise_name}.`,
+            prePain ? "Exercise Completed with Pain" : "Exercise Completed",
+            prePain
+              ? `${row.patient_name} completed exercise ${row.exercise_name}. Note: pain before starting was ${prePain.score}/10${prePain.bodyArea ? ` (${prePain.bodyArea})` : ""}.`
+              : `${row.patient_name} completed exercise ${row.exercise_name}.`,
             "patient_completed_exercise",
             row.occurrence_id
           );
+          if (prePain) {
+            // Not awaited, like the pain-pause email: mail must not hold the end of the session.
+            void emailCompletedWithPain(row.therapist_id as string, {
+              patientName: row.patient_name as string,
+              exerciseName: row.exercise_name as string,
+              ...prePain,
+            });
+          }
           await createNotification(
             row.therapist_id,
             "Session Completed",
@@ -2558,6 +2720,29 @@ export async function endSession(
     console.error("Failed to create completion notification:", err);
   }
   return transitioned;
+}
+
+/**
+ * The before-session pain of a completed exercise, when the patient reported
+ * any (1 to 10). A score of 0, a skipped survey or none at all gives null.
+ */
+function completedWithPain(value: unknown): { score: number; bodyArea: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const pain = value as { status?: unknown; score?: unknown; bodyArea?: unknown };
+  if (pain.status !== "reported" || typeof pain.score !== "number" || pain.score < 1) return null;
+  return { score: pain.score, bodyArea: typeof pain.bodyArea === "string" && pain.bodyArea ? pain.bodyArea : null };
+}
+
+/** Emails the therapist one completed exercise and the pain reported before it. Never throws. */
+async function emailCompletedWithPain(therapistId: string, details: CompletedWithPainDetails): Promise<void> {
+  try {
+    const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [therapistId]);
+    if (therapist.rows[0]?.email) {
+      await sendCompletedWithPainEmail(therapist.rows[0].email, therapist.rows[0].name, details);
+    }
+  } catch (err) {
+    console.error("Failed to email completed-with-pain to therapist:", err);
+  }
 }
 
 /** Emails the pain pause to the patient and, when one is assigned, the therapist. Never throws. */
@@ -4079,7 +4264,9 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
     }
   }
 
-  // 2. Fetch tomorrow's occurrences: due_date = tomorrowStr AND status = 'pending'
+  // The patient gets one reminder for the next day's exercises, naming them all,
+  // from the same hour as the "due tomorrow" email.
+  if (manilaHour(now) < REMINDER_TOMORROW_HOUR_MANILA) return;
   const tomorrowResult = await pool.query(
     `SELECT eo.id, e.name AS exercise_name
      FROM exercise_occurrences eo
@@ -4090,25 +4277,28 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
        AND e.archived_at IS NULL
        AND eo.cancelled_at IS NULL
        AND eo.status = 'pending'
-       AND eo.due_date = $2::date`,
+       AND eo.due_date = $2::date
+     ORDER BY pe.sequence_index, eo.id`,
     [patientId, tomorrowStr]
   );
-
-  for (const row of tomorrowResult.rows) {
-    const pCheck = await pool.query(
-      "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'scheduled_tomorrow'",
-      [patientId, row.id]
-    );
-    if (pCheck.rows.length === 0) {
-      await createNotification(
-        patientId,
-        "Exercise Starting Tomorrow",
-        `Exercise ${row.exercise_name} is scheduled to start tomorrow.`,
-        "scheduled_tomorrow",
-        row.id
-      );
-    }
-  }
+  if (tomorrowResult.rows.length === 0) return;
+  // 'scheduled_tomorrow' is the earlier per-exercise reminder; a day that already
+  // has one is not reminded again.
+  const remindedTomorrow = await pool.query(
+    `SELECT 1 FROM notifications
+      WHERE user_id = $1 AND type IN ('exercise_due_tomorrow', 'scheduled_tomorrow')
+        AND occurrence_id = ANY($2::integer[]) LIMIT 1`,
+    [patientId, tomorrowResult.rows.map((r) => r.id)],
+  );
+  if (remindedTomorrow.rows.length > 0) return;
+  const tomorrowNames = tomorrowResult.rows.map((r) => r.exercise_name as string);
+  await createNotification(
+    patientId,
+    "Exercises Due Tomorrow",
+    `You have ${tomorrowNames.length === 1 ? "1 exercise" : `${tomorrowNames.length} exercises`} due tomorrow: ${joinNames(tomorrowNames)}.`,
+    "exercise_due_tomorrow",
+    tomorrowResult.rows[0].id,
+  );
 }
 
 export async function deleteNotification(id: number, userId: string): Promise<void> {

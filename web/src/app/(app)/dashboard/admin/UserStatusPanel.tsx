@@ -100,7 +100,7 @@ export default function UserStatusPanel({
                   />
                   <span className="min-w-0 flex-1 break-words text-sm font-medium text-gray-800">{user.name}</span>
                   <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${
                       user.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"
                     }`}
                   >

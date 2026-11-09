@@ -33,6 +33,8 @@ function harness(options: { patientExerciseId?: number; actionable?: boolean; re
     setScheduleNotice: (notice: any) => calls.notices.push(notice),
     preSessionPainRef: ref({ status: "declined" }), // left over from an earlier start
     preSessionSurveyResolveRef: ref(null),
+    preSessionTargetRef: ref(null),
+    setHighPainError: () => {},
     setPreSessionSurvey: (survey: any) => calls.survey.push(survey),
     videoQuestionResolveRef: ref(null),
     setVideoQuestion: (question: any) => calls.question.push(question),
@@ -67,9 +69,15 @@ async function run() {
     const started = start();
     await settle();
     assert.deepEqual(plain(calls.survey), [{ score: 0, bodyArea: "" }], "the pain survey opens at 0 with no body area");
+    assert.deepEqual(
+      plain(context.preSessionTargetRef.current),
+      { patientExerciseId: 1, occurrenceId: 5, exerciseId: "ex_001" },
+      "the survey knows which exercise a high-pain Okay records",
+    );
     assert.equal(calls.provenance, 0, "nothing after the questions runs before an answer");
     answerPain(null);
     await started;
+    assert.equal(context.preSessionTargetRef.current, null, "closing the survey forgets the exercise");
     assert.equal(calls.survey.at(-1), null, "the survey closes");
     assert.equal(calls.question.length, 0, "Back on the pain screen asks nothing more");
     assert.equal(calls.provenance, 0, "Back cancels the start");

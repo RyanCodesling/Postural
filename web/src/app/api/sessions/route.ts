@@ -3,7 +3,12 @@ import { getAuthenticatedUser } from "@/lib/auth-server";
 import { validCoachingProvenance } from "@/lib/pose/coachingConfig";
 import { POSE_METRIC_ALGORITHM_VERSION } from "@/lib/pose/metricVersion";
 import { COACHING_CONFIG_VERSIONS, EXERCISE_CONFIG_VERSIONS, sha256Version } from "@/lib/exercises/versioning";
-import { parsePreSessionPain, SESSION_VIDEO_NOTICE_VERSION } from "@/lib/prescriptionContext";
+import {
+  HIGH_PAIN_START_ERROR,
+  parsePreSessionPain,
+  PRE_SESSION_PAIN_BLOCK_SCORE,
+  SESSION_VIDEO_NOTICE_VERSION,
+} from "@/lib/prescriptionContext";
 import { hasRecording } from "@/lib/recording/storage";
 import {
   createSession,
@@ -94,6 +99,9 @@ export async function POST(request: NextRequest) {
     const preSessionPain = parsePreSessionPain(body?.preSessionPain);
     if (!preSessionPain.ok) {
       return NextResponse.json({ error: preSessionPain.error }, { status: 400 });
+    }
+    if (preSessionPain.value?.status === "reported" && preSessionPain.value.score >= PRE_SESSION_PAIN_BLOCK_SCORE) {
+      return NextResponse.json({ error: HIGH_PAIN_START_ERROR }, { status: 409 });
     }
     // Recording is opt-in per session; only an explicit true records consent.
     if (body?.videoConsent !== undefined && typeof body.videoConsent !== "boolean") {

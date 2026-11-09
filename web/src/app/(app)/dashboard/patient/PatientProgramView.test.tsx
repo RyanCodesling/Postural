@@ -173,6 +173,11 @@ assert.ok(painDay.includes("border-l-orange-400") && !painDay.includes("border-l
 
 // Each exercise's pill shows its own state, not its day's.
 assert.equal(itemStatusLabel(occurrence(1, YESTERDAY, "pain_stopped"), YESTERDAY, TODAY), "Stopped for pain");
+assert.equal(
+  itemStatusLabel({ ...occurrence(1, YESTERDAY, "pain_stopped"), high_pain_no_start: true }, YESTERDAY, TODAY),
+  "Did not proceed – high pain score",
+  "an exercise not started for high pain says so",
+);
 assert.equal(itemStatusLabel(occurrence(2, YESTERDAY), YESTERDAY, TODAY), "Missed");
 assert.equal(itemStatusLabel(openUntil(occurrence(3, YESTERDAY), "2026-10-20"), YESTERDAY, TODAY), "Make-up open");
 assert.equal(itemStatusLabel(occurrence(4, TODAY), TODAY, TODAY), "Today");

@@ -3,7 +3,6 @@ import * as nodemailer from "nodemailer";
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const SMTP_FROM = process.env.SMTP_FROM || "accbpostural.noreply@gmail.com";
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
 function getTransporter() {
   if (!SMTP_USER || !SMTP_PASS) {
@@ -131,15 +130,6 @@ export async function sendAccountCreationEmail(
     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
       For security, you will be asked to change your password when you first log in.
     </p>
-    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 16px;">
-      <tr>
-        <td style="background-color:#166534;border-radius:8px;">
-          <a href="${APP_URL}" target="_blank" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
-            Log In Now
-          </a>
-        </td>
-      </tr>
-    </table>
   `;
   return sendEmail(email, subject, wrapTemplate("Welcome!", body));
 }
@@ -318,15 +308,6 @@ export async function sendEmailChangedToNewAddress(
     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
       Use <strong>${newEmail}</strong> to log in to the system from now on.
     </p>
-    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 20px;">
-      <tr>
-        <td style="background-color:#166534;border-radius:8px;">
-          <a href="${APP_URL}" target="_blank" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
-            Log In Now
-          </a>
-        </td>
-      </tr>
-    </table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;margin:0 0 20px;">
       <tr>
         <td style="padding:16px 20px;">
@@ -454,15 +435,6 @@ export async function sendAccountRestoredUserEmail(
           <p style="margin:0;color:#166534;font-size:14px;line-height:1.5;">
             ✅ Your account is now active again. You can log in using your existing credentials.
           </p>
-        </td>
-      </tr>
-    </table>
-    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 20px;">
-      <tr>
-        <td style="background-color:#166534;border-radius:8px;">
-          <a href="${APP_URL}" target="_blank" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
-            Log In Now
-          </a>
         </td>
       </tr>
     </table>
@@ -779,6 +751,65 @@ export async function sendExercisePausedEmail(
       </td></tr>
     </table>`;
   return sendEmail(email, "Exercise paused because of pain", wrapTemplate("Exercise Paused", body));
+}
+
+export interface HighPainNoStartDetails {
+  patientName: string;
+  exerciseName: string;
+  score: number;
+  bodyArea: string | null;
+  /** "November 7, 2026": the day the exercise was scheduled for. */
+  dueDateLabel: string;
+}
+
+/** Therapist template: a patient's pain score before starting was too high to exercise. */
+export async function sendHighPainNoStartEmail(
+  email: string,
+  therapistName: string,
+  d: HighPainNoStartDetails,
+): Promise<boolean> {
+  const area = d.bodyArea ? `<br/><strong>Body area:</strong> ${escapeHtml(d.bodyArea)}` : "";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
+    <p style="${PARAGRAPH}"><strong>${escapeHtml(d.patientName)}</strong> did not start <strong>${escapeHtml(d.exerciseName)}</strong> because of a high pain score before starting. The exercise is marked as not started and needs your review before rescheduling.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin:0 0 20px;">
+      <tr><td style="padding:16px 20px;color:#374151;font-size:14px;line-height:1.7;">
+        <strong>Pain score:</strong> ${d.score}/10${area}<br/>
+        <strong>Scheduled for:</strong> ${escapeHtml(d.dueDateLabel)}
+      </td></tr>
+    </table>`;
+  return sendEmail(email, "Exercise not started because of high pain", wrapTemplate("High Pain Before Exercise", body));
+}
+
+export interface CompletedWithPainDetails {
+  patientName: string;
+  exerciseName: string;
+  /** The pain score reported before starting, 1 to 10. */
+  score: number;
+  bodyArea: string | null;
+}
+
+/** Therapist template: one exercise completed after the patient reported pain before starting. */
+export async function sendCompletedWithPainEmail(
+  email: string,
+  therapistName: string,
+  d: CompletedWithPainDetails,
+): Promise<boolean> {
+  const area = d.bodyArea ? `<br/><strong>Body area:</strong> ${escapeHtml(d.bodyArea)}` : "";
+  const body = `
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Hello <strong>${escapeHtml(therapistName)}</strong>,</p>
+    <p style="${PARAGRAPH}"><strong>${escapeHtml(d.patientName)}</strong> completed <strong>${escapeHtml(d.exerciseName)}</strong>.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;margin:0 0 20px;">
+      <tr><td style="padding:16px 20px;color:#374151;font-size:14px;line-height:1.7;">
+        <strong>Note:</strong> the patient reported pain before starting this exercise.<br/>
+        <strong>Pain score before starting:</strong> ${d.score}/10${area}
+      </td></tr>
+    </table>`;
+  return sendEmail(
+    email,
+    `Exercise Completed with Pain – ${d.exerciseName}`,
+    wrapTemplate("Exercise Completed with Pain", body),
+  );
 }
 
 // ── Therapist / patient assignment ───────────────────────────────────────────

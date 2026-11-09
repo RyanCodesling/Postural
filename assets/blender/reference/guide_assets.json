@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-07",
+  "scope": "Accepted illustrative Reference Guide sources and byte-identical videos; no clinical validation.",
+  "blender_version": "5.1.2",
+  "clips": {
+    "ex_001": {
+      "scene": "assets/blender/previews/slate_2026_09_25/ex_001_figure_mpfb.blend",
+      "video": "web/public/demos/ex_001-figure-motion.mp4",
+      "frames": 210,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 64,
+      "hide_phase_labels": false
+    },
+    "ex_004": {
+      "scene": "assets/blender/previews/press_depth_hands_2026_10_11/ex_004_figure_mpfb.blend",
+      "video": "web/public/demos/ex_004-figure-motion.mp4",
+      "frames": 270,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 32,
+      "hide_phase_labels": false
+    },
+    "ex_005": {
+      "scene": "assets/blender/previews/side_bend_one_side_2026_09_25/ex_005_figure_mpfb.blend",
+      "video": "web/public/demos/ex_005-figure-motion.mp4",
+      "frames": 180,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 64,
+      "hide_phase_labels": false
+    },
+    "ex_006": {
+      "scene": "assets/blender/previews/slate_2026_09_25/ex_006_figure_mpfb.blend",
+      "video": "web/public/demos/ex_006-figure-motion.mp4",
+      "frames": 300,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 64,
+      "hide_phase_labels": false
+    },
+    "ex_007": {
+      "scene": "assets/blender/previews/press_depth_hands_2026_10_11/ex_007_figure_mpfb.blend",
+      "video": "web/public/demos/ex_007-figure-motion.mp4",
+      "frames": 300,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 32,
+      "hide_phase_labels": false
+    },
+    "ex_008": {
+      "scene": "assets/blender/previews/slate_2026_09_25/ex_008_figure_mpfb.blend",
+      "video": "web/public/demos/ex_008-figure-motion.mp4",
+      "frames": 468,
+      "fps": 30,
+      "resolution": [
+        870,
+        980
+      ],
+      "render_samples": 64,
+      "hide_phase_labels": false
+    }
+  },
+  "files": [
+    {
+      "path": "assets/blender/ex_001_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 1434448,
+      "sha256": "402a1da4346d1737b91b762d94f5b10175c558b2ae92905e905c8feaee57a511"
+    },
+    {
+      "path": "assets/blender/ex_005_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 1722727,
+      "sha256": "218e1e7d785126ec398a8badf7f77fd14d40b2e165bd12e0ec4256094e1f13c7"
+    },
+    {
+      "path": "assets/blender/ex_006_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 1484569,
+      "sha256": "990757d63b49a278eab6bfe1e500cad1ed6dba6faa67f1aa9c81a152620336c9"
+    },
+    {
+      "path": "assets/blender/ex_007_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 1641721,
+      "sha256": "0e2a21216f9c3914da1914061a1dbbf47e63eaa978084c4f92d7750c2709a5be"
+    },
+    {
+      "path": "assets/blender/ex_008_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 1776773,
+      "sha256": "2919ff6ac9ac24764d907238d7f68560dc11934848d44abc454c7d655c9c2d56"
+    },
+    {
+      "path": "assets/blender/previews/form_2026_10_10/press_v8_vertical/ex_007_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7876945,
+      "sha256": "01519b68d35d985a25d4113f9baef21c5fae7aeb5742dccd9d1a64ef9e38c30f"
+    },
+    {
+      "path": "assets/blender/previews/neck_side_bends_2026_10_07/swing_40bpm_v2/ex_004_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6697711,
+      "sha256": "99c26ecb33f45abf7bedaa1d49178ab8d0db7cbdacd2f80b7e7c8ed8dc5fb11e"
+    },
+    {
+      "path": "assets/blender/previews/presentation_2026_10_09/ex_004_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7534141,
+      "sha256": "1dd098d02ad56684e788adf799413d02514b314c47e3a2c880de5b81ef5cacda"
+    },
+    {
+      "path": "assets/blender/previews/presentation_2026_10_09/ex_007_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7718501,
+      "sha256": "3bc2b2e9a6190883770d122db24258a827bb7045416102a7ea16a44627d33a38"
+    },
+    {
+      "path": "assets/blender/previews/press_depth_hands_2026_10_11/ex_004_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7810905,
+      "sha256": "0c7881cb4892af33f754e17dbc0d0ca64c77d2d200fc936e8acdfb8a34676575"
+    },
+    {
+      "path": "assets/blender/previews/press_depth_hands_2026_10_11/ex_007_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7885409,
+      "sha256": "79e32497f50ad6aea3f3717ecd3477f917bebae19e348cfba88b6217c30b1deb"
+    },
+    {
+      "path": "assets/blender/previews/side_bend_one_side_2026_09_25/ex_005_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6823753,
+      "sha256": "5f74ba18940b170637877f59022dd9025cd240b2b5e14491e9590612bc996b75"
+    },
+    {
+      "path": "assets/blender/previews/slate_2026_09_25/ex_001_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6693930,
+      "sha256": "1c7d760198705e43c527ef8fb6d4d0d6fb972ea56710648ca97d125479c2e5de"
+    },
+    {
+      "path": "assets/blender/previews/slate_2026_09_25/ex_005_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6949430,
+      "sha256": "520828f70fe081330a4547cd0d2f2f89c7e80300ee2bc08798b67ab7d75a484b"
+    },
+    {
+      "path": "assets/blender/previews/slate_2026_09_25/ex_006_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6711958,
+      "sha256": "7e9ccdd45796b9302d7c0bc1a53192cf7844e58092c842f61d819b74d2152da0"
+    },
+    {
+      "path": "assets/blender/previews/slate_2026_09_25/ex_007_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 6881921,
+      "sha256": "8e9e3ee017d7832cdfb32ec4d5ac9feeee1d8f28d86187b85fefdf863a73943c"
+    },
+    {
+      "path": "assets/blender/previews/slate_2026_09_25/ex_008_figure_mpfb.blend",
+      "role": "editable-scene",
+      "bytes": 7013270,
+      "sha256": "11c2ea8f5cb6e9fde7d971cb66e3574098676c4d285d3f548a25eb08f6fd5c85"
+    },
+    {
+      "path": "assets/blender/reference/press_depth_hands_2026_10_11_validation.json",
+      "role": "historical-check",
+      "bytes": 20550,
+      "sha256": "7cb762b9e20d690580d0f4f63f7029c2c685f5adaa64fc4c5837f6f867ca91d2"
+    },
+    {
+      "path": "assets/blender/reference/resting_arms_2026_10_11_validation.json",
+      "role": "historical-check",
+      "bytes": 21717,
+      "sha256": "48ddd6310f4a353af3c0493698a103d47bc11c514f256e4a3bff380412bf5d31"
+    },
+    {
+      "path": "assets/blender/reference/vertical_press_2026_10_10_validation.json",
+      "role": "historical-check",
+      "bytes": 24364,
+      "sha256": "99777892aafb1f04c4260e4dfcbac052c50349e6e6a8862e4f597466f9212fba"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/eyes/high-poly/high-poly.mhclo",
+      "role": "CC0-source-asset",
+      "bytes": 72490,
+      "sha256": "b183cfe37120ab726f9b3f2ea6cd3a64c44ce7b4bd91a77c841cf70c04f83a0d"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/eyes/high-poly/high-poly.obj",
+      "role": "CC0-source-asset",
+      "bytes": 100882,
+      "sha256": "da2493215b708a344c33dc72f2a9a5b8fa985dcc5a70ad3b208995cf871da8e1"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/eyes/materials/brown.mhmat",
+      "role": "CC0-source-asset",
+      "bytes": 1247,
+      "sha256": "4abad93ce50541c08127721e77bce035640c9f16bed16cd0f5524b1cd5908465"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/eyes/materials/brown_eye.png",
+      "role": "CC0-source-asset",
+      "bytes": 610817,
+      "sha256": "4659691c7295ad6206c78b003e5fd0e5f91dcd53032fa914a229bb48cabe424b"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/hair/short02/short02.mhclo",
+      "role": "CC0-source-asset",
+      "bytes": 119240,
+      "sha256": "625736cdb73e6d094df6e5a2df18f371781f1d2cd37b0ae15795c5d7051c3ec2"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/hair/short02/short02.mhmat",
+      "role": "CC0-source-asset",
+      "bytes": 1323,
+      "sha256": "2ed04c8aad9c1a35d858ca72091525d32b1da3b61b5a031634dd528fd8530f6d"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/hair/short02/short02.obj",
+      "role": "CC0-source-asset",
+      "bytes": 139742,
+      "sha256": "48f979114adfa712165a69cc55c45a70831af1fb3cba8e2a89120f0c87407b64"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/hair/short02/short02_diffuse.png",
+      "role": "CC0-source-asset",
+      "bytes": 3553543,
+      "sha256": "47fe33831a3929567c733356dd66243116e05df2ace1f884ddca0080b728229f"
+    },
+    {
+      "path": "assets/blender/vendor/makehuman/hair/short02/short02_normal.png",
+      "role": "CC0-source-asset",
+      "bytes": 1626745,
+      "sha256": "2cfac7619f8eec77dd90df979d912415058f4f0fc16940cba40a8eb1ae6d74b5"
+    },
+    {
+      "path": "web/public/demos/ex_001-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 321438,
+      "sha256": "a94d7a8bc0e336c7a36e95ae72377f483de46e30d3db94e7d49d2086e70ad856"
+    },
+    {
+      "path": "web/public/demos/ex_004-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 381388,
+      "sha256": "49ea019a5130bc8fddb6c0dc9939ab4b403c298c95b2f7ac085da7c910f56f6e"
+    },
+    {
+      "path": "web/public/demos/ex_005-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 319030,
+      "sha256": "26152b8a717367e2dae0c9387da1cfa2bfe1b5485e15d26ea70bcaa816748cd6"
+    },
+    {
+      "path": "web/public/demos/ex_006-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 408069,
+      "sha256": "95307d70b6b88ff89fb4787202c501fe772374b67e96ab764deaaeb490f4a313"
+    },
+    {
+      "path": "web/public/demos/ex_007-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 493900,
+      "sha256": "4a5305a48c431e851c5df0e7f92a04df10c2207d5330650a5bafb656c44b8613"
+    },
+    {
+      "path": "web/public/demos/ex_008-figure-motion.mp4",
+      "role": "accepted-guide-video",
+      "bytes": 518905,
+      "sha256": "52de5f7485854e6bbe2fb5c8e2515bd10f44ea14fe8f15c6dd1844c4954a0b84"
+    }
+  ]
+}

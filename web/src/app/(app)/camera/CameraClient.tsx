@@ -226,6 +226,7 @@ import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "@/lib/r
 import { SessionRecorder, type RecordingState } from "@/lib/recording/sessionRecorder";
 import {
   formatResistanceContext,
+  PRE_SESSION_PAIN_BLOCK_SCORE,
   PRE_SESSION_PAIN_CAUTION_SCORE,
   type PainTiming,
   type PreSessionPain,
@@ -3108,6 +3109,15 @@ export default function CameraClient() {
   const [preSessionSurvey, setPreSessionSurvey] = useState<{ score: number; bodyArea: string } | null>(null);
   const preSessionSurveyResolveRef = useRef<((answer: PreSessionPain | null) => void) | null>(null);
   const preSessionPainRef = useRef<PreSessionPain | null>(null);
+  // The exercise the survey is for. At PRE_SESSION_PAIN_BLOCK_SCORE or higher
+  // it cannot start: Okay records it as not started and notifies the therapist.
+  const preSessionTargetRef = useRef<{ patientExerciseId: number; occurrenceId: number; exerciseId: string } | null>(null);
+  const [highPainSaving, setHighPainSaving] = useState(false);
+  const [highPainError, setHighPainError] = useState<string | null>(null);
+  // A custom exercise's session is running: its guide video plays on a loop.
+  const [customVideoPlaying, setCustomVideoPlaying] = useState(false);
+  /** The Reference Guide's spoken line, subtitled on the camera view. */
+  const [guideCue, setGuideCue] = useState<string | null>(null);
   // Optional session video: a question after the pain survey, answered each
   // time unless the patient asked this device to remember the answer.
   const [videoQuestion, setVideoQuestion] = useState<{ remember: boolean } | null>(null);
@@ -4406,7 +4416,11 @@ export default function CameraClient() {
       typeof exercise.patientExerciseId !== "number" ||
       typeof exercise.occurrenceId !== "number"
     ) return true;
-    const pain = await askPreSessionPain();
+    const pain = await askPreSessionPain({
+      patientExerciseId: exercise.patientExerciseId,
+      occurrenceId: exercise.occurrenceId,
+      exerciseId: exercise.id,
+    });
     if (pain === null) return false;
     let record: boolean;
     let remembered = false;
@@ -4778,16 +4792,72 @@ export default function CameraClient() {
    * are rebuilt so a restarted session does not inherit stale event buffers
    * or lifetime-of-instance rep indices from the previous session.
    */
-  const askPreSessionPain = () =>
+  const askPreSessionPain = (
+    target: { patientExerciseId: number; occurrenceId: number; exerciseId: string } | null,
+  ) =>
     new Promise<PreSessionPain | null>((resolve) => {
       preSessionSurveyResolveRef.current = resolve;
+      preSessionTargetRef.current = target;
+      setHighPainError(null);
       setPreSessionSurvey({ score: 0, bodyArea: "" });
     });
   const answerPreSessionSurvey = (answer: PreSessionPain | null) => {
     const resolve = preSessionSurveyResolveRef.current;
     preSessionSurveyResolveRef.current = null;
+    preSessionTargetRef.current = null;
+    setHighPainError(null);
     setPreSessionSurvey(null);
     resolve?.(answer);
+  };
+  /**
+   * Okay on the high-pain warning: the exercise does not start. It is recorded
+   * as not started because of pain, the therapist is notified, and the patient
+   * returns to their schedule.
+   */
+  const confirmHighPainNoStart = async () => {
+    const target = preSessionTargetRef.current;
+    const survey = preSessionSurvey;
+    if (!target || !survey) {
+      answerPreSessionSurvey(null);
+      return;
+    }
+    setHighPainSaving(true);
+    setHighPainError(null);
+    try {
+      const response = await fetch("/api/sessions/high-pain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...target,
+          preSessionPain: { status: "reported", score: survey.score, bodyArea: survey.bodyArea.trim() || null },
+          deviceInfo: { userAgent: navigator.userAgent },
+        }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        setHighPainError(
+          isRecord(body) && typeof body.error === "string"
+            ? body.error
+            : "This could not be saved. Please try again.",
+        );
+        return;
+      }
+      answerPreSessionSurvey(null);
+      const { remaining } = removeActionableOccurrence(assignedExercisesRef.current, target.occurrenceId);
+      assignedExercisesRef.current = remaining;
+      setAssignedExercises(remaining);
+      setActionableOccurrenceIds((previous) => {
+        const next = new Set(previous);
+        next.delete(target.occurrenceId);
+        return next;
+      });
+      setWaitMessage("Opening your schedule…");
+      router.push("/dashboard/patient?tab=session");
+    } catch {
+      setHighPainError("This could not be saved. Check your connection and try again.");
+    } finally {
+      setHighPainSaving(false);
+    }
   };
   const askVideoChoice = () =>
     new Promise<{ record: boolean; remember: boolean } | null>((resolve) => {
@@ -4850,7 +4920,16 @@ export default function CameraClient() {
     videoConsentRememberedRef.current = false;
     videoConsentNoticeRef.current = null;
     if (typeof prescriptionRef.current.patientExerciseId === "number") {
-      const answer = await askPreSessionPain();
+      const occurrenceId = prescriptionRef.current.occurrenceId;
+      const answer = await askPreSessionPain(
+        typeof occurrenceId === "number"
+          ? {
+              patientExerciseId: prescriptionRef.current.patientExerciseId,
+              occurrenceId,
+              exerciseId: activeDefinition.id,
+            }
+          : null,
+      );
       if (answer === null) return;
       preSessionPainRef.current = answer;
       // Then the video question, unless this patient asked this device to
@@ -9058,6 +9137,16 @@ export default function CameraClient() {
   // readiness state still describes the previous stream.
   const cameraFramesFlowing = cameraOn && videoResolution !== null;
   const trackingPaused = cameraFramesFlowing && !captureOk;
+  // The guide's voice and subtitles wait for Start session and the baseline:
+  // only during a set, never while positioning, capturing a baseline
+  // (including a mid-session recalibration) or resting, and they pause while
+  // tracking is interrupted ("Hold still and ensure good lighting") and while
+  // the "Tracking was interrupted" recalibration offer is up, until answered.
+  const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale;
+  // The voice speaks 3 repetitions per set, then only subtitles continue. Every
+  // start passes through the countdown, so a new session re-arms it even when
+  // it begins on the same set number as the last one.
+  const guideVoiceRound = sessionState === "countdown" ? "start" : `set-${currentSetIdx}`;
   const cameraStatus: CameraStatus =
     isStarting || (cameraOn && videoResolution === null)
       ? "starting"
@@ -10645,7 +10734,25 @@ export default function CameraClient() {
                     compact={tightLayout}
                   />
                 )}
+                {cameraOn && guideVoiceAllowed && guideCue && <GuideCueSubtitle text={guideCue} compact={tightLayout} />}
               </div>
+
+              {/* With the camera off its cover hides the column above, so the
+                  guide's subtitle sits over the cover instead. */}
+              {!cameraOn && guideVoiceAllowed && guideCue && (
+                <div style={{
+                  position: "absolute",
+                  left: tightLayout ? 10 : 16,
+                  right: tightLayout ? 10 : 16,
+                  bottom: tightLayout ? 10 : 16,
+                  zIndex: 26,
+                  display: "flex",
+                  justifyContent: "center",
+                  pointerEvents: "none",
+                }}>
+                  <GuideCueSubtitle text={guideCue} compact={tightLayout} />
+                </div>
+              )}
 
               {/* Rest */}
               {sessionState === "resting" && (
@@ -11194,7 +11301,28 @@ export default function CameraClient() {
                       placeholder="e.g. left shoulder"
                       style={FIELD_STYLE}
                     />
-                    {preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_BLOCK_SCORE ? (
+                      <div role="alert" style={{
+                        margin: "14px 0 0",
+                        padding: "12px 14px",
+                        borderRadius: 10,
+                        background: "oklch(0.96 0.03 25)",
+                        border: "1px solid oklch(0.85 0.08 25)",
+                        fontSize: 14,
+                        lineHeight: 1.5,
+                        color: "oklch(0.40 0.14 25)",
+                      }}>
+                        <strong style={{ display: "block", marginBottom: 4, fontSize: 15 }}>
+                          Your pain is too high to start this exercise.
+                        </strong>
+                        A pain score of {preSessionSurvey.score}/10 is too high to exercise safely, so this
+                        exercise cannot proceed today. If you press <strong>Okay</strong>, your assigned
+                        therapist will be notified, and this exercise will be automatically marked as
+                        &ldquo;Did not proceed because of a high pain score&rdquo; on your dashboard and as a
+                        pain follow-up on your therapist&apos;s dashboard. Press <strong>Cancel</strong> to go
+                        back without recording anything.
+                      </div>
+                    ) : preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
                       <p role="status" style={{
                         margin: "14px 0 0",
                         padding: "10px 12px",
@@ -11210,6 +11338,29 @@ export default function CameraClient() {
                         &ldquo;Stop — I have pain&rdquo; if the pain gets worse.
                       </p>
                     )}
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_BLOCK_SCORE ? (
+                      <>
+                        {highPainError && (
+                          <p role="alert" style={{ margin: "12px 0 0", fontSize: 14, color: "oklch(0.45 0.16 25)" }}>
+                            {highPainError}
+                          </p>
+                        )}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
+                          <button
+                            type="button"
+                            onClick={() => void confirmHighPainNoStart()}
+                            disabled={highPainSaving}
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px", opacity: highPainSaving ? 0.6 : 1 }}
+                          >{highPainSaving ? "Saving…" : "Okay"}</button>
+                          <button
+                            type="button"
+                            onClick={() => answerPreSessionSurvey(null)}
+                            disabled={highPainSaving}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                          >Cancel</button>
+                        </div>
+                      </>
+                    ) : (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
                       <button
                         type="button"
@@ -11226,7 +11377,8 @@ export default function CameraClient() {
                         style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                       >Skip</button>
                     </div>
-                    <button
+                    )}
+                    {preSessionSurvey.score < PRE_SESSION_PAIN_BLOCK_SCORE && <button
                       type="button"
                       onClick={() => answerPreSessionSurvey(null)}
                       style={{
@@ -11239,7 +11391,7 @@ export default function CameraClient() {
                         fontSize: 14,
                         cursor: "pointer",
                       }}
-                    >Back</button>
+                    >Back</button>}
                   </div>
                 </div>
               )}
@@ -11684,6 +11836,7 @@ export default function CameraClient() {
                       onPainStop={user?.role === "patient" ? () => endCustomSession("pain") : undefined}
                       painReport={user?.role === "patient" ? { pending: customPainReportPending, save: saveCustomPainReport } : undefined}
                       startNote={videoChoiceNote}
+                      onRunningChange={setCustomVideoPlaying}
                     />
                   ) : (
                   <button
@@ -11744,8 +11897,16 @@ export default function CameraClient() {
             <DemoCard
               exerciseId={activeDefinition?.id ?? null}
               compact={compactLayout}
+              onCue={setGuideCue}
+              voiceAllowed={guideVoiceAllowed}
+              voiceRound={guideVoiceRound}
               custom={selectedExerciseObj?.isCustom
-                ? { id: selectedExerciseObj.id, name: selectedExerciseObj.name, video: selectedExerciseObj.customVideo ?? null }
+                ? {
+                    id: selectedExerciseObj.id,
+                    name: selectedExerciseObj.name,
+                    video: selectedExerciseObj.customVideo ?? null,
+                    playing: customVideoPlaying,
+                  }
                 : undefined}
             />
           </aside>
@@ -13476,15 +13637,17 @@ function CameraSetHud({
     gap: 12,
     marginBottom: 6,
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 13,
+    // The labels are read from a few steps back while exercising, so they
+    // are sized to stay readable at a distance next to the big numbers.
+    fontSize: compact ? 15 : 20,
     fontWeight: 700,
-    letterSpacing: ".18em",
+    letterSpacing: ".14em",
     textTransform: "uppercase",
     color: "oklch(0.82 0.01 240)",
   };
   const suffixSt: CSSProperties = {
-    fontSize: compact ? 11 : 12,
-    fontWeight: 500,
+    fontSize: compact ? 15 : 20,
+    fontWeight: 600,
     letterSpacing: "normal",
     textTransform: "none",
     color: "oklch(0.76 0.01 240)",
@@ -13500,17 +13663,17 @@ function CameraSetHud({
   const captionSt: CSSProperties = {
     marginTop: 6,
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 12,
-    fontWeight: 600,
-    letterSpacing: ".14em",
+    fontSize: compact ? 15 : 20,
+    fontWeight: 700,
+    letterSpacing: ".12em",
     textTransform: "uppercase",
     color: "oklch(0.80 0.01 240)",
   };
   const sideSt: CSSProperties = {
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 13,
+    fontSize: compact ? 16 : 22,
     fontWeight: 700,
-    letterSpacing: ".18em",
+    letterSpacing: ".12em",
     textTransform: "uppercase",
     color: "oklch(0.80 0.01 240)",
   };
@@ -13737,8 +13900,10 @@ type CustomStartResult = boolean | Pick<RuntimePrescription, "sets" | "restSecon
 
 function CustomGuidedSession({
   sets: scheduledSets, restSeconds: scheduledRestSeconds, onComplete, onNext, onBackToSchedule,
-  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote,
+  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote, onRunningChange,
 }: {
+  /** True from the first set until the session ends (sets and rests): the guide video plays on a loop. */
+  onRunningChange?: (running: boolean) => void;
   sets: number;
   restSeconds: number;
   /** Saves the day as complete; resolves to an error message, or null when saved. */
@@ -13797,6 +13962,11 @@ function CustomGuidedSession({
     onRestChangeRef.current?.(null);
     if (phaseRef.current === "set" || phaseRef.current === "rest" || phaseRef.current === "ending") onEndRef.current?.("user");
   }, []);
+  const onRunningChangeRef = useRef(onRunningChange);
+  onRunningChangeRef.current = onRunningChange;
+  const running = phase === "set" || phase === "rest";
+  useEffect(() => { onRunningChangeRef.current?.(running); }, [running]);
+  useEffect(() => () => onRunningChangeRef.current?.(false), []);
 
   const askPainAfter = () => {
     if (!painReport?.pending()) return;
@@ -14108,9 +14278,29 @@ function CustomGuidedSession({
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
         {onComplete
           ? "Custom exercise: no machine learning tracks or counts it. Follow the guide video below and press Set done after each set; finishing the last set marks today's exercise complete."
-          : "Custom exercise: the camera does not track or count it. Follow the guide video below; this session is not saved."}
+          : "Custom exercise: the camera does not track or count it. Follow the guide video below."}
       </p>
     </>
+  );
+}
+
+/** Subtitle for the Reference Guide's spoken line, on the camera view. */
+function GuideCueSubtitle({ text, compact }: { text: string; compact: boolean }) {
+  return (
+    <div role="status" aria-live="polite" style={{
+      maxWidth: 760,
+      padding: compact ? "8px 14px" : "10px 20px",
+      borderRadius: 10,
+      background: "oklch(0.12 0.005 240 / 0.82)",
+      color: "#fff",
+      fontSize: compact ? 18 : 24,
+      fontWeight: 600,
+      lineHeight: 1.3,
+      textAlign: "center",
+      textShadow: "0 1px 2px oklch(0 0 0 / 0.6)",
+    }}>
+      {text}
+    </div>
   );
 }
 
@@ -14118,10 +14308,17 @@ function CustomGuidedSession({
  * The guide keeps missing-media fallback local to the selected clip. A custom
  * exercise plays the video attached to it instead of a rendered clip.
  */
-function DemoCard({ exerciseId, compact, custom }: {
+function DemoCard({ exerciseId, compact, custom, onCue, voiceAllowed, voiceRound }: {
   exerciseId: string | null;
   compact: boolean;
-  custom?: { id: string; name: string; video: ExerciseVideo | null };
+  /** The guide's spoken line, shown as a subtitle on the camera view. */
+  onCue?: (text: string | null) => void;
+  /** Whether the guide may speak now (session running, baseline captured). */
+  voiceAllowed: boolean;
+  /** Changes with each set and session, re-arming the guide's limited voice. */
+  voiceRound: string;
+  /** `playing`: a custom session is running, so its video plays on a loop. */
+  custom?: { id: string; name: string; video: ExerciseVideo | null; playing?: boolean };
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const clip = custom ? null : demoClipFor(exerciseId);
@@ -14131,9 +14328,9 @@ function DemoCard({ exerciseId, compact, custom }: {
       display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
       <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
       {custom?.video ? (
-        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} />
+        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} playing={custom.playing} />
       ) : shownClip ? (
-        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
+        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onCue={onCue} voiceAllowed={voiceAllowed} voiceRound={voiceRound} onError={() => setFailedSrc(shownClip.src)} />
       ) : (
         <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,
           display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",

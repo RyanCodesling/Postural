@@ -14,6 +14,8 @@ import {
   exerciseVideoMimeType,
   hasExerciseVideoSignature,
   parseYouTubeVideoId,
+  youTubeCommand,
+  youTubeEmbedUrl,
 } from "./customVideo";
 
 const tests: { name: string; run: () => void | Promise<void> }[] = [];
@@ -60,6 +62,17 @@ test("YouTube ids come from embed code, links or bare ids", () => {
   assert.equal(parseYouTubeVideoId(`<iframe src="https://evil.example/embed/${id}"></iframe>`), null);
   assert.equal(parseYouTubeVideoId("https://www.youtube.com/embed/tooshort"), null);
   assert.equal(parseYouTubeVideoId(""), null);
+});
+
+test("a YouTube player autoplays, loops and takes commands only during a session", () => {
+  const id = "dQw4w9WgXcQ";
+  assert.equal(youTubeEmbedUrl(id), `https://www.youtube-nocookie.com/embed/${id}?rel=0`);
+  assert.equal(
+    youTubeEmbedUrl(id, { autoplayLoop: true, origin: "http://localhost:3000" }),
+    `https://www.youtube-nocookie.com/embed/${id}?rel=0&autoplay=1&mute=1&loop=1&playlist=${id}&playsinline=1` +
+      "&enablejsapi=1&origin=http%3A%2F%2Flocalhost%3A3000",
+  );
+  assert.equal(youTubeCommand("unMute"), '{"event":"command","func":"unMute","args":[]}');
 });
 
 test("a row's video prefers a valid uploaded file, then a YouTube id", () => {

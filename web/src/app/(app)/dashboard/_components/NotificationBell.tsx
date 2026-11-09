@@ -394,9 +394,9 @@ export default function NotificationBell() {
                     />
                   </div>
 
-                  {/* Status Indicator Icon */}
-                  <div className="mt-1 shrink-0">
-                    {n.isRead ? (
+                  {/* Read: a check. Unread has no marker; its title is bold instead. */}
+                  <div className="mt-1 w-4.5 shrink-0">
+                    {n.isRead && (
                       <svg
                         className="w-4.5 h-4.5 text-gray-400"
                         fill="none"
@@ -406,18 +406,13 @@ export default function NotificationBell() {
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
-                    ) : (
-                      <span className="flex h-3 w-3 relative">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-                      </span>
                     )}
                   </div>
 
                   <div className="flex-1 min-w-0">
                     <p
-                      className={`text-sm text-gray-900 leading-snug break-words ${
-                        !n.isRead ? "font-bold text-green-900" : ""
+                      className={`text-sm leading-snug break-words ${
+                        n.isRead ? "font-normal text-gray-900" : "font-bold text-green-900"
                       }`}
                     >
                       {n.title}

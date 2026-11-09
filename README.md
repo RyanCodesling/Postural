@@ -1,5 +1,74 @@
 # Sprint Updates 
 
+## 📌 Update-11-09-26 | *RyanCodesling*
+
+- Combined the release deployed on 2026-11-06 with Enah's Update-11-08-26, merged without conflicts, and the fixes below
+- Limited the camera page to 20 processed frames a second, the rate the system was tuned at; deployed on 2026-11-06 together with Enah's Update-11-05-26, merged unchanged
+- Hid the Demo Clock in production and let an admin open it at /dashboard/admin?demoClock=1; deployed on 2026-11-06
+- Kept Enah's stop for a pain score of 9 or 10 before starting; 7 and 8 still give the caution, and the patient can continue
+- Fixed the therapist's Session report (PDF) for custom exercises, which had failed since 2026-11-01, and for exercises not started because of pain
+- Kept the session list and the therapist's session detail working for a session saved without a prescription
+- Let the admin save an account whose saved date of birth is outside ages 13 to 100 when the date itself is not changed
+- Turned the guide's voice and subtitles off during a hold set
+- Noted that Update-11-04-26 was deployed on 2026-11-05
+
+### *web\src\lib\pose\cameraFrameCap.ts*, *web\src\app\(app)\camera\CameraClient.tsx*, *web\scripts\lib\cameraReplayHarness.ts*, *web\src\lib\pose\cameraFrameCap.test.ts*, and *web\src\lib\pose\cameraStartup.test.ts*
+
+- Ran pose detection only when a 50 ms slot is due instead of on every screen refresh, so a fast computer processes at most 20 frames a second; a slower one still processes every frame, and a stall is not followed by a burst of frames
+- Added fpsCap=off to the camera page's address, which brings back the old loop for that page load
+- Kept the limit off in the replay harness unless CAMERA_REPLAY_FRAME_CAP=1, so replaying the pilot recordings gives the same summary as before
+- Tested 60, 144 and 30 Hz screens, a slow computer, a 500 ms stall, the address switch, and the camera loop with the limit on and off
+- Left thresholds, cues, counting rules and measurement versions unchanged
+
+### *web\src\lib\demoClock.ts*, *web\src\lib\DemoClockContext.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, *web\docs\demo-clock.md*, and *web\README.md*
+
+- Left the Demo Clock tab, its panel and the floating demo-time badge out of production builds; local development still shows them
+- Showed the tab and opened its panel when an admin adds demoClock=1 to the admin dashboard's address; removing it hides them again, and the badge stays hidden in production
+- Kept the clock's saved setting and dates, and its admin-only controls, as they were; the address only shows the controls and is not a password
+
+### *web\src\lib\reports\sessionReport.ts* and *web\src\lib\reports\reports.test.ts*
+
+- Named only the versions a session stored in the PDF's note for the app's developers; custom-exercise sessions and exercises not started because of pain store only the app revision, and reading the other two versions made their PDF fail
+- Tested a PDF for both kinds of session; other sessions print the same note as before
+
+### Changes to Enah's Update-11-08-26: *web\src\lib\db.ts*, *web\src\app\(app)\dashboard\therapist\patients\[id]\page.tsx*, *web\src\app\(app)\dashboard\admin\page.tsx*, *web\src\app\(app)\camera\CameraClient.tsx*, and *web\scripts\verify-manual-sessions.ts*
+
+- Read a session saved without a prescription as both sides in the session list, which stopped loading before, and showed "No prescription was recorded with this session." in the therapist's session detail; only an occurrence from the old migration, which has no prescription snapshot, can produce one, when its exercise is not started because of pain
+- Widened the edit form's date of birth limits to an unchanged saved date outside ages 13 to 100, so the browser no longer blocks saving the account's other fields; a changed date is still checked against 13 to 100 by the form and the server
+- Kept the guide's voice and subtitles off during a hold set: the hold clip says "Lower your arms" and "Relax your arms" after about 4 s, and played up to three times while the app timed a 30 s hold; they still play in full screen and outside a session
+- Loaded completedWithPain into the manual session database check and gave it a stand-in for emailCompletedWithPain, as it has for emailPainPause
+
+### *deploy\server\README.md*
+
+- Described the Reference Guide clips and voice cues as tracked in the repository and deployed with the code, no longer copied from a developer machine
+
+### *README.md*
+
+- Replaced Update-11-04-26's "not deployed" line with its deployment on 2026-11-05
+
+### *Validation*
+
+- Type check, lint and a production build pass on the whole branch
+- 103 framework-free TypeScript suites pass, including the new session report case
+- Replaying the pilot recordings through the camera code gives the same summary as before, and with the frame limit switched on every recording's repetition counts are unchanged
+- The coaching, Recently Deleted (12 cases), exercise (13 cases), manual session and date correction (16 checks) database checks pass against connection-private temporary tables
+- A database check of the pain stop passes: the record Okay saves, its PDF, and the session list with a session saved without a prescription
+- On the code deployed on 2026-11-06, a custom exercise's PDF fails; on this branch it builds
+- Signed in on a copy of the server's setup, with email off and a stand-in camera: every role, an arm-raise session with voice and subtitles, a silent hold set, the caution at 7 and the stop at 9, a custom exercise, all four session PDFs, and the admin's edit form with a 1920 date of birth
+- Production builds leave out the Demo Clock tab, panel and badge, and show the tab and panel with demoClock=1, checked on the compiled pages
+
+### *Remaining boundaries*
+
+- Not yet deployed when this was pushed on 2026-11-09; deploying it needs no SQL
+- /login now forwards to /?view=login, so a server check that waits for an answer of 200 from /login must ask for /?view=login instead
+- The 9 cutoff and the stop's wording, like the 7 caution, await a physical therapist's review
+- Not tried with a person in front of a real camera or with the voice heard through speakers; Forgot Password has not been tried, since it emails a code to a real account
+- Left for Enah: the therapist's session list calls an exercise not started because of pain "stopped for pain", with "0/0 met full-ROM target"; pressing Okay again after a lost answer shows an error, though nothing is recorded twice; the hold-set voice may want another fix, such as saying only "Raise" and "Hold" once a set
+- deploy\server\README.md still describes updating the server by copying over the app folder, not the release folders the server now uses
+- Clarence's Update-10-29-26-Hash-Login is not part of this update
+
+---
+
 ## 📌 Update-11-08-26 | *Enah*
 
 - Stopped exercises from starting when the pain score before starting is 9 or 10: the patient sees a warning with Okay and Cancel, and Okay marks the exercise "Did not proceed – high pain score" and notifies the assigned therapist in the app and by email
@@ -367,7 +436,7 @@
 ### *Remaining boundaries*
 
 - None of this update has been tried in a signed-in browser: the database check runs two tabs' restores one after the other, the order the lock gives them, and the session check test reads the route's response, not a real sign-in race
-- Not deployed; deploying it needs no SQL
+- Deployed on 2026-11-05; deploying it needed no SQL
 - deploy\server\README.md still describes updating the server by copying over the app folder, not the release folders the server now uses
 - Uncommitted work outside this branch, Blender authoring changes and six guide-validation records, is not part of this update
 - CameraClient.tsx stays one large file, outlined in CODE_MAP.md rather than split

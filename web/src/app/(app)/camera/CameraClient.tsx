@@ -9142,11 +9142,7 @@ export default function CameraClient() {
   // (including a mid-session recalibration) or resting, and they pause while
   // tracking is interrupted ("Hold still and ensure good lighting") and while
   // the "Tracking was interrupted" recalibration offer is up, until answered.
-  // Not during a hold either: the hold clip demonstrates a hold of about 4 s and
-  // then says "Lower your arms", which would contradict the prescribed hold the
-  // app is timing. Full screen still plays the guide when the viewer opens it.
-  const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale &&
-    activeDefinition?.kind !== "isometric";
+  const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale;
   // The voice speaks 3 repetitions per set, then only subtitles continue. Every
   // start passes through the countdown, so a new session re-arms it even when
   // it begins on the same set number as the last one.

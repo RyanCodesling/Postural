@@ -1,5 +1,11 @@
 # Sprint Updates 
 
+## 📌 Update-11-09-26 — Guide voice follow-up | *RyanCodesling*
+
+- Restored Reference Guide voice and subtitles during Arm Abduction at 90° sets by removing the isometric-only mute
+- Kept Voice on/off, the three-guide-repetition limit, and the calibration and tracking pause gates
+- The voice follows the guide animation, including its lowering instruction; it does not time the prescribed hold
+
 ## 📌 Update-11-09-26 | *RyanCodesling*
 
 - Combined the release deployed on 2026-11-06 with Enah's Update-11-08-26, merged without conflicts, and the fixes below

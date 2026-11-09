@@ -4,6 +4,8 @@
 --   partial             therapists: patients who did only part of a day's exercises
 --   due_tomorrow        patients: the evening reminder of the next day's exercises
 --   due_today           patients: the morning reminder of that day's exercises
+--   makeup              patients and therapists: exercises that can still be made
+--                       up, on the first day of their make-up window
 -- Run as the database owner after user_credentials_pg.sql. Safe to rerun: an
 -- existing table gets the newer kinds.
 
@@ -18,6 +20,6 @@ CREATE TABLE IF NOT EXISTS notification_email_digests (
 ALTER TABLE notification_email_digests DROP CONSTRAINT IF EXISTS notification_email_digests_kind_check;
 ALTER TABLE notification_email_digests
   ADD CONSTRAINT notification_email_digests_kind_check
-  CHECK (kind IN ('completed', 'missed', 'partial', 'due_tomorrow', 'due_today'));
+  CHECK (kind IN ('completed', 'missed', 'partial', 'due_tomorrow', 'due_today', 'makeup'));
 
 GRANT SELECT, INSERT, DELETE ON TABLE notification_email_digests TO postural;

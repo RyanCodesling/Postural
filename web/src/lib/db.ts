@@ -10,6 +10,8 @@ import {
   sendCompletedWithPainEmail,
   type CompletedWithPainDetails,
   sendPartialDayEmail,
+  sendMakeupAvailableEmail,
+  type MakeupItem,
   type ExerciseDigestItem,
   type ExercisePausedDetails,
   type ExerciseReminderItem,
@@ -3105,6 +3107,89 @@ export async function sendExerciseReminderEmails(): Promise<void> {
   }
 }
 
+/**
+ * Exercises whose make-up window opens today: scheduled yesterday, not finished,
+ * and still allowed today. A schedule with no gap between days (daily) has no
+ * make-up day, so nothing is listed for it. `patientId` narrows to one patient.
+ */
+async function makeupAvailableRows(today: string, patientId?: string) {
+  const yesterday = manilaDayKey(Date.parse(`${today}T12:00:00+08:00`) - DAY_MS);
+  const result = await pool.query(
+    `SELECT eo.id, eo.due_date::text AS due_key,
+            COALESCE(eo.makeup_until, eo.due_date)::text AS last_key,
+            e.name AS exercise_name, pe.exercise_id,
+            COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+            COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+            u.id AS patient_id, u.name AS patient_name, u.email AS patient_email,
+            t.id AS therapist_id, t.name AS therapist_name, t.email AS therapist_email
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
+       JOIN users u ON u.id = pe.patient_id
+       LEFT JOIN users t ON t.id = u.therapist_id AND (t.is_archived IS NULL OR t.is_archived = FALSE)
+      WHERE pe.archived_at IS NULL AND e.archived_at IS NULL
+        AND eo.cancelled_at IS NULL
+        AND (u.is_archived IS NULL OR u.is_archived = FALSE)
+        AND eo.status IN ('pending', 'in_progress')
+        AND eo.due_date = $1::date
+        AND COALESCE(eo.makeup_until, eo.due_date) >= $2::date
+        AND ($3::varchar IS NULL OR u.id = $3::varchar)
+      ORDER BY u.name, pe.sequence_index, eo.id`,
+    [yesterday, today, patientId ?? null],
+  );
+  return result.rows;
+}
+
+function makeupItem(r: Record<string, unknown>): MakeupItem {
+  return {
+    patientName: String(r.patient_name),
+    exerciseName: String(r.exercise_name),
+    sets: Number(r.sets),
+    target: prescriptionTargetText({
+      exerciseId: String(r.exercise_id),
+      reps: Number(r.reps),
+      holdSeconds: r.hold_seconds == null ? null : Number(r.hold_seconds),
+    }),
+    dueDateLabel: longDateLabel(String(r.due_key)),
+    lastDayLabel: longDateLabel(String(r.last_key)),
+  };
+}
+
+// On the first day of a make-up window, from the morning reminder hour, emails
+// each patient the exercises they can still make up, and each therapist one
+// email listing them by patient. Once per recipient per day.
+export async function sendMakeupReminderEmails(): Promise<void> {
+  if (!emailConfigured()) return;
+  const now = await getEffectiveNow();
+  if (manilaHour(now) < REMINDER_TODAY_HOUR_MANILA) return;
+  const today = manilaDayKey(now.getTime());
+  const rows = await makeupAvailableRows(today);
+  if (rows.length === 0) return;
+  const todayLabel = longDateLabel(today);
+
+  const byPatient = new Map<string, Record<string, unknown>[]>();
+  const byTherapist = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    byPatient.set(row.patient_id, [...(byPatient.get(row.patient_id) ?? []), row]);
+    if (row.therapist_id) byTherapist.set(row.therapist_id, [...(byTherapist.get(row.therapist_id) ?? []), row]);
+  }
+  for (const [patientId, list] of byPatient) {
+    const first = list[0];
+    if (!first.patient_email) continue;
+    await sendDigestOnce(patientId, "makeup", today, () =>
+      sendMakeupAvailableEmail(String(first.patient_email), String(first.patient_name), "patient", todayLabel, list.map(makeupItem)),
+    );
+  }
+  for (const [therapistId, list] of byTherapist) {
+    const first = list[0];
+    if (!first.therapist_email) continue;
+    await sendDigestOnce(therapistId, "makeup", today, () =>
+      sendMakeupAvailableEmail(String(first.therapist_email), String(first.therapist_name), "therapist", todayLabel, list.map(makeupItem)),
+    );
+  }
+}
+
 export class PainReportConflictError extends Error {
   constructor(message = "This session already has a different pain report.") {
     super(message);
@@ -4230,6 +4315,40 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
         `${rows[0].patient_name} missed ${names.length === 1 ? "1 exercise" : `${names.length} exercises`} scheduled for ${longDateLabel(day)}: ${joinNames(names)}.`,
         "exercise_missed_day",
         rows[0].id,
+      );
+    }
+  }
+
+  // On the first make-up day, the patient and the therapist each get one notice
+  // naming the exercises from the day before that can still be done. Any notice
+  // of that type already linked to one of them means the day was reported.
+  const makeup = await makeupAvailableRows(today, patientId);
+  if (makeup.length > 0) {
+    const ids = makeup.map((r) => Number(r.id));
+    const names = makeup.map((r) => String(r.exercise_name));
+    const due = longDateLabel(String(makeup[0].due_key));
+    const lastKey = makeup.map((r) => String(r.last_key)).sort()[0];
+    const last = lastKey === today ? "today" : longDateLabel(lastKey);
+    const count = names.length === 1 ? "1 exercise" : `${names.length} exercises`;
+    const title = names.length === 1 ? "Make-up Exercise Available" : "Make-up Exercises Available";
+    const notify = async (userId: string, type: string, message: string) => {
+      const sent = await pool.query(
+        "SELECT 1 FROM notifications WHERE user_id = $1 AND type = $2 AND occurrence_id = ANY($3::integer[]) LIMIT 1",
+        [userId, type, ids],
+      );
+      if (sent.rows.length === 0) await createNotification(userId, title, message, type, ids[0]);
+    };
+    await notify(
+      patientId,
+      "exercise_makeup_available",
+      `You can still make up ${count} scheduled for ${due}: ${joinNames(names)}. The last day to make ${names.length === 1 ? "it" : "them"} up is ${last}.`,
+    );
+    const makeupTherapist = makeup[0].therapist_id as string | null;
+    if (makeupTherapist) {
+      await notify(
+        makeupTherapist,
+        "exercise_makeup_available_day",
+        `${makeup[0].patient_name} did not finish ${count} scheduled for ${due} and can still make ${names.length === 1 ? "it" : "them"} up: ${joinNames(names)}. The last day is ${last}.`,
       );
     }
   }

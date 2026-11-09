@@ -189,8 +189,9 @@ export async function PUT(
       const adminEmail = authenticatedUser.email as string | undefined;
       const userName = updated.name as string;
 
-      sendEmailChangedToOldAddress(oldEmail, userName, newEmail).catch(console.error);
-      sendEmailChangedToNewAddress(newEmail, userName, oldEmail).catch(console.error);
+      const userRole = updated.role as string;
+      sendEmailChangedToOldAddress(oldEmail, userName, newEmail, userRole).catch(console.error);
+      sendEmailChangedToNewAddress(newEmail, userName, oldEmail, userRole).catch(console.error);
       if (adminEmail) {
         sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail).catch(console.error);
       }
@@ -292,7 +293,6 @@ export async function DELETE(
         sendAccountDeletedUserEmail(
           userToProcess.email as string,
           userToProcess.name as string,
-          userToProcess.role as string
         ).catch(console.error);
 
         if (adminEmail) {

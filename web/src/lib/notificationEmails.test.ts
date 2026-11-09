@@ -263,6 +263,64 @@ function reminderHarness() {
   };
 }
 
+/** sendMakeupReminderEmails with an in-memory claim table and a recording mailer. */
+function makeupHarness() {
+  const claims = new Set<string>();
+  // Make-up rows the query returns, keyed by the yesterday/today it was asked for.
+  const rows: Array<Record<string, unknown>> = [];
+  const queried: Array<{ yesterday: string; today: string }> = [];
+  const sent: Array<{ to: string; role: string; todayLabel: string; items: Array<{ patient: string; exercise: string; last: string }> }> = [];
+  let now = new Date();
+  const pool = {
+    query: async (sql: string, values: any[] = []) => {
+      if (sql.includes("INSERT INTO notification_email_digests")) {
+        const key = values.join("|");
+        if (claims.has(key)) return { rows: [] };
+        claims.add(key);
+        return { rows: [{ day: values[2] }] };
+      }
+      if (sql.includes("DELETE FROM notification_email_digests")) {
+        claims.delete(values.join("|"));
+        return { rows: [] };
+      }
+      if (sql.includes("COALESCE(eo.makeup_until, eo.due_date) >= $2::date")) {
+        queried.push({ yesterday: values[0], today: values[1] });
+        return { rows: rows.filter((r) => r.due_key === values[0] && String(r.last_key) >= values[1]) };
+      }
+      throw new Error(`Unexpected fixture query: ${sql}`);
+    },
+  };
+  const context: any = vm.createContext({
+    exports: {}, pool, console: { error() {} },
+    emailConfigured: () => true,
+    getEffectiveNow: async () => now,
+    manilaDayKey, DAY_MS, prescriptionTargetText,
+    sendMakeupAvailableEmail: async (to: string, _name: string, role: string, todayLabel: string, items: any[]) => {
+      // Copied out of the sandbox, so strict comparison sees ordinary arrays.
+      const list = JSON.parse(JSON.stringify(items)) as any[];
+      sent.push({ to, role, todayLabel, items: list.map((i) => ({ patient: i.patientName, exercise: i.exerciseName, last: i.lastDayLabel })) });
+      return true;
+    },
+  });
+  vm.runInContext(production([
+    "longDateLabel", "manilaHour", "sendDigestOnce", "REMINDER_TODAY_HOUR_MANILA",
+    "makeupAvailableRows", "makeupItem", "sendMakeupReminderEmails",
+  ]), context);
+  return {
+    check: async (manila: string) => {
+      now = new Date(`${manila}:00+08:00`);
+      await context.exports.sendMakeupReminderEmails();
+    },
+    missed: (patient: string, therapist: string | null, exercise: string, due: string, last: string) => rows.push({
+      id: rows.length + 1, due_key: due, last_key: last, exercise_name: exercise, exercise_id: "ex_001",
+      sets: 2, reps: 10, hold_seconds: null,
+      patient_id: patient, patient_name: `Patient ${patient}`, patient_email: `${patient}@example.invalid`,
+      therapist_id: therapist, therapist_name: therapist && `Therapist ${therapist}`, therapist_email: therapist && `${therapist}@example.invalid`,
+    }),
+    queried, sent,
+  };
+}
+
 async function run() {
   console.log("\nNotification emails: never waited on, nothing skipped\n");
 
@@ -458,6 +516,39 @@ async function run() {
     assert.equal(reminders.sent.length, 0);
     await reminders.check("2026-10-16T08:10");
     assert.equal(reminders.sent.length, 1);
+  });
+
+  await test("make-up: from 7 AM on the first make-up day, the patient and the therapist each get one email", async () => {
+    const m = makeupHarness();
+    m.missed("p1", "t1", "Lateral Arm Raises", "2026-11-08", "2026-11-09");
+    await m.check("2026-11-09T06:30");
+    assert.equal(m.sent.length, 0, "nothing before the morning reminder hour");
+    await m.check("2026-11-09T07:05");
+    assert.deepEqual(m.queried.at(-1), { yesterday: "2026-11-08", today: "2026-11-09" }, "asks for yesterday's exercises still open today");
+    assert.deepEqual(m.sent.map((s) => [s.to, s.role]), [["p1@example.invalid", "patient"], ["t1@example.invalid", "therapist"]]);
+    assert.equal(m.sent[0].todayLabel, "November 9, 2026");
+    assert.deepEqual(m.sent[0].items, [{ patient: "Patient p1", exercise: "Lateral Arm Raises", last: "November 9, 2026" }]);
+    await m.check("2026-11-09T08:05");
+    assert.equal(m.sent.length, 2, "the next hourly check sends nothing again");
+  });
+
+  await test("make-up: a therapist gets one email listing every patient; a patient without a therapist still gets theirs", async () => {
+    const m = makeupHarness();
+    m.missed("p1", "t1", "Lateral Arm Raises", "2026-11-08", "2026-11-10");
+    m.missed("p2", "t1", "Neck Lateral Flexion", "2026-11-08", "2026-11-09");
+    m.missed("p3", null, "Standing Side Bends", "2026-11-08", "2026-11-09");
+    await m.check("2026-11-09T07:05");
+    const therapist = m.sent.filter((s) => s.role === "therapist");
+    assert.equal(therapist.length, 1);
+    assert.deepEqual(therapist[0].items.map((i) => i.patient), ["Patient p1", "Patient p2"]);
+    assert.deepEqual(m.sent.filter((s) => s.role === "patient").map((s) => s.to).sort(), ["p1@example.invalid", "p2@example.invalid", "p3@example.invalid"]);
+  });
+
+  await test("make-up: nothing is sent once the exercise's make-up day has passed, or when nothing was missed", async () => {
+    const m = makeupHarness();
+    m.missed("p1", "t1", "Lateral Arm Raises", "2026-11-07", "2026-11-08");
+    await m.check("2026-11-09T07:05");
+    assert.equal(m.sent.length, 0);
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

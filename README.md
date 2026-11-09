@@ -1,5 +1,58 @@
 # Sprint Updates 
 
+## 📌 Update-11-09-26-Combined | *Enah*
+
+- Redesigned every email in a plain, letter-like layout: the clinic's name as text with a thin green line at the top, left-aligned copy, details as label and value rows, notes marked by a coloured line instead of tinted boxes and emoji, and the clinic's address and phone in the footer
+- Added make-up exercise email notification for assigned therapist and patient
+- Revised most of the email templates
+- Turned the camera on when Start session is pressed on a custom exercise, as the system exercises do, for every role
+
+### *web\src\lib\email.ts*
+
+- Replaced the gradient header, tinted rounded boxes, uppercase labels and emoji with one shared layout: "ACC+ Bacoor" and "Postural Monitoring System" as text under a thin green top line, a sentence-case heading, label and value rows between grey lines, notes with a short amber, red or green line on their left, the reset code in large plain digits, and a footer with the clinic's name, address and phone
+- Kept each email's facts and subject; dropped "Great news!" and "Welcome back!" from the account restored email
+- Added the make-up email, "Make-up Exercise Available" or "Make-up Exercises Available": patients get their own list, therapists one list grouped by patient, each exercise with its sets and target, the day it was scheduled and the last day to make it up
+- Picked the password changed email's line by role: patients "please contact your assigned therapist to inform the clinic's administrator immediately", therapists "please contact the clinic's administrator immediately", admins "please secure your account immediately"
+- Picked the email address updated and new email address active emails' line the same way: patients "please contact your assigned therapist to inform the clinic's administrator immediately", therapists "please inform the clinic's administrator immediately", admins "please secure your account immediately"
+- Said "has been changed / updated / archived / restored / permanently deleted by the clinic's administrator", ended the email address updated email with "Your old email address is no longer active for login.", asked to "contact the clinic's administrator" in the account archived email, and left the role out of the account permanently deleted email
+- Wrote "Your patient" for one patient and "Your patients" for more in the completed, missed and partially completed emails, and "Exercise Completed", "Exercise Missed" and "Exercise Due Today / Tomorrow" when there is one exercise
+
+### *web\src\lib\db.ts*, *web\src\instrumentation.ts*, and *scripts\notification_email_digests_pg.sql*
+
+- Found, each morning, the exercises scheduled yesterday, not finished, and still allowed today: the first day of their make-up window; a daily schedule has no make-up day and gets none
+- Emailed each patient and each therapist once on that day, from 7:00 AM Manila time, with the hourly check that sends the other reminders
+- Showed the patient "You can still make up 1 exercise scheduled for November 8, 2026: Lateral Arm Raises. The last day to make it up is today." and the therapist one notice per patient naming the exercises, created when either opens their notifications, once per day
+- Added the makeup kind to the table that records which emails have gone out
+
+### *web\src\app\api\auth\change-password\route.ts*, *web\src\app\api\auth\reset-password\route.ts*, and *web\src\app\api\users\[id]\route.ts*
+
+- Passed the account's role to the password changed email, after changing a password while signed in and after Forgot Password
+- Passed the account's role to both email address change emails, and no longer passed it to the account permanently deleted email
+
+### *web\src\app\(app)\camera\CameraClient.tsx*
+
+- Started the camera when Start session is pressed on a custom exercise and the camera is off, before the pain and video questions, for patients, therapists and admins, once the pose model has loaded
+- Let the custom exercise start anyway when the camera cannot, since nothing is tracked; the page says why the camera did not start
+
+### *web\src\lib\notificationEmails.test.ts*
+
+- Tested the make-up emails: nothing before 7:00 AM, then one email to the patient and one to the therapist, and none again at the next hourly check; one therapist email listing every patient, and a patient without a therapist still emailed; nothing once the last make-up day has passed
+
+### *Validation*
+
+- Type check passes, and lint passes on every changed file
+- All 104 TypeScript test suites pass, including the three new make-up cases
+- Rendered every email with sample data, with patient, therapist and admin versions where they differ, without sending any
+
+### *Remaining boundaries*
+
+- Deploying needs scripts\notification_email_digests_pg.sql run as the database owner, as the admin's documented SQL is: `sudo -u postgres psql -d postural -f /opt/postural/app/scripts/notification_email_digests_pg.sql`; until then the make-up emails are skipped with a logged error, and the in-app notices still work
+- The redesigned emails have not been checked in a real inbox; Outlook and phone mail apps can draw them a little differently from a browser
+- A make-up reminder has not been seen arriving, since it needs an exercise missed on a real schedule
+- The custom exercise's camera start has not been tried while signed in
+
+---
+
 ## 📌 Update-11-09-26 — Assignment frequency | *RyanCodesling*
 
 - New built-in and custom exercise assignments start with ---Select Frequency--- and require an explicit choice, including Every day

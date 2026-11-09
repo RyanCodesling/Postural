@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     await updateUserPassword(user.id, newPassword);
 
-    sendPasswordChangedEmail(email, user.name).catch((err) =>
+    sendPasswordChangedEmail(email, user.name, user.role).catch((err) =>
       console.error("Failed to send password changed email:", err)
     );
 

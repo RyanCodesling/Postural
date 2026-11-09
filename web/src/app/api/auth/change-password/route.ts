@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     // Send confirmation email (fire-and-forget)
     if (user?.email) {
-      sendPasswordChangedEmail(user.email as string, user.name as string).catch(
+      sendPasswordChangedEmail(user.email as string, user.name as string, user.role as string).catch(
         (err) => console.error("Failed to send password changed email:", err)
       );
     }

@@ -4411,6 +4411,14 @@ export default function CameraClient() {
     // A pain report left unanswered belongs to the earlier attempt, not this one.
     customReportSessionIdRef.current = null;
     customRecordingConsentRef.current = false;
+    // Like Start session on a system exercise, bring the camera up first, for
+    // every role. Only once the pose model is ready, for the same reason as
+    // `startSessionWithCamera`. Nothing is tracked on a custom exercise, so a
+    // camera that cannot start does not stop the session; startCamera has
+    // already said why on screen.
+    if (!cameraReadyRef.current && modelLoaded && !isStarting) {
+      await startCamera(selectedDeviceId || undefined);
+    }
     if (
       user?.role !== "patient" ||
       typeof exercise.patientExerciseId !== "number" ||

@@ -3727,9 +3727,11 @@ export async function getSessionsForPatient(patientId: string) {
 
   return result.rows.map((row) => {
     const context = (row.context_snapshot as SessionContextSnapshot | null) ?? null;
-    const prescribedSide = context?.prescription.prescribedSide ?? "both";
+    // An exercise not started because of pain on an occurrence saved without a
+    // prescription snapshot (only the old migration made those) stores none.
+    const prescribedSide = context?.prescription?.prescribedSide ?? "both";
     const resistance =
-      context?.prescription.resistance ??
+      context?.prescription?.resistance ??
       ({ type: "unknown", value: null, unit: null, label: null } as const);
     const exerciseConfigVersion =
       (row.exercise_config_version as string | null) ?? "legacy-unversioned";

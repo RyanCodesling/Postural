@@ -753,6 +753,13 @@ function AdminDashboardContent() {
     editingUser?.dateOfBirth && editingUser.dateOfBirth !== (editingLoaded?.dateOfBirth ?? "")
       ? birthDateError(editingUser.dateOfBirth, todayKey)
       : null;
+  // The picker's limits widen to an unchanged saved date outside them, so the
+  // browser's own check does not block saving the account's other fields.
+  const loadedBirthDate = editingLoaded?.dateOfBirth ?? "";
+  const editUserBirthBounds = {
+    min: loadedBirthDate && loadedBirthDate < newUserBirthBounds.min ? loadedBirthDate : newUserBirthBounds.min,
+    max: loadedBirthDate && loadedBirthDate > newUserBirthBounds.max ? loadedBirthDate : newUserBirthBounds.max,
+  };
 
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
@@ -1305,8 +1312,8 @@ function AdminDashboardContent() {
                         className={`w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
                           editUserBirthError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-green-200 focus:border-green-500 focus:ring-green-100"
                         }`}
-                        max={newUserBirthBounds.max}
-                        min={newUserBirthBounds.min}
+                        max={editUserBirthBounds.max}
+                        min={editUserBirthBounds.min}
                         aria-invalid={editUserBirthError ? true : undefined}
                         aria-describedby="edit-user-dob-hint"
                       />

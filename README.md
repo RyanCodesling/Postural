@@ -1,5 +1,11 @@
 # Sprint Updates 
 
+## 📌 Update-11-09-26 — Make-up reminder fixes | *RyanCodesling*
+
+- Show each exercise's own make-up deadline when a reminder lists different deadlines
+- Keep the day's reminder recorded after the first exercise is completed, so reopening notifications does not send it again
+- Save patient and therapist notices together and serialize overlapping requests for the same patient and scheduled day
+
 ## 📌 Update-11-09-26-Combined | *Enah*
 
 - Redesigned every email in a plain, letter-like layout: the clinic's name as text with a thin green line at the top, left-aligned copy, details as label and value rows, notes marked by a coloured line instead of tinted boxes and emoji, and the clinic's address and phone in the footer

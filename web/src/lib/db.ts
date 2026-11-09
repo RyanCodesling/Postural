@@ -3141,6 +3141,49 @@ async function makeupAvailableRows(today: string, patientId?: string) {
   return result.rows;
 }
 
+/** Publish a patient's scheduled-day reminders together, once per recipient. */
+async function notifyMakeupAvailable(
+  patientId: string,
+  dueDate: string,
+  occurrenceId: number,
+  title: string,
+  reminders: Array<{ userId: string; type: string; message: string }>,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Notification reads can overlap between patient and therapist pages. Keep
+    // the day check and both inserts on this connection under one short lock.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [
+      `makeup:${patientId}`, dueDate,
+    ]);
+    for (const reminder of reminders) {
+      const sent = await client.query(
+        `SELECT 1 FROM notifications n
+          WHERE n.user_id = $1 AND n.type = $2
+            AND n.occurrence_id IN (
+              SELECT eo.id FROM exercise_occurrences eo
+                JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+               WHERE pe.patient_id = $3 AND eo.due_date = $4::date)
+          LIMIT 1`,
+        [reminder.userId, reminder.type, patientId, dueDate],
+      );
+      if (sent.rows.length > 0) continue;
+      await client.query(
+        `INSERT INTO notifications (user_id, title, message, type, occurrence_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [reminder.userId, title, reminder.message, reminder.type, occurrenceId],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function makeupItem(r: Record<string, unknown>): MakeupItem {
   return {
     patientName: String(r.patient_name),
@@ -4320,37 +4363,39 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
   }
 
   // On the first make-up day, the patient and the therapist each get one notice
-  // naming the exercises from the day before that can still be done. Any notice
-  // of that type already linked to one of them means the day was reported.
+  // naming the exercises from the day before that can still be done. A notice
+  // linked to any occurrence that day counts even after that exercise is done.
   const makeup = await makeupAvailableRows(today, patientId);
   if (makeup.length > 0) {
-    const ids = makeup.map((r) => Number(r.id));
     const names = makeup.map((r) => String(r.exercise_name));
-    const due = longDateLabel(String(makeup[0].due_key));
-    const lastKey = makeup.map((r) => String(r.last_key)).sort()[0];
-    const last = lastKey === today ? "today" : longDateLabel(lastKey);
+    const dueKey = String(makeup[0].due_key);
+    const due = longDateLabel(dueKey);
+    const lastKeys = new Set(makeup.map((r) => String(r.last_key)));
+    const deadlineLabel = (key: string) => key === today ? "today" : longDateLabel(key);
+    const sameDeadline = lastKeys.size === 1;
+    const exercises = sameDeadline
+      ? joinNames(names)
+      : joinNames(makeup.map((r) => `${r.exercise_name} (last day: ${deadlineLabel(String(r.last_key))})`));
+    const pronoun = names.length === 1 ? "it" : "them";
+    const availability = sameDeadline
+      ? `${exercises}. The last day to make ${pronoun} up is ${deadlineLabel(String(makeup[0].last_key))}.`
+      : `${exercises}.`;
     const count = names.length === 1 ? "1 exercise" : `${names.length} exercises`;
     const title = names.length === 1 ? "Make-up Exercise Available" : "Make-up Exercises Available";
-    const notify = async (userId: string, type: string, message: string) => {
-      const sent = await pool.query(
-        "SELECT 1 FROM notifications WHERE user_id = $1 AND type = $2 AND occurrence_id = ANY($3::integer[]) LIMIT 1",
-        [userId, type, ids],
-      );
-      if (sent.rows.length === 0) await createNotification(userId, title, message, type, ids[0]);
-    };
-    await notify(
-      patientId,
-      "exercise_makeup_available",
-      `You can still make up ${count} scheduled for ${due}: ${joinNames(names)}. The last day to make ${names.length === 1 ? "it" : "them"} up is ${last}.`,
-    );
+    const reminders = [{
+      userId: patientId,
+      type: "exercise_makeup_available",
+      message: `You can still make up ${count} scheduled for ${due}: ${availability}`,
+    }];
     const makeupTherapist = makeup[0].therapist_id as string | null;
     if (makeupTherapist) {
-      await notify(
-        makeupTherapist,
-        "exercise_makeup_available_day",
-        `${makeup[0].patient_name} did not finish ${count} scheduled for ${due} and can still make ${names.length === 1 ? "it" : "them"} up: ${joinNames(names)}. The last day is ${last}.`,
-      );
+      reminders.push({
+        userId: makeupTherapist,
+        type: "exercise_makeup_available_day",
+        message: `${makeup[0].patient_name} did not finish ${count} scheduled for ${due} and can still make ${pronoun} up: ${availability}`,
+      });
     }
+    await notifyMakeupAvailable(patientId, dueKey, Number(makeup[0].id), title, reminders);
   }
 
   // The patient gets one reminder on the day exercises are due, naming them all.

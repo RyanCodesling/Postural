@@ -1,5 +1,10 @@
 # Sprint Updates 
 
+## 📌 Update-11-09-26 — Assignment frequency | *RyanCodesling*
+
+- New built-in and custom exercise assignments start with ---Select Frequency--- and require an explicit choice, including Every day
+- Show the saved frequency when viewing or editing an existing prescription
+
 ## 📌 Update-11-09-26 — Guide voice follow-up | *RyanCodesling*
 
 - Restored Reference Guide voice and subtitles during Arm Abduction at 90° sets by removing the isometric-only mute

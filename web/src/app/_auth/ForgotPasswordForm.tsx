@@ -218,45 +218,31 @@ export default function ForgotPasswordForm({ onDone }: { onDone: () => void }) {
     }
   };
 
-  // Step indicator component
-  const StepIndicator = () => (
-    <div className="flex items-center justify-center gap-0 w-full mb-2">
-      {[1, 2, 3].map((s, i) => (
-        <div key={s} className="flex items-center">
-          <div
-            className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-colors ${
-              s < step
-                ? "bg-green-500 border-green-500 text-white"
-                : s === step
-                ? "bg-green-600 border-green-400 text-white"
-                : "bg-white border-green-200 text-green-300"
-            }`}
-          >
-            {s < step ? "✓" : s}
-          </div>
-          {i < 2 && (
-            <div
-              className={`w-12 h-0.5 transition-colors ${
-                s < step ? "bg-green-500" : "bg-green-100"
-              }`}
-            />
-          )}
+  // Title and subtitle laid out the same as the log in form's, with a slim
+  // progress bar for the three steps.
+  const Header = ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <div>
+      <div className="mb-4 flex items-center gap-3" aria-label={`Step ${step} of 3`}>
+        <div className="grid flex-1 grid-cols-3 gap-1.5" aria-hidden>
+          {[1, 2, 3].map((s) => (
+            <span key={s} className={`h-1.5 rounded-full transition-colors ${s <= step ? "bg-green-600" : "bg-green-100"}`} />
+          ))}
         </div>
-      ))}
+        <span className="shrink-0 text-xs font-medium text-gray-500">Step {step} of 3</span>
+      </div>
+      <h2 id="hero-auth-title" className="text-2xl font-bold text-gray-900">{title}</h2>
+      <p className="text-sm text-gray-600">{children}</p>
     </div>
   );
 
   return (
     <div className="flex w-full flex-col gap-5">
-        <StepIndicator />
-
         {/* Step 1: Enter Email */}
         {step === 1 && (
           <form onSubmit={handleSendOtp} className="flex w-full flex-col gap-5">
-            <p className="text-2xl font-bold text-gray-900 text-left">Forgot your password?</p>
-            <p className="text-sm text-gray-600 text-left -mt-3">
-              Enter your email address and we&apos;ll send you a verification code.
-            </p>
+            <Header title="Forgot your password?">
+              Enter your email and we&apos;ll send you a verification code.
+            </Header>
 
             <div className="relative">
               <input
@@ -293,10 +279,9 @@ export default function ForgotPasswordForm({ onDone }: { onDone: () => void }) {
         {/* Step 2: Enter OTP */}
         {step === 2 && (
           <form onSubmit={handleVerifyOtp} className="flex w-full flex-col gap-5">
-            <p className="text-2xl font-bold text-gray-900 text-left">Verify your identity</p>
-            <p className="text-sm text-gray-600 text-left -mt-3">
+            <Header title="Verify your identity">
               We&apos;ve sent a 6-digit code to <span className="font-medium text-gray-900">{email}</span>
-            </p>
+            </Header>
 
             <div className="flex justify-center gap-2">
               {otp.map((digit, index) => (
@@ -354,10 +339,9 @@ export default function ForgotPasswordForm({ onDone }: { onDone: () => void }) {
         {/* Step 3: New Password */}
         {step === 3 && (
           <form onSubmit={handleResetPassword} className="flex w-full flex-col gap-5">
-            <p className="text-2xl font-bold text-gray-900 text-left">Set new password</p>
-            <p className="text-sm text-gray-600 text-left -mt-3">
+            <Header title="Set new password">
               Enter your new password below.
-            </p>
+            </Header>
 
             <div className="relative">
               <input
@@ -378,6 +362,7 @@ export default function ForgotPasswordForm({ onDone }: { onDone: () => void }) {
               <button
                 type="button"
                 onClick={() => setShowNewPassword(!showNewPassword)}
+                aria-label={showNewPassword ? "Hide password" : "Show password"}
                 className={AUTH_TOGGLE}
               >
                 {showNewPassword ? "👁️" : "👁️‍🗨️"}
@@ -403,6 +388,7 @@ export default function ForgotPasswordForm({ onDone }: { onDone: () => void }) {
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                aria-label={showConfirmPassword ? "Hide password" : "Show password"}
                 className={AUTH_TOGGLE}
               >
                 {showConfirmPassword ? "👁️" : "👁️‍🗨️"}

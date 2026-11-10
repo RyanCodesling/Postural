@@ -249,7 +249,8 @@ function HeroVideo() {
         preload="metadata"
         poster="/landing/postural-hero-poster.jpg"
       >
-        {/* One 720p file for every screen. */}
+        {/* Phones get a lighter 480p file (about 2 MB) so it plays without stutter; larger screens get 720p. */}
+        <source src="/landing/postural-hero-480p.mp4" type="video/mp4" media="(max-width: 767px)" />
         <source src="/landing/postural-hero-720p.mp4" type="video/mp4" />
       </video>
       {/* eslint-disable-next-line @next/next/no-img-element -- static poster shown instead of motion */}

@@ -100,6 +100,7 @@ export default function ChangePasswordPage() {
             <button
               type="button"
               onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+              aria-label={showCurrentPassword ? "Hide password" : "Show password"}
               className={AUTH_TOGGLE}
             >
               {showCurrentPassword ? "👁️" : "👁️‍🗨️"}
@@ -126,6 +127,7 @@ export default function ChangePasswordPage() {
             <button
               type="button"
               onClick={() => setShowNewPassword(!showNewPassword)}
+              aria-label={showNewPassword ? "Hide password" : "Show password"}
               className={AUTH_TOGGLE}
             >
               {showNewPassword ? "👁️" : "👁️‍🗨️"}
@@ -152,6 +154,7 @@ export default function ChangePasswordPage() {
             <button
               type="button"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
               className={AUTH_TOGGLE}
             >
               {showConfirmPassword ? "👁️" : "👁️‍🗨️"}

@@ -1,10 +1,66 @@
 # Sprint Updates 
+## 📌 Update-11-10-26 | *Enah*
+- Gave the change password page shown at first login, and the first-time password page, the landing page's look: the same header, tinted hero and white card as Log In and Forgot Password
+- Restyled Forgot Password to match Log In: a title and subtitle on each step, and a thin three-step progress bar in place of the numbered circles
+- Revamped the landing page's hero video, now 106 s, with the same animations and look, and new scenes for the pain check before starting, the Reference Guide's voice and subtitles, the hold timer, email reminders, the therapist's pain alerts, and the patient's session video
+- Played a lighter 480p video on phones so it does not stutter, and the 720p video on tablets and computers
+
+### *web\src\app\(auth)\AuthFrame.tsx*
+
+- Replaced the green side panel with the landing page's header (the clinic logo and name), its tinted hero with the "Postural Monitoring System" title, and the form in the same white card as the landing page's Log In; on phones the card sits below the title
+- Added AUTH_CARD, the card's style, shared with the landing page so the two stay the same
+- Kept the form styles (AUTH_INPUT, AUTH_BUTTON and the others) as they were
+
+### *web\src\app\_auth\HeroPanel.tsx*
+
+- Used AUTH_CARD for the Log In and Forgot Password card
+
+### *web\src\app\_auth\ForgotPasswordForm.tsx*
+
+- Replaced the large numbered green circles with a thin three-part progress bar and "Step 1 of 3"
+- Laid out each step's title and subtitle as Log In's are, a heading over a line of grey text, instead of paragraphs pulled together with negative margins
+- Named the show-password buttons "Show password" and "Hide password" for screen readers, as on Log In
+
+### *web\src\app\(auth)\change-password\page.tsx*
+
+- Named the three show-password buttons "Show password" and "Hide password" the same way
+
+### *web\public\landing\postural-hero-720p.mp4*, *web\public\landing\postural-hero-480p.mp4*, and *web\public\landing\postural-hero-poster.jpg*
+
+- Rebuilt the hero video from fresh screenshots of the current app, with the demo patient and therapist and dates around November 10, 2026, keeping the drifting mint background, word-by-word headlines, browser window, spotlights, zooms, the "For patients" and "For therapists" cards and the closing card
+- Added "Check in before you start." (a pain score of 3 with a body area, then the stop warning at 9), "Holds timed, side by side." (Arm Abduction at 90° timed for each side), "Reminders that find you." (the due tomorrow, make-up available and exercises completed emails), "Pain alerts, right away." (the therapist's high pain and completed with pain notifications), and "Watch the session back." (the patient's own recording above the set timeline)
+- Played the Wall Angels and Arm Abduction guide clips in the Reference Guide during the camera scenes with the spoken line as a subtitle, attached a guide video to the custom exercise, and showed the amber "Raise both arms evenly" tip turning into the green "Nice, both arms level"
+- 720p: 1280×720, 30 fps, 5.5 MB (was 4.6 MB for 80 s); 480p: 854×480, 24 fps, 2.2 MB
+- Took the poster from the form tips scene at 1920×1080, as before
+
+### *web\src\app\page.tsx*
+
+- Played postural-hero-480p.mp4 on screens up to 767 px wide and postural-hero-720p.mp4 on wider ones, so phones held upright get the 480p video and tablets and computers the 720p one
+
+### *Validation*
+
+- Type check passes, and lint passes on the landing page
+- Looked at Log In, Forgot Password and the first-time password page at computer and phone widths
+- Compared the new video with the old one frame by frame, and checked that it loads and plays muted on a loop on the landing page
+- Checked in a browser that a 390 px screen loads the 480p video, and 820 px and 1440 px screens load the 720p video
+
+### *Remaining boundaries*
+
+- The change password page has not been opened while signed in with an account that must change its password; it uses the same frame as the first-time password page
+- Steps 2 and 3 of Forgot Password have not been stepped through
+- The videos have not been played on a real phone or tablet
+- The screenshots and tools used to make the video were deleted after rendering, so a later change to it means rebuilding it
+- Browsers older than late 2023 ignore the phone-only rule and play the 480p video on every screen
+- The first-time password page is still not linked from anywhere and does not save the password, as before
+
+---
 
 ## 📌 Update-11-09-26 — Make-up reminder fixes | *RyanCodesling*
-
 - Show each exercise's own make-up deadline when a reminder lists different deadlines
 - Keep the day's reminder recorded after the first exercise is completed, so reopening notifications does not send it again
 - Save patient and therapist notices together and serialize overlapping requests for the same patient and scheduled day
+
+---
 
 ## 📌 Update-11-09-26-Combined | *Enah*
 
@@ -60,18 +116,19 @@
 ---
 
 ## 📌 Update-11-09-26 — Assignment frequency | *RyanCodesling*
-
 - New built-in and custom exercise assignments start with ---Select Frequency--- and require an explicit choice, including Every day
 - Show the saved frequency when viewing or editing an existing prescription
 
-## 📌 Update-11-09-26 — Guide voice follow-up | *RyanCodesling*
+---
 
+## 📌 Update-11-09-26 — Guide voice follow-up | *RyanCodesling*
 - Restored Reference Guide voice and subtitles during Arm Abduction at 90° sets by removing the isometric-only mute
 - Kept Voice on/off, the three-guide-repetition limit, and the calibration and tracking pause gates
 - The voice follows the guide animation, including its lowering instruction; it does not time the prescribed hold
 
-## 📌 Update-11-09-26 | *RyanCodesling*
+---
 
+## 📌 Update-11-09-26 | *RyanCodesling*
 - Combined the release deployed on 2026-11-06 with Enah's Update-11-08-26, merged without conflicts, and the fixes below
 - Limited the camera page to 20 processed frames a second, the rate the system was tuned at; deployed on 2026-11-06 together with Enah's Update-11-05-26, merged unchanged
 - Hid the Demo Clock in production and let an admin open it at /dashboard/admin?demoClock=1; deployed on 2026-11-06
@@ -140,7 +197,6 @@
 ---
 
 ## 📌 Update-11-08-26 | *Enah*
-
 - Stopped exercises from starting when the pain score before starting is 9 or 10: the patient sees a warning with Okay and Cancel, and Okay marks the exercise "Did not proceed – high pain score" and notifies the assigned therapist in the app and by email
 - Told the assigned therapist in the app and by email, for each exercise, when a patient completes it after a pain score of 1 to 8 before starting; a score of 0 is left out
 - Played a custom exercise's guide video on a loop from Start session until the session ends, for uploaded video files and YouTube videos, on the patient, therapist, and admin camera pages
@@ -317,7 +373,6 @@
 ---
 
 ## 📌 Update-11-07-26-GuideAssets | *RyanCodesling*
-
 - Added the six accepted Reference Guide MP4s and their editable Blender scenes, including the base figure and source scenes used for the final look and poses
 - Added the original CC0 hair and eye inputs, with exact file hashes and render instructions in [assets/blender/GUIDE_ASSETS.md](assets/blender/GUIDE_ASSETS.md)
 - Included the current deep-start shoulder-press and relaxed-hand neck rendering tools and their dated review reports
@@ -327,7 +382,6 @@
 ---
 
 ## 📌 Update-11-05-26 | *Enah*
-
 - Gave the app a Postural icon in the browser tab, bookmarks, and home screen, replacing the old favicon
 - Redesigned the landing page in a lighter clinical style: deep green text, the clinic logo's green, and its orange cross as a second accent
 - Added a looping hero video beside the landing page's introduction, with a still poster for people who turn off motion
@@ -374,7 +428,6 @@
 ---
 
 ## 📌 Update-11-04-26-Fixes | *Clarence*
-
 - Names can no longer contain numbers when an admin creates an account or edits a user
 
 ### *web\src\lib\personName.ts* and *web\src\lib\personName.test.ts*
@@ -404,7 +457,6 @@
 ---
 
 ## 📌 Update-11-04-26 | *RyanCodesling*
-
 - Combined Enah's Update-11-03-26 with the fixes below, keeping all of Enah's changes
 - Placed the fixes on top of Clarence's Update-11-04-26-Fixes above, keeping all of Clarence's changes
 - Restored an item from Recently Deleted only once, even when two admin tabs restore it at the same time, and never deleted for good a guide video its exercise is showing
@@ -515,7 +567,6 @@
 ---
 
 ## 📌 Update-11-03-26 | *Enah*
-
 - Kept the patient's My Progress charts inside the screen on phones and tablets, also when a chart's point table is open, as on the therapist's Patient Profile
 - Removed Print / Save as PDF from the therapist's Patient Profile with its print-only layout, keeping Progress report (PDF)
 - Deleted the root copy of the session report demo, pt_session_summary_printable_report.html, keeping the one the app serves
@@ -557,7 +608,6 @@
 ---
 
 ## 📌 Update-11-03-26 | *RyanCodesling*
-
 - Combined Enah's Update-10-31-26 with the progress chart change, keeping all of her features
 - Left attempts replaced by a new start out of the exercise trends, Reports, and progress PDFs while keeping them in session history, and counted My Progress's sessions and last session the same way
 - Renamed the completed-repetition charts "Reps reaching the target", noting that partial repetitions are recorded too
@@ -646,7 +696,6 @@
 ---
 
 ## 📌 Update-10-31-26 | *Enah*
-
 - Simplified the landing page's wording without changing its design or the clinic's name, phone numbers, email, and address, and moved the progress report to the therapists' list and the daily email to the patients'
 - Replaced the dashboards' How to Use drawings with screenshots of the real screens on 23 steps, showing each step in order with the button to press outlined
 - Kept every How to Use card inside the screen, with its title and Back / Next always visible and only its middle scrolling, and enlarged its text for readability
@@ -883,7 +932,6 @@
 ---
 
 ## 📌 Update-10-30-26 | *RyanCodesling*
-
 - Added "Stop at shoulder height" on the lateral arm raise when an arm goes past shoulder height, boxed around that arm and cleared once it is corrected in the same raise; saved videos redraw the box as it was shown
 - Coached each arm of the arm hold (Arm Abduction at 90°) on its own, with "Raise this arm" or "Lower to shoulder height" for an arm outside the target band and a raise or lower hint beside each arm's seconds, starting once an arm has earned hold time in the set
 - Showed "Turn to face the camera." once the hips have read a turn of 15° or more for half a second, until they read below 10°, also in place of the message about a hidden hand or knee
@@ -1031,7 +1079,6 @@
 ---
 
 ## 📌 Update-10-30-26 | *Enah*
-
 - Added an Archived column to the admin's Manage Exercises: archiving a custom exercise moves it there with its name, description and video kept, and it offers only Restore and Permanently delete
 - Kept the six system exercises from being archived or deleted; only their description can be edited, and the server now ignores a changed name
 - Let the admin and therapists attach a guide video to a new custom exercise, an MP4 or WebM file of up to 100 MB or a pasted YouTube embed code or link
@@ -1151,7 +1198,6 @@
 ---
 
 ## 📌 Update-10-24-26 | *RyanCodesling*
-
 - Lowered the wall angels' full-range line from 134.3 to 125 and their minimum peak from 101.6 to 98.8, because 22 of the 24 repetitions done following the guide video were rated partial
 - Recorded the tuning trace in every patient session by default, so a reported counting problem can be replayed through the counter afterwards; the staff panel can still switch it off
 - Moved the trace's frame readout and its "check the server" warning behind a new staff switch, so patients and evaluators do not see them
@@ -1227,7 +1273,6 @@
 ---
 
 ## 📌 Update-10-23-26 | *RyanCodesling*
-
 - Measured every camera angle in true picture proportions. On a 16:9 camera the old arithmetic exaggerated how far a line tilts from horizontal and shrank how far it tilts from vertical (a real 5 degrees read about 8.8 and 2.8); against motion capture, the lateral raise's peak read about 18 degrees high on average and now reads about 6 high
 - Converted every angle threshold to the corrected measurement so that counting and cues behave as before, except that a lateral raise peaking between 45 and about 60 in the corrected measurement now counts as partial instead of being dropped
 - Counted neck side bends from the head's own ear line, taken during the 3-second baseline, instead of the camera's tilt
@@ -1314,7 +1359,6 @@
 ---
 
 ## 📌 Update-10-19-26 | *Enah*
-
 - Named every exercise in the patient's assigned, edited, and removed exercise notifications, one notification for each change, and showed each edited field's old and new value
 - Added the patient's in-app reminder on the day exercises are due, and reminder emails the evening before and that morning, one email a day listing every exercise due
 - Notified the patient in the app when they pause an exercise for pain, and the patient and therapist when the exercise is resumed after that pause
@@ -1403,7 +1447,6 @@
 ---
 
 ## 📌 Update-10-19-26 | *RyanCodesling*
-
 - Measured each neck side bend's peak from the head's resting position, which the camera now records between sets, so the charts no longer shift with how the camera was set up
 - Added a 5-second positioning countdown before every 3-second baseline, so the baseline is not taken while the patient is still getting into place
 - Judged "Level your shoulders" against the patient's own resting shoulder line from the baseline instead of the camera tilt
@@ -1496,7 +1539,6 @@
 ---
 
 ## 📌 Update-10-15-26 | *Enah*
-
 - Added a How to Use button to the top bar of every patient, therapist, and administrator page, which opens a step-by-step tour of that page, in the style of the camera page's tour
 - Wrote a tour for each patient page, My Progress, Session, and View Profile as well as the dashboard, and for each therapist page, the dashboard, View Profile, Manage Patients, Manage Exercises, Assign Exercise, Exercise Program, and a patient's profile, and for each administrator tab, the dashboard, Manage Users, Manage Exercises, Assign Patients, and the demo clock
 - Removed the Open Dashboard button from the exercise, assignment, and pain emails
@@ -1543,7 +1585,6 @@
 ---
 
 ## 📌 Update-10-15-26 | *RyanCodesling*
-
 - Merged the 10-14 frame-size fix into Enah's 10-15 update, so this branch keeps every change the evaluation server runs
 - Kept the update's package upgrade, which clears every security advisory npm reports for the app's packages, including critical ones for the previous Next.js
 - Turned off the six React Compiler lint rules that the new lint package adds; the app does not use the React Compiler, and they failed on code that already runs
@@ -1587,7 +1628,6 @@
 ---
 
 ## 📌 Update-10-15-26 | *Enah*
-
 - Sent each therapist and patient one email a day for the exercises completed and one for the exercises missed, listing each exercise's sets and reps, and left manual-monitoring exercises out
 - Sent an email to the patient and the therapist when a patient pauses an exercise because of pain, with the prescribed sets and reps and how far the patient got
 - Sent separate patient and therapist emails when a therapist is assigned to a patient, and when exercises are assigned, changed, or removed, each exercise listed with its sets, reps, rest, order, side, resistance, repeat, and dates
@@ -1703,7 +1743,6 @@
 ---
 
 ## 📌 Update-10-14-26 | *RyanCodesling*
-
 - Set the lateral arm raise's full-range target to 85 instead of 90, and its return line to 15 instead of 10
 - Left the side bend's neck tilt and shoulder elevation, and the arm hold's shoulder elevation, out of the form score; they are still recorded
 - Saved each session's camera picture size in its capture summary
@@ -1742,7 +1781,6 @@
 ---
 
 ## 📌 Update-10-11-26 | *RyanCodesling*
-
 - Replaced the progress trend labels with a Gaussian-process trend model learned offline from the app's own recorded sessions, on the therapist trend cards, the patient progress view, and the progress PDF
 - Left each set's first repetition out of the raising and lowering times, and the repetitions and sessions the camera tracked poorly out of the trend lines
 - Revised the coaching cues: warnings count only movement beyond the expected amount, LOWER switches on at 7 and off at 5, and cues that failed the pilot replay check are logged but not drawn
@@ -1909,7 +1947,6 @@ The app is already running at http://localhost:3000; a second dev-server launch 
 ---
 
 ## 📌 Update-10-1-26 | *Ron*
-
 ### *pt_session_summary_printable_report.html*
 Test phase only, not offical yet
 - Added editable clinical summary and goal-progress fields, displayed them in the printable report, and included them in JSON export
@@ -1937,7 +1974,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-9-27-26 | *RyanCodesling*
-
 - Added optional session video: a question before each patient session with a "remember my choice" option, upload to this clinic's computer during the session, and a player for the patient and their assigned therapist that marks sets, repetitions, and cues and can redraw the coaching overlays
 - Added a before-session pain survey on the after-session report's 0-10 scale, with a non-blocking caution at 7/10 or above
 - Added PDF session and progress reports, built in the browser from the saved data at download time
@@ -2026,7 +2062,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-9-18-26 | *RyanCodesling*
-
 - Made manual recalibration and a dropout during calibration discard the measurement in progress, so no repetition or neutral baseline mixes readings from before and after them
 - Blanked the trace sync readout on frames that write no trace row, so a paused screen recording can no longer pair a later posture with an older row
 - Renamed the scapular overlay label from "Shoulder elevated" to "Shoulder / head position", because the metric cannot tell a rising shoulder from a lowering head
@@ -2113,7 +2148,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-9-8-26 | *RyanCodesling*
-
 - Stopped a capture dropout from silently re-capturing the neutral baseline, which could adopt a compensated posture as the reference every later deduction is measured against
 - Relaxed the default head-position ceiling that was rejecting ordinary postural movement rather than bad framing, on measurements taken from a recorded session
 - Added an on-screen trace sync readout so a screen recording can be matched to an exact exported row instead of an approximate one
@@ -2163,7 +2197,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-9-6-26 | *RyanCodesling*
-
 - Added an opt-in aspect-ratio correction to the clinical angle pipeline, default-disabled, so no patient-visible measurement changes until the affected thresholds are re-derived against it
 - Generalized the coaching-shadow capture-boundary guard from forward steps to any plan transition, closing two paths that could leave a capture while retained decisions were unexported
 - Extended the tuning trace to `upper_body_v4`, persisting the source frame size and the retained neutral-calibration samples so a recorded session can be reprocessed under a changed coordinate convention
@@ -2211,7 +2244,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-9-4-26 | *RyanCodesling*
-
 - Added an opt-in Face Landmarker comparison path and offline calibration tools for `ex_004` diagnostics while keeping Pose authoritative for readiness, timing, coaching, scoring, persistence, and ML inputs
 - Added deterministic single-cue arbitration downstream of the existing warning latches so the patient sees at most one active compensation label without changing any metric computation, threshold, target, band, or coupled-fit constant
 - Added a staff-only `coaching_shadow_v2` recorder with labelled session steps, bounded local evidence, automated export checks, and file-download export for replay and false-cue review
@@ -2258,7 +2290,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-7-31-26 | *RyanCodesling*
-
 - Consolidated the complete post–July 22 clinical-context and patient-workflow batch: typed prescription side/load, immutable runtime context, pain reporting, therapist review labels, occurrence-driven session starts, therapist-controlled order, and explicit completion acknowledgement
 - Preserved completed, started, missed, cancelled, pain-stopped, and otherwise historical occurrences without rewriting their durable prescription/session context; active camera work now locks and navigates by one exact actionable occurrence
 - Replaced moving per-frame tilt correction with capture-ready frozen neutral calibration shared by display, coaching, raw rule aggregation, and raw feature traces, while keeping the unprescribed limb observation-only
@@ -2356,8 +2387,9 @@ Test phase only, not offical yet
 - Resolve the remaining prescription/result contracts before claiming a complete rehabilitation product: patient-specific ROM/counter intent is not prescribable, `pairedReps` is a minimum-of-sides aggregate rather than time-window pairing, and prescribed rest still exposes a skip override
 - Collect a new untouched multi-subject evaluation set only after the exercise and measurement protocols are frozen; keep baseline and feedback-assisted recordings explicitly separable, and do not treat cue response as a clinical label. Researcher sessions 168–174 remain calibration evidence
 
-## 📌 Update-7-22-26 | *RyanCodesling*
+---
 
+## 📌 Update-7-22-26 | *RyanCodesling*
 - Preserved prescription, occurrence, session, set, repetition, and raw-trace history by replacing exercise and assignment hard deletion with archival and cancellation workflows
 - Reworked patient and therapist read models so prescription lifecycle, adherence, schedule status, completed outcomes, capture quality, and form quality remain separate and auditable
 - Added therapist-owned manual custom exercises and a patient acknowledgement path without treating unregistered movements as camera-monitored exercises
@@ -2422,8 +2454,9 @@ Test phase only, not offical yet
 - Complete a real-person webcam pass for prescribed-side repetition/timing behavior; automated mirrored-wrist gating coverage already passes, but pose-dependent behavior cannot be claimed from an API-only session
 - Obtain clinician-approved decisions for the `ex_004` assisted-hold target and the deferred `ex_005` threshold retune
 
-## 📌 Update-7-11-26 | *RyanCodesling*
+---
 
+## 📌 Update-7-11-26 | *RyanCodesling*
 - Converted `ex_004` to an assisted side-split isometric hold and propagated the latest single-subject scoring and threshold retunes through the live registry, tuning tools, and synthetic ML pipeline
 - Extended the offline synthetic-feasibility pipeline across all six active exercises while keeping the browser's rule-based feedback as the live coaching layer
 - Corrected recurring-assignment status rollups so future pending dates no longer hide completed current or due work
@@ -2515,6 +2548,8 @@ Test phase only, not offical yet
 - Decide the clinical `ex_004` hold angle and duration; keep the current band labeled as a placeholder until then
 - Collect future model evaluation data only after the protocol is frozen; do not reuse sessions 168–174 as held-out evidence
 - Review and disposition the dependency-audit findings before deployment rather than applying a blind breaking upgrade
+
+---
 
 ## 📌 Update-6-8-26 | *RyanCodesling*
 - Added the first offline form-quality ML layer for thesis feasibility work: synthetic data generation, raw-frame feature extraction, rule/majority baselines, leave-one-subject-out model evaluation, and learning documentation
@@ -2960,7 +2995,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-6-6-26 | *RyanCodesling*
-
 - Added dashboard-wide toast notifications and loading skeletons so patient and therapist pages give lighter-weight feedback during assignment, deletion, session save, and data-load states
 - Replaced assignment/delete success modals with non-blocking toasts while preserving the existing error modals and confirmation preview flow
 - Hardened camera session-save feedback so "Session saved" appears only after the session-end PATCH succeeds, with separate pending/failure states for in-flight or failed persistence
@@ -3081,7 +3115,6 @@ Test phase only, not offical yet
 --- 
 
 ## 📌 Update-6-4-26 | *RyanCodesling*
-
 - Expanded the patient dashboard from a simple start screen into a useful home view with consistency stats, a monthly activity calendar, and assigned-exercise status cards
 - Added outcome-aware calendar counting so accidental or zero-outcome session starts do not inflate streaks, active days, or total completed routine counts
 - Added session end-reason tracking so the dashboard can distinguish completed sessions, deliberate early endings, superseded open rows, and still-open in-progress attempts
@@ -3250,7 +3283,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-5-31-26 | *RyanCodesling*
-
 - Added durable session persistence for patient camera runs: sessions now create a session row, write dynamic `rep_events`, write set-level `set_events`, and end with optional capture-quality summary data
 - Added session API routes for creating sessions, ending sessions, and saving rep/set events with patient ownership checks before accepting writes
 - Added `scripts\sessions_pg.sql` for the session persistence schema, including `sessions`, `rep_events`, `set_events`, indexes, permissions, and safe re-run column additions for existing local databases
@@ -3335,7 +3367,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-5-29-26 | *RyanCodesling*
-
 - Refreshed the patient camera screen into a clinical three-rail workflow: left live metrics, centered camera/pose surface, right session controls and reference video, plus a bottom posture/hold/time strip sized for patients standing away from the screen
 - Restored readable patient guidance during capture-readiness pauses and kept the narrowed tilt-confidence behavior from the previous camera warning fix
 - Cleaned up countdown/session controls so the guided exercise flow stays locked and consistent during starting, active, rest, ended, and completed states
@@ -3381,7 +3412,6 @@ Test phase only, not offical yet
 ---
 
 ## 📌 Update-5-28-26 | *RyanCodesling*
-
 - Added a 3-2-1 session countdown before active camera counting starts; Start now enters `countdown`, then transitions to `active`, and End can cancel during countdown
 - Added visible baseline-capture progress for exercises that need calibration; the overlay shows seconds remaining, percent ready, and pause reason when capture readiness drops
 - Added compensation warning boxes on the camera canvas — warning metrics now draw red bounding boxes around the affected joint area with readable text badges such as "Trunk lean", "Shoulder elevated", and directional neck-tilt labels
@@ -3662,7 +3692,6 @@ Test phase only, not offical yet
 --- 
 
 ## 📌 Update-5-22-26 | *RyanCodesling*
-
 - **`ex_001` reduced-ROM leniency** — `minimumPeakThreshold` 60° → 45° (peaks from 45° to under 90° now count as `partial`; `targetROM` stays 90° so the weakness signal is preserved)
 - **Exercise double-swap (landed in code)** — deprecated `ex_002` Overhead Arm Raises (unavoidable front-camera depth ambiguity) + `ex_003` Shoulder Shrugs (sits at MediaPipe's 3° landmark noise floor); added `ex_007` Overhead Shoulder Press + `ex_008` Wall Angels (frontal-plane, MediaPipe-clean). Deprecated entries kept in the registry + DB for audit; filtered out of active catalog/debug/patient-flow surfaces
 - **Real session lifecycle** replaced the hardcoded SETS / progress / timer placeholders: idle→active→ended state machine, slower-side-gated set counter (`min(left,right) ≥ targetReps`), live session timer, progress bar, wired sidebar Start/End controls, per-side `reps/target` display with a green ✓ "done" cue
@@ -4422,7 +4451,6 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ---
 
 ## 📌 Update-5-4-26 | *RyanCodesling*
-
 ### *web\src\lib\exercises\registry.ts*
 - Added exercise registry as the source of truth for the six thesis exercises (`ex_001` to `ex_006`)
 - Added per-exercise configuration for primary metrics, compensation metrics, thresholds, bilateral mode, and isometric target bands
@@ -4579,7 +4607,6 @@ Pose / rep-counting sprint (multi-day, LLM-assisted). Net outcome below — `ex_
 ---
 
 ## 📌 Update-4-13-26 | *ralmeyda*
-
 Added 2 new database tables: therapist, patients
 
 ### *dashboard/admin/page.tsx* 
@@ -4598,7 +4625,6 @@ Added 2 new database tables: therapist, patients
 ---
 
 ## 📌 Update-4-09-26  | *RyanCodesling*
-
 ### *web/source/lib/pose*
 - Added poseMetrics.tsx for math engine
 
@@ -4620,7 +4646,6 @@ Added 2 new database tables: therapist, patients
 ---
 
 ## 📌 Update-4-08-26 | *Enah*
-
 ### *web/package.json*
 - Added `mysql2` dependency for database connection
 
@@ -4653,7 +4678,6 @@ Added 2 new database tables: therapist, patients
 ---
 
 ## 📌 Update-3-31-26 | *ralmeyda*
-
 ### *dashboard/admin/page.tsx* 
 - Added Age, Gender, Diagnosis, Prescription, and Condition when adding a new user
 - When adding a new user ( Therapist ), the Therapist ID and Specialty were added.
@@ -4669,7 +4693,6 @@ Added 2 new database tables: therapist, patients
 ---
 
 ## 📌 Update-3-25-26 | *Enah*
-
 ### *dashboard/patient/page.tsx* 
 - Created subfolder for Patient Side
 - Logout button redirects back to app\page.tsx

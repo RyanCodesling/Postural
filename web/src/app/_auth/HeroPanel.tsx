@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import LoginForm from "./LoginForm";
 import ForgotPasswordForm from "./ForgotPasswordForm";
+import { AUTH_CARD } from "../(auth)/AuthFrame";
 
 export type HeroView = "video" | "login" | "forgot";
 
@@ -49,7 +50,7 @@ export default function HeroPanel({ video }: { video: ReactNode }) {
     <div ref={panelRef} className="scroll-mt-6 px-5 sm:px-8 lg:pr-12 xl:pr-20 2xl:pr-28">
       <section
         aria-label={view === "login" ? "Log in" : "Reset your password"}
-        className="mx-auto flex w-full max-w-[440px] flex-col gap-6 rounded-2xl border border-[#dfe5db] bg-white p-6 text-gray-900 shadow-[0_18px_48px_-24px_rgba(16,36,26,0.35)] sm:p-8"
+        className={AUTH_CARD}
       >
         {view === "login" ? (
           <LoginForm resetSuccess={searchParams.get("reset") === "success"} onForgot={() => go("forgot")} />

@@ -23,7 +23,12 @@ export interface ProgramOccurrence {
   reps: number;
   hold_seconds: number;
   monitoring_mode: "camera" | "manual";
+  /** Stopped for pain before starting: the pain score was too high to proceed. */
+  high_pain_no_start?: boolean;
 }
+
+/** The pill for an exercise the patient could not start because of a high pain score. */
+export const HIGH_PAIN_NO_START_LABEL = "Did not proceed – high pain score";
 
 type DayState = "done" | "today" | "makeup" | "pain" | "partial" | "missed" | "upcoming";
 
@@ -83,7 +88,7 @@ export function dayState(day: string, items: ProgramOccurrence[], today: string)
 
 /** One exercise's pill when it cannot be started: its own state, not its day's. */
 export function itemStatusLabel(o: ProgramOccurrence, day: string, today: string): string {
-  if (o.status === "pain_stopped") return "Stopped for pain";
+  if (o.status === "pain_stopped") return o.high_pain_no_start ? HIGH_PAIN_NO_START_LABEL : "Stopped for pain";
   if (day > today) return "Upcoming";
   if (day === today) return "Today";
   return o.makeup_until >= today ? "Make-up open" : "Missed";

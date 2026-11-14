@@ -155,8 +155,9 @@ const CADENCE_PRESETS: CadencePreset[] = [
 
 // Pick the preset id that matches the current params (for the dropdown value).
 function presetIdFor(p: AssignmentParams): string {
-  if ((p.recurrence ?? "interval") === "interval") {
-    const n = p.intervalDays ?? 1;
+  if (!p.recurrence || (p.recurrence === "interval" && p.intervalDays == null)) return "";
+  if (p.recurrence === "interval") {
+    const n = p.intervalDays;
     return CADENCE_PRESETS.find((c) => c.recurrence === "interval" && c.intervalDays === n)?.id
       ?? "every_day";
   }
@@ -517,6 +518,11 @@ export default function AssignExercisePage() {
       }
       if (isIsometric && p.holdSeconds !== undefined && p.holdSeconds < 1) {
         setAssignErrorMsg(`Please enter a valid hold time (sec) for "${ex?.name ?? exId}".`);
+        setShowAssignError(true);
+        return;
+      }
+      if (!presetIdFor(p)) {
+        setAssignErrorMsg(`Please select a frequency for "${ex?.name ?? exId}".`);
         setShowAssignError(true);
         return;
       }
@@ -1518,7 +1524,7 @@ function AssignRow({
   const repsInvalid = showValidationErrors && checked && !isIsometric && !isPrescriptionCount(params.reps, MAX_PRESCRIPTION_REPS);
   const startDateInvalid = showValidationErrors && checked && !params.scheduledDate;
   const endDateInvalid = showValidationErrors && checked && !params.endDate;
-  const repeatInvalid = showValidationErrors && checked && recurrence === "interval" && params.intervalDays == null;
+  const repeatInvalid = showValidationErrors && checked && !presetId;
   const applyPreset = (id: string) => {
     const preset = CADENCE_PRESETS.find((c) => c.id === id);
     if (!preset) return;
@@ -1660,16 +1666,19 @@ function AssignRow({
           />
           {/* Schedule: a repeat cadence over a start–end date range */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">
-              Repeat <span className="text-red-500">*</span>
+            <label htmlFor={`frequency-${exercise.id}`} className="block text-xs text-gray-500 mb-1">
+              Frequency <span className="text-red-500">*</span>
             </label>
             <select
+              id={`frequency-${exercise.id}`}
               value={presetId}
               onChange={(e) => applyPreset(e.target.value)}
               disabled={locked}
+              required
               aria-invalid={repeatInvalid}
               className={`w-full border rounded-lg px-2 py-1.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-300 ${locked ? "border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed" : repeatInvalid ? "border-red-500 ring-1 ring-red-300" : "border-green-200"}`}
             >
+              <option value="" disabled>---Select Frequency---</option>
               {CADENCE_PRESETS.map((c) => (
                 <option key={c.id} value={c.id}>{c.label}</option>
               ))}

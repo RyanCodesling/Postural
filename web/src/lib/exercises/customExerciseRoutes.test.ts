@@ -168,16 +168,21 @@ test("admin recovery restores an older guide with a legacy filename", async () =
   await withFiles(async root => {
     writeFileSync(path.join(root, "ex_fixture.mp4"), MP4);
     const fixture = videoFixture();
-    let removed = false;
+    const statements: string[] = [];
+    const query = async (sql: string) => {
+      statements.push(/FOR UPDATE OF d\b/.test(sql) ? "SELECT locked" : sql.trim().split(/\s+/).slice(0, 2).join(" "));
+      if (sql.startsWith("DELETE")) return { rows: [] };
+      return { rows: [{ id: 1, kind: "exercise_video", exercise_id: "ex_fixture", label: "Fixture",
+        details: { source: "file", mimeType: "video/mp4", fileName: null } }] };
+    };
+    const transaction = { query, release() {} };
     const bin = load("../deletedItems.ts", {
       "@/lib/db": {
-        __esModule: true, default: { query: async (sql: string) => {
-          if (sql.startsWith("DELETE")) { removed = true; return { rows: [] }; }
-          return { rows: [{ id: 1, kind: "exercise_video", exercise_id: "ex_fixture", label: "Fixture",
-            details: { source: "file", mimeType: "video/mp4", fileName: null } }] };
-        } },
-        setExerciseVideoFile: async (id: string, mime: string, name: string | null, actor: string) => {
+        __esModule: true, default: { query, connect: async () => transaction },
+        setExerciseVideoFile: async (id: string, mime: string, name: string | null, actor: string, client: unknown) => {
           assert.equal(id, "ex_fixture"); assert.equal(name, null); assert.equal(actor, "fixture-admin");
+          assert.equal(client, transaction, "the guide is published inside the restore's transaction");
+          statements.push("publish");
           fixture.row = { ...fixture.row, video_mime_type: mime, video_file_name: name };
           return { exercise: fixture.row };
         },
@@ -186,7 +191,8 @@ test("admin recovery restores an older guide with a legacy filename", async () =
       "@/lib/exercises/customVideo": customVideo,
     });
     assert.equal((await bin.restoreDeletedItem(1, "fixture-admin")).ok, true);
-    assert.equal(removed, true);
+    assert.deepEqual(statements, ["BEGIN", "SELECT locked", "publish", "DELETE FROM", "COMMIT"],
+      "the bin entry is read locked, then published and removed in one transaction");
     const playback = await fixture.route.GET({ headers: new Headers() }, params);
     assert.equal(playback.status, 200);
     assert.deepEqual(new Uint8Array(await playback.arrayBuffer()), MP4);

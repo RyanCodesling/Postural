@@ -204,13 +204,6 @@ export function faceOrientationDegrees(
   };
 }
 
-/** Backward-compatible roll-only accessor used by the existing diagnostic. */
-export function faceRollImageDegrees(
-  matrix: FaceTransformMatrix | null | undefined,
-): number | null {
-  return faceOrientationDegrees(matrix)?.rollImageDeg ?? null;
-}
-
 /** Signed current-minus-baseline delta normalized to [-180, 180]. */
 export function angleDeltaDegrees(current: number, baseline: number): number {
   let delta = current - baseline;

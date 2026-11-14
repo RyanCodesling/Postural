@@ -1,7 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import logo from "../../media/acc_bacoor_logo.png";
+import HeroPanel from "./_auth/HeroPanel";
 
 // Palette: deep clinical green for ink, the clinic logo's green for marks, and
 // the logo's orange cross as a sparing second accent.
@@ -248,9 +249,9 @@ function HeroVideo() {
         preload="metadata"
         poster="/landing/postural-hero-poster.jpg"
       >
-        <source src="/landing/postural-hero-720p.mp4" type="video/mp4" media="(max-width: 767px)" />
-        <source src="/landing/postural-hero-1080p.webm" type="video/webm" />
-        <source src="/landing/postural-hero-1080p.mp4" type="video/mp4" />
+        {/* Phones get a lighter 480p file (about 2 MB) so it plays without stutter; larger screens get 720p. */}
+        <source src="/landing/postural-hero-480p.mp4" type="video/mp4" media="(max-width: 767px)" />
+        <source src="/landing/postural-hero-720p.mp4" type="video/mp4" />
       </video>
       {/* eslint-disable-next-line @next/next/no-img-element -- static poster shown instead of motion */}
       <img src="/landing/postural-hero-poster.jpg" alt="" className="hidden h-full w-full scale-[1.12] object-cover motion-reduce:block md:scale-[1.06] lg:scale-100" />
@@ -287,7 +288,7 @@ export default function HomePage() {
                 while you move. Then it sends a record of each session to your therapist.
               </p>
               <div className="mt-8">
-                <Link href="/login" className={LOGIN_BUTTON}>Log In <Arrow /></Link>
+                <Link href="/?view=login" scroll={false} className={LOGIN_BUTTON}>Log In <Arrow /></Link>
               </div>
               <ul className="mt-10 grid max-w-[520px] gap-px overflow-hidden rounded-md border border-[#dfe5db] bg-[#dfe5db] text-[13px] shadow-sm sm:grid-cols-3">
                 {HERO_FACTS.map((fact) => (
@@ -299,7 +300,10 @@ export default function HomePage() {
               </ul>
             </div>
             <div className="mx-auto w-full max-w-[880px] lg:max-w-none">
-              <HeroVideo />
+              {/* Log In and Forgot Password open here, in place of the video. */}
+              <Suspense fallback={<HeroVideo />}>
+                <HeroPanel video={<HeroVideo />} />
+              </Suspense>
             </div>
           </div>
         </section>
@@ -403,7 +407,8 @@ export default function HomePage() {
                 </div>
               </div>
               <Link
-                href="/login"
+                href="/?view=login"
+                scroll={false}
                 className="inline-flex items-center justify-center gap-2 self-start rounded-md bg-white px-5 py-3 text-[15px] font-semibold text-[#14532d] transition-colors hover:bg-[#ecf4e8] md:self-auto"
               >
                 Log In <Arrow />

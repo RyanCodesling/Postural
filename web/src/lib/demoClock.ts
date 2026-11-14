@@ -10,6 +10,9 @@ export function demoClockAllowed(env: { NODE_ENV?: string; DEMO_CLOCK?: string }
   return env.DEMO_CLOCK !== "off";
 }
 
+/** Demo controls and the floating badge are visible by default only outside production builds. */
+export const DEMO_CLOCK_UI_VISIBLE = process.env.NODE_ENV !== "production";
+
 export class DemoClockError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);

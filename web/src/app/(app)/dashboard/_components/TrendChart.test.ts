@@ -8,7 +8,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import TrendChart, { axisTicks } from "./TrendChart";
-import { modelChartSeries, primaryPointDetail, repPointDetail, type TrendSession } from "./ExerciseTrends";
+import { modelChartSeries, repPointDetail, type TrendSession } from "./ExerciseTrends";
 import { prepareModelSeries } from "@/lib/analytics/trendSeries";
 
 let passed = 0;
@@ -95,15 +95,6 @@ test("the chart draws axis values, the first and last dates, and the selected se
   assert((html.match(/data-tick="/g) ?? []).length === 3, "value ticks 80, 90, 100");
   assert(html.includes(">Sep 7<") && html.includes(">Sep 26<") && !html.includes(">Sep 12<"), "first and last dates only");
   assert(html.includes('data-selected="1"'), "selected session marked");
-});
-
-test("primary-point details: angle, normalized and hold metrics", () => {
-  const angle = { label: "Peak angle (camera estimate)", unit: "", isAngle: true };
-  assert(primaryPointDetail(session({}), 95.8, angle, false) === "Peak angle (camera estimate): 96 · 1 set · 24 reps", "angle rounds");
-  assert(primaryPointDetail(session({ setCount: 2, totalReps: 1 }), 0.874, { label: "Peak", unit: "", isAngle: false }, false)
-    === "Peak: 0.87 · 2 sets · 1 rep", "normalized keeps 2 decimals");
-  assert(primaryPointDetail(session({ setCount: 2 }), 29.96, { label: "Hold time", unit: "s", isAngle: false }, true)
-    === "Hold time: 30.0s · 2 sets", "hold seconds");
 });
 
 test("a session left out of the trend is drawn hollow, off the line, with its reason on hover", () => {

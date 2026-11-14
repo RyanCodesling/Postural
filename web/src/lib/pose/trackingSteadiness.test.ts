@@ -280,8 +280,8 @@ test("frame marks reach back markHorizonMs; a longer repetition gets no record",
 });
 
 test("the limits sit above every ordinary level measured", () => {
-  // Largest one-second medians in the researcher's six session videos
-  // (Review_Artifacts evidence): 0.211 wrists and 0.131 others with every third
+  // Largest one-second medians in the researcher's six session videos:
+  // 0.211 wrists and 0.131 others with every third
   // frame kept; 0.234 and 0.113 under the live 250 ms gap rule with every 2nd
   // to 5th frame kept.
   if (!(TRACKING_STEADINESS.wristLimit > 0.234)) throw new Error("wrist limit");

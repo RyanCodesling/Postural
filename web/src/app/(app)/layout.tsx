@@ -44,7 +44,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     if (!protectedPath || loading) return;
 
     if (!user) {
-      router.replace("/login");
+      router.replace("/?view=login");
       return;
     }
 

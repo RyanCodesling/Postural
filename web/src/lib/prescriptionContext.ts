@@ -29,6 +29,14 @@ export type PreSessionPain =
  */
 export const PRE_SESSION_PAIN_CAUTION_SCORE = 7;
 /**
+ * At or above this score the exercise cannot start. Confirming the warning
+ * records the exercise as not started because of pain and notifies the
+ * assigned therapist, who reviews it before rescheduling.
+ */
+export const PRE_SESSION_PAIN_BLOCK_SCORE = 9;
+export const HIGH_PAIN_START_ERROR =
+  "Your pain score is too high to start this exercise. Your therapist needs to review it first.";
+/**
  * The patient's opt-in to recording this session's video, stored in the start
  * context: when they agreed, which version of the notice they had seen, and
  * whether the answer came from a choice they asked this device to remember.
@@ -135,6 +143,12 @@ export type SessionContextSnapshotV3 = Omit<SessionContextSnapshotV2, "version" 
   preSessionPain?: PreSessionPain;
   /** Present only when the patient opted in to recording this session's video. */
   videoConsent?: SessionVideoConsent;
+  /**
+   * The exercise was not started: the before-session pain score reached
+   * PRE_SESSION_PAIN_BLOCK_SCORE and the patient confirmed the warning. The
+   * session opens and ends at once, ended for pain.
+   */
+  highPainNoStart?: true;
 };
 
 export type SessionContextSnapshot =
@@ -372,6 +386,11 @@ export function preSessionPainFromContext(context: unknown): PreSessionPain | nu
   return parsed.ok ? (parsed.value ?? null) : null;
 }
 
+/**
+ * The caution rule for a pre-session pain answer. Only tests call it; the
+ * camera page applies the same `PRE_SESSION_PAIN_CAUTION_SCORE` to the live
+ * survey directly.
+ */
 export function preSessionPainNeedsCaution(pain: PreSessionPain | null): boolean {
   return pain?.status === "reported" && pain.score >= PRE_SESSION_PAIN_CAUTION_SCORE;
 }

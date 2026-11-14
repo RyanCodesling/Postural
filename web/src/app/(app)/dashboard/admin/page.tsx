@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import AppShell from "../_components/AppShell";
 import { ADMIN_TOURS } from "../_components/tours";
@@ -9,7 +9,10 @@ import { FIT_SCREEN, Glyph, PageHeading, StatTile } from "../_components/Dashboa
 import { SkeletonKpiRow, SkeletonTable } from "../_components/Skeleton";
 import { PATIENT_ATTACHMENT_ACCEPT, patientAttachmentMimeType } from "@/lib/patientAttachments";
 import { adminEditBody } from "@/lib/adminUserEdit";
+import { stripNameDigits } from "@/lib/personName";
+import { birthDateBounds, birthDateError, MAX_USER_AGE, MIN_USER_AGE } from "@/lib/userAge";
 import { useDemoClock, useTickingLabel } from "@/lib/DemoClockContext";
+import { DEMO_CLOCK_UI_VISIBLE } from "@/lib/demoClock";
 import ExerciseReferenceVideo from "../_components/ExerciseReferenceVideo";
 import ExerciseVideoField, {
   KEEP_EXERCISE_VIDEO,
@@ -75,12 +78,24 @@ async function uploadPatientAttachments(patientId: string, files: File[]) {
 }
 
 export default function AdminDashboard() {
+  return <Suspense><AdminDashboardContent /></Suspense>;
+}
+
+function AdminDashboardContent() {
   const { user, logout } = useAuth();
   const router = useRouter();
-  // Today's Manila day by the demo clock; the clock's tab exists only in demo mode.
+  const searchParams = useSearchParams();
+  const demoClockFromUrl = searchParams.get("demoClock") === "1";
+  const showDemoClock = DEMO_CLOCK_UI_VISIBLE || demoClockFromUrl;
+  // Keep the effective Manila day even when production hides the demo controls.
   const { todayKey, enabled: demoClockOn } = useDemoClock();
 
-  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [activeTab, setActiveTab] = useState<Tab>(demoClockFromUrl ? "demo-clock" : "dashboard");
+
+  useEffect(() => {
+    if (demoClockFromUrl) setActiveTab("demo-clock");
+    else if (!DEMO_CLOCK_UI_VISIBLE) setActiveTab((tab) => tab === "demo-clock" ? "dashboard" : tab);
+  }, [demoClockFromUrl]);
 
   // Dashboard states
   const [dashboardData, setDashboardData] = useState<{
@@ -249,6 +264,7 @@ export default function AdminDashboard() {
     } else if (newUser.role === "therapist") {
       if (!newUser.email || !newUser.dateOfBirth || !newUser.age || !newUser.gender || !newUser.specialty) return;
     }
+    if (birthDateError(newUser.dateOfBirth, todayKey)) return;
 
     setShowAddPreview(true);
   };
@@ -451,6 +467,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     if (!editingUser || (!editingUser.name && !editingUser.firstName)) return;
     if (editEmailError) return;
+    if (editUserBirthError) return;
     setShowEditPreview(true);
   };
 
@@ -728,6 +745,22 @@ export default function AdminDashboard() {
     }
   };
 
+  // Add User accepts ages 13 to 100 only; the server checks the same rule.
+  const newUserBirthBounds = birthDateBounds(todayKey);
+  const newUserBirthError = newUser.dateOfBirth ? birthDateError(newUser.dateOfBirth, todayKey) : null;
+  // Edit checks the date only once it is changed, as the server does.
+  const editUserBirthError =
+    editingUser?.dateOfBirth && editingUser.dateOfBirth !== (editingLoaded?.dateOfBirth ?? "")
+      ? birthDateError(editingUser.dateOfBirth, todayKey)
+      : null;
+  // The picker's limits widen to an unchanged saved date outside them, so the
+  // browser's own check does not block saving the account's other fields.
+  const loadedBirthDate = editingLoaded?.dateOfBirth ?? "";
+  const editUserBirthBounds = {
+    min: loadedBirthDate && loadedBirthDate < newUserBirthBounds.min ? loadedBirthDate : newUserBirthBounds.min,
+    max: loadedBirthDate && loadedBirthDate > newUserBirthBounds.max ? loadedBirthDate : newUserBirthBounds.max,
+  };
+
   const computeAgePhilippines = (dob: string): number => {
     if (!dob) return 0;
     const phToday = todayKey;
@@ -776,7 +809,7 @@ export default function AdminDashboard() {
         { key: "exercises", label: "Manage Exercises", icon: <AdminDumbbellIcon />, active: activeTab === "exercises", onSelect: () => setActiveTab("exercises") },
         { key: "assignments", label: "Assign Patients", icon: <AdminAssignIcon />, active: activeTab === "assignments", onSelect: () => setActiveTab("assignments") },
         { key: "deleted", label: "Recently Deleted", icon: <AdminBinIcon />, active: activeTab === "deleted", onSelect: () => setActiveTab("deleted") },
-        { key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") },
+        ...(showDemoClock ? [{ key: "demo-clock", label: "Demo Clock", icon: <AdminClockGlyph />, active: activeTab === "demo-clock", onSelect: () => setActiveTab("demo-clock") }] : []),
         { key: "camera", label: "Camera", icon: <AdminCameraIcon />, active: false, href: "/camera" },
       ]}
       userName={user?.name}
@@ -785,7 +818,7 @@ export default function AdminDashboard() {
       onLogout={async () => { await logout(); router.push("/"); }}
     >
         {activeTab === "deleted" && <RecentlyDeletedPanel />}
-        {activeTab === "demo-clock" && (
+        {showDemoClock && activeTab === "demo-clock" && (
           <>
             <DemoClockPanel />
             {demoClockOn && <SessionDateCorrectionPanel />}
@@ -1020,7 +1053,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.firstName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, firstName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
@@ -1032,7 +1065,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.middleName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, middleName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, middleName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                           />
                         </div>
@@ -1043,7 +1076,7 @@ export default function AdminDashboard() {
                           <input
                             type="text"
                             value={newUser.lastName || ""}
-                            onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
+                            onChange={(e) => setNewUser({ ...newUser, lastName: stripNameDigits(e.target.value) })}
                             className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                             required
                           />
@@ -1062,11 +1095,18 @@ export default function AdminDashboard() {
                               const dob = e.target.value;
                               setNewUser({ ...newUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                             }}
-                            className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
-                            max={todayKey}
-                            min="1900-01-01"
+                            className={`w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
+                              newUserBirthError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-green-200 focus:border-green-500 focus:ring-green-100"
+                            }`}
+                            max={newUserBirthBounds.max}
+                            min={newUserBirthBounds.min}
+                            aria-invalid={newUserBirthError ? true : undefined}
+                            aria-describedby="new-user-dob-hint"
                             required
                           />
+                          <p id="new-user-dob-hint" className={`mt-1 text-xs ${newUserBirthError ? "text-red-600" : "text-gray-500"}`}>
+                            {newUserBirthError ?? `Age must be ${MIN_USER_AGE} to ${MAX_USER_AGE} years old.`}
+                          </p>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1224,7 +1264,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.firstName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, firstName: e.target.value })
+                          setEditingUser({ ...editingUser, firstName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
@@ -1237,7 +1277,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.middleName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, middleName: e.target.value })
+                          setEditingUser({ ...editingUser, middleName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
@@ -1250,7 +1290,7 @@ export default function AdminDashboard() {
                         type="text"
                         value={editingUser.lastName || ""}
                         onChange={(e) =>
-                          setEditingUser({ ...editingUser, lastName: e.target.value })
+                          setEditingUser({ ...editingUser, lastName: stripNameDigits(e.target.value) })
                         }
                         className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
                       />
@@ -1269,10 +1309,17 @@ export default function AdminDashboard() {
                           const dob = e.target.value;
                           setEditingUser({ ...editingUser, dateOfBirth: dob, age: dob ? computeAgePhilippines(dob) : undefined });
                         }}
-                        className="w-full border border-green-200 rounded-lg px-3 py-2 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-100"
-                        max={todayKey}
-                        min="1900-01-01"
+                        className={`w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${
+                          editUserBirthError ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-green-200 focus:border-green-500 focus:ring-green-100"
+                        }`}
+                        max={editUserBirthBounds.max}
+                        min={editUserBirthBounds.min}
+                        aria-invalid={editUserBirthError ? true : undefined}
+                        aria-describedby="edit-user-dob-hint"
                       />
+                      <p id="edit-user-dob-hint" className={`mt-1 text-xs ${editUserBirthError ? "text-red-600" : "text-gray-500"}`}>
+                        {editUserBirthError ?? `Age must be ${MIN_USER_AGE} to ${MAX_USER_AGE} years old.`}
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1818,13 +1865,13 @@ export default function AdminDashboard() {
                           <td className="px-5 py-3 text-sm text-gray-600">
                             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                               <span>{u.email}</span>
-                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                                 {u.role}
                               </span>
                             </span>
                           </td>
                           <td className="stack-hide px-5 py-3 text-sm">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-800" : "bg-blue-100 text-blue-800"}`}>
                               {u.role}
                             </span>
                           </td>
@@ -1867,7 +1914,8 @@ export default function AdminDashboard() {
               </h3>
               <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-green-50">
                 <table className="stack-table w-full min-w-[600px]">
-                  <thead className="sticky top-0 border-b border-gray-100 bg-white">
+                  {/* z-10: the archived rows' opacity gives each row its own layer, which would otherwise paint over this sticky header. */}
+                  <thead className="sticky top-0 z-10 border-b border-gray-100 bg-white">
                     <tr>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
                       <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Email</th>
@@ -1890,13 +1938,13 @@ export default function AdminDashboard() {
                           <td className="px-5 py-3 text-sm text-gray-500">
                             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                               <span>{u.email}</span>
-                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium opacity-70 ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                              <span className={`stack-only rounded-full px-2.5 py-0.5 text-xs font-medium uppercase opacity-70 ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
                                 {u.role}
                               </span>
                             </span>
                           </td>
                           <td className="stack-hide px-5 py-3 text-sm">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium uppercase ${u.role === "therapist" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"} opacity-70`}>
                               {u.role}
                             </span>
                           </td>

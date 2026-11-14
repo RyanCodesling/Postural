@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
 import { frameAspectOf } from "./poseMetrics";
+import { newCameraFrameCap, takeCameraFrameSlot } from "./cameraFrameCap";
 
 const filename = fileURLToPath(new URL("../../app/(app)/camera/CameraClient.tsx", import.meta.url));
 const source = readFileSync(filename, "utf8");
@@ -46,6 +47,8 @@ const state = {
   sessionStartPendingRef: ref(false), cameraStartEpochRef: ref(0),
   cameraReadyRef: ref(false),
   setTimeout, clearTimeout, frameAspectOf,
+  // The loop's frame limit, on as in the product: the first frame after a start is processed at once.
+  takeCameraFrameSlot, cameraFrameCapRef: ref(newCameraFrameCap(true)),
   videoResolutionRef: ref<{ width: number; height: number } | null>(null),
   fpsFrameCountRef: ref(0), fpsWindowStartMsRef: ref(0), perfSampleCountRef: ref(0),
   inferMsSumRef: ref(0), frameMsSumRef: ref(0),

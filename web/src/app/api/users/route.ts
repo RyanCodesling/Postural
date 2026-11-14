@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getUsers, createUser, getNextUserId, setMustChangePassword, isEmailTaken, UserClinicalFieldsUnavailableError } from "@/lib/db";
+import { nameFieldWithDigits } from "@/lib/personName";
+import { getUsers, createUser, getNextUserId, setMustChangePassword, isEmailTaken, UserClinicalFieldsUnavailableError, getEffectiveNow } from "@/lib/db";
+import { manilaDayKey } from "@/lib/demoClock";
+import { birthDateError } from "@/lib/userAge";
 import { sendAccountCreationEmail, sendAccountCreatedAdminEmail } from "@/lib/email";
 import { getAuthenticatedUser } from "@/lib/auth-server";
 
@@ -53,6 +56,15 @@ export async function POST(request: NextRequest) {
     }
     if (role !== "patient" && role !== "therapist") {
       return NextResponse.json({ error: "role must be patient or therapist" }, { status: 400 });
+    }
+    const nameFieldWithNumber = nameFieldWithDigits(body);
+    if (nameFieldWithNumber) {
+      return NextResponse.json({ error: `${nameFieldWithNumber} cannot contain numbers.` }, { status: 400 });
+    }
+    const todayKey = manilaDayKey((await getEffectiveNow()).getTime());
+    const dateOfBirthError = birthDateError(dateOfBirth, todayKey);
+    if (dateOfBirthError) {
+      return NextResponse.json({ error: dateOfBirthError }, { status: 400 });
     }
 
     if (email && await isEmailTaken(email)) {

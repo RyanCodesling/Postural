@@ -6,7 +6,12 @@ import {
   sendExerciseDigestEmail,
   sendExercisePausedEmail,
   sendExerciseReminderEmail,
+  sendHighPainNoStartEmail,
+  sendCompletedWithPainEmail,
+  type CompletedWithPainDetails,
   sendPartialDayEmail,
+  sendMakeupAvailableEmail,
+  type MakeupItem,
   type ExerciseDigestItem,
   type ExercisePausedDetails,
   type ExerciseReminderItem,
@@ -44,6 +49,7 @@ import {
   summarizeDeviceInfo,
 } from "@/lib/sessionReadModels";
 import {
+  PRE_SESSION_PAIN_BLOCK_SCORE,
   PRESCRIPTION_SNAPSHOT_VERSION,
   REP_QUALITY_VERSION,
   SESSION_CONTEXT_VERSION,
@@ -987,66 +993,70 @@ export function isMissingColumnError(error: unknown): boolean {
 /**
  * Records an uploaded file as the exercise's video, replacing a YouTube video.
  * The video it replaces goes to Recently Deleted; its file stays on disk.
+ * A restore from Recently Deleted passes its own transaction and commits it.
  */
-export async function setExerciseVideoFile(id: string, mimeType: ExerciseVideoMimeType, fileName: string | null, changedBy?: string) {
+export async function setExerciseVideoFile(
+  id: string, mimeType: ExerciseVideoMimeType, fileName: string | null, changedBy?: string, transaction?: PoolClient,
+) {
   const binReady = await hasDeletedItemsBin();
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return inVideoTransaction(transaction, async (client) => {
     // Serialize metadata publication, including the exact file it supersedes.
     const previous = await client.query(
       `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
-    if (previous.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if (previous.rows.length === 0) return null;
     const result = await client.query(
       `UPDATE exercises SET video_mime_type = $2, youtube_video_id = NULL, video_file_name = $3
         WHERE id = $1 RETURNING *`,
       [id, mimeType, fileName],
     );
     if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
-    await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 /**
  * Points a custom exercise at a YouTube video, or at no video (null), from its
  * edit form. The video it replaces goes to Recently Deleted, an uploaded file
  * staying on disk; the row lock keeps a concurrent upload from being the one
- * recorded.
+ * recorded. A restore from Recently Deleted passes its own transaction.
  */
-export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null, changedBy?: string) {
+export async function setExerciseYouTubeVideo(id: string, youtubeVideoId: string | null, changedBy?: string, transaction?: PoolClient) {
   const binReady = await hasDeletedItemsBin();
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return inVideoTransaction(transaction, async (client) => {
     const previous = await client.query(
       `SELECT name, video_mime_type, video_file_name, youtube_video_id FROM exercises
         WHERE id = $1 AND is_custom = TRUE AND archived_at IS NULL FOR UPDATE`,
       [id],
     );
-    if (previous.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    if (previous.rows.length === 0) return null;
     const result = await client.query(
       `UPDATE exercises SET youtube_video_id = $2, video_mime_type = NULL, video_file_name = NULL
         WHERE id = $1 RETURNING *`,
       [id, youtubeVideoId],
     );
     if (binReady) await binReplacedExerciseVideo(client, id, previous.rows[0], changedBy);
-    await client.query("COMMIT");
     return { exercise: result.rows[0], previousVideo: exerciseVideoFileFromRow(previous.rows[0]) };
+  });
+}
+
+/**
+ * Runs a guide video change in the caller's transaction when one is given,
+ * otherwise in its own, which a null result (no such exercise) rolls back.
+ */
+async function inVideoTransaction<T>(
+  transaction: PoolClient | undefined,
+  change: (client: PoolClient) => Promise<T | null>,
+): Promise<T | null> {
+  if (transaction) return change(transaction);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await change(client);
+    await client.query(result === null ? "ROLLBACK" : "COMMIT");
+    return result;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1620,6 +1630,10 @@ export async function getPatientOccurrences(patientId: string) {
     `SELECT eo.id, eo.patient_exercise_id, eo.due_date,
             COALESCE(eo.makeup_until, eo.due_date) AS makeup_until, eo.status,
             eo.pain_stopped_at, eo.prescription_snapshot,
+            -- Stopped for pain before starting: the pain score was too high.
+            EXISTS (SELECT 1 FROM sessions s
+                     WHERE s.occurrence_id = eo.id AND s.end_reason = 'pain'
+                       AND s.context_snapshot ->> 'highPainNoStart' = 'true') AS high_pain_no_start,
             pe.exercise_id,
             COALESCE((eo.prescription_snapshot ->> 'sets')::int, pe.sets) AS sets,
             COALESCE((eo.prescription_snapshot ->> 'reps')::int, pe.reps) AS reps,
@@ -1733,9 +1747,12 @@ export class ProgramExerciseNotAllowedError extends Error {
   }
 }
 
+/**
+ * Checks that every exercise in a program exists and is not archived. It does
+ * not check who created a custom exercise.
+ */
 async function validateProgramExerciseAccess(
   client: PoolClient,
-  therapistId: string,
   exercises: ProgramExerciseInput[],
 ) {
   const exerciseIds = Array.from(
@@ -1798,7 +1815,7 @@ export async function createProgram(data: {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await validateProgramExerciseAccess(client, data.therapistId, data.exercises);
+    await validateProgramExerciseAccess(client, data.exercises);
     await client.query(
       "INSERT INTO exercise_programs (id, therapist_id, name) VALUES ($1, $2, $3)",
       [id, data.therapistId, data.name]
@@ -1827,7 +1844,7 @@ export async function updateProgram(
       [id, therapistId]
     );
     if (check.rows.length === 0) throw new Error("Not found or forbidden");
-    await validateProgramExerciseAccess(client, therapistId, data.exercises);
+    await validateProgramExerciseAccess(client, data.exercises);
     await client.query(
       "UPDATE exercise_programs SET name = $1, updated_at = NOW() WHERE id = $2",
       [data.name, id]
@@ -2103,6 +2120,147 @@ export async function createCustomExerciseSession(data: {
   } finally {
     client.release();
   }
+}
+
+/**
+ * The patient's pain score before starting reached PRE_SESSION_PAIN_BLOCK_SCORE
+ * and they confirmed the warning, so the exercise does not start. A session
+ * opens and ends at once, ended for pain, to keep the score with the attempt;
+ * the occurrence is stopped for pain, so it awaits the therapist's review
+ * before rescheduling. The therapist is told in the app and by email.
+ */
+export async function recordHighPainNoStart(data: {
+  patientId: string;
+  patientExerciseId: number;
+  occurrenceId: number;
+  exerciseId: string;
+  pain: { score: number; bodyArea: string | null };
+  deviceInfo?: unknown;
+}): Promise<{ sessionId: number }> {
+  if (!Number.isInteger(data.pain.score) || data.pain.score < PRE_SESSION_PAIN_BLOCK_SCORE || data.pain.score > 10) {
+    throw new Error(`The pain score must be from ${PRE_SESSION_PAIN_BLOCK_SCORE} to 10.`);
+  }
+  const effectiveAt = await getEffectiveNow();
+  const today = effectiveAt.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const capturedAt = effectiveAt.toISOString();
+  const client = await pool.connect();
+  let sessionId: number;
+  let row: Record<string, unknown>;
+  try {
+    await client.query("BEGIN");
+    const occ = await client.query(
+      `SELECT eo.id, eo.due_date, COALESCE(eo.makeup_until, eo.due_date) AS makeup_until,
+              eo.prescription_snapshot, e.name, e.monitoring_mode, u.name AS patient_name, u.therapist_id
+         FROM exercise_occurrences eo
+         JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+         JOIN exercises e ON e.id = pe.exercise_id
+         JOIN users u ON u.id = pe.patient_id
+        WHERE eo.id = $1
+          AND eo.patient_exercise_id = $2
+          AND pe.patient_id = $3
+          AND pe.exercise_id = $4
+          AND pe.archived_at IS NULL
+          AND e.archived_at IS NULL
+          AND eo.cancelled_at IS NULL
+          AND eo.status IN ('pending', 'in_progress')
+          AND eo.due_date <= $5::date
+          AND COALESCE(eo.makeup_until, eo.due_date) >= $5::date
+        LIMIT 1
+        FOR UPDATE OF eo`,
+      [data.occurrenceId, data.patientExerciseId, data.patientId, data.exerciseId, today],
+    );
+    if (occ.rows.length === 0) throw new SessionNotScheduledError();
+    row = occ.rows[0] as Record<string, unknown>;
+    const schedule = { dueDate: String(row.due_date), makeupUntil: String(row.makeup_until) };
+    const context = {
+      version: SESSION_CONTEXT_VERSION,
+      capturedAt,
+      prescription: row.prescription_snapshot ?? null,
+      schedule: { ...schedule, startedDuringMakeupWindow: today > schedule.dueDate },
+      exercise: {
+        id: data.exerciseId,
+        name: String(row.name),
+        kind: row.monitoring_mode === "manual" ? "manual" : "not_started",
+        bilateralMode: null,
+        definition: null,
+      },
+      versions: { appRevision: getAppRevision() },
+      preSessionPain: { status: "reported", score: data.pain.score, bodyArea: data.pain.bodyArea },
+      highPainNoStart: true,
+    };
+    // An attempt left open by a closed tab ends here too.
+    await client.query(
+      `UPDATE sessions SET ended_at = $2, end_reason = 'superseded'
+        WHERE patient_exercise_id = $1 AND ended_at IS NULL`,
+      [data.patientExerciseId, capturedAt],
+    );
+    const inserted = await client.query(
+      `INSERT INTO sessions
+         (patient_id, patient_exercise_id, exercise_id, device_info, occurrence_id, started_at, ended_at,
+          end_reason, context_snapshot, context_snapshot_version, context_captured_at, app_revision)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'pain', $7, $8, $6, $9)
+       RETURNING id`,
+      [
+        data.patientId, data.patientExerciseId, data.exerciseId,
+        data.deviceInfo !== undefined ? JSON.stringify(data.deviceInfo) : null,
+        Number(row.id), capturedAt, JSON.stringify(context), SESSION_CONTEXT_VERSION,
+        context.versions.appRevision,
+      ],
+    );
+    sessionId = Number(inserted.rows[0].id);
+    await client.query(
+      `UPDATE exercise_occurrences SET status = 'pain_stopped', pain_stopped_at = $2 WHERE id = $1`,
+      [Number(row.id), capturedAt],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  try {
+    const exerciseName = String(row.name);
+    const patientName = String(row.patient_name);
+    const therapistId = (row.therapist_id as string | null) ?? null;
+    const area = data.pain.bodyArea ? ` (${data.pain.bodyArea})` : "";
+    if (therapistId) {
+      await createNotification(
+        therapistId,
+        "Exercise not started because of high pain",
+        `${patientName} did not start ${exerciseName} because of a pain score of ${data.pain.score}/10${area}. Review before rescheduling.`,
+        "patient_pain_stopped",
+        data.occurrenceId,
+      );
+    }
+    await createNotification(
+      data.patientId,
+      "Exercise not started because of high pain",
+      `You did not start ${exerciseName} because your pain score was ${data.pain.score}/10. ${therapistId ? "Your therapist has been notified and will review it before rescheduling." : "Please contact your therapist before trying it again."}`,
+      "patient_pain_stopped",
+      data.occurrenceId,
+    );
+    // Not awaited, like the pain-pause email: mail must not hold the response.
+    if (therapistId) {
+      void (async () => {
+        try {
+          const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [therapistId]);
+          if (therapist.rows[0]?.email) {
+            await sendHighPainNoStartEmail(therapist.rows[0].email, therapist.rows[0].name, {
+              patientName, exerciseName, score: data.pain.score, bodyArea: data.pain.bodyArea,
+              dueDateLabel: longDateLabel(String(row.due_date)),
+            });
+          }
+        } catch (err) {
+          console.error("Failed to email high pain no-start to therapist:", err);
+        }
+      })();
+    }
+  } catch (err) {
+    console.error("Failed to notify high pain no-start:", err);
+  }
+  return { sessionId };
 }
 
 export async function createSession(data: {
@@ -2491,7 +2649,8 @@ export async function endSession(
   // Trigger completion notifications for therapist
   try {
     const sessionResult = await pool.query(
-      `SELECT s.patient_id, s.exercise_id, s.occurrence_id, u.name AS patient_name, u.therapist_id, e.name AS exercise_name
+      `SELECT s.patient_id, s.exercise_id, s.occurrence_id, u.name AS patient_name, u.therapist_id, e.name AS exercise_name,
+              s.context_snapshot -> 'preSessionPain' AS pre_session_pain
        FROM sessions s
        JOIN users u ON u.id = s.patient_id
        JOIN exercises e ON e.id = s.exercise_id
@@ -2505,15 +2664,27 @@ export async function endSession(
       const pausedDetails = paused
         ? { ...paused, patientName: row.patient_name as string, exerciseName: row.exercise_name as string }
         : null;
+      // Pain reported before starting (1 or more; 0 is no pain and is left out).
+      const prePain = data.completed ? completedWithPain(row.pre_session_pain) : null;
       if (row.therapist_id) {
         if (data.completed) {
           await createNotification(
             row.therapist_id,
-            "Exercise Completed",
-            `${row.patient_name} completed exercise ${row.exercise_name}.`,
+            prePain ? "Exercise Completed with Pain" : "Exercise Completed",
+            prePain
+              ? `${row.patient_name} completed exercise ${row.exercise_name}. Note: pain before starting was ${prePain.score}/10${prePain.bodyArea ? ` (${prePain.bodyArea})` : ""}.`
+              : `${row.patient_name} completed exercise ${row.exercise_name}.`,
             "patient_completed_exercise",
             row.occurrence_id
           );
+          if (prePain) {
+            // Not awaited, like the pain-pause email: mail must not hold the end of the session.
+            void emailCompletedWithPain(row.therapist_id as string, {
+              patientName: row.patient_name as string,
+              exerciseName: row.exercise_name as string,
+              ...prePain,
+            });
+          }
           await createNotification(
             row.therapist_id,
             "Session Completed",
@@ -2551,6 +2722,29 @@ export async function endSession(
     console.error("Failed to create completion notification:", err);
   }
   return transitioned;
+}
+
+/**
+ * The before-session pain of a completed exercise, when the patient reported
+ * any (1 to 10). A score of 0, a skipped survey or none at all gives null.
+ */
+function completedWithPain(value: unknown): { score: number; bodyArea: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const pain = value as { status?: unknown; score?: unknown; bodyArea?: unknown };
+  if (pain.status !== "reported" || typeof pain.score !== "number" || pain.score < 1) return null;
+  return { score: pain.score, bodyArea: typeof pain.bodyArea === "string" && pain.bodyArea ? pain.bodyArea : null };
+}
+
+/** Emails the therapist one completed exercise and the pain reported before it. Never throws. */
+async function emailCompletedWithPain(therapistId: string, details: CompletedWithPainDetails): Promise<void> {
+  try {
+    const therapist = await pool.query("SELECT email, name FROM users WHERE id = $1", [therapistId]);
+    if (therapist.rows[0]?.email) {
+      await sendCompletedWithPainEmail(therapist.rows[0].email, therapist.rows[0].name, details);
+    }
+  } catch (err) {
+    console.error("Failed to email completed-with-pain to therapist:", err);
+  }
 }
 
 /** Emails the pain pause to the patient and, when one is assigned, the therapist. Never throws. */
@@ -2910,6 +3104,132 @@ export async function sendExerciseReminderEmails(): Promise<void> {
         console.error(`Failed to send ${kind} reminder:`, err);
       }
     }
+  }
+}
+
+/**
+ * Exercises whose make-up window opens today: scheduled yesterday, not finished,
+ * and still allowed today. A schedule with no gap between days (daily) has no
+ * make-up day, so nothing is listed for it. `patientId` narrows to one patient.
+ */
+async function makeupAvailableRows(today: string, patientId?: string) {
+  const yesterday = manilaDayKey(Date.parse(`${today}T12:00:00+08:00`) - DAY_MS);
+  const result = await pool.query(
+    `SELECT eo.id, eo.due_date::text AS due_key,
+            COALESCE(eo.makeup_until, eo.due_date)::text AS last_key,
+            e.name AS exercise_name, pe.exercise_id,
+            COALESCE((eo.prescription_snapshot->>'sets')::int, pe.sets) AS sets,
+            COALESCE((eo.prescription_snapshot->>'reps')::int, pe.reps) AS reps,
+            COALESCE((eo.prescription_snapshot->>'holdSeconds')::int, pe.hold_seconds) AS hold_seconds,
+            u.id AS patient_id, u.name AS patient_name, u.email AS patient_email,
+            t.id AS therapist_id, t.name AS therapist_name, t.email AS therapist_email
+       FROM exercise_occurrences eo
+       JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+       JOIN exercises e ON e.id = pe.exercise_id
+       JOIN users u ON u.id = pe.patient_id
+       LEFT JOIN users t ON t.id = u.therapist_id AND (t.is_archived IS NULL OR t.is_archived = FALSE)
+      WHERE pe.archived_at IS NULL AND e.archived_at IS NULL
+        AND eo.cancelled_at IS NULL
+        AND (u.is_archived IS NULL OR u.is_archived = FALSE)
+        AND eo.status IN ('pending', 'in_progress')
+        AND eo.due_date = $1::date
+        AND COALESCE(eo.makeup_until, eo.due_date) >= $2::date
+        AND ($3::varchar IS NULL OR u.id = $3::varchar)
+      ORDER BY u.name, pe.sequence_index, eo.id`,
+    [yesterday, today, patientId ?? null],
+  );
+  return result.rows;
+}
+
+/** Publish a patient's scheduled-day reminders together, once per recipient. */
+async function notifyMakeupAvailable(
+  patientId: string,
+  dueDate: string,
+  occurrenceId: number,
+  title: string,
+  reminders: Array<{ userId: string; type: string; message: string }>,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Notification reads can overlap between patient and therapist pages. Keep
+    // the day check and both inserts on this connection under one short lock.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [
+      `makeup:${patientId}`, dueDate,
+    ]);
+    for (const reminder of reminders) {
+      const sent = await client.query(
+        `SELECT 1 FROM notifications n
+          WHERE n.user_id = $1 AND n.type = $2
+            AND n.occurrence_id IN (
+              SELECT eo.id FROM exercise_occurrences eo
+                JOIN patient_exercises pe ON pe.id = eo.patient_exercise_id
+               WHERE pe.patient_id = $3 AND eo.due_date = $4::date)
+          LIMIT 1`,
+        [reminder.userId, reminder.type, patientId, dueDate],
+      );
+      if (sent.rows.length > 0) continue;
+      await client.query(
+        `INSERT INTO notifications (user_id, title, message, type, occurrence_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [reminder.userId, title, reminder.message, reminder.type, occurrenceId],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function makeupItem(r: Record<string, unknown>): MakeupItem {
+  return {
+    patientName: String(r.patient_name),
+    exerciseName: String(r.exercise_name),
+    sets: Number(r.sets),
+    target: prescriptionTargetText({
+      exerciseId: String(r.exercise_id),
+      reps: Number(r.reps),
+      holdSeconds: r.hold_seconds == null ? null : Number(r.hold_seconds),
+    }),
+    dueDateLabel: longDateLabel(String(r.due_key)),
+    lastDayLabel: longDateLabel(String(r.last_key)),
+  };
+}
+
+// On the first day of a make-up window, from the morning reminder hour, emails
+// each patient the exercises they can still make up, and each therapist one
+// email listing them by patient. Once per recipient per day.
+export async function sendMakeupReminderEmails(): Promise<void> {
+  if (!emailConfigured()) return;
+  const now = await getEffectiveNow();
+  if (manilaHour(now) < REMINDER_TODAY_HOUR_MANILA) return;
+  const today = manilaDayKey(now.getTime());
+  const rows = await makeupAvailableRows(today);
+  if (rows.length === 0) return;
+  const todayLabel = longDateLabel(today);
+
+  const byPatient = new Map<string, Record<string, unknown>[]>();
+  const byTherapist = new Map<string, Record<string, unknown>[]>();
+  for (const row of rows) {
+    byPatient.set(row.patient_id, [...(byPatient.get(row.patient_id) ?? []), row]);
+    if (row.therapist_id) byTherapist.set(row.therapist_id, [...(byTherapist.get(row.therapist_id) ?? []), row]);
+  }
+  for (const [patientId, list] of byPatient) {
+    const first = list[0];
+    if (!first.patient_email) continue;
+    await sendDigestOnce(patientId, "makeup", today, () =>
+      sendMakeupAvailableEmail(String(first.patient_email), String(first.patient_name), "patient", todayLabel, list.map(makeupItem)),
+    );
+  }
+  for (const [therapistId, list] of byTherapist) {
+    const first = list[0];
+    if (!first.therapist_email) continue;
+    await sendDigestOnce(therapistId, "makeup", today, () =>
+      sendMakeupAvailableEmail(String(first.therapist_email), String(first.therapist_name), "therapist", todayLabel, list.map(makeupItem)),
+    );
   }
 }
 
@@ -3535,9 +3855,11 @@ export async function getSessionsForPatient(patientId: string) {
 
   return result.rows.map((row) => {
     const context = (row.context_snapshot as SessionContextSnapshot | null) ?? null;
-    const prescribedSide = context?.prescription.prescribedSide ?? "both";
+    // An exercise not started because of pain on an occurrence saved without a
+    // prescription snapshot (only the old migration made those) stores none.
+    const prescribedSide = context?.prescription?.prescribedSide ?? "both";
     const resistance =
-      context?.prescription.resistance ??
+      context?.prescription?.resistance ??
       ({ type: "unknown", value: null, unit: null, label: null } as const);
     const exerciseConfigVersion =
       (row.exercise_config_version as string | null) ?? "legacy-unversioned";
@@ -4040,6 +4362,42 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
     }
   }
 
+  // On the first make-up day, the patient and the therapist each get one notice
+  // naming the exercises from the day before that can still be done. A notice
+  // linked to any occurrence that day counts even after that exercise is done.
+  const makeup = await makeupAvailableRows(today, patientId);
+  if (makeup.length > 0) {
+    const names = makeup.map((r) => String(r.exercise_name));
+    const dueKey = String(makeup[0].due_key);
+    const due = longDateLabel(dueKey);
+    const lastKeys = new Set(makeup.map((r) => String(r.last_key)));
+    const deadlineLabel = (key: string) => key === today ? "today" : longDateLabel(key);
+    const sameDeadline = lastKeys.size === 1;
+    const exercises = sameDeadline
+      ? joinNames(names)
+      : joinNames(makeup.map((r) => `${r.exercise_name} (last day: ${deadlineLabel(String(r.last_key))})`));
+    const pronoun = names.length === 1 ? "it" : "them";
+    const availability = sameDeadline
+      ? `${exercises}. The last day to make ${pronoun} up is ${deadlineLabel(String(makeup[0].last_key))}.`
+      : `${exercises}.`;
+    const count = names.length === 1 ? "1 exercise" : `${names.length} exercises`;
+    const title = names.length === 1 ? "Make-up Exercise Available" : "Make-up Exercises Available";
+    const reminders = [{
+      userId: patientId,
+      type: "exercise_makeup_available",
+      message: `You can still make up ${count} scheduled for ${due}: ${availability}`,
+    }];
+    const makeupTherapist = makeup[0].therapist_id as string | null;
+    if (makeupTherapist) {
+      reminders.push({
+        userId: makeupTherapist,
+        type: "exercise_makeup_available_day",
+        message: `${makeup[0].patient_name} did not finish ${count} scheduled for ${due} and can still make ${pronoun} up: ${availability}`,
+      });
+    }
+    await notifyMakeupAvailable(patientId, dueKey, Number(makeup[0].id), title, reminders);
+  }
+
   // The patient gets one reminder on the day exercises are due, naming them all.
   const dueToday = await pool.query(
     `SELECT eo.id, eo.status, e.name AS exercise_name
@@ -4072,7 +4430,9 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
     }
   }
 
-  // 2. Fetch tomorrow's occurrences: due_date = tomorrowStr AND status = 'pending'
+  // The patient gets one reminder for the next day's exercises, naming them all,
+  // from the same hour as the "due tomorrow" email.
+  if (manilaHour(now) < REMINDER_TOMORROW_HOUR_MANILA) return;
   const tomorrowResult = await pool.query(
     `SELECT eo.id, e.name AS exercise_name
      FROM exercise_occurrences eo
@@ -4083,25 +4443,28 @@ export async function syncTimeNotifications(patientId: string): Promise<void> {
        AND e.archived_at IS NULL
        AND eo.cancelled_at IS NULL
        AND eo.status = 'pending'
-       AND eo.due_date = $2::date`,
+       AND eo.due_date = $2::date
+     ORDER BY pe.sequence_index, eo.id`,
     [patientId, tomorrowStr]
   );
-
-  for (const row of tomorrowResult.rows) {
-    const pCheck = await pool.query(
-      "SELECT id FROM notifications WHERE user_id = $1 AND occurrence_id = $2 AND type = 'scheduled_tomorrow'",
-      [patientId, row.id]
-    );
-    if (pCheck.rows.length === 0) {
-      await createNotification(
-        patientId,
-        "Exercise Starting Tomorrow",
-        `Exercise ${row.exercise_name} is scheduled to start tomorrow.`,
-        "scheduled_tomorrow",
-        row.id
-      );
-    }
-  }
+  if (tomorrowResult.rows.length === 0) return;
+  // 'scheduled_tomorrow' is the earlier per-exercise reminder; a day that already
+  // has one is not reminded again.
+  const remindedTomorrow = await pool.query(
+    `SELECT 1 FROM notifications
+      WHERE user_id = $1 AND type IN ('exercise_due_tomorrow', 'scheduled_tomorrow')
+        AND occurrence_id = ANY($2::integer[]) LIMIT 1`,
+    [patientId, tomorrowResult.rows.map((r) => r.id)],
+  );
+  if (remindedTomorrow.rows.length > 0) return;
+  const tomorrowNames = tomorrowResult.rows.map((r) => r.exercise_name as string);
+  await createNotification(
+    patientId,
+    "Exercises Due Tomorrow",
+    `You have ${tomorrowNames.length === 1 ? "1 exercise" : `${tomorrowNames.length} exercises`} due tomorrow: ${joinNames(tomorrowNames)}.`,
+    "exercise_due_tomorrow",
+    tomorrowResult.rows[0].id,
+  );
 }
 
 export async function deleteNotification(id: number, userId: string): Promise<void> {

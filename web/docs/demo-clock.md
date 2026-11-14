@@ -1,8 +1,27 @@
 # Demo clock
 
-The demo clock is available in local development and production deployments.
-It is **off by default**. An administrator can enable or disable it from the
-dashboard without editing environment settings or restarting the server.
+The Demo Clock tab, its controls and the floating clock badge are hidden by default
+in production builds. They remain available during local development (`npm run dev`).
+This only changes visibility: saved clock settings, effective dates, recorded
+history and the authenticated APIs are preserved. Hiding the interface does not
+disable an already enabled clock or clear its offset.
+
+The clock is **off by default**. In local development, an administrator can enable
+or disable it from the dashboard without editing environment settings or restarting
+the server.
+
+## Open the hidden production controls
+
+While signed in as an administrator, open `/dashboard/admin?demoClock=1`.
+This shows the Demo Clock tab and opens its panel, including recorded-date
+corrections while demo tools are enabled. If the address already has a query
+parameter, append `&demoClock=1` instead.
+
+The parameter only reveals the interface; it does not enable the clock, set a
+date or change any recorded data. Other roles still cannot access the admin
+dashboard or change the clock. The floating badge stays hidden in production,
+including on this page. Remove `demoClock=1` from the address to hide the controls
+again. The address option is not saved on the device or in the database.
 
 ## Prepare without changing the date
 
@@ -19,11 +38,13 @@ installations keep separate settings when they use separate databases.
 
 ## Use later
 
-Start the app normally (`npm run dev` locally, or the deployed production service).
+Start the local development app with `npm run dev`, or use the hidden production
+address above.
 After the code and one-time schema setup are installed:
 
-1. Sign in as an administrator and open **Demo Clock**. This tab is always visible
-   to admins, even while the tools are off.
+1. Sign in as an administrator and open **Demo Clock**. In development this tab is
+   visible to admins even while the tools are off; production shows it only with
+   `demoClock=1` in the address.
 2. Click **Enable demo tools**. The app initially stays on real time. The recorded
    date correction form is now available without choosing a simulated date.
 3. To simulate another date for new work, enter the date/time in the device's
@@ -31,16 +52,16 @@ After the code and one-time schema setup are installed:
 4. When finished, click **Disable demo tools**. This restores real time and clears
    the offset. A later enable starts fresh on real time.
 
-No restart or rebuild is needed for these actions. A badge identifies a nonzero
-override; the clock advances normally from the chosen time. Other signed-in tabs
+No restart or rebuild is needed for these actions. During local development a badge
+identifies a nonzero override; the clock advances normally from the chosen time. Other signed-in tabs
 pick up changes within about 15 seconds; refresh their pages before using a new
 day. **Reset to system time** clears only the offset, leaving correction tools
 enabled. Disabling/resetting does not rewrite previously saved records.
 
 For administrators of the server, `DEMO_CLOCK=off` remains an optional hard lock:
-it ignores persisted mode/offset and refuses changes. The dashboard explains the
-lock. Removing an existing environment lock needs a service restart once; normal
-dashboard switching then needs none. `DEMO_CLOCK=on` and the older `dev:demo` /
+it ignores persisted mode/offset and refuses changes. The visible Demo Clock panel
+explains the lock. Removing an existing environment lock needs a service restart
+once; normal dashboard switching then needs none. `DEMO_CLOCK=on` and the older `dev:demo` /
 `start:demo` aliases merely permit the dashboard controls; they no longer enable
 the stored mode automatically. Keep `NODE_ENV=production` on deployed services.
 
@@ -75,8 +96,10 @@ permissions; it does not alter any existing session or scheduled day. Install it
 separately in each database where corrections will be used. Keep demo mode off
 until needed; no correction is made simply by enabling it.
 
-In either local or production demo mode, an administrator can open **Demo Clock →
-Correct a recorded date**. The clock offset may stay at zero:
+An administrator can open **Demo Clock → Correct a recorded date** in local
+development or through the hidden production address above. The existing
+authenticated correction API and audit history remain available.
+The clock offset may stay at zero:
 
 1. Find and select a finished session by patient, exercise, or session number.
 2. Choose the destination scheduled day (Asia/Manila). It must already exist in

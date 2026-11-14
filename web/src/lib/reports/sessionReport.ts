@@ -415,8 +415,15 @@ export function sessionReportPdf(input: SessionReportInput, options: SessionRepo
   layout.heading("Notes");
   note("Descriptive record of the session for review with a physical therapist. It is not a diagnosis.");
   if (input.context?.version === 3) {
+    // Custom-exercise sessions and exercises not started because of pain store
+    // only the app revision: no camera configuration was used, so none is named.
+    const versions = input.context.versions as { registry?: unknown; exerciseConfig?: unknown } | undefined;
+    const configuration = [
+      typeof versions?.registry === "string" ? `configuration registry ${versions.registry.slice(0, 12)}` : null,
+      typeof versions?.exerciseConfig === "string" ? `exercise ${versions.exerciseConfig.slice(0, 19)}` : null,
+    ].filter((part): part is string => part !== null);
     layout.paragraph(
-      `For the app's developers: configuration registry ${input.context.versions.registry.slice(0, 12)}, exercise ${input.context.versions.exerciseConfig.slice(0, 19)}, session ${input.id}.`,
+      `For the app's developers: ${[...configuration, `session ${input.id}`].join(", ")}.`,
       { size: 8, color: COLORS.muted },
     );
   }

@@ -14,7 +14,7 @@ assert(["localhost", "127.0.0.1", "[::1]"].includes(new URL(process.env.DATABASE
 types.setTypeParser(1082, value => value);
 const client = new Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000, statement_timeout: 5000 });
 const ast = ts.createSourceFile("db.ts", readFileSync(new URL("../src/lib/db.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
-const names = ["SessionNotScheduledError", "ManualOccurrenceNotCompletableError", "createCustomExerciseSession", "completeManualOccurrence", "endSession"];
+const names = ["SessionNotScheduledError", "ManualOccurrenceNotCompletableError", "createCustomExerciseSession", "completeManualOccurrence", "endSession", "completedWithPain"];
 const nodes = ast.statements.filter(n => (ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) && names.includes(n.name?.text ?? ""));
 assert.equal(nodes.length, names.length);
 const code = ts.transpileModule(nodes.map(n => n.getText(ast)).join("\n"), {
@@ -53,7 +53,7 @@ async function main() {
       getAppRevision: () => "private-manual-fixture",
       getPausedProgress: async () => ({ custom: true }), describePausedProgress: () => "custom exercise",
       createNotification: async (_id: string, title: string) => { notices.push(title); },
-      emailPainPause: async () => undefined,
+      emailPainPause: async () => undefined, emailCompletedWithPain: async () => undefined,
     }) as any;
     vm.runInContext(code, context);
     const db = context.exports;

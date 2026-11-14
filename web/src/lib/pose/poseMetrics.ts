@@ -76,11 +76,10 @@ type LM = { x: number; y: number; visibility?: number };
  * the uncorrected space every registry threshold had been tuned in, and the
  * live path never passed a real aspect. On 16:9 that read a shoulder angle
  * 10-20 degrees low below horizontal and up to 22 high above it against
- * motion capture (REHAB24-6, `Review_Artifacts/2026-10-20_rehab24_benchmark/`).
- * The thresholds were re-derived for the corrected space at the switch
- * (`Review_Artifacts/2026-10-21_aspect_lift/`). Pass `NO_ASPECT_CORRECTION`
- * only to reproduce the historical readings, as `poseNormalization.test.ts`
- * does to pin the defect.
+ * motion capture (REHAB24-6 benchmark, 2026-10-20). The thresholds were
+ * re-derived for the corrected space at the switch (2026-10-21). Pass
+ * `NO_ASPECT_CORRECTION` only to reproduce the historical readings, as
+ * `poseNormalization.test.ts` does to pin the defect.
  */
 export const NO_ASPECT_CORRECTION = 1;
 
@@ -1049,16 +1048,14 @@ export function isNearPeak(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 7 — METRIC STUBS (registry-referenced, math TBD)
+// SECTION 7 — REGISTRY METRICS
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// These functions exist so the exercise registry can reference them and the
-// camera loop can wire up state machines without runtime errors. Each stub
-// returns null so any consumer that checks for "no data" handles them
-// correctly. Replace each stub with real math one at a time as you implement
-// rep counting per exercise.
+// The functions behind the metric names the exercise registry uses
+// (`MetricName`); `computeMetricByName` in Section 8 maps each name to its
+// function. They began as null-returning stubs and are all implemented now.
 //
-// All stubs return a number (the metric value in the units declared by the
+// Each returns a number (the metric value in the units declared by the
 // registry — degrees for angles, normalized torso-length for displacements)
 // or null when the required landmarks aren't visible.
 
@@ -1273,7 +1270,8 @@ export function computeShoulderFlexion(
  *
  * The caller subtracts a per-session resting baseline and inverts the sign so
  * downstream consumers (rep counter, warning threshold) see "positive =
- * elevation away from rest" — see baselineCapture handling in the camera loop.
+ * elevation away from rest" — see the scapular baseline refs
+ * (left/rightScapBaselineRef) in CameraClient.tsx.
  * THIS FUNCTION returns the raw signed projection. It is the caller's job to
  * baseline-subtract and re-orient.
  *
@@ -1864,8 +1862,8 @@ export function computeWristShoulderLateral(
  * No per-session baseline capture — trunk-length normalization handles
  * patient-to-patient variation. A typical adult's upper-arm length is
  * ~0.5 × trunk length; "elbow off wall" is detected when this ratio drops
- * meaningfully below that anatomical norm (registry threshold for
- * ex_008 = 0.4 — TBD via live tuning).
+ * meaningfully below that anatomical norm (the threshold was 0.4 while
+ * ex_008 used this metric; no exercise uses it now).
  *
  * ── DEGENERATE-POSE GUARD ────────────────────────────────────────────────────
  * Reuses TRUNK_LEN_EPSILON = 0.05 (same as computeScapularElevation:1028).
@@ -1921,14 +1919,10 @@ export function computeShoulderElbowDistance(
 // SECTION 8 — REGISTRY-AWARE ENTRY POINT
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// `computePoseMetricsForExercise` is the new top-level call from CameraClient.
+// `computePoseMetricsForExercise` is the top-level call from CameraClient.
 // It looks at the active exercise definition and returns ONLY the metrics
 // that exercise needs — primary metric (for rep counting), compensation
 // metrics (for the score and warning UI), nothing else.
-//
-// The original `computePoseMetrics` is kept for backward compatibility and
-// for any UI surface that wants the always-on three-metric snapshot. New
-// camera-loop code should use this function instead.
 
 
 /**
@@ -1980,15 +1974,11 @@ export type ExerciseFrameMetrics = {
 /**
  * Compute one frame's worth of metrics for the active exercise.
  *
- * For now, primary-metric values come from the stub functions in Section 7
- * and will return null until those are implemented. Compensation metrics use
- * the existing computed values (neck tilt, shoulder symmetry, trunk lean) —
- * those work today.
+ * Each metric's value comes from its function through `computeMetricByName`.
  *
  * The function deliberately reads the active definition rather than computing
- * everything always-on. This keeps per-frame work proportional to what the UI
- * actually displays — important once the per-frame rate climbs and the stubs
- * become real implementations doing real math.
+ * everything always-on, which keeps per-frame work proportional to what the
+ * active exercise uses.
  */
 export function computePoseMetricsForExercise(
   landmarks: LM[],
@@ -2179,7 +2169,7 @@ function pickWorstSide(
  *
  * This is the single source of truth for "which function computes which
  * metric." Adding a new metric means: add to the MetricName union, add a
- * compute function (real or stubbed), add a case here. That's it.
+ * compute function, add a case here. That's it.
  *
  * Returns the metric's value as a plain number (or null when unavailable),
  * stripped of any wrapper objects. Consumers comparing to thresholds want

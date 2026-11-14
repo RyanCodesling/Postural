@@ -60,6 +60,10 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   /** The recorded frame size; the camera loop measures in its aspect (D-48). Defaults to 1280x720. */
   videoWidth?: number;
   videoHeight?: number;
+  /** Turns on the camera loop's frame limit (cameraFrameCap.ts). Off by default, because a
+   * replay feeds the frames the loop processed when it was recorded; also on when the
+   * environment sets CAMERA_REPLAY_FRAME_CAP=1, for what-if replays. */
+  frameCap?: boolean;
 } = {}) {
   let time = 1_000;
   let landmarks: any[] = [];
@@ -146,6 +150,7 @@ export function createCameraReplay(definition: ExerciseDefinition, provenance: C
   context.steadinessRef = ref(globals.newSteadinessState());
   context.trackingMessageRef = ref(globals.NO_TRACKING_MESSAGE);
   context.trackingMarksRef = ref([]);
+  context.cameraFrameCapRef = ref(globals.newCameraFrameCap(options.frameCap ?? process.env.CAMERA_REPLAY_FRAME_CAP === "1"));
   context.selectedExerciseRef = ref(definition.id);
   context.assignedExercisesRef = ref([{ id: definition.id, isCustom: false }]);
   context.neckRepDebugRef = ref([]); context.neutralCalibrationSamplesRef = ref([]);

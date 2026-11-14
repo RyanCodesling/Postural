@@ -1,6 +1,6 @@
 // Runs once when the Next.js server starts. Checks hourly whether the summary
-// emails of the day that just ended, or the patients' exercise reminders, are
-// due; sendDailyTherapistDigests and sendExerciseReminderEmails send each only once.
+// emails of the day that just ended, the patients' exercise reminders, or the
+// make-up reminders are due; each sender sends each email only once.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const state = globalThis as { __digestTimer?: NodeJS.Timeout };
@@ -18,6 +18,12 @@ export async function register() {
       await sendExerciseReminderEmails();
     } catch (err) {
       console.error("[digest] Exercise reminder emails failed:", err);
+    }
+    try {
+      const { sendMakeupReminderEmails } = await import("@/lib/db");
+      await sendMakeupReminderEmails();
+    } catch (err) {
+      console.error("[digest] Make-up reminder emails failed:", err);
     }
   };
   state.__digestTimer = setInterval(run, 60 * 60 * 1000);

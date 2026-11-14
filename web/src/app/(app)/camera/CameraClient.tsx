@@ -29,6 +29,7 @@ import { restReferencedShoulderSymmetry, restingShoulderLineDeg } from "@/lib/po
 import { restReferencedTrunkLean, restingTrunkLineDeg } from "@/lib/pose/trunkRestReference";
 import { countsFromCalibrationEarLine, primaryReferenceFor, restingEarLineDeg } from "@/lib/pose/neckCalibrationReference";
 import { drawCutoutOverlay } from "@/lib/pose/drawFramingOverlay";
+import { cameraFrameCapEnabledFromSearch, newCameraFrameCap, takeCameraFrameSlot } from "@/lib/pose/cameraFrameCap";
 import { drawCompensationOverlay, limbSideIsOverlayDirection, lowerArrowShoulder } from "@/lib/pose/drawCompensationOverlay";
 import { captureCoachingProvenance, COACHING_TICK_MS, type CoachingProvenance } from "@/lib/pose/coachingConfig";
 import { CoachingAuditBuffer, observeMovement, type CoachingObservation } from "@/lib/pose/coachingAudit";
@@ -225,6 +226,7 @@ import { forgetVideoChoice, readVideoChoice, rememberVideoChoice } from "@/lib/r
 import { SessionRecorder, type RecordingState } from "@/lib/recording/sessionRecorder";
 import {
   formatResistanceContext,
+  PRE_SESSION_PAIN_BLOCK_SCORE,
   PRE_SESSION_PAIN_CAUTION_SCORE,
   type PainTiming,
   type PreSessionPain,
@@ -404,7 +406,7 @@ type ResumeSnapshot = {
   pairedHoldMs: number;
   /**
    * Per-side hold totals for the current set of a side-split isometric
-   * (ex_004). Optional so snapshots written before the field existed still
+   * hold. Optional so snapshots written before the field existed still
    * parse; absent/zero for per-limb isometrics (which use pairedHoldMs).
    */
   sideHoldMs?: { left: number; right: number };
@@ -637,8 +639,10 @@ type SessionState =
 /**
  * Session set summary. The live UI keeps a local log, and patient sessions also
  * persist this shape to `set_events` so timed isometric holds have a durable
- * clinical outcome. `pairedReps` / `asymmetryIndex` are tracked as placeholders
- * for now (paired-rep matching is not implemented yet).
+ * clinical outcome. `pairedReps` is min(left, right) for a counted set (reps
+ * are not matched one-to-one in time) and 0 for a hold; `asymmetryIndex` is
+ * computeAsymmetryIndex of the set's left and right reps (hold times for a
+ * hold).
  */
 type CompletedSetRecord = {
   setIndex: number;
@@ -658,16 +662,17 @@ type CompletedSetRecord = {
    * Isometric-only: milliseconds of credited hold for this set, plus the
    * target. For a per-limb isometric (ex_006 T-pose) this is the time BOTH
    * arms were in the target band simultaneously. For a side-split isometric
-   * (ex_004 — per-side holds attributed from the sign of one bidirectional
-   * signal) this is min(leftHoldMs, rightHoldMs): the slower side gates
-   * completion, so the min is the per-side hold credited toward the target.
+   * (the former ex_004 neck hold; per-side holds attributed from the sign
+   * of one bidirectional signal) this is min(leftHoldMs, rightHoldMs): the
+   * slower side gates completion, so the min is the per-side hold credited
+   * toward the target.
    * Absent for dynamic (rep-counted) sets, where reps/pairedReps carry the
    * equivalent information.
    */
   pairedHoldMs?: number;
   targetHoldMs?: number;
   /**
-   * Side-split isometric only (ex_004): the per-side hold totals behind the
+   * Side-split isometric only: the per-side hold totals behind the
    * `pairedHoldMs` min. Kept separate — NEVER summed — so the live recap can
    * surface the left/right asymmetry the min alone would hide. (The persisted
    * set event carries the same per-side detail via holdQuality left/right
@@ -1974,6 +1979,13 @@ export default function CameraClient() {
   const [fps, setFps] = useState<number | null>(null);
   const fpsFrameCountRef = useRef(0);
   const fpsWindowStartMsRef = useRef(0);
+  // The loop processes at most CAMERA_LOOP_MAX_FPS frames a second
+  // (cameraFrameCap.ts). `fpsCap=off` in the page address turns the limit off
+  // for that page load, as a fallback.
+  const cameraFrameCapRef = useRef(newCameraFrameCap(true));
+  useEffect(() => {
+    cameraFrameCapRef.current = newCameraFrameCap(cameraFrameCapEnabledFromSearch(window.location.search));
+  }, []);
   // Diagnostic timing split, averaged over the same ~1 s window as FPS:
   // `infer` is time spent in detectForVideo, `frame` is the whole per-frame
   // pipeline (detect + readiness + metrics + drawing). The gap is JS/draw
@@ -2252,14 +2264,14 @@ export default function CameraClient() {
   const ex005DebugStartMsRef = useRef<number | null>(null);
   const ex005DebugSeqRef = useRef(0);
   const ex005DebugEnabledRef = useRef(false);
-  // TEMPORARY (2026-05-26): throttle anchor for the ex_005 head-lean console
-  // diagnostic below. Remove once ex_005 thresholds/framing are tuned.
+  // Throttle anchor for the opt-in ex_005 head-lean console diagnostic below
+  // (off unless `enableEx005Debug()` is run in the browser console).
   const lastEx005DebugMsRef = useRef(0);
 
-  // In-memory per-rep event log, keyed by side. Cleared when the exercise
-  // changes. This is the buffer that will eventually feed Postgres in a later
-  // step — for now, console.log on each rep is the only output beyond the
-  // live counter.
+  // In-memory per-rep event log for this page, keyed by side. Cleared when the
+  // exercise changes. The Resume snapshot and the end-of-session recap read
+  // it; each repetition is also saved to the database on its own
+  // (bufferRepEvent → the event outbox → `rep_events`).
   const repLogRef = useRef<{ left: RepEvent[]; right: RepEvent[] }>({
     left: [],
     right: [],
@@ -2273,12 +2285,17 @@ export default function CameraClient() {
 
   // ── Isometric time-in-band accumulation ──────────────────────────────────
   // Two isometric modes share this machinery:
-  //  - per-limb (ex_006 T-pose): time accrues only while BOTH arms are in the
-  //    target band simultaneously (a real T-pose) → ONE paired accumulator
-  //    (`pairedHoldMsRef`); the per-side hold refs stay 0.
-  //  - side-split (ex_004 neck hold): one signed signal, side attributed from
-  //    its sign → per-side accumulators (`left/rightHoldMsRef`); the paired
-  //    accumulator stays 0. Sides are surfaced separately (never merged).
+  //  - per-limb (ex_006 T-pose): each arm's accumulator (`left/rightHoldMsRef`)
+  //    grows while THAT arm is in the target band. A both-arm prescription
+  //    completes the set when the slower arm reaches the hold
+  //    (`prescribedTargetReached`). `pairedHoldMsRef` grows only while both
+  //    arms are in the band together; it does not decide completion.
+  //  - side-split: one signed signal, side attributed from its sign →
+  //    per-side accumulators (`left/rightHoldMsRef`); the paired accumulator
+  //    stays 0. Sides are surfaced separately (never merged). Built for the
+  //    former ex_004 neck hold. No current exercise uses it (ex_004 is now
+  //    counted side bends); it is kept as the fallback if the neck exercise
+  //    returns to a hold.
   // `left/rightInBandRef` carry the current per-side in-band status for the
   // live panel. Reset on set completion, exercise change, session start, and
   // sustained capture dropout. `holdState` mirrors these for the UI at the
@@ -2308,7 +2325,7 @@ export default function CameraClient() {
   // in-band bookkeeping and a compensation-score aggregate. Folded into a
   // HoldQuality summary at set boundary (finalizeHoldQuality) and reset alongside
   // the hold accumulators. All inputs are RAW angles (smoothing would erase the
-  // steadiness signal): per-arm angles for ex_006; for the side-split ex_004 each
+  // steadiness signal): per-arm angles for ex_006; for a side-split hold each
   // side's stream is the |signed angle| while the sign points at that side (so
   // left-tilt frames feed only the left stats). The "paired" fields read as
   // "holding either side" for side-split sets. `t` is ms since the set started.
@@ -3092,6 +3109,15 @@ export default function CameraClient() {
   const [preSessionSurvey, setPreSessionSurvey] = useState<{ score: number; bodyArea: string } | null>(null);
   const preSessionSurveyResolveRef = useRef<((answer: PreSessionPain | null) => void) | null>(null);
   const preSessionPainRef = useRef<PreSessionPain | null>(null);
+  // The exercise the survey is for. At PRE_SESSION_PAIN_BLOCK_SCORE or higher
+  // it cannot start: Okay records it as not started and notifies the therapist.
+  const preSessionTargetRef = useRef<{ patientExerciseId: number; occurrenceId: number; exerciseId: string } | null>(null);
+  const [highPainSaving, setHighPainSaving] = useState(false);
+  const [highPainError, setHighPainError] = useState<string | null>(null);
+  // A custom exercise's session is running: its guide video plays on a loop.
+  const [customVideoPlaying, setCustomVideoPlaying] = useState(false);
+  /** The Reference Guide's spoken line, subtitled on the camera view. */
+  const [guideCue, setGuideCue] = useState<string | null>(null);
   // Optional session video: a question after the pain survey, answered each
   // time unless the patient asked this device to remember the answer.
   const [videoQuestion, setVideoQuestion] = useState<{ remember: boolean } | null>(null);
@@ -3142,16 +3168,15 @@ export default function CameraClient() {
    * Semantic note: `repCounts` now means "CURRENT SET reps,"
    * not "session-total reps." It resets to {0,0} on each set completion
    * and on session restart. Current-session rep events still
-   * accumulate in `repLogRef.current.{left,right}` (a P4-friendly buffer
-   * shape-aligned with the future `rep_events` table).
+   * accumulate in `repLogRef.current.{left,right}`.
    */
   const repCountsRef = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
 
   /**
-   * P4-friendly log of completed sets in the current session. Shape-aligned
-   * with the future Postgres `sets` table. In-memory
-   * only for v1; a future P4 swap reads this and writes to DB. Cleared
-   * on session start (Start button) and on exercise change.
+   * In-memory log of completed sets in the current session, read by the
+   * Resume snapshot and the end-of-session recap. Each set is also saved to
+   * the database on its own (the event outbox → `set_events`). Cleared on
+   * session start (Start button) and on exercise change.
    */
   const completedSetsLogRef = useRef<CompletedSetRecord[]>([]);
 
@@ -4386,12 +4411,24 @@ export default function CameraClient() {
     // A pain report left unanswered belongs to the earlier attempt, not this one.
     customReportSessionIdRef.current = null;
     customRecordingConsentRef.current = false;
+    // Like Start session on a system exercise, bring the camera up first, for
+    // every role. Only once the pose model is ready, for the same reason as
+    // `startSessionWithCamera`. Nothing is tracked on a custom exercise, so a
+    // camera that cannot start does not stop the session; startCamera has
+    // already said why on screen.
+    if (!cameraReadyRef.current && modelLoaded && !isStarting) {
+      await startCamera(selectedDeviceId || undefined);
+    }
     if (
       user?.role !== "patient" ||
       typeof exercise.patientExerciseId !== "number" ||
       typeof exercise.occurrenceId !== "number"
     ) return true;
-    const pain = await askPreSessionPain();
+    const pain = await askPreSessionPain({
+      patientExerciseId: exercise.patientExerciseId,
+      occurrenceId: exercise.occurrenceId,
+      exerciseId: exercise.id,
+    });
     if (pain === null) return false;
     let record: boolean;
     let remembered = false;
@@ -4584,7 +4621,7 @@ export default function CameraClient() {
    * Check whether the current set is complete under Model C
    * (`min(left,right) >= targetReps` for bilateral, `left >= targetReps`
    * for unilateral). If complete:
-   *  - Log a `CompletedSetRecord` to `completedSetsLogRef` (P4-friendly).
+   *  - Log a `CompletedSetRecord` to `completedSetsLogRef`.
    *  - Bump `completedSets`.
    *  - Reset `repCounts` / `repCountsRef` to {0,0} for the next set.
    *  - Reset the underlying `RepCounter` instances so each set starts
@@ -4628,7 +4665,7 @@ export default function CameraClient() {
         asymmetryIndex: computeAsymmetryIndex(left, right),
       };
     } else if (isSideSplitIsometric(def)) {
-      // Side-split isometric (ex_004): each side accrues hold time on its own
+      // Side-split isometric: each side accrues hold time on its own
       // (sign-attributed), so the set completes only when BOTH sides reach the
       // prescribed per-side hold — Model C, the slower side gates. The credited
       // `pairedHoldMs` is the min; the per-side totals ride along so the recap
@@ -4763,16 +4800,72 @@ export default function CameraClient() {
    * are rebuilt so a restarted session does not inherit stale event buffers
    * or lifetime-of-instance rep indices from the previous session.
    */
-  const askPreSessionPain = () =>
+  const askPreSessionPain = (
+    target: { patientExerciseId: number; occurrenceId: number; exerciseId: string } | null,
+  ) =>
     new Promise<PreSessionPain | null>((resolve) => {
       preSessionSurveyResolveRef.current = resolve;
+      preSessionTargetRef.current = target;
+      setHighPainError(null);
       setPreSessionSurvey({ score: 0, bodyArea: "" });
     });
   const answerPreSessionSurvey = (answer: PreSessionPain | null) => {
     const resolve = preSessionSurveyResolveRef.current;
     preSessionSurveyResolveRef.current = null;
+    preSessionTargetRef.current = null;
+    setHighPainError(null);
     setPreSessionSurvey(null);
     resolve?.(answer);
+  };
+  /**
+   * Okay on the high-pain warning: the exercise does not start. It is recorded
+   * as not started because of pain, the therapist is notified, and the patient
+   * returns to their schedule.
+   */
+  const confirmHighPainNoStart = async () => {
+    const target = preSessionTargetRef.current;
+    const survey = preSessionSurvey;
+    if (!target || !survey) {
+      answerPreSessionSurvey(null);
+      return;
+    }
+    setHighPainSaving(true);
+    setHighPainError(null);
+    try {
+      const response = await fetch("/api/sessions/high-pain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...target,
+          preSessionPain: { status: "reported", score: survey.score, bodyArea: survey.bodyArea.trim() || null },
+          deviceInfo: { userAgent: navigator.userAgent },
+        }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        setHighPainError(
+          isRecord(body) && typeof body.error === "string"
+            ? body.error
+            : "This could not be saved. Please try again.",
+        );
+        return;
+      }
+      answerPreSessionSurvey(null);
+      const { remaining } = removeActionableOccurrence(assignedExercisesRef.current, target.occurrenceId);
+      assignedExercisesRef.current = remaining;
+      setAssignedExercises(remaining);
+      setActionableOccurrenceIds((previous) => {
+        const next = new Set(previous);
+        next.delete(target.occurrenceId);
+        return next;
+      });
+      setWaitMessage("Opening your schedule…");
+      router.push("/dashboard/patient?tab=session");
+    } catch {
+      setHighPainError("This could not be saved. Check your connection and try again.");
+    } finally {
+      setHighPainSaving(false);
+    }
   };
   const askVideoChoice = () =>
     new Promise<{ record: boolean; remember: boolean } | null>((resolve) => {
@@ -4835,7 +4928,16 @@ export default function CameraClient() {
     videoConsentRememberedRef.current = false;
     videoConsentNoticeRef.current = null;
     if (typeof prescriptionRef.current.patientExerciseId === "number") {
-      const answer = await askPreSessionPain();
+      const occurrenceId = prescriptionRef.current.occurrenceId;
+      const answer = await askPreSessionPain(
+        typeof occurrenceId === "number"
+          ? {
+              patientExerciseId: prescriptionRef.current.patientExerciseId,
+              occurrenceId,
+              exerciseId: activeDefinition.id,
+            }
+          : null,
+      );
       if (answer === null) return;
       preSessionPainRef.current = answer;
       // Then the video question, unless this patient asked this device to
@@ -4981,7 +5083,7 @@ export default function CameraClient() {
       repCountsRef.current = { left: 0, right: 0 };
       setRepCounts({ left: 0, right: 0 });
       pairedHoldMsRef.current = snap.pairedHoldMs;
-      // Per-side holds for a side-split isometric (ex_004). `sideHoldMs` is
+      // Per-side holds for a side-split isometric. `sideHoldMs` is
       // optional (older snapshots predate it) — missing means 0/0.
       leftHoldMsRef.current = snap.sideHoldMs?.left ?? 0;
       rightHoldMsRef.current = snap.sideHoldMs?.right ?? 0;
@@ -5065,7 +5167,7 @@ export default function CameraClient() {
     if (def?.kind === "isometric") {
       // Isometric partial: log the hold time accumulated this set. Per-limb
       // (ex_006): the valid-T-pose (both-arms-in-band) paired accumulator.
-      // Side-split (ex_004): per-side accumulators; credited pairedHoldMs is
+      // Side-split: per-side accumulators; credited pairedHoldMs is
       // the min (slower side gates), which can legitimately be 0 when only
       // one side was held — the per-side fields keep that partial visible.
       const leftMs = leftHoldMsRef.current;
@@ -6256,8 +6358,9 @@ export default function CameraClient() {
    *                                   doesn't advance progress further).
    *   Divided by (targetSets * targetReps) for a 0–100 percentage.
    *
-   * Isometric exercises (ex_006) don't track reps yet (P3b unbuilt) — we
-   * fall back to 0 so the bar doesn't show a misleading value.
+   * Isometric exercises (ex_006) use the hold analogue below: completed sets
+   * count in full and the current set adds its credited hold time, capped at
+   * the per-set hold.
    */
   const currentSetMinReps = activeDefinition?.bilateral
     ? prescription.prescribedSide === "left"
@@ -6279,11 +6382,9 @@ export default function CameraClient() {
         ? (() => {
             // Hold analogue of the rep formula: each completed set contributes
             // a full hold; the current set contributes its credited hold
-            // seconds, capped at the per-set target. Per-limb (ex_006): the
-            // paired (both-arms-in-band) accumulator. Side-split (ex_004):
-            // each side owes the full hold, so the set is the average of the
-            // two capped per-side holds — finishing one side reads as half
-            // the set, and the faster side's surplus can't advance it further.
+            // seconds, capped at the per-set target. The credited hold is the
+            // prescribed side's time, or for a both-side prescription the
+            // slower side's, so the faster side's surplus can't advance it.
             const creditedSec =
               prescription.prescribedSide === "left"
                 ? holdState.leftSec
@@ -6874,7 +6975,10 @@ export default function CameraClient() {
     // previous exercise's definition. The ref is sync'd by a useEffect.
     const activeDefinition = activeDefinitionRef.current;
 
-    if (video.readyState === 4 && video.videoWidth > 0) {
+    // At most CAMERA_LOOP_MAX_FPS processed frames a second (cameraFrameCap.ts).
+    // A refresh without a free slot does nothing: the skeleton and readouts stay
+    // as the last processed frame left them, as on a computer that is no faster.
+    if (video.readyState === 4 && video.videoWidth > 0 && takeCameraFrameSlot(cameraFrameCapRef.current, performance.now())) {
       if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
       if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
 
@@ -7966,11 +8070,11 @@ export default function CameraClient() {
                       ? smoothedMetricVelocities[primaryName]
                       : null;
 
-                  // ── TEMPORARY ex_005 head-lean diagnostic (2026-05-26) ──
+                  // ── ex_005 head-lean diagnostic (added 2026-05-26) ──
                   // Opt-in with `enableEx005Debug()` from the browser console.
                   // Logs structured copy-pasteable JSON lines INCLUDING null
                   // metric frames so off-frame ears are visible.
-                  // Remove this block once ex_005 is tuned.
+                  // A tuning aid: off by default and not part of the coaching.
                   if (
                     activeDefinition.id === "ex_005" &&
                     tNow - lastEx005DebugMsRef.current > EX005_DEBUG_THROTTLE_MS
@@ -8193,10 +8297,10 @@ export default function CameraClient() {
               } else if (activeDefinition.kind === "isometric") {
                 // ── Isometric time-in-band accumulation ──────────────────
                 // Two modes, dispatched on bilateralMode:
-                //  - per-limb (ex_006 T-pose): a valid T-pose requires BOTH
-                //    arms in the target band at the same time, so the paired
-                //    hold accrues only on both-in-band frames.
-                //  - side-split (ex_004 neck hold): ONE signed bidirectional
+                //  - per-limb (ex_006 T-pose): each arm accrues its own hold
+                //    time while it is in the band; the paired hold accrues only
+                //    on both-in-band frames and does not decide completion.
+                //  - side-split (former ex_004 neck hold): ONE signed bidirectional
                 //    signal (positive = patient's LEFT, the pinned sign
                 //    convention); each side accrues its own hold time while
                 //    the signed angle sits inside that side's band. At most
@@ -8351,7 +8455,7 @@ export default function CameraClient() {
 
                     // Compensation aggregate. Reuses the single per-frame
                     // score computed above (per-side worst for per-limb holds
-                    // like ex_006, single-primary for side-split ex_004), so
+                    // like ex_006, single-primary for side-split holds), so
                     // the hold-quality accumulator and the UI card never
                     // disagree.
                     const score = frameCompensationScore;
@@ -9041,6 +9145,16 @@ export default function CameraClient() {
   // readiness state still describes the previous stream.
   const cameraFramesFlowing = cameraOn && videoResolution !== null;
   const trackingPaused = cameraFramesFlowing && !captureOk;
+  // The guide's voice and subtitles wait for Start session and the baseline:
+  // only during a set, never while positioning, capturing a baseline
+  // (including a mid-session recalibration) or resting, and they pause while
+  // tracking is interrupted ("Hold still and ensure good lighting") and while
+  // the "Tracking was interrupted" recalibration offer is up, until answered.
+  const guideVoiceAllowed = sessionState === "active" && baselinePhase !== "capturing" && !trackingPaused && !calibrationStale;
+  // The voice speaks 3 repetitions per set, then only subtitles continue. Every
+  // start passes through the countdown, so a new session re-arms it even when
+  // it begins on the same set number as the last one.
+  const guideVoiceRound = sessionState === "countdown" ? "start" : `set-${currentSetIdx}`;
   const cameraStatus: CameraStatus =
     isStarting || (cameraOn && videoResolution === null)
       ? "starting"
@@ -10628,7 +10742,25 @@ export default function CameraClient() {
                     compact={tightLayout}
                   />
                 )}
+                {cameraOn && guideVoiceAllowed && guideCue && <GuideCueSubtitle text={guideCue} compact={tightLayout} />}
               </div>
+
+              {/* With the camera off its cover hides the column above, so the
+                  guide's subtitle sits over the cover instead. */}
+              {!cameraOn && guideVoiceAllowed && guideCue && (
+                <div style={{
+                  position: "absolute",
+                  left: tightLayout ? 10 : 16,
+                  right: tightLayout ? 10 : 16,
+                  bottom: tightLayout ? 10 : 16,
+                  zIndex: 26,
+                  display: "flex",
+                  justifyContent: "center",
+                  pointerEvents: "none",
+                }}>
+                  <GuideCueSubtitle text={guideCue} compact={tightLayout} />
+                </div>
+              )}
 
               {/* Rest */}
               {sessionState === "resting" && (
@@ -11177,7 +11309,28 @@ export default function CameraClient() {
                       placeholder="e.g. left shoulder"
                       style={FIELD_STYLE}
                     />
-                    {preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_BLOCK_SCORE ? (
+                      <div role="alert" style={{
+                        margin: "14px 0 0",
+                        padding: "12px 14px",
+                        borderRadius: 10,
+                        background: "oklch(0.96 0.03 25)",
+                        border: "1px solid oklch(0.85 0.08 25)",
+                        fontSize: 14,
+                        lineHeight: 1.5,
+                        color: "oklch(0.40 0.14 25)",
+                      }}>
+                        <strong style={{ display: "block", marginBottom: 4, fontSize: 15 }}>
+                          Your pain is too high to start this exercise.
+                        </strong>
+                        A pain score of {preSessionSurvey.score}/10 is too high to exercise safely, so this
+                        exercise cannot proceed today. If you press <strong>Okay</strong>, your assigned
+                        therapist will be notified, and this exercise will be automatically marked as
+                        &ldquo;Did not proceed because of a high pain score&rdquo; on your dashboard and as a
+                        pain follow-up on your therapist&apos;s dashboard. Press <strong>Cancel</strong> to go
+                        back without recording anything.
+                      </div>
+                    ) : preSessionSurvey.score >= PRE_SESSION_PAIN_CAUTION_SCORE && (
                       <p role="status" style={{
                         margin: "14px 0 0",
                         padding: "10px 12px",
@@ -11193,6 +11346,29 @@ export default function CameraClient() {
                         &ldquo;Stop — I have pain&rdquo; if the pain gets worse.
                       </p>
                     )}
+                    {preSessionSurvey.score >= PRE_SESSION_PAIN_BLOCK_SCORE ? (
+                      <>
+                        {highPainError && (
+                          <p role="alert" style={{ margin: "12px 0 0", fontSize: 14, color: "oklch(0.45 0.16 25)" }}>
+                            {highPainError}
+                          </p>
+                        )}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
+                          <button
+                            type="button"
+                            onClick={() => void confirmHighPainNoStart()}
+                            disabled={highPainSaving}
+                            style={{ ...PRIMARY_BUTTON_STYLE, flex: "1 1 160px", opacity: highPainSaving ? 0.6 : 1 }}
+                          >{highPainSaving ? "Saving…" : "Okay"}</button>
+                          <button
+                            type="button"
+                            onClick={() => answerPreSessionSurvey(null)}
+                            disabled={highPainSaving}
+                            style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
+                          >Cancel</button>
+                        </div>
+                      </>
+                    ) : (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18 }}>
                       <button
                         type="button"
@@ -11209,7 +11385,8 @@ export default function CameraClient() {
                         style={{ ...SECONDARY_BUTTON_STYLE, flex: "1 1 160px" }}
                       >Skip</button>
                     </div>
-                    <button
+                    )}
+                    {preSessionSurvey.score < PRE_SESSION_PAIN_BLOCK_SCORE && <button
                       type="button"
                       onClick={() => answerPreSessionSurvey(null)}
                       style={{
@@ -11222,7 +11399,7 @@ export default function CameraClient() {
                         fontSize: 14,
                         cursor: "pointer",
                       }}
-                    >Back</button>
+                    >Back</button>}
                   </div>
                 </div>
               )}
@@ -11667,6 +11844,7 @@ export default function CameraClient() {
                       onPainStop={user?.role === "patient" ? () => endCustomSession("pain") : undefined}
                       painReport={user?.role === "patient" ? { pending: customPainReportPending, save: saveCustomPainReport } : undefined}
                       startNote={videoChoiceNote}
+                      onRunningChange={setCustomVideoPlaying}
                     />
                   ) : (
                   <button
@@ -11727,8 +11905,16 @@ export default function CameraClient() {
             <DemoCard
               exerciseId={activeDefinition?.id ?? null}
               compact={compactLayout}
+              onCue={setGuideCue}
+              voiceAllowed={guideVoiceAllowed}
+              voiceRound={guideVoiceRound}
               custom={selectedExerciseObj?.isCustom
-                ? { id: selectedExerciseObj.id, name: selectedExerciseObj.name, video: selectedExerciseObj.customVideo ?? null }
+                ? {
+                    id: selectedExerciseObj.id,
+                    name: selectedExerciseObj.name,
+                    video: selectedExerciseObj.customVideo ?? null,
+                    playing: customVideoPlaying,
+                  }
                 : undefined}
             />
           </aside>
@@ -13459,15 +13645,17 @@ function CameraSetHud({
     gap: 12,
     marginBottom: 6,
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 13,
+    // The labels are read from a few steps back while exercising, so they
+    // are sized to stay readable at a distance next to the big numbers.
+    fontSize: compact ? 15 : 20,
     fontWeight: 700,
-    letterSpacing: ".18em",
+    letterSpacing: ".14em",
     textTransform: "uppercase",
     color: "oklch(0.82 0.01 240)",
   };
   const suffixSt: CSSProperties = {
-    fontSize: compact ? 11 : 12,
-    fontWeight: 500,
+    fontSize: compact ? 15 : 20,
+    fontWeight: 600,
     letterSpacing: "normal",
     textTransform: "none",
     color: "oklch(0.76 0.01 240)",
@@ -13483,17 +13671,17 @@ function CameraSetHud({
   const captionSt: CSSProperties = {
     marginTop: 6,
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 12,
-    fontWeight: 600,
-    letterSpacing: ".14em",
+    fontSize: compact ? 15 : 20,
+    fontWeight: 700,
+    letterSpacing: ".12em",
     textTransform: "uppercase",
     color: "oklch(0.80 0.01 240)",
   };
   const sideSt: CSSProperties = {
     fontFamily: "var(--mono)",
-    fontSize: compact ? 11 : 13,
+    fontSize: compact ? 16 : 22,
     fontWeight: 700,
-    letterSpacing: ".18em",
+    letterSpacing: ".12em",
     textTransform: "uppercase",
     color: "oklch(0.80 0.01 240)",
   };
@@ -13720,8 +13908,10 @@ type CustomStartResult = boolean | Pick<RuntimePrescription, "sets" | "restSecon
 
 function CustomGuidedSession({
   sets: scheduledSets, restSeconds: scheduledRestSeconds, onComplete, onNext, onBackToSchedule,
-  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote,
+  onBeforeStart, onSetStart, onRestStart, onEnd, onRestChange, onPainStop, painReport, startNote, onRunningChange,
 }: {
+  /** True from the first set until the session ends (sets and rests): the guide video plays on a loop. */
+  onRunningChange?: (running: boolean) => void;
   sets: number;
   restSeconds: number;
   /** Saves the day as complete; resolves to an error message, or null when saved. */
@@ -13745,7 +13935,8 @@ function CustomGuidedSession({
   /** Shown under Start session before the session starts, such as a remembered video choice. */
   startNote?: React.ReactNode;
 }) {
-  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain">("idle");
+  // "ending": ended early, its save pending or failed.
+  const [phase, setPhase] = useState<"idle" | "starting" | "set" | "rest" | "done" | "pain" | "ending">("idle");
   const [runDose, setRunDose] = useState({ sets: scheduledSets, restSeconds: scheduledRestSeconds });
   const sets = phase === "idle" || phase === "starting" ? scheduledSets : runDose.sets;
   const restSeconds = phase === "idle" || phase === "starting" ? scheduledRestSeconds : runDose.restSeconds;
@@ -13764,8 +13955,11 @@ function CustomGuidedSession({
   const [reportError, setReportError] = useState<string | null>(null);
   const [painStopError, setPainStopError] = useState<string | null>(null);
   const [painStopping, setPainStopping] = useState(false);
+  const [endSaving, setEndSaving] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
   // Leaving the exercise mid-session (another exercise, another page) ends
-  // its recording the same way End session does.
+  // its recording the same way End session does, and sends an early end
+  // that is not saved yet once more.
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const onEndRef = useRef(onEnd);
@@ -13774,8 +13968,13 @@ function CustomGuidedSession({
   onRestChangeRef.current = onRestChange;
   useEffect(() => () => {
     onRestChangeRef.current?.(null);
-    if (phaseRef.current === "set" || phaseRef.current === "rest") onEndRef.current?.("user");
+    if (phaseRef.current === "set" || phaseRef.current === "rest" || phaseRef.current === "ending") onEndRef.current?.("user");
   }, []);
+  const onRunningChangeRef = useRef(onRunningChange);
+  onRunningChangeRef.current = onRunningChange;
+  const running = phase === "set" || phase === "rest";
+  useEffect(() => { onRunningChangeRef.current?.(running); }, [running]);
+  useEffect(() => () => onRunningChangeRef.current?.(false), []);
 
   const askPainAfter = () => {
     if (!painReport?.pending()) return;
@@ -13843,6 +14042,7 @@ function CustomGuidedSession({
     setSave({ state: "idle" });
     setAsking(false);
     setPainStopError(null);
+    setEndError(null);
     setPhase("set");
     onSetStart?.();
   };
@@ -13858,11 +14058,19 @@ function CustomGuidedSession({
   };
   const skipRest = () => { setRestEndsAt(null); setCurrentSet((set) => set + 1); setPhase("set"); onSetStart?.(); };
   const endEarly = async () => {
-    setPhase("idle");
+    if (endSaving) return;
+    // Until the server has the end, it stays on screen with a retry, and no
+    // Start session is offered that could replace the attempt.
+    setPhase("ending");
     setRestEndsAt(null);
-    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    setEndSaving(true);
     const error = await Promise.resolve(onEnd?.("user")).catch(() => "Your session could not be saved.");
-    if (!error) askPainAfter();
+    setEndSaving(false);
+    setEndError(error || null);
+    if (error) return;
+    setPhase("idle");
+    // As after a camera session, pain after the attempt is asked once the early end is saved.
+    askPainAfter();
   };
   const stopForPain = async () => {
     if (!onPainStop || painStopping) return;
@@ -13885,6 +14093,10 @@ function CustomGuidedSession({
           : painStopError
             ? "Stopped because of pain. The pain stop has not been saved; please try saving again."
             : "Stopped because of pain. Your therapist has been notified and will review it before you try again."
+        : phase === "ending"
+          ? endSaving
+            ? "Session ended early. Saving…"
+            : "Session ended early, but it has not been saved; please try saving again."
         : phase === "done"
           ? onComplete
             ? save.state === "saved"
@@ -13990,6 +14202,18 @@ function CustomGuidedSession({
             </button>
           )}
         </>
+      ) : phase === "ending" ? (
+        endError ? (
+          <>
+            <p role="alert" style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.50 0.17 25)" }}>
+              {endError}
+            </p>
+            <button type="button" onClick={() => void endEarly()} disabled={endSaving}
+              style={{ ...PRIMARY_BUTTON_STYLE, width: "100%", padding: "14px 16px", fontSize: 18 }}>
+              {endSaving ? "Saving…" : "Try saving again"}
+            </button>
+          </>
+        ) : null
       ) : phase === "done" && onComplete ? (
         <>
           {save.state === "error" && (
@@ -14062,9 +14286,29 @@ function CustomGuidedSession({
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: "oklch(0.45 0.01 240)" }}>
         {onComplete
           ? "Custom exercise: no machine learning tracks or counts it. Follow the guide video below and press Set done after each set; finishing the last set marks today's exercise complete."
-          : "Custom exercise: the camera does not track or count it. Follow the guide video below; this session is not saved."}
+          : "Custom exercise: the camera does not track or count it. Follow the guide video below."}
       </p>
     </>
+  );
+}
+
+/** Subtitle for the Reference Guide's spoken line, on the camera view. */
+function GuideCueSubtitle({ text, compact }: { text: string; compact: boolean }) {
+  return (
+    <div role="status" aria-live="polite" style={{
+      maxWidth: 760,
+      padding: compact ? "8px 14px" : "10px 20px",
+      borderRadius: 10,
+      background: "oklch(0.12 0.005 240 / 0.82)",
+      color: "#fff",
+      fontSize: compact ? 18 : 24,
+      fontWeight: 600,
+      lineHeight: 1.3,
+      textAlign: "center",
+      textShadow: "0 1px 2px oklch(0 0 0 / 0.6)",
+    }}>
+      {text}
+    </div>
   );
 }
 
@@ -14072,10 +14316,17 @@ function CustomGuidedSession({
  * The guide keeps missing-media fallback local to the selected clip. A custom
  * exercise plays the video attached to it instead of a rendered clip.
  */
-function DemoCard({ exerciseId, compact, custom }: {
+function DemoCard({ exerciseId, compact, custom, onCue, voiceAllowed, voiceRound }: {
   exerciseId: string | null;
   compact: boolean;
-  custom?: { id: string; name: string; video: ExerciseVideo | null };
+  /** The guide's spoken line, shown as a subtitle on the camera view. */
+  onCue?: (text: string | null) => void;
+  /** Whether the guide may speak now (session running, baseline captured). */
+  voiceAllowed: boolean;
+  /** Changes with each set and session, re-arming the guide's limited voice. */
+  voiceRound: string;
+  /** `playing`: a custom session is running, so its video plays on a loop. */
+  custom?: { id: string; name: string; video: ExerciseVideo | null; playing?: boolean };
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const clip = custom ? null : demoClipFor(exerciseId);
@@ -14085,9 +14336,9 @@ function DemoCard({ exerciseId, compact, custom }: {
       display: "flex", flexDirection: "column", gap: 8, padding: 12 }}>
       <span style={{ ...EYEBROW_STYLE, fontSize: 14 }}>Reference Guide</span>
       {custom?.video ? (
-        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} />
+        <CustomExerciseVideo key={custom.id} exerciseId={custom.id} exerciseName={custom.name} video={custom.video} playing={custom.playing} />
       ) : shownClip ? (
-        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onError={() => setFailedSrc(shownClip.src)} />
+        <DemoClipPlayer key={shownClip.src} clip={shownClip} compact={compact} onCue={onCue} voiceAllowed={voiceAllowed} voiceRound={voiceRound} onError={() => setFailedSrc(shownClip.src)} />
       ) : (
         <div style={{ minHeight: 150, height: compact ? 260 : 300, padding: 24, borderRadius: 10,
           display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",

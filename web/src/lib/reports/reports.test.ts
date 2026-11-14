@@ -200,7 +200,7 @@ async function run() {
     const text = drawnText(bytes);
     for (const expected of [
       "Session report", "Lateral Arm Raises · report generated Sep 26, 2026, 9:00 AM",
-      "PATIENT NAME Test Patient PATIENT ID patient_007 DATE OF BIRTH (AGE) Mar 4, 1990 (36 years)",
+      "PATIENT NAME Test Patient PATIENT ID patient_007 DATE OF BIRTH (AGE) Mar 4, 1990 (36 years old)",
       "GENDER Female ASSIGNED THERAPIST Sarah Therapist",
       "DIAGNOSIS (ENTERED BY THE CLINIC) Left shoulder impingement (sample entry)",
       "CONDITION (ENTERED BY THE CLINIC) Sample condition text",
@@ -262,6 +262,26 @@ async function run() {
     assert(text.includes("SESSION NO. (THIS EXERCISE) not available"), "no session number");
     assert(text.includes("NAME Test Patient OTHER DETAILS The patient's record could not be loaded"), "patient block without a record");
     assert(!text.includes(" ID "), "no patient ID without a record");
+  });
+
+  await test("session report: custom-exercise and not-started sessions, whose context names only the app revision", () => {
+    // What createCustomExerciseSession and recordHighPainNoStart store.
+    const appOnly = { ...context, versions: { appRevision: "0123456789abcdef" } };
+    const opts = { patientName: "Test Patient", generatedAt: new Date("2026-11-09T05:00:00Z"), timeZone: "Asia/Manila" };
+    const custom = drawnText(sessionReportPdf({
+      ...detail, context: { ...appOnly, exercise: { kind: "manual", definition: null } } as unknown as SessionContextSnapshot,
+    }, opts));
+    assert(custom.includes("For the app's developers: session 218."), "custom exercise");
+    const notStarted = drawnText(sessionReportPdf({
+      ...detail, endReason: "pain", sets: [], reps: [],
+      context: {
+        ...appOnly, prescription: null, exercise: { kind: "not_started", definition: null },
+        preSessionPain: { status: "reported", score: 9, bodyArea: null }, highPainNoStart: true,
+      } as unknown as SessionContextSnapshot,
+    }, opts));
+    assert(notStarted.includes("For the app's developers: session 218."), "not started because of pain");
+    assert(notStarted.includes("Pain before the session (patient-reported) 9/10"), "the score that stopped it");
+    assert(notStarted.includes("No set was recorded."), "no sets");
   });
 
   // Sessions measured with the current measurement (D-48), as saved sessions carry it.

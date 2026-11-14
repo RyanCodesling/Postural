@@ -1361,7 +1361,7 @@ function SessionDetailBody({
   patientName: string;
 }) {
   const prescribedSide =
-    detail.context?.prescription.prescribedSide ?? "both";
+    detail.context?.prescription?.prescribedSide ?? "both";
   const outcomeRows = detail.sets.length > 0 ? (
     detail.sets.map((set) => (
       <SetRow
@@ -1412,6 +1412,15 @@ function SessionPrescriptionContext({ detail }: { detail: SessionDetail }) {
     return (
       <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500">
         Prescription and scoring context is unavailable for this legacy session.
+      </div>
+    );
+  }
+  // An exercise not started because of pain on an occurrence saved without a
+  // prescription snapshot stores the context without a prescription.
+  if (!context.prescription) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500">
+        No prescription was recorded with this session.
       </div>
     );
   }

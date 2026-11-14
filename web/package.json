@@ -17,6 +17,7 @@
     "verify:exercises:db": "tsx scripts/verify-exercise-lifecycle.ts",
     "verify:session-dates": "tsx src/lib/sessionDateCorrection.test.tsx --db",
     "verify:manual:db": "tsx scripts/verify-manual-sessions.ts",
+    "verify:deleted:db": "tsx scripts/verify-recently-deleted.ts",
     "replay:coaching": "tsx scripts/replay-coaching.ts",
     "backup:local": "tsx scripts/backup-local.ts",
     "profile:filter": "tsx scripts/profileOneEuroFilter.ts",
@@ -46,6 +47,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "^16.4.3",
+    "msedge-tts": "2.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

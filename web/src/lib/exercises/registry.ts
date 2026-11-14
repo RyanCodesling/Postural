@@ -54,16 +54,16 @@
  * When `bilateral: true`, the camera loop instantiates two independent state
  * machines — one per side — and surfaces left, right, and paired rep counts
  * separately. Asymmetry between left and right is itself clinically meaningful
- * (per project memory) and must not be averaged away.
+ * and must not be averaged away.
  *
  * ── THRESHOLD CALIBRATION STATUS ─────────────────────────────────────────────
  * The thresholds in this file are engineering settings, established through
  * pilot calibration on recorded sessions (single-subject tuning data, D-08)
  * and later engineering revisions. None is derived from clinical
- * range-of-motion norms, and none is a clinically validated cutoff (CST1
- * check, 2026-10-23). Since 2026-10-21 their numbers are in the
- * aspect-corrected unit (D-48; see the UNITS note above the registry). Each
- * threshold's comment records its provenance.
+ * range-of-motion norms, and none is a clinically validated cutoff (checked
+ * against the thesis manuscript, 2026-10-23). Since 2026-10-21 their numbers
+ * are in the aspect-corrected unit (D-48; see the UNITS note above the
+ * registry). Each threshold's comment records its provenance.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@
 export type MetricName =
   | "shoulderAbduction"      // arm out to the side, used by ex_001 lateral arm raise + ex_008 wall angels
   | "shoulderFlexion"        // arm forward/overhead, used by ex_002 (DEPRECATED 2026-05-21, kept for back-compat)
-  | "scapularElevation"      // shoulder-to-ear vertical distance, used by ex_003 (DEPRECATED 2026-05-21, kept for back-compat) + compensation on ex_001/ex_006 only; ex_007/ex_008 deferred pending compensation-baseline capture
+  | "scapularElevation"      // shoulder-to-ear vertical distance, used by ex_003 (DEPRECATED 2026-05-21, kept for back-compat) + compensation on ex_001, deprecated ex_002, and ex_005/ex_006 (hidden, unscored); not used on ex_007/ex_008
   | "neckLateralFlexion"     // head tilting ear-to-shoulder, used by ex_004 neck lateral flexion
   | "trunkLateralFlexion"    // torso side-bending, used by ex_005 standing side bends
   | "shoulderHorizAbd"       // arm held at 90° abduction (T-pose), used by ex_006 isometric hold
@@ -555,7 +555,7 @@ export type Band = { max: number; deductionMin: number; deductionMax: number };
 export const COMPENSATION_BANDS: Partial<Record<MetricName, Band[]>> = {
   // The three angle band sets below were re-derived on 2026-10-21 (D-48) from
   // their pipeline-unit edges on 16:9 frames, so each band covers the same
-  // movement as before (Review_Artifacts/2026-10-21_aspect_lift/).
+  // movement as before.
   // Neck tilt: normal floor matching the severity classifier (was 5/10/20/30).
   neckTilt: [
     { max: 2.8,  deductionMin: 0,   deductionMax: 0   },
@@ -657,9 +657,9 @@ export type ExerciseDefinition =
        * Defaults to the magnitude/neutral-settle wrapper. The velocity
        * strategy (velocityBidirectionalRepCounter.ts) suppresses passive
        * return-stroke overshoot from counting as an opposite-side rep while
-       * loose-neutral deliberate alternation still counts. No active exercise
-       * sets it since ex_004's conversion to an isometric hold (2026-06-11) —
-       * ex_005 deliberately keeps the default — but the strategy remains
+       * loose-neutral deliberate alternation still counts. No exercise sets
+       * it: ex_004 is counted per side by two rep counters ("per-limb"), and
+       * ex_005 deliberately keeps the default. The strategy remains
        * available for future bidirectional dynamic exercises.
        */
       bidirectionalRepStrategy?: BidirectionalRepStrategy;
@@ -722,8 +722,7 @@ export type ExerciseDefinition =
 // value, measured on 16:9 frames with x and y normalised separately, so that
 // counting and cues behave as before; the one deliberate change is ex_001's
 // minimum peak. The notes beside each value give the old number ("was"). Prose
-// written before 2026-10-21 quotes pipeline units throughout. Table and method:
-// Review_Artifacts/2026-10-21_aspect_lift/threshold_conversion.md.
+// written before 2026-10-21 quotes pipeline units throughout.
 export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
   // ────────────────────────────────────────────────────────────────────────
   // ex_001 — Lateral Arm Raises (Shoulder Abduction)
@@ -864,8 +863,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         warningThreshold: 0.04, requiresBaselineCapture: true,
         // Refitted 2026-10-21 for the corrected abduction (D-48): the same
         // estimator in the corrected plane, n=1836, R2=0.79, on sessions
-        // 200-205 (Review_Artifacts/2026-09-10_coupled_refits/, mode
-        // "corrected"). Was -0.0077 + 0.00124 per pipeline unit.
+        // 200-205 (coupled refit, mode "corrected"). Was -0.0077 + 0.00124 per
+        // pipeline unit.
         scoring: { mode: "primary-coupled", intercept: -0.0435, slopePerPrimaryUnit: 0.00162, source: "pilot-fit" } },
       // Uneven shoulder line during the raise — one whole shoulder rides
       // higher than the other (distinct from a symmetric shrug). Drives the
@@ -1022,9 +1021,9 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
     },
     compensationMetrics: [
       // Trunk extension (leaning back) is the dominant compensation for
-      // weak shoulder flexion. We don't have a sagittal-plane trunk angle
-      // metric yet; trunkLean (lateral) catches asymmetric leans only.
-      // TODO: add `trunkExtension` metric for sagittal compensation.
+      // weak shoulder flexion. There is no sagittal-plane trunk angle
+      // metric; trunkLean (lateral) catches asymmetric leans only. Not
+      // pursued: this exercise has been deprecated since 2026-05-21.
       { name: "trunkLean",
         cue: {
           id: "ex_002.trunk-lean",
@@ -1057,13 +1056,12 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
    * shoulderAbduction (a much larger-amplitude signal) as primary and keeps
    * only the v1 compensation signals that survived live testing (`trunkLean`
    * and `elbowFlexion`). Kept in the registry for audit and because
-   * `scapularElevation` is still used as a COMPENSATION metric on ex_001 /
-   * ex_006. It was removed from ex_007 / ex_008 until compensation-metric
-   * baseline capture exists. Filtered out of staff DEBUG_IDS in
-   * `CameraClient.tsx`; not assigned to patients. `computeScapularElevation`
-   * stays live. Baseline-capture wiring in CameraClient remains in place for
-   * the moment (dead code once DEBUG_IDS is updated) — preserved for the
-   * possibility of future revival without redo.
+   * `scapularElevation` is still used as a COMPENSATION metric on ex_001,
+   * ex_005 and ex_006 (hidden on the last two); it is not used on ex_007 /
+   * ex_008. Filtered out of staff DEBUG_IDS in `CameraClient.tsx`; not
+   * assigned to patients. `computeScapularElevation` stays live, and so does
+   * the per-session baseline capture in CameraClient, which those
+   * compensations use.
    *
    * IMPORTANT for tests: `scapularElevation.test.ts` references this entry
    * structurally (assertions on `EXERCISE_REGISTRY.ex_003.kind === "dynamic"`
@@ -1333,9 +1331,10 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
       // side where trunk mobility is restricted. Scored as `primary-coupled`:
       // the head rides with the trunk through a clean side bend, so the
       // deduction runs on the residual from the expected neck tilt at the
-      // current trunk flexion. Fit: expected ≈ 11.71 + 1.505·|trunkFlexion°|
-      // (clean-rep recording, n≈1299; the intercept is an in-rep envelope
-      // extrapolation, not an anatomical resting claim).
+      // current trunk flexion. Earlier fit, in pipeline units: expected ≈
+      // 11.71 + 1.505·|trunkFlexion°| (clean-rep recording, n≈1299; the
+      // intercept is an in-rep envelope extrapolation, not an anatomical
+      // resting claim). The current coefficients are on the scoring line.
       // HIDDEN 2026-10-01 (logged, never drawn): in the pilot replay this cue was
       // drawn on correct side bends and did not separate the deliberate
       // head-tilt fault. The primary here is itself a head-lean angle, so a
@@ -1354,8 +1353,8 @@ export const EXERCISE_REGISTRY: Record<string, ExerciseDefinition> = {
         warningThreshold: 2.8, // was 5; D-48
         // Refitted 2026-10-21 for the corrected readings (D-48): the same
         // estimator in the corrected plane with the frozen tilt the live loop
-        // uses, n=1715, R2=0.93, on sessions 200-205
-        // (Review_Artifacts/2026-09-10_coupled_refits/, mode "corrected").
+        // uses, n=1715, R2=0.93, on sessions 200-205 (coupled refit, mode
+        // "corrected").
         // Was 11.7093 + 1.50466 per pipeline unit, fitted with a per-frame tilt.
         scoring: { mode: "primary-coupled", intercept: 1.5574, slopePerPrimaryUnit: 1.38065, source: "pilot-fit" },
         // Out of the form score since 2026-10-14 by user decision: hidden as a

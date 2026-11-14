@@ -1,6 +1,5 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
-import bgImage from "../../../media/acc_bacoor_landing_page.png";
 import logo from "../../../media/acc_bacoor_logo.png";
 
 export const AUTH_INPUT =
@@ -16,75 +15,52 @@ export const AUTH_TOGGLE =
   "absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 transition-colors hover:text-green-700";
 export const AUTH_LINK =
   "text-sm font-medium text-green-700 transition-colors hover:text-green-900";
+/** The white card the log in, password reset and change password forms sit in. */
+export const AUTH_CARD =
+  "mx-auto flex w-full max-w-[440px] flex-col gap-6 rounded-2xl border border-[#dfe5db] bg-white p-6 text-gray-900 shadow-[0_18px_48px_-24px_rgba(16,36,26,0.35)] sm:p-8";
 
-const SERVICES = ["Orthopedic Consultation", "Rehabilitation Medicine", "Physical Therapy Services"];
-
-function Check() {
-  return (
-    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/20">
-      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-        <path d="m5 12 5 5 9-10" />
-      </svg>
-    </span>
-  );
-}
+const INK = "#10241a";
+const ORANGE = "#ea580c";
 
 /**
- * The shared frame for the signed-out pages: a green brand panel (clinic photo
- * under a green wash, with the clinic details as live text) beside a clean
- * white form panel. On small screens only the form panel shows.
+ * The frame for the change-password and first-time password pages. It matches
+ * the landing page, where log in and the password reset open: the same header,
+ * the same tinted hero, and the form in the same white card on the right.
  */
 export default function AuthFrame({ children }: { children: ReactNode }) {
   return (
-    <main className="grid min-h-screen bg-white text-gray-900 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]" style={{ colorScheme: "light" }}>
-      <aside className="relative hidden overflow-hidden text-white lg:flex lg:flex-col lg:justify-between lg:p-12 xl:p-16">
-        <Image src={bgImage} alt="" fill unoptimized priority className="object-cover object-right" />
-        <div className="absolute inset-0 bg-gradient-to-br from-green-950/95 via-green-900/85 to-green-700/55" />
-
-        <div className="relative flex items-center gap-4">
-          <Image src={logo} alt="ACC Bacoor" width={112} height={112} className="h-14 w-14 shrink-0 rounded-full ring-2 ring-white/40" />
-          <div className="leading-tight">
-            <p className="text-lg font-bold">ACC Bacoor</p>
-            <p className="text-sm text-green-100">Orthopaedic and Physical Therapy Clinic</p>
-          </div>
-        </div>
-
-        <div className="relative max-w-lg space-y-8">
-          <div className="space-y-4">
-            <h2 className="text-4xl font-bold leading-tight xl:text-5xl">Postural Monitoring System</h2>
-            <p className="text-lg text-green-50/90">
-              Accelerate and comprehensive care, with camera-assisted posture and movement analysis for every session.
-            </p>
-          </div>
-          <ul className="space-y-3 text-base">
-            {SERVICES.map((service) => (
-              <li key={service} className="flex items-center gap-3">
-                <Check />
-                {service}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="relative space-y-1 text-sm text-green-100">
-          <p>(046) 416 7479 / 0939-719-1892</p>
-          <p>accptclinic_2019@yahoo.com</p>
-          <p>Unit 1, L-1F, Tirona Highway, Habay 1, Bacoor City, Cavite</p>
-        </div>
-      </aside>
-
-      <div className="flex items-center justify-center bg-[#f7fbf8] px-6 py-10 sm:px-12">
-        <div className="flex w-full max-w-sm flex-col gap-8">
-          <div className="flex items-center gap-3 lg:hidden">
-            <Image src={logo} alt="ACC Bacoor" width={88} height={88} className="h-11 w-11 shrink-0 rounded-full" />
-            <div className="leading-tight">
-              <p className="text-xl font-bold text-gray-900">ACC Bacoor</p>
-              <p className="text-sm text-gray-600">Postural Monitoring System</p>
+    <div className="flex min-h-screen flex-col bg-[#fafaf7]" style={{ colorScheme: "light", color: INK }}>
+      <header className="border-b border-[#e3e7df] bg-[#fafaf7]">
+        <nav className="flex items-center justify-between gap-4 px-5 py-4 sm:px-8 lg:px-12 xl:px-20 2xl:px-28">
+          <div className="flex min-w-0 items-center gap-3">
+            <Image src={logo} alt="ACC Bacoor" width={88} height={88} className="h-10 w-10 shrink-0 rounded-full" />
+            <div className="min-w-0 leading-tight">
+              <p className="text-[15px] font-semibold">ACC+ Bacoor</p>
+              <p className="truncate text-xs text-[#5b6b60]">Orthopaedic and Physical Therapy Clinic</p>
             </div>
           </div>
-          {children}
+        </nav>
+      </header>
+
+      <main className="flex flex-1 overflow-hidden bg-[linear-gradient(to_right,#fafaf7_0%,#fafaf7_30%,#e8f5ec_62%)] max-lg:bg-[linear-gradient(to_bottom,#fafaf7_0%,#fafaf7_35%,#e8f5ec_70%)]">
+        <div className="grid w-full items-center gap-8 pb-10 pt-12 sm:pt-16 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-6 lg:py-16 lg:pl-12 xl:pl-20 2xl:pl-28">
+          <div className="px-5 sm:px-8 lg:px-0">
+            <p className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-[#5b6b60]">
+              <span className="text-[13px] font-bold leading-none" style={{ color: ORANGE }} aria-hidden>+</span>
+              Machine learning-assisted posture and exercise tracking
+            </p>
+            <h1 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-0.03em] sm:text-[52px] xl:text-[56px]">
+              Postural <span className="text-[#15803d]">Monitoring</span> System
+            </h1>
+            <p className="mt-5 max-w-md text-[17px] leading-relaxed text-[#2f3f35]">
+              Set your own password to keep your exercise records private.
+            </p>
+          </div>
+          <div className="px-5 sm:px-8 lg:pr-12 xl:pr-20 2xl:pr-28">
+            <section className={AUTH_CARD}>{children}</section>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

@@ -1,16 +1,24 @@
 # Additional exercise animation drafts
 
+Current publication, 2026-11-07: the accepted scenes, CC0 inputs and six
+guide videos are versioned. See [GUIDE_ASSETS.md](GUIDE_ASSETS.md) and
+[the asset manifest](reference/guide_assets.json) for the authoritative
+accepted mapping. The dated sections below also describe earlier review
+stages and candidates; unselected previews remain local generated files.
+
 Five editable animations reuse the clothed MPFB figure. These are presentation
 drafts for review; timing and ranges are authored display choices, not patient
 prescriptions or scoring calibration. The side-bend, arm-hold, overhead-press and
 wall-angels MP4s play in the camera page's Reference Guide as low-priority,
-illustrative guides: each is copied unmodified into the gitignored
+illustrative guides: each is copied unmodified into the versioned
 `web/public/demos/` folder and shown through the same crop as the lateral-raise
 guide, set in `web/src/lib/exercises/demoClips.ts`. The neck exercise (`ex_004`)
 is now active alternating neck tilts rather than the assisted stretch. Its
-animation, the neck side bends, follows that version; it is a draft for review
-and is not in the Reference Guide. Deprecated exercises `ex_002` and `ex_003`
-are not included.
+animation, the neck side bends, follows that version. Since 2026-10-11 it also
+plays in the Reference Guide, by user decision ahead of the multi-person neck
+counting test, as the resting-hand revision described in
+[MPFB_PRESENTATION.md](MPFB_PRESENTATION.md). Deprecated exercises `ex_002` and
+`ex_003` are not included.
 
 | Exercise | Editable source | Preview | Timeline |
 | --- | --- | --- | --- |
@@ -26,6 +34,9 @@ angels play in the Reference Guide as full-size re-renders in the upgraded look
 (see [MPFB_FIGURE.md](MPFB_FIGURE.md#upgraded-presentation-look)). Those are
 870 x 980 at 64 samples, rebuilt by this builder from the upgraded figure into
 `previews/slate_2026_09_25/`, with the same motion and the same checks passed.
+Since 2026-10-11 the guide's overhead press is instead the deep-start revision
+in `previews/press_depth_hands_2026_10_11/` (see [MPFB_PRESENTATION.md](MPFB_PRESENTATION.md));
+the slate press remains archived.
 The side bend plays a one-sided version at the same size and look, rebuilt by
 this builder from the upgraded figure into `previews/side_bend_one_side_2026_09_25/`:
 180 frames (6 s), one bend per loop. The table's 360-frame alternating side bend
@@ -343,7 +354,6 @@ and records every copied frame; these scenes have no simulation or temporal
 effects. The encoder rejects partial sequences, decodes every video frame,
 verifies dimensions/duration/fps and faststart metadata, and compares seven
 decoded images with their source renders for colour changes. Reports and hashes
-are stored beside the frames and decoded images. Blender files, renders and
-videos are local ignored artifacts; scripts, JSON manifests and this document
-can be versioned separately. See [MPFB_FIGURE.md](MPFB_FIGURE.md) for the source
+are stored beside the frames and decoded images. Selected Blender source scenes and accepted videos are versioned together;
+generated frame sequences and unselected previews stay ignored. See [MPFB_FIGURE.md](MPFB_FIGURE.md) for the source
 figure's workflow.

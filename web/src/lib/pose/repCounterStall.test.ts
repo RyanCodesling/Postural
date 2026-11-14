@@ -7,8 +7,7 @@
  * all still counts when the pause is under 1 s. A start hidden by frames the
  * camera processed without a reading (ears or an elbow out of view, a
  * rejected capture, no person) is still refused after 300 ms, as before.
- * The recordings behind it: C1, C4 and session 230
- * (Review_Artifacts/2026-10-22_rep_counter_gap_proposal/).
+ * The recordings behind it: C1, C4 and session 230.
  *
  *   npx tsx src/lib/pose/repCounterStall.test.ts
  */

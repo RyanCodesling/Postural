@@ -196,6 +196,26 @@ async function main() {
     assert.deepEqual(ends, ["user"]);
     assert.equal(early.html().includes("Pain after this attempt"), asked, `early end ${saved ?? "saved"}`);
   }
+  let finishEnd!: (error: string | null) => void;
+  const endCalls: string[] = [];
+  const retried = guided({ painReport: { pending: () => false, save: async () => null },
+    onEnd: (reason: string) => { endCalls.push(reason); return new Promise<string | null>(resolve => { finishEnd = resolve; }); } });
+  await retried.click("Start session");
+  await retried.click("End session");
+  assert(retried.html().includes("Session ended early. Saving"), "the end shows as pending");
+  assert(!retried.html().includes("Start session"), "no new start while the end is pending");
+  finishEnd("Not saved");
+  await new Promise(resolve => setImmediate(resolve));
+  assert(retried.html().includes("Not saved"), "the failure is shown");
+  assert(retried.html().includes("has not been saved"));
+  assert(!retried.html().includes("Start session"), "no new start may replace an unsaved end");
+  await retried.click("Try saving again");
+  assert.deepEqual(endCalls, ["user", "user"], "the retry ends the same attempt again");
+  finishEnd(null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert(retried.html().includes("Start session"), "Start session returns once the end is saved");
+  assert(!retried.html().includes("has not been saved"));
+  console.log("PASS a failed End session is shown with a retry, and no new start is offered until it is saved");
   const parts: string[] = [];
   const noRest = guided({ onBeforeStart: async () => ({ sets: 2, restSeconds: 0 }),
     onSetStart: () => parts.push("open"), onRestStart: () => parts.push("close") });

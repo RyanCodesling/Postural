@@ -19,7 +19,7 @@ import {
   type PrescriptionState,
 } from "@/lib/exercises/prescriptionStatus";
 import ConsistencyCalendar from "./ConsistencyCalendar";
-import PatientProgramView from "./PatientProgramView";
+import PatientProgramView, { HIGH_PAIN_NO_START_LABEL } from "./PatientProgramView";
 import { groupSessionsByExercise, ExerciseTrendCard } from "../_components/ExerciseTrends";
 import { SkeletonBar, SkeletonCard } from "../_components/Skeleton";
 import ReportButton from "../_components/ReportButton";
@@ -97,6 +97,8 @@ interface PatientOccurrence {
   due_date: string;
   makeup_until: string;
   status: OccurrenceStatus;
+  /** Stopped for pain before starting: the pain score was too high to proceed. */
+  high_pain_no_start?: boolean;
   exercise_id: string;
   name: string;
   sets: number;
@@ -290,7 +292,7 @@ export default function PatientDashboardPage() {
 
   // Most-recent session per exercise — used to decide the in_progress sub-label
   // (In Progress vs Ended Early) from the latest attempt only (see
-  // exerciseStatusTag). Sessions arrive newest-first, but pick by startedAt
+  // dashboardOccurrenceStatusTag). Sessions arrive newest-first, but pick by startedAt
   // defensively in case ordering ever changes.
   const latestSessionByExercise = new Map<string, SessionLite>();
   for (const s of sessions) {
@@ -833,7 +835,8 @@ function ScheduleOccurrenceCard({
     occurrence.status,
     occurrence.due_date,
     occurrence.makeup_until,
-    today
+    today,
+    occurrence.high_pain_no_start === true,
   );
   const completedResult = occurrence.status === "completed"
     ? selectCompletedOccurrenceResult(sessionsByOccurrenceId.get(occurrence.id) ?? [])
@@ -1008,7 +1011,8 @@ function occurrenceCardStyle(
   status: OccurrenceStatus,
   dueDate: string,
   makeupUntil: string,
-  today: string
+  today: string,
+  highPainNoStart = false,
 ): {
   label: string;
   card: string;
@@ -1020,7 +1024,7 @@ function occurrenceCardStyle(
   }
   if (status === "pain_stopped") {
     return {
-      label: "Stopped for pain",
+      label: highPainNoStart ? HIGH_PAIN_NO_START_LABEL : "Stopped for pain",
       card: "bg-red-50 border-red-200",
       badge: "bg-red-100 text-red-700",
       action: "pain",

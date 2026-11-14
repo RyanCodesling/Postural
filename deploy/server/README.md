@@ -14,7 +14,7 @@ The general checklist (passwords, accounts, backups, the second-device test) is
 | Item | Location |
 |---|---|
 | Code (one revision of this repository) | `/opt/postural/app` (`web`, `scripts`, `AUTHENTICATION_SETUP.md`) |
-| Reference Guide clips (gitignored, copied from a developer machine) | `/opt/postural/app/web/public/demos/` |
+| Reference Guide clips and voice cues (tracked in the repository, deployed with the code) | `/opt/postural/app/web/public/demos/` |
 | Settings and secrets (generated on the server, never printed) | `/etc/postural/env` |
 | Session videos | `/var/lib/postural/recordings` |
 | Uploaded custom exercise guides | `EXERCISE_VIDEOS_DIR`, preferably `/var/lib/postural/exercise-videos` |

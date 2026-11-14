@@ -1,16 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nameFieldWithDigits } from "@/lib/personName";
 import {
   PermanentUserDeletionError,
   UserClinicalFieldsUnavailableError,
   archiveUser,
   createNotification,
   deleteUser,
+  getEffectiveNow,
   getUserById,
   isEmailTaken,
   restoreUser,
   updateUser,
 } from "@/lib/db";
 import { getAuthenticatedUser } from "@/lib/auth-server";
+import { manilaDayKey } from "@/lib/demoClock";
+import { birthDateError } from "@/lib/userAge";
 import {
   sendEmailChangedToOldAddress,
   sendEmailChangedToNewAddress,
@@ -80,6 +84,11 @@ export async function PUT(
     const { id } = await params;
     const body = await request.json();
 
+    const nameFieldWithNumber = nameFieldWithDigits(body);
+    if (nameFieldWithNumber) {
+      return NextResponse.json({ error: `${nameFieldWithNumber} cannot contain numbers.` }, { status: 400 });
+    }
+
     if (body.firstName !== undefined || body.lastName !== undefined) {
       const parts = [body.firstName, body.middleName, body.lastName].filter(Boolean);
       if (parts.length > 0) body.name = parts.join(" ");
@@ -98,6 +107,17 @@ export async function PUT(
 
     // Capture old user data before update to detect email change
     const oldUser = await getUserById(id);
+
+    // A changed date of birth must give an age from 13 to 100. An unchanged
+    // one is not checked again, so an older account stays editable.
+    const newBirth = typeof body.dateOfBirth === "string" ? body.dateOfBirth.slice(0, 10) : "";
+    const oldBirth = typeof oldUser?.dateOfBirth === "string" ? oldUser.dateOfBirth.slice(0, 10) : "";
+    if (newBirth !== "" && newBirth !== oldBirth) {
+      const dateOfBirthError = birthDateError(newBirth, manilaDayKey((await getEffectiveNow()).getTime()));
+      if (dateOfBirthError) {
+        return NextResponse.json({ error: dateOfBirthError }, { status: 400 });
+      }
+    }
 
     const updated = await updateUser(id, body);
 
@@ -169,8 +189,9 @@ export async function PUT(
       const adminEmail = authenticatedUser.email as string | undefined;
       const userName = updated.name as string;
 
-      sendEmailChangedToOldAddress(oldEmail, userName, newEmail).catch(console.error);
-      sendEmailChangedToNewAddress(newEmail, userName, oldEmail).catch(console.error);
+      const userRole = updated.role as string;
+      sendEmailChangedToOldAddress(oldEmail, userName, newEmail, userRole).catch(console.error);
+      sendEmailChangedToNewAddress(newEmail, userName, oldEmail, userRole).catch(console.error);
       if (adminEmail) {
         sendEmailChangedAdminNotification(adminEmail, userName, oldEmail, newEmail).catch(console.error);
       }
@@ -221,8 +242,7 @@ export async function PATCH(
 
       sendAccountRestoredUserEmail(
         userToRestore.email as string,
-        userToRestore.name as string,
-        userToRestore.role as string
+        userToRestore.name as string
       ).catch(console.error);
 
       if (adminEmail) {
@@ -273,7 +293,6 @@ export async function DELETE(
         sendAccountDeletedUserEmail(
           userToProcess.email as string,
           userToProcess.name as string,
-          userToProcess.role as string
         ).catch(console.error);
 
         if (adminEmail) {
@@ -301,8 +320,7 @@ export async function DELETE(
 
         sendAccountArchivedUserEmail(
           userToProcess.email as string,
-          userToProcess.name as string,
-          userToProcess.role as string
+          userToProcess.name as string
         ).catch(console.error);
 
         if (adminEmail) {
